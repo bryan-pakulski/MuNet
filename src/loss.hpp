@@ -72,7 +72,13 @@ namespace munet {
 			const float* p_ptr = static_cast<const float*>(pred.data());
 			const float* t_ptr = static_cast<const float*>(target.data());
 			float* g_ptr = static_cast<float*>(grad_output.data());
-			
+
+ #ifdef MUNET_USE_CUDA                                                                                                                                                                    
+             if (pred.device_ == Device::CUDA) {                                                                                                                                          
+                     return cuda_kernels::mse_loss_cuda(p_ptr, t_ptr, g_ptr, pred.size());                                                                                                
+             }                                                                                                                                                                            
+ #endif 
+	
 			float loss = 0.0f;
 			float n = static_cast<float>(pred.size());
 			

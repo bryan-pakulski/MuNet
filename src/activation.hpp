@@ -80,6 +80,14 @@ namespace munet {
 			const float* in_ptr = static_cast<const float*>(input.data());
 			float* out_ptr = static_cast<float*>(output.data());
 
+ #ifdef MUNET_USE_CUDA                                                                                                                                                                    
+             if (input.device_ == Device::CUDA) {                                                                                                                                         
+                     cuda_kernels::softmax_forward(in_ptr, out_ptr, batch_size, num_classes);                                                                                             
+                     output_cache_ = output.clone();                                                                                                                                      
+                     return output;                                                                                                                                                       
+             }                                                                                                                                                                            
+ #endif 
+
 			for (int b = 0; b < batch_size; ++b) {
 					const float* in_row = in_ptr + b * num_classes;
 					float* out_row = out_ptr + b * num_classes;
@@ -112,6 +120,13 @@ namespace munet {
 			const float* go_ptr = static_cast<const float*>(grad_output.data());
 			const float* out_ptr = static_cast<const float*>(output_cache_.data());
 			float* gi_ptr = static_cast<float*>(grad_input.data());
+
+ #ifdef MUNET_USE_CUDA                                                                                                                                                                    
+             if (grad_output.device_ == Device::CUDA) {                                                                                                                                   
+                     cuda_kernels::softmax_backward(go_ptr, out_ptr, gi_ptr, batch_size, num_classes);                                                                                    
+                     return grad_input;                                                                                                                                                   
+             }                                                                                                                                                                            
+ #endif       
 
 			for (int b = 0; b < batch_size; ++b) {
 					const float* go_row = go_ptr + b * num_classes;

@@ -56,11 +56,22 @@ PYBIND11_MODULE(munet, m) {
     py::class_<Flatten, Layer, std::shared_ptr<Flatten>>(m, "Flatten")
         .def(py::init<>());
 
+		py::class_<Upsample2D, Layer, std::shared_ptr<Upsample2D>>(m, "Upsample2D")
+        .def(py::init<int>(), py::arg("scale_factor"));
+
     py::class_<Conv2D, Layer, std::shared_ptr<Conv2D>>(m, "Conv2D")
         .def(py::init<int, int, int, int, int>(), 
              py::arg("in_channels"), py::arg("out_channels"), 
              py::arg("kernel_size"), py::arg("stride") = 1, py::arg("padding") = 0);
 
+    py::class_<BatchNorm2D, Layer, std::shared_ptr<BatchNorm2D>>(m, "BatchNorm2D")                                                                                                       
+        .def(py::init<int, float, float>(),                                                                                                                                              
+             py::arg("num_features"),                                                                                                                                                    
+             py::arg("eps") = 1e-5f,                                                                                                                                                     
+             py::arg("momentum") = 0.1f)                                                                                                                                                 
+        .def("train", &BatchNorm2D::train)                                                                                                                                               
+        .def("eval", &BatchNorm2D::eval);
+ 
     py::class_<MaxPool2D, Layer, std::shared_ptr<MaxPool2D>>(m, "MaxPool2D")
         .def(py::init<int, int>(), py::arg("kernel_size"), py::arg("stride"));
 

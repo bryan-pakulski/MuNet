@@ -124,13 +124,292 @@ __global__ void cross_entropy_gradient_kernel(const float* logits, const float* 
     }
 }
 
+__global__ void softmax_forward_kernel(const float* in, float* out, int batch_size, int num_classes) {                                                                                   
+     int b = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                       
+     if (b < batch_size) {                                                                                                                                                                
+         const float* in_row = in + b * num_classes;                                                                                                                                      
+         float* out_row = out + b * num_classes;                                                                                                                                          
+                                                                                                                                                                                          
+         float max_val = -1e30f;                                                                                                                                                          
+         for (int i = 0; i < num_classes; ++i) if (in_row[i] > max_val) max_val = in_row[i];                                                                                              
+                                                                                                                                                                                          
+         float sum_exp = 0.0f;                                                                                                                                                            
+         for (int i = 0; i < num_classes; ++i) {                                                                                                                                          
+             out_row[i] = expf(in_row[i] - max_val);                                                                                                                                      
+             sum_exp += out_row[i];                                                                                                                                                       
+         }                                                                                                                                                                                
+         for (int i = 0; i < num_classes; ++i) out_row[i] /= sum_exp;                                                                                                                     
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void softmax_backward_kernel(const float* go, const float* out, float* gi, int batch_size, int num_classes) {                                                                 
+     int b = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                       
+     if (b < batch_size) {                                                                                                                                                                
+         const float* go_row = go + b * num_classes;                                                                                                                                      
+         const float* out_row = out + b * num_classes;                                                                                                                                    
+         float* gi_row = gi + b * num_classes;                                                                                                                                            
+                                                                                                                                                                                          
+         float dot = 0.0f;                                                                                                                                                                
+         for (int i = 0; i < num_classes; ++i) dot += out_row[i] * go_row[i];                                                                                                             
+         for (int i = 0; i < num_classes; ++i) gi_row[i] = out_row[i] * (go_row[i] - dot);                                                                                                
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void maxpool_forward_kernel(const float* in, float* out, int* indices, int N, int C, int H, int W, int OH, int OW, int K, int S) {                                            
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * C * OH * OW) {                                                                                                                                                         
+         int ow = idx % OW;                                                                                                                                                               
+         int oh = (idx / OW) % OH;                                                                                                                                                        
+         int c = (idx / (OW * OH)) % C;                                                                                                                                                   
+         int n = idx / (OW * OH * C);                                                                                                                                                     
+                                                                                                                                                                                          
+         float max_val = -1e30f;                                                                                                                                                          
+         int max_idx = -1;                                                                                                                                                                
+         for (int kh = 0; kh < K; ++kh) {                                                                                                                                                 
+             for (int kw = 0; kw < K; ++kw) {                                                                                                                                             
+                 int ih = oh * S + kh;                                                                                                                                                    
+                 int iw = ow * S + kw;                                                                                                                                                    
+                 int in_idx = ((n * C + c) * H + ih) * W + iw;                                                                                                                            
+                 if (in[in_idx] > max_val) {                                                                                                                                              
+                     max_val = in[in_idx];                                                                                                                                                
+                     max_idx = in_idx;                                                                                                                                                    
+                 }                                                                                                                                                                        
+             }                                                                                                                                                                            
+         }                                                                                                                                                                                
+         out[idx] = max_val;                                                                                                                                                              
+         indices[idx] = max_idx;                                                                                                                                                          
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void maxpool_backward_kernel(const float* go, float* gi, const int* indices, int size) {                                                                                      
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < size) atomicAdd(&gi[indices[idx]], go[idx]);                                                                                                                               
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void conv2d_forward_kernel(const float* in, const float* w, const float* b, float* out, int N, int IC, int OC, int H, int W, int OH, int OW, int K, int S, int P) {           
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * OC * OH * OW) {                                                                                                                                                        
+         int ow = idx % OW;                                                                                                                                                               
+         int oh = (idx / OW) % OH;                                                                                                                                                        
+         int oc = (idx / (OW * OH)) % OC;                                                                                                                                                 
+         int n = idx / (OW * OH * OC);                                                                                                                                                    
+                                                                                                                                                                                          
+         float sum = b[oc];                                                                                                                                                               
+         for (int ic = 0; ic < IC; ++ic) {                                                                                                                                                
+             for (int kh = 0; kh < K; ++kh) {                                                                                                                                             
+                 for (int kw = 0; kw < K; ++kw) {                                                                                                                                         
+                     int ih = oh * S - P + kh;                                                                                                                                            
+                     int iw = ow * S - P + kw;                                                                                                                                            
+                     if (ih >= 0 && ih < H && iw >= 0 && iw < W) {                                                                                                                        
+                         sum += in[((n * IC + ic) * H + ih) * W + iw] * w[((oc * IC + ic) * K + kh) * K + kw];                                                                            
+                     }                                                                                                                                                                    
+                 }                                                                                                                                                                        
+             }                                                                                                                                                                            
+         }                                                                                                                                                                                
+         out[idx] = sum;                                                                                                                                                                  
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void upsample_forward_kernel(const float* in, float* out, int N, int C, int H, int W, int OH, int OW, int SF) {                                                               
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * C * OH * OW) {                                                                                                                                                         
+         int ow = idx % OW, oh = (idx / OW) % OH, c = (idx / (OW * OH)) % C, n = idx / (OW * OH * C);                                                                                     
+         out[idx] = in[((n * C + c) * H + (oh / SF)) * W + (ow / SF)];                                                                                                                    
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void mse_loss_kernel(const float* p, const float* t, float* g, float* loss, int size) {                                                                                       
+     int i = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                       
+     if (i < size) {                                                                                                                                                                      
+         float diff = p[i] - t[i];                                                                                                                                                        
+         atomicAdd(loss, (diff * diff) / size);                                                                                                                                           
+         g[i] = (2.0f * diff) / size;                                                                                                                                                     
+     }                                                                                                                                                                                    
+ }
 
+ __global__ void conv2d_backward_bias_kernel(const float* go, float* gb, int N, int OC, int OH, int OW) {                                                                                 
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * OC * OH * OW) {                                                                                                                                                        
+         int oc = (idx / (OH * OW)) % OC;                                                                                                                                                 
+         atomicAdd(&gb[oc], go[idx]);                                                                                                                                                     
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void conv2d_backward_weight_kernel(const float* go, const float* in, float* gw,                                                                                               
+     int N, int IC, int OC, int H, int W, int OH, int OW, int K, int S, int P)                                                                                                            
+ {                                                                                                                                                                                        
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * OC * OH * OW) {                                                                                                                                                        
+         int ow = idx % OW;                                                                                                                                                               
+         int oh = (idx / OW) % OH;                                                                                                                                                        
+         int oc = (idx / (OW * OH)) % OC;                                                                                                                                                 
+         int n = idx / (OW * OH * OC);                                                                                                                                                    
+                                                                                                                                                                                          
+         float go_val = go[idx];                                                                                                                                                          
+                                                                                                                                                                                          
+         for (int ic = 0; ic < IC; ++ic) {                                                                                                                                                
+             for (int kh = 0; kh < K; ++kh) {                                                                                                                                             
+                 for (int kw = 0; kw < K; ++kw) {                                                                                                                                         
+                     int ih = oh * S - P + kh;                                                                                                                                            
+                     int iw = ow * S - P + kw;                                                                                                                                            
+                     if (ih >= 0 && ih < H && iw >= 0 && iw < W) {                                                                                                                        
+                          int in_idx = ((n * IC + ic) * H + ih) * W + iw;                                                                                                                 
+                          int w_idx = ((oc * IC + ic) * K + kh) * K + kw;                                                                                                                 
+                          atomicAdd(&gw[w_idx], in[in_idx] * go_val);                                                                                                                     
+                     }                                                                                                                                                                    
+                 }                                                                                                                                                                        
+             }                                                                                                                                                                            
+         }                                                                                                                                                                                
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void conv2d_backward_input_kernel(const float* go, const float* w, float* gi,                                                                                                 
+     int N, int IC, int OC, int H, int W, int OH, int OW, int K, int S, int P)                                                                                                            
+ {                                                                                                                                                                                        
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * IC * H * W) {                                                                                                                                                          
+         int iw = idx % W;                                                                                                                                                                
+         int ih = (idx / W) % H;                                                                                                                                                          
+         int ic = (idx / (W * H)) % IC;                                                                                                                                                   
+         int n = idx / (W * H * IC);                                                                                                                                                      
+                                                                                                                                                                                          
+         float sum = 0.0f;                                                                                                                                                                
+                                                                                                                                                                                          
+         for (int oc = 0; oc < OC; ++oc) {                                                                                                                                                
+             for (int kh = 0; kh < K; ++kh) {                                                                                                                                             
+                 for (int kw = 0; kw < K; ++kw) {                                                                                                                                         
+                     // ih = oh * S - P + kh  =>  oh * S = ih + P - kh                                                                                                                    
+                     int num_h = ih + P - kh;                                                                                                                                             
+                     int num_w = iw + P - kw;                                                                                                                                             
+                                                                                                                                                                                          
+                     if (num_h % S == 0 && num_w % S == 0) {                                                                                                                              
+                         int oh = num_h / S;                                                                                                                                              
+                         int ow = num_w / S;                                                                                                                                              
+                                                                                                                                                                                          
+                         if (oh >= 0 && oh < OH && ow >= 0 && ow < OW) {                                                                                                                  
+                              int go_idx = ((n * OC + oc) * OH + oh) * OW + ow;                                                                                                           
+                              int w_idx = ((oc * IC + ic) * K + kh) * K + kw;                                                                                                             
+                              sum += go[go_idx] * w[w_idx];                                                                                                                               
+                         }                                                                                                                                                                
+                     }                                                                                                                                                                    
+                 }                                                                                                                                                                        
+             }                                                                                                                                                                            
+         }                                                                                                                                                                                
+         gi[idx] = sum;                                                                                                                                                                   
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void upsample_backward_kernel(const float* go, float* gi, int N, int C, int H, int W, int OH, int OW, int SF) {                                                               
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * C * OH * OW) {                                                                                                                                                         
+         // Map output pixel (grad_output) back to input pixel (grad_input)                                                                                                               
+         int ow = idx % OW;                                                                                                                                                               
+         int oh = (idx / OW) % OH;                                                                                                                                                        
+         int c = (idx / (OW * OH)) % C;                                                                                                                                                   
+         int n = idx / (OW * OH * C);                                                                                                                                                     
+                                                                                                                                                                                          
+         int ih = oh / SF;                                                                                                                                                                
+         int iw = ow / SF;                                                                                                                                                                
+                                                                                                                                                                                          
+         int gi_idx = ((n * C + c) * H + ih) * W + iw;                                                                                                                                    
+         atomicAdd(&gi[gi_idx], go[idx]);                                                                                                                                                 
+     }                                                                                                                                                                                    
+ }   
 
-
-
-
-
-
+__global__ void bn_mean_kernel(const float* in, float* mean, int N, int C, int H, int W) {                                                                                               
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * C * H * W) {                                                                                                                                                           
+         int c = (idx / (W * H)) % C;                                                                                                                                                     
+         float val = in[idx] / (N * H * W);                                                                                                                                               
+         atomicAdd(&mean[c], val);                                                                                                                                                        
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void bn_var_kernel(const float* in, const float* mean, float* var, int N, int C, int H, int W) {                                                                              
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * C * H * W) {                                                                                                                                                           
+         int c = (idx / (W * H)) % C;                                                                                                                                                     
+         float diff = in[idx] - mean[c];                                                                                                                                                  
+         float val = (diff * diff) / (N * H * W);                                                                                                                                         
+         atomicAdd(&var[c], val);                                                                                                                                                         
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void bn_update_stats_kernel(const float* mean, const float* var, float* inv_std,                                                                                              
+                                        float* run_mean, float* run_var,                                                                                                                  
+                                        int M, int C, float eps, float momentum) {                                                                                                        
+     int c = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                       
+     if (c < C) {                                                                                                                                                                         
+         float m = mean[c];                                                                                                                                                               
+         float v = var[c];                                                                                                                                                                
+         inv_std[c] = rsqrtf(v + eps);                                                                                                                                                    
+         run_mean[c] = (1.0f - momentum) * run_mean[c] + momentum * m;                                                                                                                    
+         run_var[c] = (1.0f - momentum) * run_var[c] + momentum * (v * M / (M > 1 ? M - 1 : 1));                                                                                          
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void bn_forward_train_kernel(const float* in, float* out,                                                                                                                     
+                                         const float* mean, const float* inv_std,                                                                                                         
+                                         const float* weight, const float* bias,                                                                                                          
+                                         int N, int C, int H, int W) {                                                                                                                    
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * C * H * W) {                                                                                                                                                           
+         int c = (idx / (W * H)) % C;                                                                                                                                                     
+         float norm = (in[idx] - mean[c]) * inv_std[c];                                                                                                                                   
+         out[idx] = norm * weight[c] + bias[c];                                                                                                                                           
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void bn_forward_eval_kernel(const float* in, float* out,                                                                                                                      
+                                        const float* run_mean, const float* run_var,                                                                                                      
+                                        const float* weight, const float* bias,                                                                                                           
+                                        int N, int C, int H, int W, float eps) {                                                                                                          
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * C * H * W) {                                                                                                                                                           
+         int c = (idx / (W * H)) % C;                                                                                                                                                     
+         float norm = (in[idx] - run_mean[c]) * rsqrtf(run_var[c] + eps);                                                                                                                 
+         out[idx] = norm * weight[c] + bias[c];                                                                                                                                           
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void bn_bw_pass1_kernel(const float* go, const float* in,                                                                                                                     
+                                    const float* mean, const float* inv_std,                                                                                                              
+                                    float* sum_go_xhat, float* sum_go,                                                                                                                    
+                                    int N, int C, int H, int W) {                                                                                                                         
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * C * H * W) {                                                                                                                                                           
+         int c = (idx / (W * H)) % C;                                                                                                                                                     
+         float go_val = go[idx];                                                                                                                                                          
+         float xhat = (in[idx] - mean[c]) * inv_std[c];                                                                                                                                   
+                                                                                                                                                                                          
+         atomicAdd(&sum_go[c], go_val);                                                                                                                                                   
+         atomicAdd(&sum_go_xhat[c], go_val * xhat);                                                                                                                                       
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void bn_bw_pass2_kernel(const float* go, const float* in, float* gi,                                                                                                          
+                                    const float* mean, const float* inv_std,                                                                                                              
+                                    const float* weight, const float* sum_go_xhat, const float* sum_go,                                                                                   
+                                    int N, int C, int H, int W) {                                                                                                                         
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     if (idx < N * C * H * W) {                                                                                                                                                           
+         int c = (idx / (W * H)) % C;                                                                                                                                                     
+         int M = N * H * W;                                                                                                                                                               
+         float go_val = go[idx];                                                                                                                                                          
+         float xhat = (in[idx] - mean[c]) * inv_std[c];                                                                                                                                   
+                                                                                                                                                                                          
+         float dx = (weight[c] * inv_std[c] / M) * (M * go_val - sum_go[c] - xhat * sum_go_xhat[c]);                                                                                      
+         gi[idx] = dx;                                                                                                                                                                    
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ __global__ void add_grads_kernel(float* gw, float* gb, const float* sum_go_xhat, const float* sum_go, int C) {                                                                           
+     int c = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                       
+     if (c < C) {                                                                                                                                                                         
+         atomicAdd(&gw[c], sum_go_xhat[c]);                                                                                                                                               
+         atomicAdd(&gb[c], sum_go[c]);                                                                                                                                                    
+     }                                                                                                                                                                                    
+ }
 
 
 
@@ -140,6 +419,108 @@ __global__ void cross_entropy_gradient_kernel(const float* logits, const float* 
 
 
 // Wrapper functions callable from standard C++
+
+void batchnorm2d_forward(const float* in, float* out,                                                                                                                                    
+                          float* save_mean, float* save_var, float* save_inv_std,                                                                                                         
+                          float* run_mean, float* run_var,                                                                                                                                
+                          const float* weight, const float* bias,                                                                                                                         
+                          int N, int C, int H, int W, float eps, float momentum, bool training) {                                                                                         
+     int size = N * C * H * W;                                                                                                                                                            
+     int threads = 256;                                                                                                                                                                   
+     int blocks = (size + threads - 1) / threads;                                                                                                                                         
+                                                                                                                                                                                          
+     if (training) {                                                                                                                                                                      
+         cudaMemset(save_mean, 0, C * sizeof(float));                                                                                                                                     
+         cudaMemset(save_var, 0, C * sizeof(float));                                                                                                                                      
+                                                                                                                                                                                          
+         bn_mean_kernel<<<blocks, threads>>>(in, save_mean, N, C, H, W);                                                                                                                  
+         bn_var_kernel<<<blocks, threads>>>(in, save_mean, save_var, N, C, H, W);                                                                                                         
+                                                                                                                                                                                          
+         int c_blocks = (C + threads - 1) / threads;                                                                                                                                      
+         bn_update_stats_kernel<<<c_blocks, threads>>>(save_mean, save_var, save_inv_std, run_mean, run_var, N*H*W, C, eps, momentum);                                                    
+                                                                                                                                                                                          
+         bn_forward_train_kernel<<<blocks, threads>>>(in, out, save_mean, save_inv_std, weight, bias, N, C, H, W);                                                                        
+     } else {                                                                                                                                                                             
+         bn_forward_eval_kernel<<<blocks, threads>>>(in, out, run_mean, run_var, weight, bias, N, C, H, W, eps);                                                                          
+     }                                                                                                                                                                                    
+ }                                                                                                                                                                                        
+                                                                                                                                                                                          
+ void batchnorm2d_backward(const float* go, const float* in, float* gi,                                                                                                                   
+                           float* gw, float* gb,                                                                                                                                          
+                           const float* mean, const float* inv_std,                                                                                                                       
+                           const float* weight,                                                                                                                                           
+                           int N, int C, int H, int W) {                                                                                                                                  
+     int size = N * C * H * W;                                                                                                                                                            
+     int threads = 256;                                                                                                                                                                   
+     int blocks = (size + threads - 1) / threads;                                                                                                                                         
+                                                                                                                                                                                          
+     float *d_sum_go, *d_sum_go_xhat;                                                                                                                                                     
+     cudaMalloc(&d_sum_go, C * sizeof(float));                                                                                                                                            
+     cudaMalloc(&d_sum_go_xhat, C * sizeof(float));                                                                                                                                       
+     cudaMemset(d_sum_go, 0, C * sizeof(float));                                                                                                                                          
+     cudaMemset(d_sum_go_xhat, 0, C * sizeof(float));                                                                                                                                     
+                                                                                                                                                                                          
+     bn_bw_pass1_kernel<<<blocks, threads>>>(go, in, mean, inv_std, d_sum_go_xhat, d_sum_go, N, C, H, W);                                                                                 
+     bn_bw_pass2_kernel<<<blocks, threads>>>(go, in, gi, mean, inv_std, weight, d_sum_go_xhat, d_sum_go, N, C, H, W);                                                                     
+                                                                                                                                                                                          
+     int c_blocks = (C + threads - 1) / threads;                                                                                                                                          
+     add_grads_kernel<<<c_blocks, threads>>>(gw, gb, d_sum_go_xhat, d_sum_go, C);                                                                                                         
+                                                                                                                                                                                          
+     cudaFree(d_sum_go);                                                                                                                                                                  
+     cudaFree(d_sum_go_xhat);                                                                                                                                                             
+ }       
+
+void conv2d_backward(const float* go, const float* in, const float* w, float* gi, float* gw, float* gb,                                                                                  
+	 int N, int IC, int OC, int H, int W, int OH, int OW, int K, int S, int P)                                                                                                            
+{                                                                                                                                                                                        
+	 int size_go = N * OC * OH * OW;                                                                                                                                                      
+	 int size_gi = N * IC * H * W;                                                                                                                                                        
+																																																																																												
+	 // 1. Bias Gradients                                                                                                                                                                 
+	 conv2d_backward_bias_kernel<<<(size_go + 255) / 256, 256>>>(go, gb, N, OC, OH, OW);                                                                                                  
+																																																																																												
+	 // 2. Weight Gradients                                                                                                                                                               
+	 conv2d_backward_weight_kernel<<<(size_go + 255) / 256, 256>>>(go, in, gw, N, IC, OC, H, W, OH, OW, K, S, P);                                                                         
+																																																																																												
+	 // 3. Input Gradients                                                                                                                                                                
+	 conv2d_backward_input_kernel<<<(size_gi + 255) / 256, 256>>>(go, w, gi, N, IC, OC, H, W, OH, OW, K, S, P);                                                                           
+}                                                                                                                                                                                        
+																																																																																												
+void upsample_backward(const float* go, float* gi, int N, int C, int H, int W, int OH, int OW, int SF) {                                                                                 
+	 int size = N * C * OH * OW;                                                                                                                                                          
+	 upsample_backward_kernel<<<(size + 255) / 256, 256>>>(go, gi, N, C, H, W, OH, OW, SF);                                                                                               
+}                                                                                                                                                                                        
+	 
+
+void softmax_forward(const float* in, float* out, int b, int c) {                                                                                                                        
+	 softmax_forward_kernel<<<(b + 255) / 256, 256>>>(in, out, b, c);                                                                                                                     
+}                                                                                                                                                                                        
+void softmax_backward(const float* go, const float* out, float* gi, int b, int c) {                                                                                                      
+	 softmax_backward_kernel<<<(b + 255) / 256, 256>>>(go, out, gi, b, c);                                                                                                                
+}                                                                                                                                                                                        
+void maxpool_forward(const float* in, float* out, int* ind, int N, int C, int H, int W, int OH, int OW, int K, int S) {                                                                  
+	 maxpool_forward_kernel<<<(N * C * OH * OW + 255) / 256, 256>>>(in, out, ind, N, C, H, W, OH, OW, K, S);                                                                              
+}                                                                                                                                                                                        
+void maxpool_backward(const float* go, float* gi, const int* ind, int size) {                                                                                                            
+	 maxpool_backward_kernel<<<(size + 255) / 256, 256>>>(go, gi, ind, size);                                                                                                             
+}                                                                                                                                                                                        
+void conv2d_forward(const float* in, const float* w, const float* b, float* out, int N, int IC, int OC, int H, int W, int OH, int OW, int K, int S, int P) {                             
+	 conv2d_forward_kernel<<<(N * OC * OH * OW + 255) / 256, 256>>>(in, w, b, out, N, IC, OC, H, W, OH, OW, K, S, P);                                                                     
+}                                                                                                                                                                                        
+void upsample_forward(const float* in, float* out, int N, int C, int H, int W, int OH, int OW, int SF) {                                                                                 
+	 upsample_forward_kernel<<<(N * C * OH * OW + 255) / 256, 256>>>(in, out, N, C, H, W, OH, OW, SF);                                                                                    
+}                                                                                                                                                                                        
+float mse_loss_cuda(const float* p, const float* t, float* g, int size) {                                                                                                                
+	 float *d_loss, h_loss;                                                                                                                                                               
+	 cudaMalloc(&d_loss, sizeof(float));                                                                                                                                                  
+	 cudaMemset(d_loss, 0, sizeof(float));                                                                                                                                                
+	 mse_loss_kernel<<<(size + 255) / 256, 256>>>(p, t, g, d_loss, size);                                                                                                                 
+	 cudaMemcpy(&h_loss, d_loss, sizeof(float), cudaMemcpyDeviceToHost);                                                                                                                  
+	 cudaFree(d_loss);                                                                                                                                                                    
+	 return h_loss;                                                                                                                                                                       
+}                                                                                                                                                                                        
+						
+
 void relu_forward(const float* in, float* out, size_t size) {
     int threads = 256;
     int blocks = (size + 255) / 256;

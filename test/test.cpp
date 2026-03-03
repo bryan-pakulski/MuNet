@@ -485,6 +485,24 @@ void test_error_handling() {
     std::cout << "[OK] Error Handling (Shape Mismatch)\n";
 }
 
+void test_upsample2d() {                                                                                                                                                                 
+	 Upsample2D up(2);                                                                                                                                                                    
+	 Tensor input({1, 1, 2, 2}, Device::CPU, DataType::FP32);                                                                                                                             
+	 float* in_ptr = static_cast<float*>(input.data());                                                                                                                                   
+	 in_ptr[0] = 1.0f; in_ptr[1] = 2.0f;                                                                                                                                                  
+	 in_ptr[2] = 3.0f; in_ptr[3] = 4.0f;                                                                                                                                                  
+																																																																																												
+	 Tensor out = up.forward(input);                                                                                                                                                      
+	 const float* out_ptr = static_cast<const float*>(out.data());                                                                                                                        
+																																																																																												
+	 assert(out.shape() == std::vector<int>({1, 1, 4, 4}));                                                                                                                               
+	 assert(is_close(out_ptr[0], 1.0f)); assert(is_close(out_ptr[1], 1.0f));                                                                                                              
+	 assert(is_close(out_ptr[4], 1.0f)); assert(is_close(out_ptr[5], 1.0f));                                                                                                              
+	 assert(is_close(out_ptr[15], 4.0f));                                                                                                                                                 
+																																																																																												
+	 std::cout << "[OK] Upsample2D Layer (CPU)\n";                                                                                                                                        
+} 
+
 /*
 
 */
@@ -726,6 +744,85 @@ void test_training_loop_gpu() {
     std::cout << "Passed (Loss " << initial_loss << " -> " << final_loss << ").\n";
 }
 
+void test_softmax_gpu() {                                                                                                                                                                
+     std::cout << "[TEST] Softmax GPU... ";                                                                                                                                               
+     Softmax sm;                                                                                                                                                                          
+     Tensor cpu_in({1, 5}, Device::CPU, DataType::FP32);                                                                                                                                  
+     float* p = (float*)cpu_in.data();                                                                                                                                                    
+     for(int i=0; i<5; ++i) p[i] = (float)i;                                                                                                                                              
+                                                                                                                                                                                          
+     Tensor gpu_in = cpu_in.clone(); gpu_in.to_gpu();                                                                                                                                     
+     Tensor gpu_out = sm.forward(gpu_in);                                                                                                                                                 
+     gpu_out.to_cpu();                                                                                                                                                                    
+                                                                                                                                                                                          
+     float sum = 0;                                                                                                                                                                       
+     float* res = (float*)gpu_out.data();                                                                                                                                                 
+     for(int i=0; i<5; ++i) sum += res[i];                                                                                                                                                
+     assert(is_close(sum, 1.0f));                                                                                                                                                         
+     std::cout << "Passed.\n";                                                                                                                                                            
+}                                                                                                                                                                                        
+																																																																																												
+void test_maxpool_gpu() {                                                                                                                                                                
+	 std::cout << "[TEST] MaxPool2D GPU... ";                                                                                                                                             
+	 MaxPool2D pool(2, 2);                                                                                                                                                                
+	 Tensor cpu_in({1, 1, 4, 4}, Device::CPU, DataType::FP32);                                                                                                                            
+	 float* in_ptr = (float*)cpu_in.data();                                                                                                                                               
+	 for(int i=0; i<16; ++i) in_ptr[i] = (float)i;                                                                                                                                        
+																																																																																												
+	 Tensor gpu_in = cpu_in.clone(); gpu_in.to_gpu();                                                                                                                                     
+	 Tensor gpu_out = pool.forward(gpu_in);                                                                                                                                               
+																																																																																												
+	 Tensor grad_out({1, 1, 2, 2}, Device::CUDA, DataType::FP32);                                                                                                                         
+	 grad_out.zero(); // fill with 1.0 manually                                                                                                                                           
+	 float h_one = 1.0f;                                                                                                                                                                  
+	 for(int i=0; i<4; ++i) cudaMemcpy((float*)grad_out.data() + i, &h_one, sizeof(float), cudaMemcpyHostToDevice);                                                                       
+																																																																																												
+	 Tensor gpu_grad_in = pool.backward(grad_out);                                                                                                                                        
+	 gpu_grad_in.to_cpu();                                                                                                                                                                
+	 float* gi = (float*)gpu_grad_in.data();                                                                                                                                              
+	 assert(is_close(gi[15], 1.0f));                                                                                                                                                      
+	 assert(is_close(gi[0], 0.0f));                                                                                                                                                       
+	 std::cout << "Passed.\n";                                                                                                                                                            
+}                                                                                                                                                                                        
+																																																																																												
+void test_conv2d_gpu() {                                                                                                                                                                 
+	 std::cout << "[TEST] Conv2D GPU... ";                                                                                                                                                
+	 Conv2D conv(1, 1, 2, 1, 0);                                                                                                                                                          
+	 Tensor cpu_in({1, 1, 3, 3}, Device::CPU, DataType::FP32);                                                                                                                            
+	 for(int i=0; i<9; ++i) ((float*)cpu_in.data())[i] = 1.0f;                                                                                                                            
+																																																																																												
+	 Tensor gpu_in = cpu_in.clone(); gpu_in.to_gpu();                                                                                                                                     
+	 // Set weights on GPU                                                                                                                                                                
+	 for(int i=0; i<4; ++i) {                                                                                                                                                             
+			 float h_w = 1.0f;                                                                                                                                                                
+			 cudaMemcpy((float*)conv.get_parameters()["weight"]->data() + i, &h_w, sizeof(float), cudaMemcpyHostToDevice);                                                                    
+	 }                                                                                                                                                                                    
+	 conv.get_parameters()["weight"]->device_ = Device::CUDA;                                                                                                                             
+	 conv.get_parameters()["bias"]->to_gpu();                                                                                                                                             
+																																																																																												
+	 Tensor gpu_out = conv.forward(gpu_in);                                                                                                                                               
+	 gpu_out.to_cpu();                                                                                                                                                                    
+	 assert(is_close(((float*)gpu_out.data())[0], 4.0f));                                                                                                                                 
+	 std::cout << "Passed.\n";                                                                                                                                                            
+}                                                                                                                                                                                        
+																																																																																												
+void test_mse_loss_gpu() {                                                                                                                                                               
+	 std::cout << "[TEST] MSE Loss GPU... ";                                                                                                                                              
+	 Tensor p({10}, Device::CUDA, DataType::FP32);                                                                                                                                        
+	 Tensor t({10}, Device::CUDA, DataType::FP32);                                                                                                                                        
+	 Tensor g({10}, Device::CUDA, DataType::FP32);                                                                                                                                        
+																																																																																												
+	 float h_data[10];                                                                                                                                                                    
+	 for(int i=0; i<10; ++i) h_data[i] = 1.0f;                                                                                                                                            
+	 cudaMemcpy(p.data(), h_data, 10*4, cudaMemcpyHostToDevice);                                                                                                                          
+	 for(int i=0; i<10; ++i) h_data[i] = 0.0f;                                                                                                                                            
+	 cudaMemcpy(t.data(), h_data, 10*4, cudaMemcpyHostToDevice);                                                                                                                          
+																																																																																												
+	 float loss = mse_loss(p, t, g);                                                                                                                                                      
+	 assert(is_close(loss, 1.0f)); // (1-0)^2 / 1 = 1                                                                                                                                     
+	 std::cout << "Passed.\n";                                                                                                                                                            
+} 
+
 #endif
 
 int main() {
@@ -738,6 +835,7 @@ int main() {
         test_conv2d();
         test_relu();
         test_softmax();
+				test_upsample2d();
 
         test_sgd_update_mechanics();      // NEW
         test_cnn_integration();           // NEW
@@ -757,6 +855,10 @@ int main() {
         test_relu_gpu();
         test_sgd_gpu();
         test_training_loop_gpu();
+				test_softmax_gpu();
+				test_maxpool_gpu();
+				test_conv2d_gpu();
+				test_mse_loss_gpu();
         std::cout << "[INFO] CUDA tests executed successfully.\n";
 #else
         std::cout << "\n\n[INFO] Skipping CUDA tests (MUNET_USE_CUDA not defined).\n\n";
