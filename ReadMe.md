@@ -30,7 +30,7 @@ final goal of running on edge devices with limited resources.
  • Dense: Linear (Fully Connected).
  • Normalization: BatchNorm2D (Train/Eval modes).
  • Regularization: Dropout.
- • Utility: Flatten.
+ • Utility: Flatten, Concat, Skip Connection.
 
 ## Activations
 

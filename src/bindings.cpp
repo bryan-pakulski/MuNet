@@ -9,19 +9,19 @@ using namespace munet;
 PYBIND11_MODULE(munet, m) {
   m.doc() = "MuNet: A lightweight C++ AI framework with Python bindings";
 
-  // 1. Register Enums FIRST so they can be used as default arguments
   py::enum_<Device>(m, "Device")
       .value("CPU", Device::CPU)
       .value("CUDA", Device::CUDA)
       .export_values();
 
-  // 2. Register Tensor
   py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
       .def(py::init<std::vector<int>, Device>(), py::arg("shape"),
            py::arg("device") = Device::CPU)
       .def("to_cpu", &Tensor::to_cpu)
       .def("to_gpu", &Tensor::to_gpu)
       .def_property_readonly("shape", &Tensor::shape)
+      .def_readonly("device", &Tensor::device_,
+                    py::return_value_policy::reference)
       .def("__add__", &Tensor::operator+)
       .def("grad", &Tensor::grad, py::return_value_policy::reference)
       .def("numpy",
@@ -60,23 +60,31 @@ PYBIND11_MODULE(munet, m) {
         t.copy_from(buf.ptr, bytes);
       });
 
-  // 3. Register Layers
   py::class_<Layer, std::shared_ptr<Layer>>(m, "Layer");
 
   py::class_<Linear, Layer, std::shared_ptr<Linear>>(m, "Linear")
       .def(py::init<int, int>())
+      .def("forward", &Linear::forward)
+      .def("backward", &Linear::backward)
       .def("parameters", &Linear::get_parameters,
            py::return_value_policy::reference)
       .def("get_gradients", &Linear::get_gradients,
            py::return_value_policy::reference);
 
-  py::class_<ReLU, Layer, std::shared_ptr<ReLU>>(m, "ReLU").def(py::init<>());
+  py::class_<ReLU, Layer, std::shared_ptr<ReLU>>(m, "ReLU")
+      .def(py::init<>())
+      .def("forward", &ReLU::forward)
+      .def("backward", &ReLU::backward);
 
   py::class_<Softmax, Layer, std::shared_ptr<Softmax>>(m, "Softmax")
-      .def(py::init<>());
+      .def(py::init<>())
+      .def("forward", &Softmax::forward)
+      .def("backward", &Softmax::backward);
 
   py::class_<Flatten, Layer, std::shared_ptr<Flatten>>(m, "Flatten")
-      .def(py::init<>());
+      .def(py::init<>())
+      .def("forward", &Flatten::forward)
+      .def("backward", &Flatten::backward);
 
   py::class_<Upsample2D, Layer, std::shared_ptr<Upsample2D>>(m, "Upsample2D")
       .def(py::init<int>(), py::arg("scale_factor"));
@@ -85,6 +93,8 @@ PYBIND11_MODULE(munet, m) {
       .def(py::init<int, int, int, int, int>(), py::arg("in_channels"),
            py::arg("out_channels"), py::arg("kernel_size"),
            py::arg("stride") = 1, py::arg("padding") = 0)
+      .def("forward", &Conv2D::forward)
+      .def("backward", &Conv2D::backward)
       .def("parameters", &Conv2D::get_parameters,
            py::return_value_policy::reference)
       .def("get_gradients", &Conv2D::get_gradients,
@@ -103,7 +113,10 @@ PYBIND11_MODULE(munet, m) {
            py::return_value_policy::reference);
 
   py::class_<MaxPool2D, Layer, std::shared_ptr<MaxPool2D>>(m, "MaxPool2D")
-      .def(py::init<int, int>(), py::arg("kernel_size"), py::arg("stride"));
+      .def(py::init<int, int>(), py::arg("kernel_size"), py::arg("stride"))
+      .def("forward", &MaxPool2D::forward)
+      .def("backward", &MaxPool2D::backward);
+
   // Concat is NOT inheriting Layer in Python purely for signature reasons
   // (forward takes list of tensors), but acts like one.
   py::class_<Concat, std::shared_ptr<Concat>>(m, "Concat")
@@ -112,9 +125,10 @@ PYBIND11_MODULE(munet, m) {
       .def("backward", &Concat::backward);
 
   py::class_<Dropout, Layer, std::shared_ptr<Dropout>>(m, "Dropout")
-      .def(py::init<float>(), py::arg("p") = 0.5f);
+      .def(py::init<float>(), py::arg("p") = 0.5f)
+      .def("forward", &Dropout::forward)
+      .def("backward", &Dropout::backward);
 
-  // 4. Register Model
   py::class_<Model>(m, "Model")
       .def(py::init<>())
       .def("add", &Model::add)
@@ -128,7 +142,6 @@ PYBIND11_MODULE(munet, m) {
       .def("save_weights", &Model::save_weights)
       .def("load_weights", &Model::load_weights);
 
-  // 5. Register Optimizer
   py::class_<Optimizer>(m, "Optimizer");
 
   py::class_<SGD, Optimizer>(m, "SGD")
@@ -150,7 +163,6 @@ PYBIND11_MODULE(munet, m) {
       .def("forward", &Sigmoid::forward)
       .def("backward", &Sigmoid::backward);
 
-  // 6. Loss Helper
   m.def("cross_entropy_loss", [](const Tensor &logits, const Tensor &targets) {
     // Output gradient will live on same device as logits
     auto grad_out = std::make_shared<Tensor>(logits.shape(), logits.device_);
