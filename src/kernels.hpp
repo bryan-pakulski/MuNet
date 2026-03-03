@@ -57,5 +57,10 @@ void adam_step(float *w, const float *grad, float *m, float *v, float lr,
 void sigmoid_forward(const float *in, float *out, size_t size);
 void sigmoid_backward(const float *go, const float *out, float *gi,
                       size_t size);
+void tensor_add(const float *a, const float *b, float *out, size_t size);
+void concat_channel_forward(const float *src, float *dst, int N, int H, int W,
+                            int C_src, int C_total, int C_offset);
+void concat_channel_backward(const float *src, float *dst, int N, int H, int W,
+                             int C_total, int C_dst, int C_offset);
 } // namespace cuda_kernels
 #endif

@@ -29,7 +29,7 @@ public:
   std::shared_ptr<Tensor> grad_tensor_ = nullptr;
 
   inline Tensor *grad() { return grad_tensor_.get(); }
-
+  Tensor operator+(const Tensor &other) const;
   inline void allocate_grad();
 
   void to_cpu();
@@ -222,6 +222,31 @@ inline void Tensor::copy_from(const void *host_data, size_t size) {
   else {
     throw std::runtime_error("Unsupported device");
   }
+}
+
+inline Tensor Tensor::operator+(const Tensor &other) const {
+  if (shape_ != other.shape_)
+    throw std::runtime_error("Shape mismatch in Tensor addition");
+  if (device_ != other.device_)
+    throw std::runtime_error("Device mismatch in Tensor addition");
+
+  Tensor result(shape_, device_, dtype_);
+
+  const float *a_ptr = static_cast<const float *>(data());
+  const float *b_ptr = static_cast<const float *>(other.data());
+  float *res_ptr = static_cast<float *>(result.data());
+
+#ifdef MUNET_USE_CUDA
+  if (device_ == Device::CUDA) {
+    cuda_kernels::tensor_add(a_ptr, b_ptr, res_ptr, size());
+    return result;
+  }
+#endif
+
+  for (size_t i = 0; i < size(); ++i) {
+    res_ptr[i] = a_ptr[i] + b_ptr[i];
+  }
+  return result;
 }
 
 } // namespace munet

@@ -2,6 +2,60 @@ import unittest
 import munet
 import numpy as np
 
+
+class TestNewFeatures(unittest.TestCase):
+    def test_tensor_add(self):
+        a = munet.Tensor([2, 2])
+        b = munet.Tensor([2, 2])
+        a_np = np.ones((2, 2), dtype=np.float32)
+        b_np = np.ones((2, 2), dtype=np.float32) * 2
+        a.copy_from_numpy(a_np)
+        b.copy_from_numpy(b_np)
+
+        c = a + b
+        c_np = c.numpy()
+        np.testing.assert_allclose(c_np, a_np + b_np, atol=1e-5)
+
+    def test_sigmoid(self):
+        layer = munet.Sigmoid()
+        x = munet.Tensor([2])
+        x_np = np.array([0.0, 2.0], dtype=np.float32)
+        x.copy_from_numpy(x_np)
+
+        y = layer.forward(x)
+        y_np = y.numpy()
+        expected = 1.0 / (1.0 + np.exp(-x_np))
+        np.testing.assert_allclose(y_np, expected, atol=1e-5)
+
+    def test_concat(self):
+        c = munet.Concat()
+        # NCHW
+        t1 = munet.Tensor([1, 1, 2, 2])  # 1 channel
+        t2 = munet.Tensor([1, 2, 2, 2])  # 2 channels
+
+        t1.copy_from_numpy(np.ones((1, 1, 2, 2), dtype=np.float32))
+        t2.copy_from_numpy(np.ones((1, 2, 2, 2), dtype=np.float32) * 2)
+
+        out = c.forward([t1, t2])
+        out_np = out.numpy()
+
+        self.assertEqual(out_np.shape, (1, 3, 2, 2))
+        # First channel is all 1s
+        np.testing.assert_allclose(out_np[:, 0, :, :], 1.0)
+        # Next two channels are all 2s
+        np.testing.assert_allclose(out_np[:, 1:, :, :], 2.0)
+
+    def test_adam_step(self):
+        # Simple check that Adam runs without crashing
+        w = munet.Tensor([1])
+        w.copy_from_numpy(np.array([10.0], dtype=np.float32))
+
+        # Initialize Adam (creates states)
+        opt = munet.Adam([w], lr=0.1)
+        # Note: step() won't change w if grad is null, but checks initialization logic
+        opt.step()
+
+
 class TestModel(unittest.TestCase):
 
     def test_gpu_stability(self):

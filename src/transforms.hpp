@@ -605,4 +605,106 @@ inline Tensor Upsample2D::backward(const Tensor &grad_output) {
   }
   return grad_input;
 }
+
+class Concat {
+public:
+  inline Tensor forward(const std::vector<Tensor *> &inputs);
+  inline std::vector<Tensor> backward(const Tensor &grad_output);
+
+private:
+  std::vector<int> cached_input_channels_;
+  std::vector<int> common_shape_; // N, H, W
+  Device device_;
+};
+
+inline Tensor Concat::forward(const std::vector<Tensor *> &inputs) {
+  if (inputs.empty())
+    throw std::runtime_error("Concat needs inputs");
+
+  cached_input_channels_.clear();
+  device_ = inputs[0]->device_;
+  int N = inputs[0]->shape()[0];
+  int H = inputs[0]->shape()[2];
+  int W = inputs[0]->shape()[3];
+  common_shape_ = {N, H, W};
+
+  int total_channels = 0;
+  for (const auto *t : inputs) {
+    if (t->shape()[0] != N || t->shape()[2] != H || t->shape()[3] != W)
+      throw std::runtime_error("Concat shape mismatch (N, H, W must match)");
+    cached_input_channels_.push_back(t->shape()[1]);
+    total_channels += t->shape()[1];
+  }
+
+  Tensor output({N, total_channels, H, W}, device_, inputs[0]->dtype_);
+  float *out_ptr = static_cast<float *>(output.data());
+
+  int current_c = 0;
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    const float *in_ptr = static_cast<const float *>(inputs[i]->data());
+    int c_src = inputs[i]->shape()[1];
+
+#ifdef MUNET_USE_CUDA
+    if (device_ == Device::CUDA) {
+      cuda_kernels::concat_channel_forward(in_ptr, out_ptr, N, H, W, c_src,
+                                           total_channels, current_c);
+    } else {
+#endif
+      for (int n = 0; n < N; ++n) {
+        for (int c = 0; c < c_src; ++c) {
+          for (int hw = 0; hw < H * W; ++hw) {
+            int src_idx = n * c_src * H * W + c * H * W + hw;
+            int dst_idx =
+                n * total_channels * H * W + (current_c + c) * H * W + hw;
+            out_ptr[dst_idx] = in_ptr[src_idx];
+          }
+        }
+      }
+#ifdef MUNET_USE_CUDA
+    }
+#endif
+    current_c += c_src;
+  }
+  return output;
+}
+
+inline std::vector<Tensor> Concat::backward(const Tensor &grad_output) {
+  std::vector<Tensor> grads;
+  int N = common_shape_[0];
+  int H = common_shape_[1];
+  int W = common_shape_[2];
+  int total_channels = grad_output.shape()[1];
+
+  const float *go_ptr = static_cast<const float *>(grad_output.data());
+
+  int current_c = 0;
+  for (int c_dst : cached_input_channels_) {
+    Tensor gi({N, c_dst, H, W}, device_, grad_output.dtype_);
+    float *gi_ptr = static_cast<float *>(gi.data());
+
+#ifdef MUNET_USE_CUDA
+    if (device_ == Device::CUDA) {
+      cuda_kernels::concat_channel_backward(go_ptr, gi_ptr, N, H, W,
+                                            total_channels, c_dst, current_c);
+    } else {
+#endif
+      for (int n = 0; n < N; ++n) {
+        for (int c = 0; c < c_dst; ++c) {
+          for (int hw = 0; hw < H * W; ++hw) {
+            int src_idx =
+                n * total_channels * H * W + (current_c + c) * H * W + hw;
+            int dst_idx = n * c_dst * H * W + c * H * W + hw;
+            gi_ptr[dst_idx] = go_ptr[src_idx];
+          }
+        }
+      }
+#ifdef MUNET_USE_CUDA
+    }
+#endif
+    grads.push_back(std::move(gi));
+    current_c += c_dst;
+  }
+  return grads;
+}
+
 } // namespace munet

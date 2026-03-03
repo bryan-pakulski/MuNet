@@ -22,6 +22,7 @@ PYBIND11_MODULE(munet, m) {
       .def("to_cpu", &Tensor::to_cpu)
       .def("to_gpu", &Tensor::to_gpu)
       .def_property_readonly("shape", &Tensor::shape)
+      .def("__add__", &Tensor::operator+)
       .def("grad", &Tensor::grad, py::return_value_policy::reference)
       .def("numpy",
            [](Tensor &t) {
@@ -103,6 +104,12 @@ PYBIND11_MODULE(munet, m) {
 
   py::class_<MaxPool2D, Layer, std::shared_ptr<MaxPool2D>>(m, "MaxPool2D")
       .def(py::init<int, int>(), py::arg("kernel_size"), py::arg("stride"));
+  // Concat is NOT inheriting Layer in Python purely for signature reasons
+  // (forward takes list of tensors), but acts like one.
+  py::class_<Concat, std::shared_ptr<Concat>>(m, "Concat")
+      .def(py::init<>())
+      .def("forward", &Concat::forward)
+      .def("backward", &Concat::backward);
 
   py::class_<Dropout, Layer, std::shared_ptr<Dropout>>(m, "Dropout")
       .def(py::init<float>(), py::arg("p") = 0.5f);
@@ -139,7 +146,9 @@ PYBIND11_MODULE(munet, m) {
       .def("zero_grad", &Adam::zero_grad);
 
   py::class_<Sigmoid, Layer, std::shared_ptr<Sigmoid>>(m, "Sigmoid")
-      .def(py::init<>());
+      .def(py::init<>())
+      .def("forward", &Sigmoid::forward)
+      .def("backward", &Sigmoid::backward);
 
   // 6. Loss Helper
   m.def("cross_entropy_loss", [](const Tensor &logits, const Tensor &targets) {
