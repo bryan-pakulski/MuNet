@@ -8,7 +8,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <vector>
 
 namespace munet {
 
@@ -150,4 +149,60 @@ inline Tensor Softmax::backward(const Tensor &grad_output) {
   }
   return grad_input;
 }
+
+class Sigmoid : public Layer {
+public:
+  inline Tensor forward(const Tensor &input) override;
+  inline Tensor backward(const Tensor &grad_output) override;
+  inline std::string get_onnx_op_type() const override { return "Sigmoid"; }
+
+private:
+  Tensor output_cache_{std::vector<int>{}};
+};
+
+inline Tensor Sigmoid::forward(const Tensor &input) {
+  Tensor output(input.shape(), input.device_, input.dtype_);
+
+#ifdef MUNET_USE_CUDA
+  if (input.device_ == Device::CUDA) {
+    cuda_kernels::sigmoid_forward((float *)input.data(), (float *)output.data(),
+                                  input.size());
+    output_cache_ = output.clone();
+    return output;
+  }
+#endif
+
+  const float *in = (const float *)input.data();
+  float *out = (float *)output.data();
+  for (size_t i = 0; i < input.size(); ++i) {
+    out[i] = 1.0f / (1.0f + std::exp(-in[i]));
+  }
+  output_cache_ = output.clone();
+  return output;
+}
+
+inline Tensor Sigmoid::backward(const Tensor &grad_output) {
+  Tensor grad_input(grad_output.shape(), grad_output.device_,
+                    grad_output.dtype_);
+
+#ifdef MUNET_USE_CUDA
+  if (grad_output.device_ == Device::CUDA) {
+    cuda_kernels::sigmoid_backward(
+        (float *)grad_output.data(), (float *)output_cache_.data(),
+        (float *)grad_input.data(), grad_output.size());
+    return grad_input;
+  }
+#endif
+
+  const float *go = (const float *)grad_output.data();
+  const float *out = (const float *)output_cache_.data();
+  float *gi = (float *)grad_input.data();
+
+  for (size_t i = 0; i < grad_output.size(); ++i) {
+    float s = out[i];
+    gi[i] = go[i] * s * (1.0f - s);
+  }
+  return grad_input;
+}
+
 } // namespace munet

@@ -50,5 +50,12 @@ float cross_entropy_loss_cuda(const float *logits, const float *targets,
 float spatial_cross_entropy_loss_cuda(const float *logits, const float *targets,
                                       float *grad_output, int N, int C, int H,
                                       int W);
+void adam_step(float *w, const float *grad, float *m, float *v, float lr,
+               float beta1, float beta2, float eps, float weight_decay,
+               int step, size_t size);
+
+void sigmoid_forward(const float *in, float *out, size_t size);
+void sigmoid_backward(const float *go, const float *out, float *gi,
+                      size_t size);
 } // namespace cuda_kernels
 #endif

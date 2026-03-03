@@ -122,11 +122,24 @@ PYBIND11_MODULE(munet, m) {
       .def("load_weights", &Model::load_weights);
 
   // 5. Register Optimizer
-  py::class_<SGD>(m, "SGD")
+  py::class_<Optimizer>(m, "Optimizer");
+
+  py::class_<SGD, Optimizer>(m, "SGD")
       .def(py::init<std::vector<Tensor *>, float>(), py::arg("params"),
            py::arg("lr"))
       .def("step", &SGD::step)
       .def("zero_grad", &SGD::zero_grad);
+
+  py::class_<Adam, Optimizer>(m, "Adam")
+      .def(py::init<std::vector<Tensor *>, float, float, float, float, float>(),
+           py::arg("params"), py::arg("lr") = 0.001f, py::arg("beta1") = 0.9f,
+           py::arg("beta2") = 0.999f, py::arg("eps") = 1e-8f,
+           py::arg("weight_decay") = 0.0f)
+      .def("step", &Adam::step)
+      .def("zero_grad", &Adam::zero_grad);
+
+  py::class_<Sigmoid, Layer, std::shared_ptr<Sigmoid>>(m, "Sigmoid")
+      .def(py::init<>());
 
   // 6. Loss Helper
   m.def("cross_entropy_loss", [](const Tensor &logits, const Tensor &targets) {

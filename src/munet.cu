@@ -466,7 +466,47 @@ __global__ void bn_mean_kernel(const float* in, float* mean, int N, int C, int H
      }                                                                                                                                                                                    
  }
 
-
+__global__ void adam_step_kernel(float* w, const float* g, float* m, float* v,                       
+                                 float lr, float beta1, float beta2, float eps, float weight_decay,  
+                                 int step, size_t size) {                                            
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;                                                
+    if (i < size) {                                                                                  
+        float grad = g[i];                                                                           
+        if (weight_decay > 0.0f) {                                                                   
+            grad += w[i] * weight_decay;                                                             
+        }                                                                                            
+                                                                                                     
+        float m_t = beta1 * m[i] + (1.0f - beta1) * grad;                                            
+        float v_t = beta2 * v[i] + (1.0f - beta2) * grad * grad;                                     
+                                                                                                     
+        m[i] = m_t;                                                                                  
+        v[i] = v_t;                                                                                  
+                                                                                                     
+        // Bias correction                                                                           
+        float bias_correction1 = 1.0f - powf(beta1, step);                                           
+        float bias_correction2 = 1.0f - powf(beta2, step);                                           
+                                                                                                     
+        float m_hat = m_t / bias_correction1;                                                        
+        float v_hat = v_t / bias_correction2;                                                        
+                                                                                                     
+        w[i] -= lr * m_hat / (sqrtf(v_hat) + eps);                                                   
+    }                                                                                                
+}                                                                                                    
+                                                                                                     
+__global__ void sigmoid_forward_kernel(const float* in, float* out, size_t size) {                   
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;                                                
+    if (i < size) {                                                                                  
+        out[i] = 1.0f / (1.0f + expf(-in[i]));                                                       
+    }                                                                                                
+}                                                                                                    
+                                                                                                     
+__global__ void sigmoid_backward_kernel(const float* go, const float* out, float* gi, size_t size) { 
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;                                                
+    if (i < size) {                                                                                  
+        float s = out[i];                                                                            
+        gi[i] = go[i] * s * (1.0f - s);                                                              
+    }                                                                                                
+}                                                                                                    
 
 
 
@@ -649,28 +689,48 @@ float cross_entropy_loss_cuda(const float* logits, const float* targets, float* 
     return h_loss;
 }
 
- float spatial_cross_entropy_loss_cuda(const float* logits, const float* targets, float* grad_output, int N, int C, int H, int W) {                                                       
-     float* d_loss;                                                                                                                                                                       
-     cudaMalloc(&d_loss, sizeof(float));                                                                                                                                                  
-     cudaMemset(d_loss, 0, sizeof(float));                                                                                                                                                
-                                                                                                                                                                                          
-     int total_pixels = N * H * W;                                                                                                                                                        
-     int threads = 256;                                                                                                                                                                   
-     int blocks = (total_pixels + 255) / 256;                                                                                                                                             
-     spatial_cross_entropy_kernel<<<blocks, threads>>>(logits, targets, grad_output, d_loss, N, C, H, W);                                                                                 
-                                                                                                                                                                                          
-     float h_loss;                                                                                                                                                                        
-     cudaMemcpy(&h_loss, d_loss, sizeof(float), cudaMemcpyDeviceToHost);                                                                                                                  
-     cudaFree(d_loss);                                                                                                                                                                    
-                                                                                                                                                                                          
-     // Average loss over spatial dimensions? usually standard reduction is sum over spatial, avg over batch.                                                                             
-     // The kernel atomicAdds (pixel_loss / N). Sum of (pixel_loss / N) = (Sum pixel_loss) / N.                                                                                           
-     // This assumes we want total image loss. If we want per-pixel average, divide by (H*W).                                                                                             
-     // Standard CrossEntropy in frameworks is usually mean-over-batch, sum-over-spatial (or mean-over-all).                                                                              
-     // Let's stick to sum-over-spatial, mean-over-batch to match the scale.                                                                                                              
-                                                                                                                                                                                          
-     return h_loss;                                                                                                                                                                       
- }
+float spatial_cross_entropy_loss_cuda(const float* logits, const float* targets, float* grad_output, int N, int C, int H, int W) {                                                       
+   float* d_loss;                                                                                                                                                                       
+   cudaMalloc(&d_loss, sizeof(float));                                                                                                                                                  
+   cudaMemset(d_loss, 0, sizeof(float));                                                                                                                                                
+                                                                                                                                                                                        
+   int total_pixels = N * H * W;                                                                                                                                                        
+   int threads = 256;                                                                                                                                                                   
+   int blocks = (total_pixels + 255) / 256;                                                                                                                                             
+   spatial_cross_entropy_kernel<<<blocks, threads>>>(logits, targets, grad_output, d_loss, N, C, H, W);                                                                                 
+                                                                                                                                                                                        
+   float h_loss;                                                                                                                                                                        
+   cudaMemcpy(&h_loss, d_loss, sizeof(float), cudaMemcpyDeviceToHost);                                                                                                                  
+   cudaFree(d_loss);                                                                                                                                                                    
+                                                                                                                                                                                        
+   // Average loss over spatial dimensions? usually standard reduction is sum over spatial, avg over batch.                                                                             
+   // The kernel atomicAdds (pixel_loss / N). Sum of (pixel_loss / N) = (Sum pixel_loss) / N.                                                                                           
+   // This assumes we want total image loss. If we want per-pixel average, divide by (H*W).                                                                                             
+   // Standard CrossEntropy in frameworks is usually mean-over-batch, sum-over-spatial (or mean-over-all).                                                                              
+   // Let's stick to sum-over-spatial, mean-over-batch to match the scale.                                                                                                              
+                                                                                                                                                                                        
+   return h_loss;                                                                                                                                                                       
+}
+
+void adam_step(float* w, const float* grad, float* m, float* v,                                           
+               float lr, float beta1, float beta2, float eps, float weight_decay,                         
+               int step, size_t size) {                                                                   
+    int threads = 256;                                                                                    
+    int blocks = (size + 255) / 256;                                                                      
+    adam_step_kernel<<<blocks, threads>>>(w, grad, m, v, lr, beta1, beta2, eps, weight_decay, step, size);
+}                                                                                                         
+                                                                                                          
+void sigmoid_forward(const float* in, float* out, size_t size) {                                          
+    int threads = 256;                                                                                    
+    int blocks = (size + 255) / 256;                                                                      
+    sigmoid_forward_kernel<<<blocks, threads>>>(in, out, size);                                           
+}                                                                                                         
+                                                                                                          
+void sigmoid_backward(const float* go, const float* out, float* gi, size_t size) {                        
+    int threads = 256;                                                                                    
+    int blocks = (size + 255) / 256;                                                                      
+    sigmoid_backward_kernel<<<blocks, threads>>>(go, out, gi, size);                                      
+}                                                                                                         
 
 } // namespace cuda_kernels
 #endif
