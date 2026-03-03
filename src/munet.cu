@@ -192,8 +192,14 @@ void elementwise_mul(const float* a, const float* b, float* out, size_t size) {
 
 float cross_entropy_loss_cuda(const float* logits, const float* targets, float* grad_output, int batch_size, int num_classes) {
     // Use persistent workspace (No Malloc/Free)
-    float* d_loss = Context::instance().d_workspace;
-    cudaMemsetAsync(d_loss, 0, sizeof(float), 0); // Async set
+    // TODO: this causes segfaults when computing loss...
+    //float* d_loss = Context::instance().d_workspace;
+    //cudaMemsetAsync(d_loss, 0, sizeof(float), 0); // Async set
+    
+		float* d_loss;
+		cudaMalloc(&d_loss, sizeof(float));
+		cudaMemset(d_loss, 0, sizeof(float));
+
     int threads = 256;
     int blocks = (batch_size + 255) / 256;
     cross_entropy_gradient_kernel<<<blocks, threads>>>(logits, targets, grad_output, d_loss, batch_size, num_classes);

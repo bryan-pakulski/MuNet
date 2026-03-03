@@ -1,0 +1,8 @@
+- [ ] GPU not fully utilized
+- [ ] Add additional C++ tests
+- [ ] Add additional Python tests
+- [ ] Add support for ONNX export
+- [ ] Add support for ONNX import
+- [ ] Add support for inference
+- [ ] Add support for generic GPU acceleration
+- [ ] Add generic acceleration module for arbitrary accelerators (interfaces exposed to implement kernels)

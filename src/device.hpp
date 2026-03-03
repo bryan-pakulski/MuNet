@@ -22,6 +22,9 @@ private:
     Context() {
 #ifdef MUNET_USE_CUDA
         cublasCreate(&cublas_handle);
+				// Memory buffer for temporary storage so we don't have to malloc / free
+				// TODO: was set in the cross_entropy_loss_cuda function but it causes segfaults
+				// when computing loss.
         cudaMalloc(&d_workspace, 1024);
 #endif
     }

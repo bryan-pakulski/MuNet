@@ -125,8 +125,7 @@ namespace munet {
 #ifdef MUNET_USE_CUDA
 			if (grad_output.device_ == Device::CUDA) {
             float alpha = 1.0f;
-            float beta_input = 0.0f; // FIX: 0.0 to overwrite garbage in grad_input
-            float beta_accum = 1.0f; // FIX: 1.0 to accumulate into weight grads
+						float beta = 0.0f;
 
             // 1. Grad Input = Grad Output * Weight^T
             cublasSgemm(Context::instance().cublas_handle,
@@ -136,7 +135,6 @@ namespace munet {
                                     w_ptr, out_features_,
                                     go_ptr, out_features_,
                                     &beta,
-                                    &beta_input, 
                                     gi_ptr, in_features_);
 
             // 2. Grad Weight = Input^T * Grad Output
@@ -147,7 +145,6 @@ namespace munet {
                                     go_ptr, out_features_,
                                     in_ptr, in_features_,
                                     &beta,
-                                    &beta_accum,
                                     gw_ptr, out_features_);
 
 					return grad_input;
