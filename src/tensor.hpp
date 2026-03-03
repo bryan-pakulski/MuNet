@@ -29,7 +29,6 @@ public:
   std::shared_ptr<Tensor> grad_tensor_ = nullptr;
 
   inline Tensor *grad() { return grad_tensor_.get(); }
-  inline const Tensor *grad() const { return grad_tensor_.get(); }
 
   inline void allocate_grad();
 

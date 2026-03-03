@@ -157,22 +157,24 @@ __global__ void spatial_cross_entropy_kernel(const float* logits, const float* t
          }                                                                                                                                                                                
          if (sum_exp < 1e-7f) sum_exp = 1e-7f;                                                                                                                                            
                                                                                                                                                                                           
-         // 3. Grad & Loss                                                                                                                                                                
-         float pixel_loss = 0.0f;                                                                                                                                                         
-         const float epsilon = 1e-7f;                                                                                                                                                     
-         for (int c=0; c<C; ++c) {                                                                                                                                                        
-              float p = expf(logits[base_offset + c*stride] - max_val) / sum_exp;                                                                                                         
-              if (p < epsilon) p = epsilon;                                                                                                                                               
-              if (p > 1.0f - epsilon) p = 1.0f - epsilon;                                                                                                                                 
-                                                                                                                                                                                          
-              float t = targets[base_offset + c*stride];                                                                                                                                  
-                                                                                                                                                                                          
-              if (t > 0.0f) pixel_loss -= t * logf(p);                                                                                                                                    
-                                                                                                                                                                                          
-              // Normalize gradient by Batch Size N (standard practice), not by pixels                                                                                                    
-              grad[base_offset + c*stride] = (p - t) / (float)N;                                                                                                                          
-         }                                                                                                                                                                                
-         atomicAdd(loss, pixel_loss / (float)N);                                                                                                                                          
+         // 3. Grad & Loss         
+          float pixel_loss = 0.0f;                                                
+          const float epsilon = 1e-7f;                                            
+          // Normalize by Total Pixels (N * H * W) for resolution invariance      
+          float norm_factor = 1.0f / (float)(N * H * W);                          
+                                                                                  
+          for (int c=0; c<C; ++c) {                                               
+               float p = expf(logits[base_offset + c*stride] - max_val) / sum_exp;
+               if (p < epsilon) p = epsilon;                                      
+               if (p > 1.0f - epsilon) p = 1.0f - epsilon;                        
+                                                                                  
+               float t = targets[base_offset + c*stride];                         
+                                                                                  
+               if (t > 0.0f) pixel_loss -= t * logf(p);                           
+                                                                                  
+               grad[base_offset + c*stride] = (p - t) * norm_factor;              
+          }                                                                       
+          atomicAdd(loss, pixel_loss * norm_factor);
      }                                                                                                                                                                                    
  }      
 

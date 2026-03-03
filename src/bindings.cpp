@@ -21,7 +21,8 @@ PYBIND11_MODULE(munet, m) {
            py::arg("device") = Device::CPU)
       .def("to_cpu", &Tensor::to_cpu)
       .def("to_gpu", &Tensor::to_gpu)
-      .def("shape", &Tensor::shape)
+      .def_property_readonly("shape", &Tensor::shape)
+      .def("grad", &Tensor::grad, py::return_value_policy::reference)
       .def("numpy",
            [](Tensor &t) {
              // Create shape vector compatible with pybind11 (ssize_t)
@@ -62,7 +63,11 @@ PYBIND11_MODULE(munet, m) {
   py::class_<Layer, std::shared_ptr<Layer>>(m, "Layer");
 
   py::class_<Linear, Layer, std::shared_ptr<Linear>>(m, "Linear")
-      .def(py::init<int, int>());
+      .def(py::init<int, int>())
+      .def("parameters", &Linear::get_parameters,
+           py::return_value_policy::reference)
+      .def("get_gradients", &Linear::get_gradients,
+           py::return_value_policy::reference);
 
   py::class_<ReLU, Layer, std::shared_ptr<ReLU>>(m, "ReLU").def(py::init<>());
 
@@ -78,7 +83,11 @@ PYBIND11_MODULE(munet, m) {
   py::class_<Conv2D, Layer, std::shared_ptr<Conv2D>>(m, "Conv2D")
       .def(py::init<int, int, int, int, int>(), py::arg("in_channels"),
            py::arg("out_channels"), py::arg("kernel_size"),
-           py::arg("stride") = 1, py::arg("padding") = 0);
+           py::arg("stride") = 1, py::arg("padding") = 0)
+      .def("parameters", &Conv2D::get_parameters,
+           py::return_value_policy::reference)
+      .def("get_gradients", &Conv2D::get_gradients,
+           py::return_value_policy::reference);
 
   py::class_<BatchNorm2D, Layer, std::shared_ptr<BatchNorm2D>>(m, "BatchNorm2D")
       .def(py::init<int, float, float>(), py::arg("num_features"),
@@ -87,8 +96,10 @@ PYBIND11_MODULE(munet, m) {
       .def("eval", &BatchNorm2D::eval)
       .def("forward", &BatchNorm2D::forward)
       .def("backward", &BatchNorm2D::backward)
-      .def("parameters", &BatchNorm2D::get_parameters)
-      .def("get_gradients", &BatchNorm2D::get_gradients);
+      .def("parameters", &BatchNorm2D::get_parameters,
+           py::return_value_policy::reference)
+      .def("get_gradients", &BatchNorm2D::get_gradients,
+           py::return_value_policy::reference);
 
   py::class_<MaxPool2D, Layer, std::shared_ptr<MaxPool2D>>(m, "MaxPool2D")
       .def(py::init<int, int>(), py::arg("kernel_size"), py::arg("stride"));

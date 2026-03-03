@@ -67,7 +67,7 @@ class TestBatchNorm2D(unittest.TestCase):
         # In eval mode, output should just use running_mean (0) and running_var (1)
         bn.eval()
         out = bn.forward(x)
-        out_np = out.to_numpy()
+        out_np = out.numpy()
 
         # Expected: x * (1 / sqrt(1 + 1e-5))
         scale = 1.0 / np.sqrt(1.0 + 1e-5)
@@ -86,7 +86,7 @@ class TestBatchNorm2D(unittest.TestCase):
         # In train mode, it calculates mean and var dynamically
         bn.train()
         out = bn.forward(x)
-        out_np = out.to_numpy()
+        out_np = out.numpy()
 
         # Channel 0: [1,2,3,4], Mean=2.5, Var=1.25
         mean0 = 2.5
@@ -125,8 +125,8 @@ class TestBatchNorm2D(unittest.TestCase):
             elif name == "running_var":
                 rv_tensor = tensor
 
-        rm_np = rm_tensor.to_numpy()
-        rv_np = rv_tensor.to_numpy()
+        rm_np = rm_tensor.numpy()
+        rv_np = rv_tensor.numpy()
 
         # Initial RM=0, RV=1. Mean=2.5, Var=1.25.
         # Unbiased var for running_var (M=4): 1.25 * (4/3) = 1.66667
@@ -160,8 +160,8 @@ class TestBatchNorm2D(unittest.TestCase):
         # Since grad output is entirely 1s, and input xhat sums to 0,
         # bias gradient should just be sum(go) = 4 per channel.
         # weight gradient should be sum(go * xhat) = 0 per channel.
-        gw = params["weight"].grad().to_numpy()
-        gb = params["bias"].grad().to_numpy()
+        gw = params["weight"].grad().numpy()
+        gb = params["bias"].grad().numpy()
 
         np.testing.assert_allclose(gb, np.array([4.0, 4.0]), rtol=1e-5)
         np.testing.assert_allclose(gw, np.array([0.0, 0.0]), atol=1e-5)
