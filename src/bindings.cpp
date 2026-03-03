@@ -24,10 +24,21 @@ PYBIND11_MODULE(munet, m) {
       .def("shape", &Tensor::shape)
       .def("numpy",
            [](Tensor &t) {
-             if (t.device_ == Device::CUDA)
-               t.to_cpu();
-             return py::array_t<float>(t.shape(),
-                                       static_cast<float *>(t.data()));
+             // Create shape vector compatible with pybind11 (ssize_t)
+             std::vector<ssize_t> shape(t.shape().begin(), t.shape().end());
+
+             if (t.device_ == Device::CPU) {
+               // py::array_t makes a copy of the data by default when
+               // constructed from a pointer
+               return py::array_t<float>(shape, static_cast<float *>(t.data()));
+             } else {
+               // Clone to preserve original tensor on GPU, then move clone to
+               // CPU
+               Tensor cpu_copy = t.clone();
+               cpu_copy.to_cpu();
+               return py::array_t<float>(shape,
+                                         static_cast<float *>(cpu_copy.data()));
+             }
            })
       .def_static("from_numpy",
                   [](py::array_t<float> input) {
@@ -73,7 +84,11 @@ PYBIND11_MODULE(munet, m) {
       .def(py::init<int, float, float>(), py::arg("num_features"),
            py::arg("eps") = 1e-5f, py::arg("momentum") = 0.1f)
       .def("train", &BatchNorm2D::train)
-      .def("eval", &BatchNorm2D::eval);
+      .def("eval", &BatchNorm2D::eval)
+      .def("forward", &BatchNorm2D::forward)
+      .def("backward", &BatchNorm2D::backward)
+      .def("parameters", &BatchNorm2D::get_parameters)
+      .def("get_gradients", &BatchNorm2D::get_gradients);
 
   py::class_<MaxPool2D, Layer, std::shared_ptr<MaxPool2D>>(m, "MaxPool2D")
       .def(py::init<int, int>(), py::arg("kernel_size"), py::arg("stride"));

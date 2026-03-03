@@ -84,45 +84,97 @@ __global__ void elementwise_mul_kernel(const float* a, const float* b, float* ou
     if (i < size) out[i] = a[i] * b[i];
 }
 
-__global__ void cross_entropy_gradient_kernel(const float* logits, const float* targets, float* grad_input, float* loss_out, int batch_size, int num_classes) {
-    int b = blockIdx.x * blockDim.x + threadIdx.x;
-    if (b < batch_size) {
-        const float* logit_row = logits + b * num_classes;
-        const float* target_row = targets + b * num_classes;
-        float* grad_row = grad_input + b * num_classes;
+// Flat cross entryopy (for classification)
+__global__ void cross_entropy_gradient_kernel(const float* logits, const float* targets, float* grad_input, float* loss_out, int batch_size, int num_classes) {                          
+     int b = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                       
+     if (b < batch_size) {                                                                                                                                                                
+         const float* logit_row = logits + b * num_classes;                                                                                                                               
+         const float* target_row = targets + b * num_classes;                                                                                                                             
+         float* grad_row = grad_input + b * num_classes;                                                                                                                                  
+                                                                                                                                                                                          
+         // 1. Find Max (for numerical stability)                                                                                                                                         
+         float max_val = -1e30f;                                                                                                                                                          
+         for(int i=0; i<num_classes; ++i) {                                                                                                                                               
+             if(logit_row[i] > max_val) max_val = logit_row[i];                                                                                                                           
+         }                                                                                                                                                                                
+                                                                                                                                                                                          
+         // 2. Sum Exponentials                                                                                                                                                           
+         float sum_exp = 0.0f;                                                                                                                                                            
+         for(int i=0; i<num_classes; ++i) {                                                                                                                                               
+             sum_exp += expf(logit_row[i] - max_val);                                                                                                                                     
+         }                                                                                                                                                                                
+         // FIX: Prevent division by zero if sum_exp is tiny (unlikely with exp, but safe)                                                                                                
+         if (sum_exp < 1e-7f) sum_exp = 1e-7f;                                                                                                                                            
+                                                                                                                                                                                          
+         // 3. Calculate Gradient                                                                                                                                                         
+         float sample_loss = 0.0f;                                                                                                                                                        
+         const float epsilon = 1e-7f;                                                                                                                                                     
+         for(int i=0; i<num_classes; ++i) {                                                                                                                                               
+             float p = expf(logit_row[i] - max_val) / sum_exp;                                                                                                                            
+                                                                                                                                                                                          
+             // Numerical stability clamping                                                                                                                                              
+             if (p < epsilon) p = epsilon;                                                                                                                                                
+             if (p > 1.0f - epsilon) p = 1.0f - epsilon;                                                                                                                                  
+                                                                                                                                                                                          
+             float t = target_row[i];                                                                                                                                                     
+                                                                                                                                                                                          
+             if (t > 0.0f) {                                                                                                                                                              
+                 sample_loss -= t * logf(p);                                                                                                                                              
+             }                                                                                                                                                                            
+             grad_row[i] = (p - t) / (float)batch_size;                                                                                                                                   
+         }                                                                                                                                                                                
+                                                                                                                                                                                          
+         atomicAdd(loss_out, sample_loss / (float)batch_size);                                                                                                                            
+     }                                                                                                                                                                                    
+ }   
 
-        // 1. Find Max (for numerical stability)
-        float max_val = -1e30f; // Simple low value
-        for(int i=0; i<num_classes; ++i) {
-            if(logit_row[i] > max_val) max_val = logit_row[i];
-        }
-
-        // 2. Sum Exponentials
-        float sum_exp = 0.0f;
-        for(int i=0; i<num_classes; ++i) {
-            sum_exp += expf(logit_row[i] - max_val);
-        }
-
-        // 3. Calculate Gradient: (p_i - y_i) / batch_size
-        //    And accumulate loss for this sample
-        float sample_loss = 0.0f;
-        const float epsilon = 1e-7f;
-        for(int i=0; i<num_classes; ++i) {
-            float p = expf(logit_row[i] - max_val) / sum_exp;
-            if (p < epsilon) p = epsilon;
-            if (p > 1.0f - epsilon) p = 1.0f - epsilon;
-            float t = target_row[i];
-            
-            if (t > 0.0f) {
-                sample_loss -= t * logf(p);
-            }
-            grad_row[i] = (p - t) / (float)batch_size;
-        }
-        
-        // Simple atomic add for total loss (not most efficient reduction, but keeps data on GPU)
-        atomicAdd(loss_out, sample_loss / (float)batch_size);
-    }
-}
+// Spatial Cross Entropy (for Segmentation NCHW) 
+__global__ void spatial_cross_entropy_kernel(const float* logits, const float* targets, float* grad, float* loss, int N, int C, int H, int W) {                                          
+     int idx = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                     
+     int spatial_size = H * W;                                                                                                                                                            
+     int total_pixels = N * spatial_size;                                                                                                                                                 
+                                                                                                                                                                                          
+     if (idx < total_pixels) {                                                                                                                                                            
+         int n = idx / spatial_size;                                                                                                                                                      
+         int hw = idx % spatial_size;                                                                                                                                                     
+                                                                                                                                                                                          
+         // In NCHW, the c-th class value for pixel hw is at: n*C*HW + c*HW + hw                                                                                                          
+         // The stride between classes is spatial_size (H*W).                                                                                                                             
+         int base_offset = n * C * spatial_size + hw;                                                                                                                                     
+         int stride = spatial_size;                                                                                                                                                       
+                                                                                                                                                                                          
+         // 1. Max                                                                                                                                                                        
+         float max_val = -1e30f;                                                                                                                                                          
+         for (int c=0; c<C; ++c) {                                                                                                                                                        
+             float val = logits[base_offset + c*stride];                                                                                                                                  
+             if (val > max_val) max_val = val;                                                                                                                                            
+         }                                                                                                                                                                                
+                                                                                                                                                                                          
+         // 2. Sum Exp                                                                                                                                                                    
+         float sum_exp = 0.0f;                                                                                                                                                            
+         for (int c=0; c<C; ++c) {                                                                                                                                                        
+             sum_exp += expf(logits[base_offset + c*stride] - max_val);                                                                                                                   
+         }                                                                                                                                                                                
+         if (sum_exp < 1e-7f) sum_exp = 1e-7f;                                                                                                                                            
+                                                                                                                                                                                          
+         // 3. Grad & Loss                                                                                                                                                                
+         float pixel_loss = 0.0f;                                                                                                                                                         
+         const float epsilon = 1e-7f;                                                                                                                                                     
+         for (int c=0; c<C; ++c) {                                                                                                                                                        
+              float p = expf(logits[base_offset + c*stride] - max_val) / sum_exp;                                                                                                         
+              if (p < epsilon) p = epsilon;                                                                                                                                               
+              if (p > 1.0f - epsilon) p = 1.0f - epsilon;                                                                                                                                 
+                                                                                                                                                                                          
+              float t = targets[base_offset + c*stride];                                                                                                                                  
+                                                                                                                                                                                          
+              if (t > 0.0f) pixel_loss -= t * logf(p);                                                                                                                                    
+                                                                                                                                                                                          
+              // Normalize gradient by Batch Size N (standard practice), not by pixels                                                                                                    
+              grad[base_offset + c*stride] = (p - t) / (float)N;                                                                                                                          
+         }                                                                                                                                                                                
+         atomicAdd(loss, pixel_loss / (float)N);                                                                                                                                          
+     }                                                                                                                                                                                    
+ }      
 
 __global__ void softmax_forward_kernel(const float* in, float* out, int batch_size, int num_classes) {                                                                                   
      int b = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                       
@@ -334,20 +386,21 @@ __global__ void bn_mean_kernel(const float* in, float* mean, int N, int C, int H
          atomicAdd(&var[c], val);                                                                                                                                                         
      }                                                                                                                                                                                    
  }                                                                                                                                                                                        
-                                                                                                                                                                                          
- __global__ void bn_update_stats_kernel(const float* mean, const float* var, float* inv_std,                                                                                              
-                                        float* run_mean, float* run_var,                                                                                                                  
-                                        int M, int C, float eps, float momentum) {                                                                                                        
-     int c = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                       
-     if (c < C) {                                                                                                                                                                         
-         float m = mean[c];                                                                                                                                                               
-         float v = var[c];                                                                                                                                                                
-         inv_std[c] = rsqrtf(v + eps);                                                                                                                                                    
-         run_mean[c] = (1.0f - momentum) * run_mean[c] + momentum * m;                                                                                                                    
-         run_var[c] = (1.0f - momentum) * run_var[c] + momentum * (v * M / (M > 1 ? M - 1 : 1));                                                                                          
-     }                                                                                                                                                                                    
- }                                                                                                                                                                                        
-                                                                                                                                                                                          
+            
+  __global__ void bn_update_stats_kernel(const float* mean, const float* var, float* inv_std,                                                                                             
+                                         float* run_mean, float* run_var,                                                                                                                 
+                                         int M, int C, float eps, float momentum) {                                                                                                       
+      int c = blockIdx.x * blockDim.x + threadIdx.x;                                                                                                                                      
+      if (c < C) {                                                                                                                                                                        
+          float m = mean[c];                                                                                                                                                              
+          float v = var[c];                                                                                                                                                               
+          if (v < 0.0f) v = 0.0f; // Numerical safety                                                                                                                                     
+          inv_std[c] = rsqrtf(v + eps);                                                                                                                                                   
+          run_mean[c] = (1.0f - momentum) * run_mean[c] + momentum * m;                                                                                                                   
+          run_var[c] = (1.0f - momentum) * run_var[c] + momentum * (v * M / (M > 1 ? M - 1 : 1));                                                                                         
+      }                                                                                                                                                                                   
+  }
+
  __global__ void bn_forward_train_kernel(const float* in, float* out,                                                                                                                     
                                          const float* mean, const float* inv_std,                                                                                                         
                                          const float* weight, const float* bias,                                                                                                          
@@ -594,6 +647,28 @@ float cross_entropy_loss_cuda(const float* logits, const float* targets, float* 
     return h_loss;
 }
 
+ float spatial_cross_entropy_loss_cuda(const float* logits, const float* targets, float* grad_output, int N, int C, int H, int W) {                                                       
+     float* d_loss;                                                                                                                                                                       
+     cudaMalloc(&d_loss, sizeof(float));                                                                                                                                                  
+     cudaMemset(d_loss, 0, sizeof(float));                                                                                                                                                
+                                                                                                                                                                                          
+     int total_pixels = N * H * W;                                                                                                                                                        
+     int threads = 256;                                                                                                                                                                   
+     int blocks = (total_pixels + 255) / 256;                                                                                                                                             
+     spatial_cross_entropy_kernel<<<blocks, threads>>>(logits, targets, grad_output, d_loss, N, C, H, W);                                                                                 
+                                                                                                                                                                                          
+     float h_loss;                                                                                                                                                                        
+     cudaMemcpy(&h_loss, d_loss, sizeof(float), cudaMemcpyDeviceToHost);                                                                                                                  
+     cudaFree(d_loss);                                                                                                                                                                    
+                                                                                                                                                                                          
+     // Average loss over spatial dimensions? usually standard reduction is sum over spatial, avg over batch.                                                                             
+     // The kernel atomicAdds (pixel_loss / N). Sum of (pixel_loss / N) = (Sum pixel_loss) / N.                                                                                           
+     // This assumes we want total image loss. If we want per-pixel average, divide by (H*W).                                                                                             
+     // Standard CrossEntropy in frameworks is usually mean-over-batch, sum-over-spatial (or mean-over-all).                                                                              
+     // Let's stick to sum-over-spatial, mean-over-batch to match the scale.                                                                                                              
+                                                                                                                                                                                          
+     return h_loss;                                                                                                                                                                       
+ }
 
 } // namespace cuda_kernels
 #endif

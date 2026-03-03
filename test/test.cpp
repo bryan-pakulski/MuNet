@@ -920,9 +920,9 @@ int main() {
     test_softmax();
     test_upsample2d();
 
-    test_sgd_update_mechanics(); // NEW
-    test_cnn_integration();      // NEW
-    test_error_handling();       // NEW
+    test_sgd_update_mechanics();
+    test_cnn_integration();
+    test_error_handling();
 
     test_model_and_training();
     test_model_and_training_fp16();
@@ -948,7 +948,7 @@ int main() {
         << "\n\n[INFO] Skipping CUDA tests (MUNET_USE_CUDA not defined).\n\n";
 #endif
 
-    std::cout << "\nAll MuNet tests passed successfully!\n";
+    std::cout << "\nAll C++ MuNet tests passed successfully!\n";
   } catch (const std::exception &e) {
     std::cerr << "[ERROR] Test failed with exception: " << e.what() << "\n";
     return 1;

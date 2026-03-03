@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 #ifdef MUNET_USE_CUDA
 namespace cuda_kernels {
 void softmax_forward(const float *in, float *out, int batch_size,
@@ -45,5 +47,8 @@ void elementwise_mul(const float *a, const float *b, float *out, size_t size);
 float cross_entropy_loss_cuda(const float *logits, const float *targets,
                               float *grad_output, int batch_size,
                               int num_classes);
+float spatial_cross_entropy_loss_cuda(const float *logits, const float *targets,
+                                      float *grad_output, int N, int C, int H,
+                                      int W);
 } // namespace cuda_kernels
 #endif

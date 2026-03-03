@@ -1,6 +1,6 @@
-- [ ] GPU not fully utilized
-- [ ] Add additional C++ tests
-- [ ] Add additional Python tests
+- [x] GPU not fully utilized -> Just need to make sure the loader side can keep up with feeding the GPU
+- [x] Add additional C++ tests
+- [x] Add additional Python tests
 - [ ] Add support for ONNX export
 - [ ] Add support for ONNX import
 - [ ] Add support for inference

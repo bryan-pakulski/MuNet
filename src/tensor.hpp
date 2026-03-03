@@ -142,8 +142,9 @@ inline Tensor::~Tensor() { deallocate(); }
 
 inline Tensor::Tensor(Tensor &&other) noexcept
     : shape_(std::move(other.shape_)), device_(other.device_),
-      dtype_(other.dtype_), data_ptr_(other.data_ptr_) {
-  other.data_ptr_ = nullptr; // Take ownership
+      dtype_(other.dtype_), data_ptr_(other.data_ptr_),
+      grad_tensor_(std::move(other.grad_tensor_)) { // FIX: Move gradients
+  other.data_ptr_ = nullptr;                        // Take ownership
 }
 
 inline Tensor &Tensor::operator=(Tensor &&other) noexcept {
@@ -153,6 +154,7 @@ inline Tensor &Tensor::operator=(Tensor &&other) noexcept {
     device_ = other.device_;
     dtype_ = other.dtype_;
     data_ptr_ = other.data_ptr_;
+    grad_tensor_ = std::move(other.grad_tensor_); // FIX: Move gradients
     other.data_ptr_ = nullptr;
   }
   return *this;

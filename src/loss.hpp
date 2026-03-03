@@ -24,10 +24,27 @@ inline float cross_entropy_loss(const Tensor &logits, const Tensor &targets,
 
 #ifdef MUNET_USE_CUDA
   if (logits.device_ == Device::CUDA && targets.device_ == Device::CUDA) {
-    return cuda_kernels::cross_entropy_loss_cuda(
-        static_cast<const float *>(logits.data()),
-        static_cast<const float *>(targets.data()),
-        static_cast<float *>(grad_output.data()), batch_size, num_classes);
+    if (logits.shape().size() == 4) {
+      // Spatial Cross Entropy (NCHW)
+      int N = logits.shape()[0];
+      int C = logits.shape()[1];
+      int H = logits.shape()[2];
+      int W = logits.shape()[3];
+      return cuda_kernels::spatial_cross_entropy_loss_cuda(
+          static_cast<const float *>(logits.data()),
+          static_cast<const float *>(targets.data()),
+          static_cast<float *>(grad_output.data()), N, C, H, W);
+    } else {
+      // Standard Flat Cross Entropy
+      int batch_size = logits.shape().size() > 1 ? logits.shape()[0] : 1;
+      int num_classes =
+          logits.shape().size() > 1 ? logits.shape()[1] : logits.shape()[0];
+
+      return cuda_kernels::cross_entropy_loss_cuda(
+          static_cast<const float *>(logits.data()),
+          static_cast<const float *>(targets.data()),
+          static_cast<float *>(grad_output.data()), batch_size, num_classes);
+    }
   }
 #endif
 
