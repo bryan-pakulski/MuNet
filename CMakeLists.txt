@@ -9,7 +9,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)                                                                        
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)                                                                    
                                                                                                            
-include(FetchContent)                                                                                      
+include(FetchContent)     
+
+# optimization flags
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+endif()
                                                                                                            
 # --- Dependencies ---                                                                                     
 FetchContent_Declare(pybind11 GIT_REPOSITORY https://github.com/pybind/pybind11.git GIT_TAG v2.11.1)       
@@ -46,7 +51,14 @@ if(Vulkan_FOUND)
 else()                                                          
     message(WARNING "Vulkan not found.")                        
 endif()                                                         
-                                                                                                           
+
+# Set ENABLE_PROFILING flag
+option(ENABLE_PROFILING "Enable Profiling" OFF)               
+if(ENABLE_PROFILING)                                           
+    message(STATUS "Profiling Enabled!")                        
+    add_compile_definitions(ENABLE_PROFILING)            
+endif()
+                                                                                          
 # --- Core Library ---                                                                                     
 add_library(munet_core ${MUNET_SOURCES})                                                                   
 target_include_directories(munet_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)       
@@ -61,7 +73,7 @@ target_link_libraries(munet PRIVATE munet_core)
                                                                                                            
 # --- Unit Tests ---                                                                                       
 enable_testing()                                                                                           
-add_executable(munet_tests tests/test_tensor.cpp tests/test_autograd.cpp)                                  
+add_executable(munet_tests tests/test_tensor.cpp tests/test_autograd.cpp tests/test_vulkan.cpp tests/test_cuda.cpp)                                  
 target_link_libraries(munet_tests PRIVATE munet_core gtest_main)                                           
                                                                                                            
 include(GoogleTest)                                                                                        

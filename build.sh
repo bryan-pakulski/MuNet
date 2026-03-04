@@ -14,6 +14,6 @@ popd
 echo "=== Building MuNet ==="
 mkdir -p build
 pushd build/
-	cmake ..
+	cmake .. -DENABLE_PROFILING=OFF -DCMAKE_BUILD_TYPE=Release
 	make -j $(nproc)
 popd

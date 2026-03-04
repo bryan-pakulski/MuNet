@@ -236,7 +236,7 @@ struct SumBackward : public Node {
     Tensor cpu_grad_in(shape, Device{DeviceType::CPU, 0}, DataType::Float32);
     float *dest = (float *)cpu_grad_in.data();
     for (size_t i = 0; i < numel(shape); ++i)
-      dest[i] = g; // <--- FIX: access array index, do not assign to pointer
+      dest[i] = g;
     return {cpu_grad_in.to(dev)};
   }
 };
@@ -261,6 +261,39 @@ inline Tensor sum(const Tensor &a) {
     out.impl_->grad_fn = fn;
   }
   record_trace(out, "Sum", {a});
+  return out;
+}
+
+struct ReshapeBackward : public Node {
+  Shape input_shape;
+  ReshapeBackward(Shape s) : input_shape(s) {}
+  std::string name() const override { return "ReshapeBackward"; }
+
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    // Gradient just needs to be reshaped back to original input layout
+    return {grads[0].reshape(input_shape)};
+  }
+};
+
+inline Tensor reshape(const Tensor &in, Shape new_shape) {
+  size_t src_el = numel(in.shape());
+  size_t dst_el = numel(new_shape);
+  if (src_el != dst_el)
+    throw std::runtime_error("Reshape: element count mismatch");
+
+  Tensor out;
+  // Create new TensorImpl pointing to the SAME storage (View)
+  out.impl_ = std::make_shared<TensorImpl>(new_shape, in.device(), in.dtype(),
+                                           in.requires_grad());
+  out.impl_->storage = in.impl_->storage;
+
+  if (in.requires_grad()) {
+    auto fn = std::make_shared<ReshapeBackward>(in.shape());
+    link_backward_edges(fn.get(), {in});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_trace(out, "Reshape", {in});
   return out;
 }
 

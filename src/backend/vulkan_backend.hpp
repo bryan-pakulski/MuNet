@@ -1,5 +1,5 @@
-#pragma once
 #include "../backend.hpp"
+#include <vector>
 #include <vulkan/vulkan.h>
 
 namespace munet {
@@ -32,6 +32,10 @@ public:
            size_t num_elements) override;
   void update(Storage &weight, const Storage &grad, float lr,
               size_t num_elements) override;
+
+private:
+  void dispatch_kernel(VkPipeline pipeline, const std::vector<void *> &buffers,
+                       void *pc, size_t pcSize, int x, int y, int z);
 };
 
 } // namespace munet

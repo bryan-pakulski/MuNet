@@ -93,6 +93,7 @@ public:
   Tensor matmul(const Tensor &other) const;
   Tensor relu() const;
   Tensor sum() const;
+  Tensor reshape(Shape new_shape) const;
 
   // In-place initialization
   void uniform_(float low = -1.0f, float high = 1.0f);

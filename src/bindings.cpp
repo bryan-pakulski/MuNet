@@ -60,9 +60,12 @@ PYBIND11_MODULE(munet, m) {
            [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
       .def("relu", &Tensor::relu)
       .def("sum", &Tensor::sum)
+      .def("reshape", &Tensor::reshape, py::arg("shape"))
       .def("uniform_", &Tensor::uniform_, py::arg("low") = -1.0f,
            py::arg("high") = 1.0f)
       .def("step", &Tensor::step, py::arg("lr"))
+      .def("replace_",
+           [](Tensor &self, const Tensor &other) { self.impl_ = other.impl_; })
 
       .def_buffer([](Tensor &t) -> py::buffer_info {
         // Safety Check: Prevent NumPy from segfaulting by accessing GPU memory

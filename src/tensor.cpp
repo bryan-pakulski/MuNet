@@ -2,6 +2,7 @@
 #include "autograd/autograd.hpp"
 #include "backend/cpu_backend.hpp"
 #include "ops.hpp"
+#include <cstring>
 #include <random>
 #include <stdexcept>
 #include <vector>
@@ -98,18 +99,28 @@ Tensor Tensor::operator*(const Tensor &other) const {
 }
 Tensor Tensor::sum() const { return ops::sum(*this); }
 
+Tensor Tensor::reshape(Shape new_shape) const {
+  return ops::reshape(*this, new_shape);
+}
+
 void Tensor::uniform_(float low, float high) {
-  // Initialize on CPU, then copy to Device if needed
-  Tensor cpu_tensor = to(Device{DeviceType::CPU, 0});
+  if (size() == 0)
+    return;
+
+  // Initialize a fresh CPU tensor to avoid copying uninitialized garbage from
+  // GPU
+  Tensor cpu_tensor(shape(), Device{DeviceType::CPU, 0}, dtype(), false);
   std::mt19937 gen(42); // fixed seed for predictability
   std::uniform_real_distribution<float> dis(low, high);
   float *ptr = (float *)cpu_tensor.data();
   for (size_t i = 0; i < size(); ++i)
-    ptr[i] = dis(gen); // Fixed: access index i
+    ptr[i] = dis(gen);
 
   if (device().type != DeviceType::CPU) {
     impl_->backend().copy(cpu_tensor.data(), data(), bytes(),
                           Device{DeviceType::CPU, 0}, device());
+  } else {
+    std::memcpy(data(), cpu_tensor.data(), bytes());
   }
 }
 
