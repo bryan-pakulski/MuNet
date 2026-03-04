@@ -29,7 +29,7 @@
 namespace munet {
 
 // --- Configuration ---
-static const int MAX_FRAMES_IN_FLIGHT = 1;
+static const int MAX_FRAMES_IN_FLIGHT = 2;
 static const int BATCH_SIZE_LIMIT = 1000; // Flush after this many ops
 static const int MAX_DESCRIPTORS_PER_FRAME = 2048;
 
@@ -66,6 +66,7 @@ static std::unordered_map<uint64_t, VkDeviceMemory> allocation_memory;
 // --- Persistent Staging Buffers ---
 static VkBuffer stagingBuffer = VK_NULL_HANDLE;
 static VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+static size_t stagingOffset = 0;
 static size_t stagingSize = 0;
 static void *stagingMapped = nullptr;
 static VkCommandBuffer immediateCmdBuffer = VK_NULL_HANDLE;
@@ -132,7 +133,7 @@ static std::vector<uint32_t> compileShader(const std::string &name,
   std::ofstream out(compPath);
   out << source;
   out.close();
-  std::string cmd = "glslc " + compPath + " -o " + spvPath;
+  std::string cmd = "glslc -O " + compPath + " -o " + spvPath;
   if (std::system(cmd.c_str()) != 0)
     throw std::runtime_error("Failed to compile shader '" + name +
                              "'. Ensure 'glslc' is installed (Vulkan SDK).");
@@ -364,13 +365,19 @@ VulkanBackend::VulkanBackend() {
         void main() {                                                                                                                                                                    
             int m = int(gl_GlobalInvocationID.x);                                                                                                                                        
             int n = int(gl_GlobalInvocationID.y);                                                                                                                                        
-            if (m < p.M && n < p.N) {                                                                                                                                                    
-                float sum = 0.0;                                                                                                                                                         
-                for (int k = 0; k < p.K; ++k) {                                                                                                                                          
-                    float a_val = p.tA == 1 ? a[k * p.M + m] : a[m * p.K + k];                                                                                                           
-                    float b_val = p.tB == 1 ? b[n * p.K + k] : b[k * p.N + n];                                                                                                           
-                    sum += a_val * b_val;                                                                                                                                                
-                }                                                                                                                                                                        
+            if (m < p.M && n < p.N) {      
+                float sum = 0.0; 
+                
+                // Branch manually hoisted out of the hot loop to match CUDA performance 
+                if (p.tA == 0 && p.tB == 0) {                                            
+                    for (int k = 0; k < p.K; ++k) sum += a[m * p.K + k] * b[k * p.N + n];
+                } else if (p.tA == 1 && p.tB == 0) {                                     
+                    for (int k = 0; k < p.K; ++k) sum += a[k * p.M + m] * b[k * p.N + n];
+                } else if (p.tA == 0 && p.tB == 1) {                                     
+                    for (int k = 0; k < p.K; ++k) sum += a[m * p.K + k] * b[n * p.K + k];
+                } else {                                                                 
+                    for (int k = 0; k < p.K; ++k) sum += a[k * p.M + m] * b[n * p.K + k];
+                }                                                                        
                 c[m * p.N + n] = sum;                                                                                                                                                    
             }                                                                                                                                                                            
         }                                                                                                                                                                                
@@ -542,9 +549,22 @@ static void runImmediateCommand(std::function<void(VkCommandBuffer)> func) {
 void VulkanBackend::memset(void *ptr, int value, size_t bytes) {
   if (bytes == 0)
     return;
-  runImmediateCommand([&](VkCommandBuffer cmd) {
-    vkCmdFillBuffer(cmd, (VkBuffer)(uint64_t)ptr, 0, bytes, value);
-  });
+
+  ensure_recording();
+  vkCmdFillBuffer(commandBuffers[currentFrame], (VkBuffer)(uint64_t)ptr, 0,
+                  bytes, value);
+
+  VkMemoryBarrier mb{};
+  mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+  mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  vkCmdPipelineBarrier(
+      commandBuffers[currentFrame], VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+
+  currentBatchSize++;
+  if (currentBatchSize >= BATCH_SIZE_LIMIT)
+    flush_batch();
 }
 
 void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
@@ -560,51 +580,101 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     vkCmdCopyBuffer(commandBuffers[currentFrame], (VkBuffer)(uint64_t)src,
                     (VkBuffer)(uint64_t)dst, 1, &copyRegion);
 
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(commandBuffers[currentFrame],
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0,
+                         nullptr, 0, nullptr);
+
     currentBatchSize++;
     if (currentBatchSize >= BATCH_SIZE_LIMIT)
       flush_batch();
     return;
   }
-  if (isRecording)
-    flush_batch();
-  VK_CHECK(vkQueueWaitIdle(computeQueue));
-  auto ensure_staging = [&](size_t req_bytes) {
-    if (stagingSize < req_bytes) {
-      if (stagingBuffer) {
-        vkUnmapMemory(device, stagingMemory);
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingMemory, nullptr);
+
+  auto get_staging = [&](size_t req_bytes, size_t &offset) {
+    size_t aligned = (req_bytes + 255) & ~255;
+    if (!stagingBuffer || stagingOffset + aligned > stagingSize) {
+      if (isRecording)
+        flush_batch();
+      VK_CHECK(vkQueueWaitIdle(computeQueue));
+      stagingOffset = 0; // Safe because queue is idle
+      if (stagingSize < aligned) {
+        if (stagingBuffer) {
+          vkUnmapMemory(device, stagingMemory);
+          vkDestroyBuffer(device, stagingBuffer, nullptr);
+          vkFreeMemory(device, stagingMemory, nullptr);
+        }
+        stagingSize =
+            aligned * 2 < 16 * 1024 * 1024 ? 16 * 1024 * 1024 : aligned * 2;
+        createBuffer(stagingSize,
+                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     stagingBuffer, stagingMemory);
+        VK_CHECK(vkMapMemory(device, stagingMemory, 0, stagingSize, 0,
+                             &stagingMapped));
       }
-      stagingSize = req_bytes * 2; // grow by 2x to limit future allocations
-      createBuffer(stagingSize,
-                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                   stagingBuffer, stagingMemory);
-      VK_CHECK(vkMapMemory(device, stagingMemory, 0, stagingSize, 0,
-                           &stagingMapped));
     }
+    offset = stagingOffset;
+    stagingOffset += aligned;
   };
+
   if (src_dev.type == DeviceType::CPU && dst_dev.type == DeviceType::VULKAN) {
-    ensure_staging(bytes);
-    std::memcpy(stagingMapped, src, bytes);
-    runImmediateCommand([&](VkCommandBuffer cmd) {
-      VkBufferCopy copyRegion{};
-      copyRegion.size = bytes;
-      vkCmdCopyBuffer(cmd, stagingBuffer, (VkBuffer)(uint64_t)dst, 1,
-                      &copyRegion);
-    });
+    size_t offset = 0;
+    get_staging(bytes, offset);
+    std::memcpy((char *)stagingMapped + offset, src, bytes);
+
+    ensure_recording();
+    VkBufferCopy copyRegion{};
+    copyRegion.srcOffset = offset;
+    copyRegion.dstOffset = 0;
+    copyRegion.size = bytes;
+    vkCmdCopyBuffer(commandBuffers[currentFrame], stagingBuffer,
+                    (VkBuffer)(uint64_t)dst, 1, &copyRegion);
+
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(commandBuffers[currentFrame],
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0,
+                         nullptr, 0, nullptr);
+
+    currentBatchSize++;
+    if (currentBatchSize >= BATCH_SIZE_LIMIT)
+      flush_batch();
   } else if (src_dev.type == DeviceType::VULKAN &&
              dst_dev.type == DeviceType::CPU) {
-    ensure_staging(bytes);
-    runImmediateCommand([&](VkCommandBuffer cmd) {
-      VkBufferCopy copyRegion{};
-      copyRegion.size = bytes;
-      vkCmdCopyBuffer(cmd, (VkBuffer)(uint64_t)src, stagingBuffer, 1,
-                      &copyRegion);
-    });
-    std::memcpy(dst, stagingMapped, bytes);
+    size_t offset = 0;
+    get_staging(bytes, offset);
+
+    ensure_recording();
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(
+        commandBuffers[currentFrame], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+
+    VkBufferCopy copyRegion{};
+    copyRegion.srcOffset = 0;
+    copyRegion.dstOffset = offset;
+    copyRegion.size = bytes;
+    vkCmdCopyBuffer(commandBuffers[currentFrame], (VkBuffer)(uint64_t)src,
+                    stagingBuffer, 1, &copyRegion);
+
+    flush_batch();
+    VK_CHECK(vkQueueWaitIdle(computeQueue));
+    std::memcpy(dst, (char *)stagingMapped + offset, bytes);
+    stagingOffset =
+        0; // Free entire staging buffer since we just forced a full wait
   }
 }
 
