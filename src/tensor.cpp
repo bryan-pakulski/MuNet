@@ -67,6 +67,15 @@ Tensor Tensor::matmul(const Tensor &other) const {
 Tensor Tensor::relu() const { return ops::relu(*this); }
 
 // --- Utilities ---
+struct ToBackward : public Node {
+  Device src_device;
+  ToBackward(Device dev) : src_device(dev) {}
+  std::string name() const override { return "ToBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    return {grads[0].to(src_device)};
+  }
+};
+
 Tensor Tensor::to(Device dev) const {
   if (device() == dev)
     return *this;
@@ -87,6 +96,14 @@ Tensor Tensor::to(Device dev) const {
     // CPU -> CPU routing
     out.impl_->backend().copy(data(), out.data(), bytes(), device(), dev);
   }
+
+  if (requires_grad()) {
+    auto fn = std::make_shared<ToBackward>(device());
+    ops::link_backward_edges(fn.get(), {*this});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  ops::record_trace(out, "To", {*this});
 
   return out;
 }

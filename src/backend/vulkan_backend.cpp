@@ -62,6 +62,7 @@ static std::vector<std::string> batchProfileNames[MAX_FRAMES_IN_FLIGHT];
 static std::unordered_map<size_t, std::vector<uint64_t>> free_pool;
 static std::unordered_map<uint64_t, size_t> allocation_sizes;
 static std::unordered_map<uint64_t, VkDeviceMemory> allocation_memory;
+static std::vector<uint64_t> deferred_frees[MAX_FRAMES_IN_FLIGHT];
 
 // --- Persistent Staging Buffers ---
 static VkBuffer stagingBuffer = VK_NULL_HANDLE;
@@ -363,8 +364,8 @@ VulkanBackend::VulkanBackend() {
         layout(binding = 2) buffer C { float c[]; };                                                                                                                                     
         layout(push_constant) uniform Push { int M, K, N, tA, tB; } p;                                                                                                                   
         void main() {                                                                                                                                                                    
-            int m = int(gl_GlobalInvocationID.x);                                                                                                                                        
-            int n = int(gl_GlobalInvocationID.y);                                                                                                                                        
+            int n = int(gl_GlobalInvocationID.x); // n maps to N (columns), fast dimension                                                                                                                                       
+            int m = int(gl_GlobalInvocationID.y); // m maps to M (rows), slow dimension                                                                                                                                       
             if (m < p.M && n < p.N) {      
                 float sum = 0.0; 
                 
@@ -441,9 +442,7 @@ void VulkanBackend::deallocate(void *ptr) {
   if (!ptr)
     return;
   uint64_t handle = (uint64_t)ptr;
-  if (allocation_sizes.count(handle)) {
-    free_pool[allocation_sizes[handle]].push_back(handle);
-  }
+  deferred_frees[currentFrame].push_back(handle);
 }
 
 // --- Batch Management ---
@@ -451,10 +450,6 @@ void VulkanBackend::deallocate(void *ptr) {
 void flush_batch() {
   if (!isRecording)
     return;
-  if (currentBatchSize == 0) {
-    isRecording = false;
-    return; // Nothing to submit
-  }
 
   VkCommandBuffer cmd = commandBuffers[currentFrame];
 
@@ -486,6 +481,14 @@ void ensure_recording() {
   // Wait for the NEXT frame slot to be free (Fence Wait)
   VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE,
                            UINT64_MAX));
+
+  // Process deferred frees safely now that the GPU is done with this frame
+  for (uint64_t handle : deferred_frees[currentFrame]) {
+    if (allocation_sizes.count(handle)) {
+      free_pool[allocation_sizes[handle]].push_back(handle);
+    }
+  }
+  deferred_frees[currentFrame].clear();
 
   // Process Profiling for the FINISHED frame
 #ifdef ENABLE_PROFILING
@@ -669,7 +672,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     copyRegion.size = bytes;
     vkCmdCopyBuffer(commandBuffers[currentFrame], (VkBuffer)(uint64_t)src,
                     stagingBuffer, 1, &copyRegion);
-
+    currentBatchSize++;
     flush_batch();
     VK_CHECK(vkQueueWaitIdle(computeQueue));
     std::memcpy(dst, (char *)stagingMapped + offset, bytes);
@@ -788,8 +791,9 @@ void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
   struct {
     int m, k, n, ta, tb;
   } pc = {M, K, N, transA, transB};
+  // Dispatch x maps to N (cols), y maps to M (rows)
   dispatch_kernel(matmulPipeline, {a.data(), b.data(), out.data()}, &pc,
-                  sizeof(pc), (M + 15) / 16, (N + 15) / 16, 1);
+                  sizeof(pc), (N + 15) / 16, (M + 15) / 16, 1);
 }
 
 } // namespace munet

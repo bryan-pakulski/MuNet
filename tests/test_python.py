@@ -242,5 +242,48 @@ class TestMuNetPythonBindings(unittest.TestCase):
         print(f"\nTraining Loop -> Start Loss: {loss_start:.4f} | End Loss: {loss_end:.4f}")
         self.assertLess(loss_end, loss_start)
 
+    def test_multi_device_model_parallelism(self):
+        """Test seamless autograd across CPU and GPU boundaries."""
+        # Find an available GPU
+        gpu_dev = None
+        for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+            try:
+                gpu_dev = munet.Device(dev_type, 0)
+                break
+            except RuntimeError:
+                continue
+        
+        if gpu_dev is None:
+            print("\nSkipping multi-device test (No GPU available).")
+            return
+        cpu_dev = munet.Device(munet.DeviceType.CPU, 0)
+        # --- Layer 1 on CPU ---
+        x_cpu = munet.Tensor([1, 3], device=cpu_dev)
+        w1_cpu = munet.Tensor([3, 4], device=cpu_dev, requires_grad=True)
+        np.array(x_cpu, copy=False)[:] = [[1.0, 2.0, 3.0]]
+        w1_cpu.uniform_(-0.5, 0.5)
+        # --- Layer 2 on GPU ---
+        w2_gpu = munet.Tensor([4, 2], device=gpu_dev, requires_grad=True)
+        w2_gpu.uniform_(-0.5, 0.5)
+        # --- Forward Pass (Cross-device) ---
+        h_cpu = x_cpu @ w1_cpu
+        h_gpu = h_cpu.to(gpu_dev)  # Autograd boundary crossing!
+        pred_gpu = h_gpu @ w2_gpu
+        
+        target_gpu = munet.Tensor([1, 2], device=gpu_dev)
+        target_gpu.uniform_(-1.0, 1.0)
+        
+        diff = pred_gpu - target_gpu
+        loss = (diff * diff).sum()
+        # --- Backward Pass ---
+        loss.backward()
+        # --- Verify Gradients Synchronized Correctly ---
+        self.assertTrue(w1_cpu.grad is not None)
+        self.assertTrue(w2_gpu.grad is not None)
+        self.assertEqual(w1_cpu.grad.device.type, munet.DeviceType.CPU)
+        self.assertEqual(w2_gpu.grad.device.type, gpu_dev.type)
+        print(f"\nSuccessfully backpropagated from {gpu_dev.type} back to CPU!")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
