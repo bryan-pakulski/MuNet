@@ -75,6 +75,10 @@ static VkCommandBuffer immediateCmdBuffer = VK_NULL_HANDLE;
 static VkPipelineLayout pipelineLayout;
 static VkPipeline addPipeline, mulPipeline, subPipeline, updatePipeline;
 static VkPipeline matmulPipeline, reluPipeline, reluBackwardPipeline;
+static VkPipeline sigmoidPipeline, sigmoidBackwardPipeline;
+static VkPipeline softmaxPipeline, softmaxBackwardPipeline;
+static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
+static VkPipeline crossEntropyPipeline, crossEntropyBackwardPipeline;
 
 // --- Helpers ---
 static size_t round_up_alloc_size(size_t bytes) {
@@ -197,9 +201,9 @@ VulkanBackend::VulkanBackend() {
   poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
   VK_CHECK(vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool));
 
-  // Layouts: Binding 0, 1, 2
-  VkDescriptorSetLayoutBinding bindings[3] = {};
-  for (int i = 0; i < 3; i++) {
+  // Layouts: Bindings 0 through 7
+  VkDescriptorSetLayoutBinding bindings[8] = {};
+  for (int i = 0; i < 8; i++) {
     bindings[i].binding = i;
     bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[i].descriptorCount = 1;
@@ -207,7 +211,7 @@ VulkanBackend::VulkanBackend() {
   }
   VkDescriptorSetLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  layoutInfo.bindingCount = 3;
+  layoutInfo.bindingCount = 8;
   layoutInfo.pBindings = bindings;
   VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
                                        &descriptorSetLayout));
@@ -254,9 +258,9 @@ VulkanBackend::VulkanBackend() {
         vkCreateQueryPool(device, &queryPoolInfo, nullptr, &queryPools[i]));
 #endif
     // Create one descriptor pool per frame
-    // We have 3 bindings per set. So poolSize should be roughly 3x maxSets
+    // We have 8 bindings per set. So poolSize should be roughly 8x maxSets
     VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                  MAX_DESCRIPTORS_PER_FRAME * 3};
+                                  MAX_DESCRIPTORS_PER_FRAME * 8};
     VkDescriptorPoolCreateInfo descPoolInfo{};
     descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     descPoolInfo.poolSizeCount = 1;
@@ -290,99 +294,697 @@ VulkanBackend::VulkanBackend() {
     return pipeline;
   };
 
-  addPipeline = createComputePipeline(
-      "add",
-      R"(                                                                                                                                         
-        #version 450                                                                                                                                                                     
-        layout(local_size_x = 256) in;                                                                                                                                                   
-        layout(binding = 0) buffer A { float a[]; };                                                                                                                                     
-        layout(binding = 1) buffer B { float b[]; };                                                                                                                                     
-        layout(binding = 2) buffer C { float c[]; };                                                                                                                                     
-        layout(push_constant) uniform Push { uint N; } p;                                                                                                                                
-        void main() { if (gl_GlobalInvocationID.x < p.N) c[gl_GlobalInvocationID.x] = a[gl_GlobalInvocationID.x] + b[gl_GlobalInvocationID.x]; }                                         
+  addPipeline = createComputePipeline("add",
+                                      R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer B { float b[]; };
+        layout(binding = 2) buffer C { float c[]; };
+        layout(push_constant) uniform Push { uint N; } p;
+        void main() { if (gl_GlobalInvocationID.x < p.N) c[gl_GlobalInvocationID.x] = a[gl_GlobalInvocationID.x] + b[gl_GlobalInvocationID.x]; }
     )");
-  mulPipeline = createComputePipeline(
-      "mul",
-      R"(                                                                                                                                         
-        #version 450                                                                                                                                                                     
-        layout(local_size_x = 256) in;                                                                                                                                                   
-        layout(binding = 0) buffer A { float a[]; };                                                                                                                                     
-        layout(binding = 1) buffer B { float b[]; };                                                                                                                                     
-        layout(binding = 2) buffer C { float c[]; };                                                                                                                                     
-        layout(push_constant) uniform Push { uint N; } p;                                                                                                                                
-        void main() { if (gl_GlobalInvocationID.x < p.N) c[gl_GlobalInvocationID.x] = a[gl_GlobalInvocationID.x] * b[gl_GlobalInvocationID.x]; }                                         
+  mulPipeline = createComputePipeline("mul",
+                                      R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer B { float b[]; };
+        layout(binding = 2) buffer C { float c[]; };
+        layout(push_constant) uniform Push { uint N; } p;
+        void main() { if (gl_GlobalInvocationID.x < p.N) c[gl_GlobalInvocationID.x] = a[gl_GlobalInvocationID.x] * b[gl_GlobalInvocationID.x]; }
     )");
-  subPipeline = createComputePipeline(
-      "sub",
-      R"(                                                                                                                                         
-        #version 450                                                                                                                                                                     
-        layout(local_size_x = 256) in;                                                                                                                                                   
-        layout(binding = 0) buffer A { float a[]; };                                                                                                                                     
-        layout(binding = 1) buffer B { float b[]; };                                                                                                                                     
-        layout(binding = 2) buffer C { float c[]; };                                                                                                                                     
-        layout(push_constant) uniform Push { uint N; } p;                                                                                                                                
-        void main() { if (gl_GlobalInvocationID.x < p.N) c[gl_GlobalInvocationID.x] = a[gl_GlobalInvocationID.x] - b[gl_GlobalInvocationID.x]; }                                         
+  subPipeline = createComputePipeline("sub",
+                                      R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer B { float b[]; };
+        layout(binding = 2) buffer C { float c[]; };
+        layout(push_constant) uniform Push { uint N; } p;
+        void main() { if (gl_GlobalInvocationID.x < p.N) c[gl_GlobalInvocationID.x] = a[gl_GlobalInvocationID.x] - b[gl_GlobalInvocationID.x]; }
     )");
-  updatePipeline = createComputePipeline(
-      "update",
-      R"(                                                                                                                                   
-        #version 450                                                                                                                                                                     
-        layout(local_size_x = 256) in;                                                                                                                                                   
-        layout(binding = 0) buffer W { float w[]; };                                                                                                                                     
-        layout(binding = 1) buffer G { float g[]; };                                                                                                                                     
-        layout(push_constant) uniform Push { uint N; float lr; } p;                                                                                                                      
-        void main() { if (gl_GlobalInvocationID.x < p.N) w[gl_GlobalInvocationID.x] -= p.lr * g[gl_GlobalInvocationID.x]; }                                                              
+  updatePipeline = createComputePipeline("update",
+                                         R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer W { float w[]; };
+        layout(binding = 1) buffer G { float g[]; };
+        layout(push_constant) uniform Push { uint N; float lr; } p;
+        void main() { if (gl_GlobalInvocationID.x < p.N) w[gl_GlobalInvocationID.x] -= p.lr * g[gl_GlobalInvocationID.x]; }
     )");
-  reluPipeline = createComputePipeline(
-      "relu",
-      R"(                                                                                                                                       
-        #version 450                                                                                                                                                                     
-        layout(local_size_x = 256) in;                                                                                                                                                   
-        layout(binding = 0) buffer A { float a[]; };                                                                                                                                     
-        layout(binding = 1) buffer C { float c[]; };                                                                                                                                     
-        layout(push_constant) uniform Push { uint N; } p;                                                                                                                                
-        void main() { uint i = gl_GlobalInvocationID.x; if (i < p.N) c[i] = max(0.0, a[i]); }                                                                                            
+  reluPipeline = createComputePipeline("relu",
+                                       R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer C { float c[]; };
+        layout(push_constant) uniform Push { uint N; } p;
+        void main() { uint i = gl_GlobalInvocationID.x; if (i < p.N) c[i] = max(0.0, a[i]); }
     )");
-  reluBackwardPipeline = createComputePipeline(
-      "relu_back",
-      R"(                                                                                                                          
-        #version 450                                                                                                                                                                     
-        layout(local_size_x = 256) in;                                                                                                                                                   
-        layout(binding = 0) buffer GO { float go[]; };                                                                                                                                   
-        layout(binding = 1) buffer I { float i[]; };                                                                                                                                     
-        layout(binding = 2) buffer GI { float gi[]; };                                                                                                                                   
-        layout(push_constant) uniform Push { uint N; } p;                                                                                                                                
-        void main() { uint id = gl_GlobalInvocationID.x; if (id < p.N) gi[id] = (i[id] > 0.0) ? go[id] : 0.0; }                                                                          
+  reluBackwardPipeline = createComputePipeline("relu_back",
+                                               R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer GO { float go[]; };
+        layout(binding = 1) buffer I { float i[]; };
+        layout(binding = 2) buffer GI { float gi[]; };
+        layout(push_constant) uniform Push { uint N; } p;
+        void main() { uint id = gl_GlobalInvocationID.x; if (id < p.N) gi[id] = (i[id] > 0.0) ? go[id] : 0.0; }
     )");
-  matmulPipeline = createComputePipeline(
-      "matmul",
-      R"(                                                                                                                                   
-        #version 450                                                                                                                                                                     
-        layout(local_size_x = 16, local_size_y = 16) in;                                                                                                                                 
-        layout(binding = 0) buffer A { float a[]; };                                                                                                                                     
-        layout(binding = 1) buffer B { float b[]; };                                                                                                                                     
-        layout(binding = 2) buffer C { float c[]; };                                                                                                                                     
-        layout(push_constant) uniform Push { int M, K, N, tA, tB; } p;                                                                                                                   
-        void main() {                                                                                                                                                                    
-            int n = int(gl_GlobalInvocationID.x); // n maps to N (columns), fast dimension                                                                                                                                       
-            int m = int(gl_GlobalInvocationID.y); // m maps to M (rows), slow dimension                                                                                                                                       
-            if (m < p.M && n < p.N) {      
-                float sum = 0.0; 
-                
-                // Branch manually hoisted out of the hot loop to match CUDA performance 
-                if (p.tA == 0 && p.tB == 0) {                                            
+  sigmoidPipeline = createComputePipeline("sigmoid",
+                                          R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer C { float c[]; };
+        layout(push_constant) uniform Push { uint N; } p;
+        void main() { uint i = gl_GlobalInvocationID.x; if (i < p.N) c[i] = 1.0 / (1.0 + exp(-a[i])); }
+    )");
+  sigmoidBackwardPipeline = createComputePipeline("sigmoid_back",
+                                                  R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer GO { float go[]; };
+        layout(binding = 1) buffer O { float out_d[]; };
+        layout(binding = 2) buffer GI { float gi[]; };
+        layout(push_constant) uniform Push { uint N; } p;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N) { float s = out_d[i]; gi[i] = go[i] * s * (1.0 - s); }
+        }
+    )");
+  softmaxPipeline = createComputePipeline("softmax",
+                                          R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer I { float in_d[]; };
+        layout(binding = 1) buffer O { float out_d[]; };
+        layout(push_constant) uniform P { int B, C; } u;
+        void main() {
+            int b = int(gl_GlobalInvocationID.x);
+            if (b < u.B) {
+                float max_val = -1e30;
+                for (int i = 0; i < u.C; ++i) { float v = in_d[b * u.C + i]; if (v > max_val) max_val = v; }
+                float sum_exp = 0.0;
+                for (int i = 0; i < u.C; ++i) { float e = exp(in_d[b * u.C + i] - max_val); out_d[b * u.C + i] = e; sum_exp += e; }
+                for (int i = 0; i < u.C; ++i) out_d[b * u.C + i] /= sum_exp;
+            }
+        }
+    )");
+  softmaxBackwardPipeline = createComputePipeline("softmax_back",
+                                                  R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer GO { float go[]; };
+        layout(binding = 1) buffer O { float out_d[]; };
+        layout(binding = 2) buffer GI { float gi[]; };
+        layout(push_constant) uniform P { int B, C; } u;
+        void main() {
+            int b = int(gl_GlobalInvocationID.x);
+            if (b < u.B) {
+                float dot = 0.0;
+                for (int i = 0; i < u.C; ++i) dot += out_d[b * u.C + i] * go[b * u.C + i];
+                for (int i = 0; i < u.C; ++i) gi[b * u.C + i] = out_d[b * u.C + i] * (go[b * u.C + i] - dot);
+            }
+        }
+    )");
+
+  mseLossPipeline = createComputePipeline("mse_loss",
+                                          R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer P { float p[]; };
+        layout(binding = 1) buffer T { float t[]; };
+        layout(binding = 2) buffer O { uint out_u[]; };
+        layout(push_constant) uniform Push { uint N; } u;
+
+        #define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) \
+        do { \
+             uint expected = BUFFER[IDX]; \
+             uint current; \
+             while(true) { \
+                    uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); \
+                    current = atomicCompSwap(BUFFER[IDX], expected, next); \
+                    if (current == expected) break; \
+                    expected = current; \
+             } \
+        } while(false)
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < u.N) {
+                float diff = p[i] - t[i];
+                float val = (diff * diff) / float(u.N);
+                ATOMIC_ADD_FLOAT(out_u, 0, val);
+            }
+        }
+    )");
+  mseLossBackwardPipeline = createComputePipeline("mse_loss_back",
+                                                  R"(
+        #version 450
+        layout(local_size_x = 256) in;
+        layout(binding = 0) buffer GO { float go[]; };
+        layout(binding = 1) buffer P { float p[]; };
+        layout(binding = 2) buffer T { float t[]; };
+        layout(binding = 3) buffer GI { float gi[]; };
+        layout(push_constant) uniform Push { uint N; } u;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < u.N) {
+                gi[i] = go[0] * 2.0 * (p[i] - t[i]) / float(u.N);
+            }
+        }
+    )");
+
+  crossEntropyPipeline = createComputePipeline(
+      "ce_loss",
+      R"(
+         #version 450
+         layout(local_size_x = 256) in;
+         layout(binding = 0) buffer L { float logits[]; };
+         layout(binding = 1) buffer T { float targets[]; };
+         layout(binding = 2) buffer O { uint out_u[]; };
+         layout(push_constant) uniform Push { int B; int C; } u;
+
+         #define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) \
+         do { \
+              uint expected = BUFFER[IDX]; \
+              uint current; \
+              while(true) { \
+                     uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); \
+                     current = atomicCompSwap(BUFFER[IDX], expected, next); \
+                     if (current == expected) break; \
+                     expected = current; \
+              } \
+         } while(false)
+
+         void main() {
+             int b = int(gl_GlobalInvocationID.x);
+             if (b < u.B) {
+                 float max_val = -1e30;
+                 for (int i=0; i<u.C; ++i) max_val = max(max_val, logits[b*u.C + i]);
+                 float sum_exp = 0.0;
+                 for (int i=0; i<u.C; ++i) sum_exp += exp(logits[b*u.C + i] - max_val);
+                 float loss = 0.0;
+                 for (int i=0; i<u.C; ++i) {
+                     float prob = exp(logits[b*u.C + i] - max_val) / sum_exp;
+                     float target = targets[b*u.C + i];
+                     if (target > 0.0) loss -= target * log(prob + 1e-9);
+                 }
+                 ATOMIC_ADD_FLOAT(out_u, 0, loss / float(u.B));
+             }
+         }
+     )");
+
+  crossEntropyBackwardPipeline = createComputePipeline(
+      "ce_loss_back",
+      R"(
+         #version 450
+         layout(local_size_x = 256) in;
+         layout(binding = 0) buffer GO { float go[]; };
+         layout(binding = 1) buffer L { float logits[]; };
+         layout(binding = 2) buffer T { float targets[]; };
+         layout(binding = 3) buffer GI { float gi[]; };
+         layout(push_constant) uniform Push { int B; int C; } u;
+         void main() {
+             int b = int(gl_GlobalInvocationID.x);
+             if (b < u.B) {
+                 float max_val = -1e30;
+                 for (int i=0; i<u.C; ++i) max_val = max(max_val, logits[b*u.C + i]);
+                 float sum_exp = 0.0;
+                 for (int i=0; i<u.C; ++i) sum_exp += exp(logits[b*u.C + i] - max_val);
+                 float go_val = go[0];
+                 for (int i=0; i<u.C; ++i) {
+                     float prob = exp(logits[b*u.C + i] - max_val) / sum_exp;
+                     gi[b*u.C + i] = go_val * (prob - targets[b*u.C + i]) / float(u.B);
+                 }
+             }
+         }
+     )");
+
+  matmulPipeline = createComputePipeline("matmul",
+                                         R"(
+        #version 450
+        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer B { float b[]; };
+        layout(binding = 2) buffer C { float c[]; };
+        layout(push_constant) uniform Push { int M, K, N, tA, tB; } p;
+        void main() {
+            int n = int(gl_GlobalInvocationID.x); // n maps to N (columns), fast dimension
+            int m = int(gl_GlobalInvocationID.y); // m maps to M (rows), slow dimension
+            if (m < p.M && n < p.N) {
+                float sum = 0.0;
+
+                // Branch manually hoisted out of the hot loop to match CUDA performance
+                if (p.tA == 0 && p.tB == 0) {
                     for (int k = 0; k < p.K; ++k) sum += a[m * p.K + k] * b[k * p.N + n];
-                } else if (p.tA == 1 && p.tB == 0) {                                     
+                } else if (p.tA == 1 && p.tB == 0) {
                     for (int k = 0; k < p.K; ++k) sum += a[k * p.M + m] * b[k * p.N + n];
-                } else if (p.tA == 0 && p.tB == 1) {                                     
+                } else if (p.tA == 0 && p.tB == 1) {
                     for (int k = 0; k < p.K; ++k) sum += a[m * p.K + k] * b[n * p.K + k];
-                } else {                                                                 
+                } else {
                     for (int k = 0; k < p.K; ++k) sum += a[k * p.M + m] * b[n * p.K + k];
-                }                                                                        
-                c[m * p.N + n] = sum;                                                                                                                                                    
-            }                                                                                                                                                                            
-        }                                                                                                                                                                                
+                }
+                c[m * p.N + n] = sum;
+            }
+        }
     )");
+
+  conv2dPipeline = createComputePipeline("conv2d",
+                                         R"(
+         #version 450
+         layout(local_size_x=256) in;
+         layout(binding=0) buffer I { float in_d[]; };
+         layout(binding=1) buffer W { float w_d[]; };
+         layout(binding=2) buffer B_ { float b_d[]; }; // Optional
+         layout(binding=3) buffer O { float out_d[]; };
+         layout(push_constant) uniform P { int B, iC, iH, iW, oC, kH, kW, s, p, oH, oW, has_bias; } u;
+         void main() {
+                 int idx = int(gl_GlobalInvocationID.x);
+                 int total = u.B * u.oC * u.oH * u.oW;
+                 if(idx < total) {
+                         int ow = idx % u.oW; int tmp = idx / u.oW;
+                         int oh = tmp % u.oH; tmp /= u.oH;
+                         int oc = tmp % u.oC; int b = tmp / u.oC;
+                         float sum = (u.has_bias == 1) ? b_d[oc] : 0.0;
+
+                         for(int ic=0; ic<u.iC; ++ic) {
+                                 for(int kh=0; kh<u.kH; ++kh) {
+                                         for(int kw=0; kw<u.kW; ++kw) {
+                                                 int ih = oh*u.s - u.p + kh;
+                                                 int iw = ow*u.s - u.p + kw;
+                                                 if(ih>=0 && ih<u.iH && iw>=0 && iw<u.iW) {
+                                                         int i_idx = (b * u.iC + ic) * (u.iH * u.iW) + ih * u.iW + iw;
+                                                         int w_idx = (oc * u.iC + ic) * (u.kH * u.kW) + kh * u.kW + kw;
+                                                         sum += in_d[i_idx] * w_d[w_idx];
+                                                 }
+                                         }
+                                 }
+                         }
+                         out_d[idx] = sum;
+                 }
+         }
+     )");
+
+  conv2dBackInputPipeline = createComputePipeline("conv2d_bi",
+                                                  R"(
+         #version 450
+         layout(local_size_x=256) in;
+         layout(binding=0) buffer GO { float go[]; };
+         layout(binding=1) buffer W { float w[]; };
+         layout(binding=2) buffer GI { float gi[]; };
+         layout(push_constant) uniform P { int B, iC, iH, iW, oC, kH, kW, s, p, oH, oW; } u;
+         void main() {
+                 int idx = int(gl_GlobalInvocationID.x);
+                 int total = u.B * u.iC * u.iH * u.iW;
+                 if(idx < total) {
+                         int iw = idx % u.iW; int tmp = idx / u.iW;
+                         int ih = tmp % u.iH; tmp /= u.iH;
+                         int ic = tmp % u.iC; int b = tmp / u.iC;
+                         float d_in = 0.0;
+                         for(int oc=0; oc<u.oC; ++oc) {
+                                 for(int kh=0; kh<u.kH; ++kh) {
+                                         for(int kw=0; kw<u.kW; ++kw) {
+                                                 int num_h = ih + u.p - kh;
+                                                 int num_w = iw + u.p - kw;
+                                                 if (num_h >= 0 && num_w >= 0 && num_h % u.s == 0 && num_w % u.s == 0) {
+                                                          int oh = num_h / u.s;
+                                                          int ow = num_w / u.s;
+                                                          if(oh>=0 && oh<u.oH && ow>=0 && ow<u.oW) {
+                                                                  int go_idx = (b*u.oC+oc)*(u.oH*u.oW) + oh*u.oW + ow;
+                                                                  int w_idx = (oc*u.iC+ic)*(u.kH*u.kW) + kh*u.kW + kw;
+                                                                  d_in += go[go_idx] * w[w_idx];
+                                                          }
+                                                 }
+                                         }
+                                 }
+                         }
+                         gi[idx] = d_in;
+                 }
+         }
+     )");
+
+  conv2dBackWeightPipeline = createComputePipeline("conv2d_bw",
+                                                   R"(
+         #version 450
+         layout(local_size_x=256) in;
+         layout(binding=0) buffer GO { float go[]; };
+         layout(binding=1) buffer I { float in_d[]; };
+         layout(binding=2) buffer GW { float gw[]; };
+         layout(push_constant) uniform P { int B, iC, iH, iW, oC, kH, kW, s, p, oH, oW; } u;
+         void main() {
+                 int idx = int(gl_GlobalInvocationID.x);
+                 int total = u.oC * u.iC * u.kH * u.kW;
+                 if(idx < total) {
+                         int kw = idx % u.kW; int tmp = idx / u.kW;
+                         int kh = tmp % u.kH; tmp /= u.kH;
+                         int ic = tmp % u.iC; int oc = tmp / u.iC;
+                         float dw = 0.0;
+                         for(int b=0; b<u.B; ++b) {
+                                 for(int oh=0; oh<u.oH; ++oh) {
+                                         for(int ow=0; ow<u.oW; ++ow) {
+                                                 int ih = oh*u.s - u.p + kh;
+                                                 int iw = ow*u.s - u.p + kw;
+                                                 if(ih>=0 && ih<u.iH && iw>=0 && iw<u.iW) {
+                                                          int in_idx = (b*u.iC+ic)*(u.iH*u.iW) + ih*u.iW + iw;
+                                                          int go_idx = (b*u.oC+oc)*(u.oH*u.oW) + oh*u.oW + ow;
+                                                          dw += go[go_idx] * in_d[in_idx];
+                                                 }
+                                         }
+                                 }
+                         }
+                         gw[idx] = dw;
+                 }
+         }
+     )");
+
+  conv2dBackBiasPipeline = createComputePipeline("conv2d_bb",
+                                                 R"(
+         #version 450
+         layout(local_size_x=256) in;
+         layout(binding=0) buffer GO { float go[]; };
+         layout(binding=1) buffer GB { float gb[]; };
+         layout(push_constant) uniform P { int B, oC, oH, oW; } u;
+         void main() {
+                 int oc = int(gl_GlobalInvocationID.x);
+                 if(oc < u.oC) {
+                         float db = 0.0;
+                         for(int b=0; b<u.B; ++b) {
+                                 for(int i=0; i<u.oH*u.oW; ++i) {
+                                     int go_idx = (b*u.oC+oc)*(u.oH*u.oW) + i;
+                                     db += go[go_idx];
+                                 }
+                         }
+                         gb[oc] = db;
+                 }
+         }
+     )");
+
+  maxPoolPipeline = createComputePipeline("maxpool",
+                                          R"(
+         #version 450
+         layout(local_size_x=256) in;
+         layout(binding=0) buffer I { float in_d[]; };
+         layout(binding=1) buffer O { float out_d[]; };
+         layout(push_constant) uniform P { int B, C, iH, iW, k, s, p, oH, oW; } u;
+         void main() {
+                 int idx = int(gl_GlobalInvocationID.x);
+                 int total = u.B*u.C*u.oH*u.oW;
+                 if(idx < total) {
+                         int ow = idx % u.oW; int tmp = idx / u.oW;
+                         int oh = tmp % u.oH; tmp /= u.oH;
+                         int c = tmp % u.C; int b = tmp / u.C;
+                         float max_val = -1e37;
+                         for(int kh=0; kh<u.k; ++kh) {
+                                 for(int kw=0; kw<u.k; ++kw) {
+                                         int ih = oh*u.s - u.p + kh;
+                                         int iw = ow*u.s - u.p + kw;
+                                         if(ih>=0 && ih<u.iH && iw>=0 && iw<u.iW) {
+                                                 float val = in_d[(b*u.C+c)*(u.iH*u.iW) + ih*u.iW + iw];
+                                                 if(val > max_val) max_val = val;
+                                         }
+                                 }
+                         }
+                         out_d[idx] = max_val;
+                 }
+         }
+     )");
+
+  maxPoolBackPipeline = createComputePipeline("maxpool_b",
+                                              R"(
+         #version 450
+         layout(local_size_x=256) in;
+         layout(binding=0) buffer GO { float go[]; };
+         layout(binding=1) buffer I { float in_d[]; };
+         layout(binding=2) buffer GI { uint gi_u[]; };
+         layout(push_constant) uniform P { int B, C, iH, iW, k, s, p, oH, oW; } u;
+
+         void atomicAddFloat(uint index, float val) {
+              uint expected = gi_u[index];
+              uint current;
+              while(true) {
+                     uint next = floatBitsToUint(uintBitsToFloat(expected) + val);
+                     current = atomicCompSwap(gi_u[index], expected, next);
+                     if (current == expected) break;
+                     expected = current;
+              }
+         }
+
+         void main() {
+                 int idx = int(gl_GlobalInvocationID.x);
+                 int total = u.B*u.C*u.oH*u.oW;
+                 if(idx < total) {
+                         int ow = idx % u.oW; int tmp = idx / u.oW;
+                         int oh = tmp % u.oH; tmp /= u.oH;
+                         int c = tmp % u.C; int b = tmp / u.C;
+
+                         float max_val = -1e37;
+                         int max_idx = -1;
+
+                         for(int kh=0; kh<u.k; ++kh) {
+                                 for(int kw=0; kw<u.k; ++kw) {
+                                         int ih = oh*u.s - u.p + kh;
+                                         int iw = ow*u.s - u.p + kw;
+                                         if(ih>=0 && ih<u.iH && iw>=0 && iw<u.iW) {
+                                                 int i_idx = (b*u.C+c)*(u.iH*u.iW) + ih*u.iW + iw;
+                                                 float val = in_d[i_idx];
+                                                 if(val > max_val) { max_val = val; max_idx = i_idx; }
+                                         }
+                                 }
+                         }
+
+                         if(max_idx != -1) {
+                                 atomicAddFloat(uint(max_idx), go[idx]);
+                         }
+                 }
+         }
+     )");
+
+  upsamplePipeline = createComputePipeline("upsample",
+                                           R"(
+         #version 450
+         layout(local_size_x=256) in;
+         layout(binding=0) buffer I { float in_d[]; };
+         layout(binding=1) buffer O { float out_d[]; };
+         layout(push_constant) uniform P { int B, C, iH, iW, scale; } u;
+         void main() {
+                 int idx = int(gl_GlobalInvocationID.x);
+                 int oH = u.iH * u.scale; int oW = u.iW * u.scale;
+                 int total = u.B*u.C*oH*oW;
+                 if(idx < total) {
+                          int ow = idx % oW; int tmp = idx / oW;
+                          int oh = tmp % oH; tmp /= oH;
+                          int c = tmp % u.C; int b = tmp / u.C;
+                          out_d[idx] = in_d[(b*u.C+c)*(u.iH*u.iW) + (oh/u.scale)*u.iW + (ow/u.scale)];
+                 }
+         }
+     )");
+
+  upsampleBackPipeline = createComputePipeline("upsample_b",
+                                               R"(
+         #version 450
+         layout(local_size_x=256) in;
+         layout(binding=0) buffer GO { float go[]; };
+         layout(binding=1) buffer GI { float gi[]; };
+         layout(push_constant) uniform P { int B, C, iH, iW, scale; } u;
+         void main() {
+                 int idx = int(gl_GlobalInvocationID.x);
+                 int total = u.B*u.C*u.iH*u.iW;
+                 if(idx < total) {
+                          int iw = idx % u.iW; int tmp = idx / u.iW;
+                          int ih = tmp % u.iH; tmp /= u.iH;
+                          int c = tmp % u.C; int b = tmp / u.C;
+                          float sum = 0.0;
+                          int oH = u.iH*u.scale; int oW = u.iW*u.scale;
+                          int oh_start = ih * u.scale;
+                          int ow_start = iw * u.scale;
+                          for(int y=0; y<u.scale; ++y) {
+                                  for(int x=0; x<u.scale; ++x) {
+                                          int go_idx = (b*u.C+c)*(oH*oW) + (oh_start+y)*oW + (ow_start+x);
+                                          sum += go[go_idx];
+                                  }
+                          }
+                          gi[idx] = sum;
+                 }
+         }
+     )");
+
+  // Collect Stats (Training): Sum and SqSum
+  bnCollectPipeline = createComputePipeline("bn_collect", R"(
+		#version 450
+		layout(local_size_x=256) in;
+		layout(binding=0) buffer I { float in_d[]; };
+		layout(binding=1) buffer S { uint sum_u[]; };
+		layout(binding=2) buffer SS { uint sq_sum_u[]; };
+		layout(push_constant) uniform P { int N, C, Spatial; } u;
+
+      #define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) \
+      do { \
+           uint expected = BUFFER[IDX]; \
+           uint current; \
+           while(true) { \
+                  uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); \
+                  current = atomicCompSwap(BUFFER[IDX], expected, next); \
+                  if (current == expected) break; \
+                  expected = current; \
+           } \
+      } while(false)
+
+		void main() {
+			 int idx = int(gl_GlobalInvocationID.x);
+			 if(idx < u.N) {
+					int s = idx % u.Spatial;
+					int tmp = idx / u.Spatial;
+					int c = tmp % u.C;
+					float val = in_d[idx];
+					ATOMIC_ADD_FLOAT(sum_u, c, val);
+					ATOMIC_ADD_FLOAT(sq_sum_u, c, val * val);
+			 }
+		}
+	)");
+
+  // Update Stats (Training): Calc Mean/Var, Update Running
+  bnUpdatePipeline = createComputePipeline("bn_update", R"(
+		#version 450
+		layout(local_size_x=256) in;
+		layout(binding=0) buffer RM { float rm[]; };
+		layout(binding=1) buffer RV { float rv[]; };
+		layout(binding=2) buffer SM { uint sm_u[]; }; // Aliased as uint for reading sums, writing mean
+		layout(binding=3) buffer SV { uint sv_u[]; }; // Aliased as uint for reading sq_sum, writing var
+		layout(push_constant) uniform P { int C; float m; int N_samples; } u;
+
+		void main() {
+			 int c = int(gl_GlobalInvocationID.x);
+			 if(c < u.C) {
+					 // Read sums (bits)
+					 float sum = uintBitsToFloat(sm_u[c]);
+					 float sq_sum = uintBitsToFloat(sv_u[c]);
+					 float n = float(u.N_samples);
+
+					 float mu = sum / n;
+					 float var = (sq_sum / n) - (mu * mu);
+
+					 // Update Running
+					 rm[c] = (1.0 - u.m) * rm[c] + u.m * mu;
+					 rv[c] = (1.0 - u.m) * rv[c] + u.m * var;
+
+					 // Store saved stats (overwrite sums)
+					 sm_u[c] = floatBitsToUint(mu);
+					 sv_u[c] = floatBitsToUint(var);
+			 }
+		}
+	)");
+
+  // Normalize (Training/Inference)
+  bnNormalizePipeline = createComputePipeline("bn_norm", R"(
+		#version 450
+		layout(local_size_x=256) in;
+		layout(binding=0) buffer I { float in_d[]; };
+		layout(binding=1) buffer G { float gamma[]; };
+		layout(binding=2) buffer B_ { float beta[]; };
+		layout(binding=3) buffer M { float mean[]; };
+		layout(binding=4) buffer V { float var[]; };
+		layout(binding=5) buffer O { float out_d[]; };
+		layout(push_constant) uniform P { int N, C, Spatial; float eps; } u;
+
+		void main() {
+			 int idx = int(gl_GlobalInvocationID.x);
+			 if(idx < u.N) {
+					int s = idx % u.Spatial;
+					int tmp = idx / u.Spatial;
+					int c = tmp % u.C;
+
+					float mu = mean[c];
+					float v = var[c];
+					float inv_std = inversesqrt(v + u.eps);
+
+					out_d[idx] = gamma[c] * (in_d[idx] - mu) * inv_std + beta[c];
+			 }
+		}
+	)");
+
+  // Backward Reduce
+  bnBackReducePipeline = createComputePipeline("bn_back_reduce", R"(
+		#version 450
+		layout(local_size_x=256) in;
+		layout(binding=0) buffer GO { float dy[]; };
+		layout(binding=1) buffer I { float x[]; };
+		layout(binding=2) buffer M { float mean[]; };
+		layout(binding=3) buffer V { float var[]; };
+		layout(binding=4) buffer DS { uint dgamma_u[]; }; // Accumulator
+		layout(binding=5) buffer DB { uint dbeta_u[]; };  // Accumulator
+		layout(push_constant) uniform P { int N, C, Spatial; float eps; } u;
+
+    #define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) \
+		do { \
+				 uint expected = BUFFER[IDX]; \
+				 uint current; \
+				 while(true) { \
+								uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); \
+								current = atomicCompSwap(BUFFER[IDX], expected, next); \
+								if (current == expected) break; \
+								expected = current; \
+				 } \
+		} while(false)
+
+		void main() {
+			 int idx = int(gl_GlobalInvocationID.x);
+			 if(idx < u.N) {
+					int s = idx % u.Spatial;
+					int tmp = idx / u.Spatial;
+					int c = tmp % u.C;
+
+					float mu = mean[c];
+					float v = var[c];
+					float inv_std = inversesqrt(v + u.eps);
+					float x_hat = (x[idx] - mu) * inv_std;
+					float g_val = dy[idx];
+
+					ATOMIC_ADD_FLOAT(dbeta_u, c, g_val);
+					ATOMIC_ADD_FLOAT(dgamma_u, c, g_val * x_hat);
+
+			 }
+		}
+	)");
+
+  // Backward Compute DX
+  bnBackDxPipeline = createComputePipeline("bn_back_dx", R"(
+		#version 450
+		layout(local_size_x=256) in;
+		layout(binding=0) buffer GO { float dy[]; };
+		layout(binding=1) buffer I { float x[]; };
+		layout(binding=2) buffer G { float gamma[]; };
+		layout(binding=3) buffer M { float mean[]; };
+		layout(binding=4) buffer V { float var[]; };
+		layout(binding=5) buffer DS { float dgamma[]; };
+		layout(binding=6) buffer DB { float dbeta[]; };
+		layout(binding=7) buffer DX { float dx[]; };
+		layout(push_constant) uniform P { int N, C, Spatial; float eps; } u;
+
+		void main() {
+			 int idx = int(gl_GlobalInvocationID.x);
+			 if(idx < u.N) {
+					int s = idx % u.Spatial;
+					int tmp = idx / u.Spatial;
+					int c = tmp % u.C;
+
+					float mu = mean[c];
+					float v = var[c];
+					float inv_std = inversesqrt(v + u.eps);
+					float x_hat = (x[idx] - mu) * inv_std;
+
+					float m_val = float(u.N) / float(u.C); // Batch * Spatial size
+					float term1 = m_val * dy[idx];
+					float term2 = dbeta[c];
+					float term3 = x_hat * dgamma[c];
+
+					float factor = gamma[c] * inv_std / m_val;
+					dx[idx] = factor * (term1 - term2 - term3);
+			 }
+		}
+	)");
 }
 
 VulkanBackend::~VulkanBackend() {
@@ -403,13 +1005,42 @@ VulkanBackend::~VulkanBackend() {
     vkDestroyBuffer(device, stagingBuffer, nullptr);
     vkFreeMemory(device, stagingMemory, nullptr);
   }
+  vkDestroyPipeline(device, conv2dPipeline, nullptr);
+  vkDestroyPipeline(device, conv2dBackInputPipeline, nullptr);
+  vkDestroyPipeline(device, conv2dBackWeightPipeline, nullptr);
+  vkDestroyPipeline(device, conv2dBackBiasPipeline, nullptr);
+
+  vkDestroyPipeline(device, maxPoolPipeline, nullptr);
+  vkDestroyPipeline(device, maxPoolBackPipeline, nullptr);
+
+  vkDestroyPipeline(device, upsamplePipeline, nullptr);
+  vkDestroyPipeline(device, upsampleBackPipeline, nullptr);
+
+  vkDestroyPipeline(device, bnCollectPipeline, nullptr);
+  vkDestroyPipeline(device, bnUpdatePipeline, nullptr);
+  vkDestroyPipeline(device, bnNormalizePipeline, nullptr);
+  vkDestroyPipeline(device, bnBackReducePipeline, nullptr);
+  vkDestroyPipeline(device, bnBackDxPipeline, nullptr);
+
   vkDestroyPipeline(device, addPipeline, nullptr);
   vkDestroyPipeline(device, mulPipeline, nullptr);
   vkDestroyPipeline(device, subPipeline, nullptr);
   vkDestroyPipeline(device, updatePipeline, nullptr);
+
   vkDestroyPipeline(device, reluPipeline, nullptr);
   vkDestroyPipeline(device, reluBackwardPipeline, nullptr);
+  vkDestroyPipeline(device, sigmoidPipeline, nullptr);
+  vkDestroyPipeline(device, sigmoidBackwardPipeline, nullptr);
+
+  vkDestroyPipeline(device, softmaxPipeline, nullptr);
+  vkDestroyPipeline(device, softmaxBackwardPipeline, nullptr);
+  vkDestroyPipeline(device, mseLossPipeline, nullptr);
+  vkDestroyPipeline(device, mseLossBackwardPipeline, nullptr);
+  vkDestroyPipeline(device, crossEntropyPipeline, nullptr);
+  vkDestroyPipeline(device, crossEntropyBackwardPipeline, nullptr);
+
   vkDestroyPipeline(device, matmulPipeline, nullptr);
+
   vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
   vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
   vkDestroyCommandPool(device, commandPool, nullptr);
@@ -703,13 +1334,14 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   VkDescriptorSet ds;
   VK_CHECK(vkAllocateDescriptorSets(device, &allocSetInfo, &ds));
 
-  // Always update 3 bindings to match layout, padding with first buffer if
+  // Always update 8 bindings to match layout, padding with first buffer if
   // needed
-  std::vector<VkDescriptorBufferInfo> bInfos(3);
-  std::vector<VkWriteDescriptorSet> writes(3);
+  std::vector<VkDescriptorBufferInfo> bInfos(8);
+  std::vector<VkWriteDescriptorSet> writes(8);
 
-  for (size_t i = 0; i < 3; ++i) {
-    void *ptr = (i < buffers.size()) ? buffers[i] : buffers[0];
+  for (size_t i = 0; i < 8; ++i) {
+    void *ptr =
+        (i < buffers.size() && buffers[i] != nullptr) ? buffers[i] : buffers[0];
     bInfos[i].buffer = (VkBuffer)(uint64_t)ptr;
     bInfos[i].offset = 0;
     bInfos[i].range = VK_WHOLE_SIZE;
@@ -721,7 +1353,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
     writes[i].descriptorCount = 1;
     writes[i].pBufferInfo = &bInfos[i];
   }
-  vkUpdateDescriptorSets(device, 3, writes.data(), 0, nullptr);
+  vkUpdateDescriptorSets(device, 8, writes.data(), 0, nullptr);
 
   VkMemoryBarrier memoryBarrier{};
   memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -777,6 +1409,84 @@ void VulkanBackend::relu_backward(const Storage &grad_out, const Storage &input,
                   {grad_out.data(), input.data(), grad_in.data()}, &N,
                   sizeof(N), (N + 255) / 256, 1, 1);
 }
+void VulkanBackend::sigmoid(const Storage &in, Storage &out,
+                            size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(sigmoidPipeline, {in.data(), out.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+void VulkanBackend::sigmoid_backward(const Storage &grad_out,
+                                     const Storage &out, Storage &grad_in,
+                                     size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(sigmoidBackwardPipeline,
+                  {grad_out.data(), out.data(), grad_in.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+void VulkanBackend::softmax(const Storage &in, Storage &out, int batch_size,
+                            int num_classes) {
+  struct {
+    int B, C;
+  } pc = {batch_size, num_classes};
+  dispatch_kernel(softmaxPipeline, {in.data(), out.data()}, &pc, sizeof(pc),
+                  (batch_size + 255) / 256, 1, 1);
+}
+void VulkanBackend::softmax_backward(const Storage &grad_out,
+                                     const Storage &out, Storage &grad_in,
+                                     int batch_size, int num_classes) {
+  struct {
+    int B, C;
+  } pc = {batch_size, num_classes};
+  dispatch_kernel(softmaxBackwardPipeline,
+                  {grad_out.data(), out.data(), grad_in.data()}, &pc,
+                  sizeof(pc), (batch_size + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::mse_loss(const Storage &pred, const Storage &target,
+                             Storage &out_loss, size_t num_elements) {
+  memset(out_loss.data(), 0, out_loss.size_bytes());
+  uint32_t N = num_elements;
+  dispatch_kernel(mseLossPipeline,
+                  {pred.data(), target.data(), out_loss.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::mse_loss_backward(const Storage &grad_out,
+                                      const Storage &pred,
+                                      const Storage &target, Storage &grad_in,
+                                      size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(mseLossBackwardPipeline,
+                  {grad_out.data(), pred.data(), target.data(), grad_in.data()},
+                  &N, sizeof(N), (N + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::cross_entropy(const Storage &logits, const Storage &targets,
+                                  Storage &out_loss, int batch_size,
+                                  int num_classes) {
+  memset(out_loss.data(), 0, out_loss.size_bytes());
+  struct {
+    int B, C;
+  } pc = {batch_size, num_classes};
+  dispatch_kernel(crossEntropyPipeline,
+                  {logits.data(), targets.data(), out_loss.data()}, &pc,
+                  sizeof(pc), (batch_size + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::cross_entropy_backward(const Storage &grad_out,
+                                           const Storage &logits,
+                                           const Storage &targets,
+                                           Storage &grad_in, int batch_size,
+                                           int num_classes) {
+  struct {
+    int B, C;
+  } pc = {batch_size, num_classes};
+  dispatch_kernel(
+      crossEntropyBackwardPipeline,
+      {grad_out.data(), logits.data(), targets.data(), grad_in.data()}, &pc,
+      sizeof(pc), (batch_size + 255) / 256, 1, 1);
+}
+
 void VulkanBackend::update(Storage &weight, const Storage &grad, float lr,
                            size_t num_elements) {
   struct {
@@ -797,33 +1507,175 @@ void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
 }
 
 // --- Spatial Stubs ---
-void VulkanBackend::conv2d(const Storage &, const Storage &, const Storage *,
-                           Storage &, int, int, int, int, int, int, int, int,
-                           int) {
-  throw std::runtime_error("Vulkan conv2d not implemented yet");
+void VulkanBackend::conv2d(const Storage &in, const Storage &weight,
+                           const Storage *bias, Storage &out, int B, int iC,
+                           int iH, int iW, int oC, int kH, int kW, int s,
+                           int p) {
+  int oH = (iH + 2 * p - kH) / s + 1;
+  int oW = (iW + 2 * p - kW) / s + 1;
+  struct {
+    int B, iC, iH, iW, oC, kH, kW, s, p, oH, oW, has_bias;
+  } pc = {B, iC, iH, iW, oC, kH, kW, s, p, oH, oW, bias ? 1 : 0};
+  dispatch_kernel(
+      conv2dPipeline,
+      {in.data(), weight.data(), bias ? bias->data() : nullptr, out.data()},
+      &pc, sizeof(pc), (B * oC * oH * oW + 255) / 256, 1, 1);
 }
-void VulkanBackend::conv2d_backward(const Storage &, const Storage &,
-                                    const Storage &, Storage &, Storage &,
-                                    Storage *, int, int, int, int, int, int,
-                                    int, int, int) {
-  throw std::runtime_error("Vulkan conv2d_backward not implemented yet");
+
+void VulkanBackend::conv2d_backward(const Storage &grad_out, const Storage &in,
+                                    const Storage &weight, Storage &grad_in,
+                                    Storage &grad_w, Storage *grad_b, int B,
+                                    int iC, int iH, int iW, int oC, int kH,
+                                    int kW, int s, int p) {
+  int oH = (iH + 2 * p - kH) / s + 1;
+  int oW = (iW + 2 * p - kW) / s + 1;
+  struct {
+    int B, iC, iH, iW, oC, kH, kW, s, p, oH, oW;
+  } pc = {B, iC, iH, iW, oC, kH, kW, s, p, oH, oW};
+
+  // 1. Grad Input
+  dispatch_kernel(conv2dBackInputPipeline,
+                  {grad_out.data(), weight.data(), grad_in.data()}, &pc,
+                  sizeof(pc), (B * iC * iH * iW + 255) / 256, 1, 1);
+
+  // 2. Grad Weight
+  dispatch_kernel(conv2dBackWeightPipeline,
+                  {grad_out.data(), in.data(), grad_w.data()}, &pc, sizeof(pc),
+                  (oC * iC * kH * kW + 255) / 256, 1, 1);
+
+  // 3. Grad Bias
+  if (grad_b) {
+    struct {
+      int B, oC, oH, oW;
+    } pcb = {B, oC, oH, oW};
+    dispatch_kernel(conv2dBackBiasPipeline, {grad_out.data(), grad_b->data()},
+                    &pcb, sizeof(pcb), (oC + 255) / 256, 1, 1);
+  }
 }
-void VulkanBackend::max_pool2d(const Storage &, Storage &, int, int, int, int,
-                               int, int, int) {
-  throw std::runtime_error("Vulkan max_pool2d not implemented yet");
+
+void VulkanBackend::max_pool2d(const Storage &in, Storage &out, int B, int C,
+                               int iH, int iW, int k, int s, int p) {
+  int oH = (iH + 2 * p - k) / s + 1;
+  int oW = (iW + 2 * p - k) / s + 1;
+  struct {
+    int B, C, iH, iW, k, s, p, oH, oW;
+  } pc = {B, C, iH, iW, k, s, p, oH, oW};
+  dispatch_kernel(maxPoolPipeline, {in.data(), out.data()}, &pc, sizeof(pc),
+                  (B * C * oH * oW + 255) / 256, 1, 1);
 }
-void VulkanBackend::max_pool2d_backward(const Storage &, const Storage &,
-                                        Storage &, int, int, int, int, int, int,
-                                        int) {
-  throw std::runtime_error("Vulkan max_pool2d_backward not implemented yet");
+
+void VulkanBackend::max_pool2d_backward(const Storage &grad_out,
+                                        const Storage &in, Storage &grad_in,
+                                        int B, int C, int iH, int iW, int k,
+                                        int s, int p) {
+  int oH = (iH + 2 * p - k) / s + 1;
+  int oW = (iW + 2 * p - k) / s + 1;
+  struct {
+    int B, C, iH, iW, k, s, p, oH, oW;
+  } pc = {B, C, iH, iW, k, s, p, oH, oW};
+  dispatch_kernel(maxPoolBackPipeline,
+                  {grad_out.data(), in.data(), grad_in.data()}, &pc, sizeof(pc),
+                  (B * C * oH * oW + 255) / 256, 1, 1);
 }
-void VulkanBackend::upsample2d(const Storage &, Storage &, int, int, int, int,
-                               int) {
-  throw std::runtime_error("Vulkan upsample2d not implemented yet");
+
+void VulkanBackend::upsample2d(const Storage &in, Storage &out, int B, int C,
+                               int iH, int iW, int scale) {
+  struct {
+    int B, C, iH, iW, scale;
+  } pc = {B, C, iH, iW, scale};
+  int oH = iH * scale, oW = iW * scale;
+  dispatch_kernel(upsamplePipeline, {in.data(), out.data()}, &pc, sizeof(pc),
+                  (B * C * oH * oW + 255) / 256, 1, 1);
 }
-void VulkanBackend::upsample2d_backward(const Storage &, Storage &, int, int,
-                                        int, int, int) {
-  throw std::runtime_error("Vulkan upsample2d_backward not implemented yet");
+
+void VulkanBackend::upsample2d_backward(const Storage &grad_out,
+                                        Storage &grad_in, int B, int C, int iH,
+                                        int iW, int scale) {
+  struct {
+    int B, C, iH, iW, scale;
+  } pc = {B, C, iH, iW, scale};
+  dispatch_kernel(upsampleBackPipeline, {grad_out.data(), grad_in.data()}, &pc,
+                  sizeof(pc), (B * C * iH * iW + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::batch_norm(const Storage &in, const Storage &scale,
+                               const Storage &bias, Storage &running_mean,
+                               Storage &running_var, Storage &save_mean,
+                               Storage &save_var, Storage &out, int B, int C,
+                               int H, int W, float momentum, float eps,
+                               bool training) {
+  int Spatial = H * W;
+  int Total = B * C * Spatial;
+
+  if (training) {
+    // 1. Zero accumulator buffers (save_mean/save_var act as temps)
+    memset(save_mean.data(), 0, save_mean.size_bytes());
+    memset(save_var.data(), 0, save_var.size_bytes());
+
+    // 2. Collect stats (Sum, SqSum)
+    struct {
+      int N, C, Spatial;
+    } pc = {Total, C, Spatial};
+    dispatch_kernel(bnCollectPipeline,
+                    {in.data(), save_mean.data(), save_var.data()}, &pc,
+                    sizeof(pc), (Total + 255) / 256, 1, 1);
+
+    // 3. Finalize and Update
+    struct {
+      int C;
+      float m;
+      int N_samples;
+    } pc_up = {C, momentum, B * Spatial};
+    dispatch_kernel(bnUpdatePipeline,
+                    {running_mean.data(), running_var.data(), save_mean.data(),
+                     save_var.data()},
+                    &pc_up, sizeof(pc_up), (C + 255) / 256, 1, 1);
+  }
+
+  // 4. Normalize
+  void *m_ptr = training ? save_mean.data() : running_mean.data();
+  void *v_ptr = training ? save_var.data() : running_var.data();
+
+  struct {
+    int N, C, Spatial;
+    float eps;
+  } pc_norm = {Total, C, Spatial, eps};
+  dispatch_kernel(
+      bnNormalizePipeline,
+      {in.data(), scale.data(), bias.data(), m_ptr, v_ptr, out.data()},
+      &pc_norm, sizeof(pc_norm), (Total + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::batch_norm_backward(const Storage &grad_out,
+                                        const Storage &in, const Storage &scale,
+                                        const Storage &save_mean,
+                                        const Storage &save_var,
+                                        Storage &grad_in, Storage &grad_scale,
+                                        Storage &grad_bias, int B, int C, int H,
+                                        int W, float eps) {
+  int Spatial = H * W;
+  int Total = B * C * Spatial;
+
+  // 1. Zero Accumulators (grad_scale / grad_bias)
+  memset(grad_scale.data(), 0, grad_scale.size_bytes());
+  memset(grad_bias.data(), 0, grad_bias.size_bytes());
+
+  // 2. Reduce (Compute dGamma, dBeta)
+  struct {
+    int N, C, Spatial;
+    float eps;
+  } pc = {Total, C, Spatial, eps};
+  dispatch_kernel(bnBackReducePipeline,
+                  {grad_out.data(), in.data(), save_mean.data(),
+                   save_var.data(), grad_scale.data(), grad_bias.data()},
+                  &pc, sizeof(pc), (Total + 255) / 256, 1, 1);
+
+  // 3. Compute DX
+  dispatch_kernel(bnBackDxPipeline,
+                  {grad_out.data(), in.data(), scale.data(), save_mean.data(),
+                   save_var.data(), grad_scale.data(), grad_bias.data(),
+                   grad_in.data()},
+                  &pc, sizeof(pc), (Total + 255) / 256, 1, 1);
 }
 
 } // namespace munet

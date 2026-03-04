@@ -16,6 +16,70 @@ except ImportError as e:
     raise e
 
 
+class TestLoss(unittest.TestCase):
+    def test_mse_loss(self):                                                                                                                                                                     
+        pred_np = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)                                                                                                                           
+        target_np = np.array([0.0, 0.0, 2.0, 2.0], dtype=np.float32)                                                                                                                         
+                                                                                                                                                                                      
+        # Load into MuNet tensors                                                                                                                                                            
+        pred = munet.Tensor(pred_np.shape)                                                                                                                                                   
+        target = munet.Tensor(target_np.shape)                                                                                                                                               
+                                                                                                                                                                                      
+        # We can use the buffer protocol via np.array to write directly to C++ memory                                                                                                        
+        np.array(pred, copy=False)[:] = pred_np                                                                                                                                              
+        np.array(target, copy=False)[:] = target_np                                                                                                                                          
+                                                                                                                                                                                      
+        pred.requires_grad = True                                                                                                                                                            
+                                                                                                                                                                                      
+        loss = pred.mse_loss(target)                                                                                                                                                         
+        loss_val = np.array(loss, copy=False)[0]                                                                                                                                             
+                                                                                                                                                                                      
+        # MSE Forward Check                                                                                                                                                                  
+        self.assertTrue(np.isclose(loss_val, 0.5))                                                                                                                                           
+                                                                                                                                                                                      
+        loss.backward()                                                                                                                                                                      
+        grad = np.array(pred.grad, copy=False)                                                                                                                                               
+                                                                                                                                                                                      
+        # MSE Backward Check                                                                                                                                                                 
+        expected_grad = np.array([0.0, 0.5, 0.0, 0.5], dtype=np.float32)                                                                                                                     
+        self.assertTrue(np.allclose(grad, expected_grad, atol=1e-6))                                                                                                                        
+                                                                                                                                                                                          
+    def test_cross_entropy_loss(self):                                                                                                                                                           
+        logits_np = np.array([                                                                                                                                                               
+         [2.0, 1.0, 0.1],                                                                                                                                                                 
+         [0.1, 1.0, 2.0]                                                                                                                                                                  
+        ], dtype=np.float32)                                                                                                                                                                 
+                                                                                                                                                                                          
+        targets_np = np.array([                                                                                                                                                              
+         [1.0, 0.0, 0.0],                                                                                                                                                                 
+         [0.0, 0.0, 1.0]                                                                                                                                                                  
+        ], dtype=np.float32)                                                                                                                                                                 
+                                                                                                                                                                                          
+        logits = munet.Tensor(list(logits_np.shape))                                                                                                                                         
+        targets = munet.Tensor(list(targets_np.shape))                                                                                                                                       
+                                                                                                                                                                                          
+        np.array(logits, copy=False)[:] = logits_np.flatten()                                                                                                                                
+        np.array(targets, copy=False)[:] = targets_np.flatten()                                                                                                                              
+                                                                                                                                                                                          
+        logits.requires_grad = True                                                                                                                                                          
+                                                                                                                                                                                          
+        loss = logits.cross_entropy(targets)                                                                                                                                                 
+        loss_val = np.array(loss, copy=False)[0]                                                                                                                                             
+                                                                                                                                                                                          
+        # CE Forward Check (Matches PyTorch F.cross_entropy)                                                                                                                                 
+        self.assertTrue(np.isclose(loss_val, 0.417022, atol=1e-4))                                                                                                                                     
+                                                                                                                                                                                          
+        loss.backward()                                                                                                                                                                      
+        grad = np.array(logits.grad, copy=False)                                                                                                                                             
+                                                                                                                                                                                          
+        # CE Backward Check                                                                                                                                                                  
+        expected_grad = np.array([                                                                                                                                                           
+         [-0.17049,  0.12101,  0.04948],                                                                                                                                                  
+         [ 0.04948,  0.12101, -0.17049]                                                                                                                                                   
+        ], dtype=np.float32).flatten()                                                                                                                                                       
+                                                                                                                                                                                          
+        self.assertTrue(np.allclose(grad, expected_grad, atol=1e-4))        
+
 class TestMuNetPythonBindings(unittest.TestCase):
 
     def test_tensor_creation(self):

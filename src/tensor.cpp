@@ -65,6 +65,8 @@ Tensor Tensor::matmul(const Tensor &other) const {
 }
 
 Tensor Tensor::relu() const { return ops::relu(*this); }
+Tensor Tensor::sigmoid() const { return ops::sigmoid(*this); }
+Tensor Tensor::softmax() const { return ops::softmax(*this); }
 
 Tensor Tensor::conv2d(const Tensor &weight, const Tensor &bias, int stride,
                       int padding) const {
@@ -156,6 +158,21 @@ void Tensor::step(float lr) {
   if (!impl_->grad)
     return;
   impl_->backend().update(*impl_->storage, *impl_->grad->storage, lr, size());
+}
+
+Tensor Tensor::batch_norm(Tensor &running_mean, Tensor &running_var,
+                          const Tensor &weight, const Tensor &bias,
+                          bool training, float momentum, float eps) const {
+  return ops::batch_norm(*this, running_mean, running_var, weight, bias,
+                         training, momentum, eps);
+}
+
+Tensor Tensor::mse_loss(const Tensor &target) const {
+  return ops::mse_loss(*this, target);
+}
+
+Tensor Tensor::cross_entropy(const Tensor &target) const {
+  return ops::cross_entropy(*this, target);
 }
 
 } // namespace munet

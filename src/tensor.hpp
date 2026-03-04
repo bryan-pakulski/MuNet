@@ -92,6 +92,8 @@ public:
   Tensor operator*(const Tensor &other) const;
   Tensor matmul(const Tensor &other) const;
   Tensor relu() const;
+  Tensor sigmoid() const;
+  Tensor softmax() const;
   Tensor sum() const;
   Tensor reshape(Shape new_shape) const;
 
@@ -99,6 +101,14 @@ public:
                 int padding = 0) const;
   Tensor max_pool2d(int kernel_size, int stride, int padding = 0) const;
   Tensor upsample2d(int scale_factor) const;
+
+  Tensor batch_norm(Tensor &running_mean, Tensor &running_var,
+                    const Tensor &weight, const Tensor &bias, bool training,
+                    float momentum, float eps) const;
+
+  // Losses
+  Tensor mse_loss(const Tensor &target) const;
+  Tensor cross_entropy(const Tensor &target) const;
 
   // In-place initialization
   void uniform_(float low = -1.0f, float high = 1.0f);

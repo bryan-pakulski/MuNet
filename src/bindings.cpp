@@ -59,6 +59,8 @@ PYBIND11_MODULE(munet, m) {
       .def("__matmul__",
            [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
       .def("relu", &Tensor::relu)
+      .def("sigmoid", &Tensor::sigmoid)
+      .def("softmax", &Tensor::softmax)
       .def("sum", &Tensor::sum)
       .def("reshape", &Tensor::reshape, py::arg("shape"))
       .def("conv2d", &Tensor::conv2d, py::arg("weight"),
@@ -67,6 +69,12 @@ PYBIND11_MODULE(munet, m) {
       .def("max_pool2d", &Tensor::max_pool2d, py::arg("kernel_size"),
            py::arg("stride"), py::arg("padding") = 0)
       .def("upsample2d", &Tensor::upsample2d, py::arg("scale_factor"))
+      .def("batch_norm", &Tensor::batch_norm, py::arg("running_mean"),
+           py::arg("running_var"), py::arg("weight"), py::arg("bias"),
+           py::arg("training"), py::arg("momentum") = 0.1,
+           py::arg("eps") = 1e-5)
+      .def("mse_loss", &Tensor::mse_loss, py::arg("target"))
+      .def("cross_entropy", &Tensor::cross_entropy, py::arg("target"))
       .def("uniform_", &Tensor::uniform_, py::arg("low") = -1.0f,
            py::arg("high") = 1.0f)
       .def("step", &Tensor::step, py::arg("lr"))

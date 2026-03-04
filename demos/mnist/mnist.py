@@ -157,8 +157,8 @@ def train():
 
     # Check for CUDA
     try:
-        device = munet.Device(munet.DeviceType.CUDA, 0)
-        # Allocate small tensor to test if CUDA works
+        device = munet.Device(munet.DeviceType.VULKAN, 0)
+        # Allocate small tensor to test if VULKAN works
         munet.Tensor([1], device=device)
         print("Using VULKAN GPU")
     except:
@@ -218,7 +218,7 @@ def train():
             optimizer.step()
 
         # Metrics (CPU sync)
-        if epoch % 5 == 0: 
+        if epoch % 5 == 0:
             loss_val = np.array(
                 loss.to(munet.Device(munet.DeviceType.CPU, 0)), copy=False
             )[0]

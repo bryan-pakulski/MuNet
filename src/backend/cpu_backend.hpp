@@ -234,6 +234,184 @@ public:
     });
   }
 
+  void sigmoid(const Storage &in, Storage &out, size_t num_elements) override {
+    profile("sigmoid", [&]() {
+      const float *ip = (const float *)in.data();
+      float *op = (float *)out.data();
+      parallel_for(0, num_elements, [&](size_t s, size_t e) {
+        for (size_t i = s; i < e; ++i)
+          op[i] = 1.0f / (1.0f + std::exp(-ip[i]));
+      });
+    });
+  }
+
+  void sigmoid_backward(const Storage &grad_out, const Storage &out,
+                        Storage &grad_in, size_t num_elements) override {
+    profile("sigmoid_backward", [&]() {
+      const float *go = (const float *)grad_out.data();
+      const float *o = (const float *)out.data();
+      float *gi = (float *)grad_in.data();
+      parallel_for(0, num_elements, [&](size_t s, size_t e) {
+        for (size_t i = s; i < e; ++i)
+          gi[i] = go[i] * o[i] * (1.0f - o[i]);
+      });
+    });
+  }
+
+  void softmax(const Storage &in, Storage &out, int batch_size,
+               int num_classes) override {
+    profile("softmax", [&]() {
+      const float *ip = (const float *)in.data();
+      float *op = (float *)out.data();
+      parallel_for(0, batch_size, [&](size_t s, size_t e) {
+        for (size_t b = s; b < e; ++b) {
+          const float *in_row = ip + b * num_classes;
+          float *out_row = op + b * num_classes;
+          float max_val = in_row[0];
+          for (int i = 1; i < num_classes; ++i)
+            if (in_row[i] > max_val)
+              max_val = in_row[i];
+          float sum_exp = 0.0f;
+          for (int i = 0; i < num_classes; ++i) {
+            out_row[i] = std::exp(in_row[i] - max_val);
+            sum_exp += out_row[i];
+          }
+          for (int i = 0; i < num_classes; ++i)
+            out_row[i] /= sum_exp;
+        }
+      });
+    });
+  }
+
+  void softmax_backward(const Storage &grad_out, const Storage &out,
+                        Storage &grad_in, int batch_size,
+                        int num_classes) override {
+    profile("softmax_backward", [&]() {
+      const float *go = (const float *)grad_out.data();
+      const float *o = (const float *)out.data();
+      float *gi = (float *)grad_in.data();
+      parallel_for(0, batch_size, [&](size_t s, size_t e) {
+        for (size_t b = s; b < e; ++b) {
+          const float *go_row = go + b * num_classes;
+          const float *out_row = o + b * num_classes;
+          float *gi_row = gi + b * num_classes;
+          float sum_out_go = 0.0f;
+          for (int i = 0; i < num_classes; ++i)
+            sum_out_go += out_row[i] * go_row[i];
+          for (int i = 0; i < num_classes; ++i)
+            gi_row[i] = out_row[i] * (go_row[i] - sum_out_go);
+        }
+      });
+    });
+  }
+
+  void mse_loss(const Storage &pred, const Storage &target, Storage &out_loss,
+                size_t num_elements) override {
+    profile("mse_loss", [&]() {
+      const float *p = (const float *)pred.data();
+      const float *t = (const float *)target.data();
+      float *out = (float *)out_loss.data();
+
+      // Sequential reduction for simplicity and thread safety
+      float sum = 0.0f;
+      for (size_t i = 0; i < num_elements; ++i) {
+        float diff = p[i] - t[i];
+        sum += diff * diff;
+      }
+      out[0] = sum / (float)num_elements;
+    });
+  }
+
+  void mse_loss_backward(const Storage &grad_out, const Storage &pred,
+                         const Storage &target, Storage &grad_in,
+                         size_t num_elements) override {
+    profile("mse_loss_backward", [&]() {
+      const float *go = (const float *)grad_out.data();
+      const float *p = (const float *)pred.data();
+      const float *t = (const float *)target.data();
+      float *gi = (float *)grad_in.data();
+
+      parallel_for(0, num_elements, [&](size_t s, size_t e) {
+        float go_val = go[0]; // Loss is scalar
+        float scale = 2.0f / (float)num_elements;
+        for (size_t i = s; i < e; ++i) {
+          gi[i] = go_val * scale * (p[i] - t[i]);
+        }
+      });
+    });
+  }
+
+  void cross_entropy(const Storage &logits, const Storage &targets,
+                     Storage &out_loss, int batch_size,
+                     int num_classes) override {
+    profile("cross_entropy", [&]() {
+      const float *l = (const float *)logits.data();
+      const float *t = (const float *)targets.data();
+      float *out = (float *)out_loss.data();
+
+      float total_loss = 0.0f;
+      for (int b = 0; b < batch_size; ++b) {
+        const float *l_row = l + b * num_classes;
+        const float *t_row = t + b * num_classes;
+
+        float max_val = -1e30f;
+        for (int i = 0; i < num_classes; ++i) {
+          if (l_row[i] > max_val)
+            max_val = l_row[i];
+        }
+
+        float sum_exp = 0.0f;
+        for (int i = 0; i < num_classes; ++i) {
+          sum_exp += std::exp(l_row[i] - max_val);
+        }
+
+        for (int i = 0; i < num_classes; ++i) {
+          float prob = std::exp(l_row[i] - max_val) / sum_exp;
+          if (t_row[i] > 0.0f) {
+            total_loss -= t_row[i] * std::log(prob + 1e-9f);
+          }
+        }
+      }
+      out[0] = total_loss / (float)batch_size;
+    });
+  }
+
+  void cross_entropy_backward(const Storage &grad_out, const Storage &logits,
+                              const Storage &targets, Storage &grad_in,
+                              int batch_size, int num_classes) override {
+    profile("cross_entropy_backward", [&]() {
+      const float *go = (const float *)grad_out.data();
+      const float *l = (const float *)logits.data();
+      const float *t = (const float *)targets.data();
+      float *gi = (float *)grad_in.data();
+
+      parallel_for(0, batch_size, [&](size_t s, size_t e) {
+        float go_val = go[0]; // Loss is a scalar
+        for (size_t b = s; b < e; ++b) {
+          const float *l_row = l + b * num_classes;
+          const float *t_row = t + b * num_classes;
+          float *gi_row = gi + b * num_classes;
+
+          float max_val = -1e30f;
+          for (int i = 0; i < num_classes; ++i) {
+            if (l_row[i] > max_val)
+              max_val = l_row[i];
+          }
+
+          float sum_exp = 0.0f;
+          for (int i = 0; i < num_classes; ++i) {
+            sum_exp += std::exp(l_row[i] - max_val);
+          }
+
+          for (int i = 0; i < num_classes; ++i) {
+            float prob = std::exp(l_row[i] - max_val) / sum_exp;
+            gi_row[i] = go_val * (prob - t_row[i]) / (float)batch_size;
+          }
+        }
+      });
+    });
+  }
+
   void sub(const Storage &a, const Storage &b, Storage &out,
            size_t num_elements) override {
     profile("sub", [&]() {
@@ -271,7 +449,7 @@ public:
       for (size_t idx = start; idx < end; ++idx) {
         int ow = idx % oW, oh = (idx / oW) % oH, oc = (idx / (oW * oH)) % oC,
             b = idx / (oW * oH * oC);
-        float val = *b_p ? *b_p : 0.0f;
+        float val = b_p ? b_p[oc] : 0.0f;
         for (int ic = 0; ic < iC; ++ic) {
           for (int kh = 0; kh < kH; ++kh) {
             for (int kw = 0; kw < kW; ++kw) {
@@ -283,7 +461,7 @@ public:
             }
           }
         }
-        out_p = &val;
+        out_p[idx] = val;
       }
     });
   }
@@ -304,7 +482,7 @@ public:
           for (int ow = 0; ow < oW; ++ow) {
             float go_val = go_p[((b * oC + oc) * oH + oh) * oW + ow];
             if (gb_p)
-              *gb_p += go_val;
+              gb_p[oc] += go_val;
             for (int ic = 0; ic < iC; ++ic) {
               for (int kh = 0; kh < kH; ++kh) {
                 for (int kw = 0; kw < kW; ++kw) {
@@ -342,7 +520,7 @@ public:
             }
           }
         }
-        *out_p = max_val;
+        out_p[idx] = max_val;
       }
     });
   }
@@ -373,7 +551,7 @@ public:
               }
             }
             if (max_idx != -1)
-              *gi_p += go_p[((b * C + c) * oH + oh) * oW + ow];
+              gi_p[max_idx] += go_p[((b * C + c) * oH + oh) * oW + ow];
           }
         }
       }
@@ -388,7 +566,8 @@ public:
       for (size_t idx = start; idx < end; ++idx) {
         int ow = idx % oW, oh = (idx / oW) % oH, c = (idx / (oW * oH)) % C,
             b = idx / (oW * oH * C);
-        *out_p = in_p[((b * C + c) * iH + (oh / scale)) * iW + (ow / scale)];
+        out_p[idx] =
+            in_p[((b * C + c) * iH + (oh / scale)) * iW + (ow / scale)];
       }
     });
   }
@@ -404,6 +583,108 @@ public:
             gi_p[((b * C + c) * iH + (oh / scale)) * iW + (ow / scale)] +=
                 go_p[((b * C + c) * oH + oh) * oW + ow];
           }
+        }
+      }
+    }
+  }
+
+  void batch_norm(const Storage &in, const Storage &scale, const Storage &bias,
+                  Storage &running_mean, Storage &running_var,
+                  Storage &save_mean, Storage &save_var, Storage &out, int B,
+                  int C, int H, int W, float momentum, float eps,
+                  bool training) override {
+    const float *x = (const float *)in.data();
+    const float *g = (const float *)scale.data();
+    const float *b = (const float *)bias.data();
+    float *rm = (float *)running_mean.data();
+    float *rv = (float *)running_var.data();
+    float *sm = (float *)save_mean.data();
+    float *sv = (float *)save_var.data();
+    float *y = (float *)out.data();
+    size_t spatial = H * W;
+
+    if (training) {
+      // 1. Calculate Mean/Var per channel
+      for (int c = 0; c < C; ++c) {
+        float sum = 0, sq_sum = 0;
+        for (int batch = 0; batch < B; ++batch) {
+          for (int s = 0; s < spatial; ++s) {
+            float val = x[(batch * C + c) * spatial + s];
+            sum += val;
+            sq_sum += val * val;
+          }
+        }
+        float n = B * spatial;
+        float mu = sum / n;
+        float var = (sq_sum / n) - (mu * mu);
+        sm[c] = mu;
+        sv[c] = var; // save variance
+        // Update running
+        rm[c] = (1 - momentum) * rm[c] + momentum * mu;
+        rv[c] = (1 - momentum) * rv[c] + momentum * var;
+      }
+    }
+
+    // 2. Normalize
+    parallel_for(0, B * C * spatial, [&](size_t start, size_t end) {
+      for (size_t i = start; i < end; ++i) {
+        int s_idx = i % spatial;
+        int tmp = i / spatial;
+        int c = tmp % C;
+        float mu = training ? sm[c] : rm[c];
+        float var = training ? sv[c] : rv[c];
+        float inv_std = 1.0f / std::sqrt(var + eps);
+        y[i] = g[c] * (x[i] - mu) * inv_std + b[c];
+      }
+    });
+  }
+
+  void batch_norm_backward(const Storage &grad_out, const Storage &in,
+                           const Storage &scale, const Storage &save_mean,
+                           const Storage &save_var, Storage &grad_in,
+                           Storage &grad_scale, Storage &grad_bias, int B,
+                           int C, int H, int W, float eps) override {
+    const float *dy = (const float *)grad_out.data();
+    const float *x = (const float *)in.data();
+    const float *gamma = (const float *)scale.data();
+    const float *mu = (const float *)save_mean.data();
+    const float *var = (const float *)save_var.data();
+    float *dx = (float *)grad_in.data();
+    float *dg = (float *)grad_scale.data();
+    float *db = (float *)grad_bias.data();
+
+    size_t spatial = H * W;
+    float m = B * spatial;
+
+    // Zero out gradients first (since we might accumulate if reusing buffers,
+    // though here we write directly)
+    std::memset(dg, 0, C * sizeof(float));
+    std::memset(db, 0, C * sizeof(float));
+
+    // 1. Compute dGamma, dBeta
+    for (int c = 0; c < C; ++c) {
+      float sum_dy = 0;
+      float sum_dy_xhat = 0;
+      float inv_std = 1.0f / std::sqrt(var[c] + eps);
+
+      for (int b = 0; b < B; ++b) {
+        for (int s = 0; s < spatial; ++s) {
+          int idx = (b * C + c) * spatial + s;
+          float x_hat = (x[idx] - mu[c]) * inv_std;
+          sum_dy += dy[idx];
+          sum_dy_xhat += dy[idx] * x_hat;
+        }
+      }
+      dg[c] = sum_dy_xhat;
+      db[c] = sum_dy;
+
+      // 2. Compute dx (Simplified standard BN backward)
+      float factor = gamma[c] * inv_std / m;
+      for (int b = 0; b < B; ++b) {
+        for (int s = 0; s < spatial; ++s) {
+          int idx = (b * C + c) * spatial + s;
+          float x_hat = (x[idx] - mu[c]) * inv_std;
+          dx[idx] = factor * (m * dy[idx] - sum_dy - x_hat * sum_dy_xhat);
         }
       }
     }

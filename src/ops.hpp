@@ -61,6 +61,81 @@ inline Tensor add(const Tensor &a, const Tensor &b) {
   return out;
 }
 
+// --- MSE LOSS ---
+struct MSELossBackward : public Node {
+  Tensor pred, target;
+  MSELossBackward(Tensor p, Tensor t) : pred(p), target(t) {}
+  std::string name() const override { return "MSELossBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_out = grads[0];
+    Tensor grad_in(pred.shape(), pred.device(), pred.dtype());
+    pred.impl_->backend().mse_loss_backward(
+        *grad_out.impl_->storage, *pred.impl_->storage, *target.impl_->storage,
+        *grad_in.impl_->storage, pred.size());
+    // Only return gradient for predictions (targets don't need gradients)
+    return {grad_in, Tensor()};
+  }
+};
+
+inline Tensor mse_loss(const Tensor &pred, const Tensor &target) {
+  if (pred.shape() != target.shape())
+    throw std::runtime_error("MSELoss: shape mismatch");
+
+  Tensor out({1}, pred.device(), pred.dtype());
+  pred.impl_->backend().mse_loss(*pred.impl_->storage, *target.impl_->storage,
+                                 *out.impl_->storage, pred.size());
+
+  if (pred.requires_grad()) {
+    auto fn = std::make_shared<MSELossBackward>(pred, target);
+    link_backward_edges(fn.get(), {pred, target});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_trace(out, "MSELoss", {pred, target});
+  return out;
+}
+
+// --- CROSS ENTROPY LOSS ---
+struct CrossEntropyBackward : public Node {
+  Tensor logits, targets;
+  int batch_size, num_classes;
+  CrossEntropyBackward(Tensor l, Tensor t, int b, int c)
+      : logits(l), targets(t), batch_size(b), num_classes(c) {}
+  std::string name() const override { return "CrossEntropyBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_out = grads[0];
+    Tensor grad_in(logits.shape(), logits.device(), logits.dtype());
+    logits.impl_->backend().cross_entropy_backward(
+        *grad_out.impl_->storage, *logits.impl_->storage,
+        *targets.impl_->storage, *grad_in.impl_->storage, batch_size,
+        num_classes);
+    return {grad_in, Tensor()};
+  }
+};
+
+inline Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
+  if (logits.shape() != targets.shape())
+    throw std::runtime_error("CrossEntropy: shape mismatch");
+
+  int batch_size = logits.shape().size() > 1 ? logits.shape()[0] : 1;
+  int num_classes = logits.size() / batch_size;
+
+  Tensor out({1}, logits.device(), logits.dtype());
+  logits.impl_->backend().cross_entropy(
+      *logits.impl_->storage, *targets.impl_->storage, *out.impl_->storage,
+      batch_size, num_classes);
+
+  if (logits.requires_grad()) {
+    auto fn = std::make_shared<CrossEntropyBackward>(logits, targets,
+                                                     batch_size, num_classes);
+    link_backward_edges(fn.get(), {logits, targets});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_trace(out, "CrossEntropy", {logits, targets});
+  return out;
+}
+
 // --- RELU ---
 struct ReluBackward : public Node {
   Tensor saved_input;
@@ -89,6 +164,69 @@ inline Tensor relu(const Tensor &a) {
     out.impl_->grad_fn = fn;
   }
   record_trace(out, "ReLU", {a});
+  return out;
+}
+
+// --- SIGMOID ---
+struct SigmoidBackward : public Node {
+  Tensor saved_out;
+  SigmoidBackward(Tensor o) : saved_out(o) {}
+  std::string name() const override { return "SigmoidBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_out = grads[0];
+    Tensor grad_in(saved_out.shape(), saved_out.device(), saved_out.dtype());
+    saved_out.impl_->backend().sigmoid_backward(
+        *grad_out.impl_->storage, *saved_out.impl_->storage,
+        *grad_in.impl_->storage, saved_out.size());
+    return {grad_in};
+  }
+};
+
+inline Tensor sigmoid(const Tensor &a) {
+  Tensor out(a.shape(), a.device(), a.dtype());
+  a.impl_->backend().sigmoid(*a.impl_->storage, *out.impl_->storage, a.size());
+
+  if (a.requires_grad()) {
+    auto fn = std::make_shared<SigmoidBackward>(out);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_trace(out, "Sigmoid", {a});
+  return out;
+}
+
+// --- SOFTMAX ---
+struct SoftmaxBackward : public Node {
+  Tensor saved_out;
+  int batch_size, num_classes;
+  SoftmaxBackward(Tensor o, int b, int c)
+      : saved_out(o), batch_size(b), num_classes(c) {}
+  std::string name() const override { return "SoftmaxBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_out = grads[0];
+    Tensor grad_in(saved_out.shape(), saved_out.device(), saved_out.dtype());
+    saved_out.impl_->backend().softmax_backward(
+        *grad_out.impl_->storage, *saved_out.impl_->storage,
+        *grad_in.impl_->storage, batch_size, num_classes);
+    return {grad_in};
+  }
+};
+
+inline Tensor softmax(const Tensor &a) {
+  Tensor out(a.shape(), a.device(), a.dtype());
+  int batch_size = a.shape().size() > 1 ? a.shape()[0] : 1;
+  int num_classes = a.size() / batch_size;
+  a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage, batch_size,
+                             num_classes);
+
+  if (a.requires_grad()) {
+    auto fn = std::make_shared<SoftmaxBackward>(out, batch_size, num_classes);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_trace(out, "Softmax", {a});
   return out;
 }
 
@@ -415,6 +553,63 @@ inline Tensor upsample2d(const Tensor &in, int scale_factor) {
   if (in.requires_grad()) {
     auto fn = std::make_shared<Upsample2DBackward>(in, scale_factor);
     link_backward_edges(fn.get(), {in});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  return out;
+}
+
+// --- BATCH NORM ---
+struct BatchNormBackward : public Node {
+  Tensor in, weight, save_mean, save_var;
+  float eps;
+  BatchNormBackward(Tensor i, Tensor w, Tensor sm, Tensor sv, float e)
+      : in(i), weight(w), save_mean(sm), save_var(sv), eps(e) {}
+  std::string name() const override { return "BatchNormBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_out = grads[0];
+    Tensor grad_in(in.shape(), in.device(), in.dtype());
+    Tensor grad_scale(weight.shape(), weight.device(), weight.dtype());
+    Tensor grad_bias(weight.shape(), weight.device(), weight.dtype());
+
+    int B = in.shape()[0], C = in.shape()[1], H = in.shape()[2],
+        W = in.shape()[3];
+    in.impl_->backend().batch_norm_backward(
+        *grad_out.impl_->storage, *in.impl_->storage, *weight.impl_->storage,
+        *save_mean.impl_->storage, *save_var.impl_->storage,
+        *grad_in.impl_->storage, *grad_scale.impl_->storage,
+        *grad_bias.impl_->storage, B, C, H, W, eps);
+
+    // Inputs: in (0), weight (1), bias (2)
+    return {grad_in, grad_scale, grad_bias};
+  }
+};
+
+inline Tensor batch_norm(const Tensor &in, Tensor &running_mean,
+                         Tensor &running_var, const Tensor &weight,
+                         const Tensor &bias, bool training, float momentum,
+                         float eps) {
+  int B = in.shape()[0], C = in.shape()[1], H = in.shape()[2],
+      W = in.shape()[3];
+  Tensor out(in.shape(), in.device(), in.dtype());
+
+  // We need to save mean/var for backward if training
+  Tensor save_mean({C}, in.device(), DataType::Float32);
+  Tensor save_var({C}, in.device(), DataType::Float32);
+
+  in.impl_->backend().batch_norm(
+      *in.impl_->storage, *weight.impl_->storage, *bias.impl_->storage,
+      *running_mean.impl_->storage, *running_var.impl_->storage,
+      *save_mean.impl_->storage, *save_var.impl_->storage, *out.impl_->storage,
+      B, C, H, W, momentum, eps, training);
+
+  if (training &&
+      (in.requires_grad() || weight.requires_grad() || bias.requires_grad())) {
+    auto fn = std::make_shared<BatchNormBackward>(in, weight, save_mean,
+                                                  save_var, eps);
+    // Link inputs: input, weight, bias. Running stats do not participate in
+    // gradient graph for backprop.
+    link_backward_edges(fn.get(), {in, weight, bias});
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }

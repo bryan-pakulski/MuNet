@@ -34,6 +34,32 @@ public:
   virtual void relu_backward(const Storage &grad_out, const Storage &input,
                              Storage &grad_in, size_t num_elements) = 0;
 
+  virtual void sigmoid(const Storage &in, Storage &out,
+                       size_t num_elements) = 0;
+  virtual void sigmoid_backward(const Storage &grad_out, const Storage &out,
+                                Storage &grad_in, size_t num_elements) = 0;
+
+  virtual void softmax(const Storage &in, Storage &out, int batch_size,
+                       int num_classes) = 0;
+  virtual void softmax_backward(const Storage &grad_out, const Storage &out,
+                                Storage &grad_in, int batch_size,
+                                int num_classes) = 0;
+
+  // --- Loss Functions ---
+  virtual void cross_entropy(const Storage &logits, const Storage &targets,
+                             Storage &out_loss, int batch_size,
+                             int num_classes) = 0;
+  virtual void cross_entropy_backward(const Storage &grad_out,
+                                      const Storage &logits,
+                                      const Storage &targets, Storage &grad_in,
+                                      int batch_size, int num_classes) = 0;
+
+  virtual void mse_loss(const Storage &pred, const Storage &target,
+                        Storage &out_loss, size_t num_elements) = 0;
+  virtual void mse_loss_backward(const Storage &grad_out, const Storage &pred,
+                                 const Storage &target, Storage &grad_in,
+                                 size_t num_elements) = 0;
+
   // --- Spatial Compute ---
   virtual void conv2d(const Storage &in, const Storage &weight,
                       const Storage *bias, Storage &out, int B, int iC, int iH,
@@ -52,6 +78,19 @@ public:
                           int iW, int scale) = 0;
   virtual void upsample2d_backward(const Storage &grad_out, Storage &grad_in,
                                    int B, int C, int iH, int iW, int scale) = 0;
+
+  // --- Normalization ---
+  virtual void batch_norm(const Storage &in, const Storage &scale,
+                          const Storage &bias, Storage &running_mean,
+                          Storage &running_var, Storage &save_mean,
+                          Storage &save_var, Storage &out, int B, int C, int H,
+                          int W, float momentum, float eps, bool training) = 0;
+  virtual void batch_norm_backward(const Storage &grad_out, const Storage &in,
+                                   const Storage &scale,
+                                   const Storage &save_mean,
+                                   const Storage &save_var, Storage &grad_in,
+                                   Storage &grad_scale, Storage &grad_bias,
+                                   int B, int C, int H, int W, float eps) = 0;
 
   // --- Optimizers ---
   // In-place SGD update: w = w - lr * grad
