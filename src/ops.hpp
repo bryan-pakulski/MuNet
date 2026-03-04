@@ -297,5 +297,129 @@ inline Tensor reshape(const Tensor &in, Shape new_shape) {
   return out;
 }
 
+// --- CONV2D ---
+struct Conv2DBackward : public Node {
+  Tensor in, weight, bias;
+  int stride, padding;
+  Conv2DBackward(Tensor i, Tensor w, Tensor b, int s, int p)
+      : in(i), weight(w), bias(b), stride(s), padding(p) {}
+  std::string name() const override { return "Conv2DBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_out = grads[0];
+    Tensor grad_in(in.shape(), in.device(), in.dtype());
+    Tensor grad_w(weight.shape(), weight.device(), weight.dtype());
+    Tensor grad_b;
+    if (bias.impl_)
+      grad_b = Tensor(bias.shape(), bias.device(), bias.dtype());
+    grad_in.impl_->storage->zero_();
+    grad_w.impl_->storage->zero_();
+    if (bias.impl_)
+      grad_b.impl_->storage->zero_();
+    int B = in.shape()[0], iC = in.shape()[1], iH = in.shape()[2],
+        iW = in.shape()[3];
+    int oC = weight.shape()[0], kH = weight.shape()[2], kW = weight.shape()[3];
+    in.impl_->backend().conv2d_backward(
+        *grad_out.impl_->storage, *in.impl_->storage, *weight.impl_->storage,
+        *grad_in.impl_->storage, *grad_w.impl_->storage,
+        bias.impl_ ? grad_b.impl_->storage.get() : nullptr, B, iC, iH, iW, oC,
+        kH, kW, stride, padding);
+    return {grad_in, grad_w, grad_b};
+  }
+};
+inline Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
+                     int stride, int padding) {
+  int B = in.shape()[0], iC = in.shape()[1], iH = in.shape()[2],
+      iW = in.shape()[3];
+  int oC = weight.shape()[0], kH = weight.shape()[2], kW = weight.shape()[3];
+  int oH = (iH + 2 * padding - kH) / stride + 1;
+  int oW = (iW + 2 * padding - kW) / stride + 1;
+  Tensor out({B, oC, oH, oW}, in.device(), in.dtype());
+  in.impl_->backend().conv2d(*in.impl_->storage, *weight.impl_->storage,
+                             bias.impl_ ? bias.impl_->storage.get() : nullptr,
+                             *out.impl_->storage, B, iC, iH, iW, oC, kH, kW,
+                             stride, padding);
+  if (in.requires_grad() || weight.requires_grad() ||
+      (bias.impl_ && bias.requires_grad())) {
+    auto fn =
+        std::make_shared<Conv2DBackward>(in, weight, bias, stride, padding);
+    std::vector<Tensor> inputs = {in, weight};
+    if (bias.impl_)
+      inputs.push_back(bias);
+    link_backward_edges(fn.get(), inputs);
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  return out;
+}
+// --- MAXPOOL2D ---
+struct MaxPool2DBackward : public Node {
+  Tensor in;
+  int k, s, p;
+  MaxPool2DBackward(Tensor i, int k_, int s_, int p_)
+      : in(i), k(k_), s(s_), p(p_) {}
+  std::string name() const override { return "MaxPool2DBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_in(in.shape(), in.device(), in.dtype());
+    grad_in.impl_->storage->zero_();
+    int B = in.shape()[0], C = in.shape()[1], iH = in.shape()[2],
+        iW = in.shape()[3];
+    in.impl_->backend().max_pool2d_backward(
+        *grads[0].impl_->storage, *in.impl_->storage, *grad_in.impl_->storage,
+        B, C, iH, iW, k, s, p);
+    return {grad_in};
+  }
+};
+inline Tensor max_pool2d(const Tensor &in, int kernel_size, int stride,
+                         int padding) {
+  int B = in.shape()[0], C = in.shape()[1], iH = in.shape()[2],
+      iW = in.shape()[3];
+  int oH = (iH + 2 * padding - kernel_size) / stride + 1;
+  int oW = (iW + 2 * padding - kernel_size) / stride + 1;
+  Tensor out({B, C, oH, oW}, in.device(), in.dtype());
+  in.impl_->backend().max_pool2d(*in.impl_->storage, *out.impl_->storage, B, C,
+                                 iH, iW, kernel_size, stride, padding);
+
+  if (in.requires_grad()) {
+    auto fn =
+        std::make_shared<MaxPool2DBackward>(in, kernel_size, stride, padding);
+    link_backward_edges(fn.get(), {in});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  return out;
+}
+// --- UPSAMPLE2D ---
+struct Upsample2DBackward : public Node {
+  Tensor in;
+  int scale;
+  Upsample2DBackward(Tensor i, int sc) : in(i), scale(sc) {}
+  std::string name() const override { return "Upsample2DBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_in(in.shape(), in.device(), in.dtype());
+    grad_in.impl_->storage->zero_();
+    int B = in.shape()[0], C = in.shape()[1], iH = in.shape()[2],
+        iW = in.shape()[3];
+    in.impl_->backend().upsample2d_backward(
+        *grads[0].impl_->storage, *grad_in.impl_->storage, B, C, iH, iW, scale);
+    return {grad_in};
+  }
+};
+inline Tensor upsample2d(const Tensor &in, int scale_factor) {
+  int B = in.shape()[0], C = in.shape()[1], iH = in.shape()[2],
+      iW = in.shape()[3];
+  Tensor out({B, C, iH * scale_factor, iW * scale_factor}, in.device(),
+             in.dtype());
+  in.impl_->backend().upsample2d(*in.impl_->storage, *out.impl_->storage, B, C,
+                                 iH, iW, scale_factor);
+
+  if (in.requires_grad()) {
+    auto fn = std::make_shared<Upsample2DBackward>(in, scale_factor);
+    link_backward_edges(fn.get(), {in});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  return out;
+}
+
 } // namespace ops
 } // namespace munet

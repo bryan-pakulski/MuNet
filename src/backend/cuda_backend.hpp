@@ -28,6 +28,23 @@ public:
            size_t num_elements) override;
   void update(Storage &weight, const Storage &grad, float lr,
               size_t num_elements) override;
+
+  void conv2d(const Storage &in, const Storage &weight, const Storage *bias,
+              Storage &out, int B, int iC, int iH, int iW, int oC, int kH,
+              int kW, int s, int p) override;
+  void conv2d_backward(const Storage &grad_out, const Storage &in,
+                       const Storage &weight, Storage &grad_in, Storage &grad_w,
+                       Storage *grad_b, int B, int iC, int iH, int iW, int oC,
+                       int kH, int kW, int s, int p) override;
+  void max_pool2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
+                  int k, int s, int p) override;
+  void max_pool2d_backward(const Storage &grad_out, const Storage &in,
+                           Storage &grad_in, int B, int C, int iH, int iW,
+                           int k, int s, int p) override;
+  void upsample2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
+                  int scale) override;
+  void upsample2d_backward(const Storage &grad_out, Storage &grad_in, int B,
+                           int C, int iH, int iW, int scale) override;
 };
 
 } // namespace munet

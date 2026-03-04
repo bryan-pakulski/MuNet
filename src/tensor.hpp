@@ -95,6 +95,11 @@ public:
   Tensor sum() const;
   Tensor reshape(Shape new_shape) const;
 
+  Tensor conv2d(const Tensor &weight, const Tensor &bias, int stride = 1,
+                int padding = 0) const;
+  Tensor max_pool2d(int kernel_size, int stride, int padding = 0) const;
+  Tensor upsample2d(int scale_factor) const;
+
   // In-place initialization
   void uniform_(float low = -1.0f, float high = 1.0f);
   // Optimizer Step

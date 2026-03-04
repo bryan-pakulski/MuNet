@@ -209,4 +209,33 @@ void CUDABackend::relu_backward(const Storage &grad_out, const Storage &input,
   });
 }
 
+void CUDABackend::conv2d(const Storage &, const Storage &, const Storage *,
+                         Storage &, int, int, int, int, int, int, int, int,
+                         int) {
+  throw std::runtime_error("CUDA conv2d not implemented yet");
+}
+void CUDABackend::conv2d_backward(const Storage &, const Storage &,
+                                  const Storage &, Storage &, Storage &,
+                                  Storage *, int, int, int, int, int, int, int,
+                                  int, int) {
+  throw std::runtime_error("CUDA conv2d_backward not implemented yet");
+}
+void CUDABackend::max_pool2d(const Storage &, Storage &, int, int, int, int,
+                             int, int, int) {
+  throw std::runtime_error("CUDA max_pool2d not implemented yet");
+}
+void CUDABackend::max_pool2d_backward(const Storage &, const Storage &,
+                                      Storage &, int, int, int, int, int, int,
+                                      int) {
+  throw std::runtime_error("CUDA max_pool2d_backward not implemented yet");
+}
+void CUDABackend::upsample2d(const Storage &, Storage &, int, int, int, int,
+                             int) {
+  throw std::runtime_error("CUDA upsample2d not implemented yet");
+}
+void CUDABackend::upsample2d_backward(const Storage &, Storage &, int, int, int,
+                                      int, int) {
+  throw std::runtime_error("CUDA upsample2d_backward not implemented yet");
+}
+
 } // namespace munet

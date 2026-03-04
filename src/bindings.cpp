@@ -61,6 +61,12 @@ PYBIND11_MODULE(munet, m) {
       .def("relu", &Tensor::relu)
       .def("sum", &Tensor::sum)
       .def("reshape", &Tensor::reshape, py::arg("shape"))
+      .def("conv2d", &Tensor::conv2d, py::arg("weight"),
+           py::arg("bias") = Tensor(), py::arg("stride") = 1,
+           py::arg("padding") = 0)
+      .def("max_pool2d", &Tensor::max_pool2d, py::arg("kernel_size"),
+           py::arg("stride"), py::arg("padding") = 0)
+      .def("upsample2d", &Tensor::upsample2d, py::arg("scale_factor"))
       .def("uniform_", &Tensor::uniform_, py::arg("low") = -1.0f,
            py::arg("high") = 1.0f)
       .def("step", &Tensor::step, py::arg("lr"))

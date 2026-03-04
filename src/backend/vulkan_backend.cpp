@@ -796,4 +796,34 @@ void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
                   sizeof(pc), (N + 15) / 16, (M + 15) / 16, 1);
 }
 
+// --- Spatial Stubs ---
+void VulkanBackend::conv2d(const Storage &, const Storage &, const Storage *,
+                           Storage &, int, int, int, int, int, int, int, int,
+                           int) {
+  throw std::runtime_error("Vulkan conv2d not implemented yet");
+}
+void VulkanBackend::conv2d_backward(const Storage &, const Storage &,
+                                    const Storage &, Storage &, Storage &,
+                                    Storage *, int, int, int, int, int, int,
+                                    int, int, int) {
+  throw std::runtime_error("Vulkan conv2d_backward not implemented yet");
+}
+void VulkanBackend::max_pool2d(const Storage &, Storage &, int, int, int, int,
+                               int, int, int) {
+  throw std::runtime_error("Vulkan max_pool2d not implemented yet");
+}
+void VulkanBackend::max_pool2d_backward(const Storage &, const Storage &,
+                                        Storage &, int, int, int, int, int, int,
+                                        int) {
+  throw std::runtime_error("Vulkan max_pool2d_backward not implemented yet");
+}
+void VulkanBackend::upsample2d(const Storage &, Storage &, int, int, int, int,
+                               int) {
+  throw std::runtime_error("Vulkan upsample2d not implemented yet");
+}
+void VulkanBackend::upsample2d_backward(const Storage &, Storage &, int, int,
+                                        int, int, int) {
+  throw std::runtime_error("Vulkan upsample2d_backward not implemented yet");
+}
+
 } // namespace munet

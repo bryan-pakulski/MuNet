@@ -257,6 +257,156 @@ public:
       });
     });
   }
-};
 
+  void conv2d(const Storage &in, const Storage &weight, const Storage *bias,
+              Storage &out, int B, int iC, int iH, int iW, int oC, int kH,
+              int kW, int s, int p) override {
+    int oH = (iH + 2 * p - kH) / s + 1;
+    int oW = (iW + 2 * p - kW) / s + 1;
+    const float *in_p = (const float *)in.data(),
+                *w_p = (const float *)weight.data();
+    const float *b_p = bias ? (const float *)bias->data() : nullptr;
+    float *out_p = (float *)out.data();
+    parallel_for(0, B * oC * oH * oW, [&](size_t start, size_t end) {
+      for (size_t idx = start; idx < end; ++idx) {
+        int ow = idx % oW, oh = (idx / oW) % oH, oc = (idx / (oW * oH)) % oC,
+            b = idx / (oW * oH * oC);
+        float val = *b_p ? *b_p : 0.0f;
+        for (int ic = 0; ic < iC; ++ic) {
+          for (int kh = 0; kh < kH; ++kh) {
+            for (int kw = 0; kw < kW; ++kw) {
+              int ih = oh * s - p + kh, iw = ow * s - p + kw;
+              if (ih >= 0 && ih < iH && iw >= 0 && iw < iW) {
+                val += in_p[((b * iC + ic) * iH + ih) * iW + iw] *
+                       w_p[((oc * iC + ic) * kH + kh) * kW + kw];
+              }
+            }
+          }
+        }
+        out_p = &val;
+      }
+    });
+  }
+  void conv2d_backward(const Storage &grad_out, const Storage &in,
+                       const Storage &weight, Storage &grad_in, Storage &grad_w,
+                       Storage *grad_b, int B, int iC, int iH, int iW, int oC,
+                       int kH, int kW, int s, int p) override {
+    int oH = (iH + 2 * p - kH) / s + 1, oW = (iW + 2 * p - kW) / s + 1;
+    const float *go_p = (const float *)grad_out.data(),
+                *in_p = (const float *)in.data(),
+                *w_p = (const float *)weight.data();
+    float *gi_p = (float *)grad_in.data(), *gw_p = (float *)grad_w.data();
+    float *gb_p = grad_b ? (float *)grad_b->data() : nullptr;
+    // Single threaded accumulation to avoid atomic locks for now
+    for (int b = 0; b < B; ++b) {
+      for (int oc = 0; oc < oC; ++oc) {
+        for (int oh = 0; oh < oH; ++oh) {
+          for (int ow = 0; ow < oW; ++ow) {
+            float go_val = go_p[((b * oC + oc) * oH + oh) * oW + ow];
+            if (gb_p)
+              *gb_p += go_val;
+            for (int ic = 0; ic < iC; ++ic) {
+              for (int kh = 0; kh < kH; ++kh) {
+                for (int kw = 0; kw < kW; ++kw) {
+                  int ih = oh * s - p + kh, iw = ow * s - p + kw;
+                  if (ih >= 0 && ih < iH && iw >= 0 && iw < iW) {
+                    gi_p[((b * iC + ic) * iH + ih) * iW + iw] +=
+                        go_val * w_p[((oc * iC + ic) * kH + kh) * kW + kw];
+                    gw_p[((oc * iC + ic) * kH + kh) * kW + kw] +=
+                        go_val * in_p[((b * iC + ic) * iH + ih) * iW + iw];
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  void max_pool2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
+                  int k, int s, int p) override {
+    int oH = (iH + 2 * p - k) / s + 1, oW = (iW + 2 * p - k) / s + 1;
+    const float *in_p = (const float *)in.data();
+    float *out_p = (float *)out.data();
+    parallel_for(0, B * C * oH * oW, [&](size_t start, size_t end) {
+      for (size_t idx = start; idx < end; ++idx) {
+        int ow = idx % oW, oh = (idx / oW) % oH, c = (idx / (oW * oH)) % C,
+            b = idx / (oW * oH * C);
+        float max_val = -1e9f;
+        for (int kh = 0; kh < k; ++kh) {
+          for (int kw = 0; kw < k; ++kw) {
+            int ih = oh * s - p + kh, iw = ow * s - p + kw;
+            if (ih >= 0 && ih < iH && iw >= 0 && iw < iW) {
+              max_val =
+                  std::max(max_val, in_p[((b * C + c) * iH + ih) * iW + iw]);
+            }
+          }
+        }
+        *out_p = max_val;
+      }
+    });
+  }
+  void max_pool2d_backward(const Storage &grad_out, const Storage &in,
+                           Storage &grad_in, int B, int C, int iH, int iW,
+                           int k, int s, int p) override {
+    int oH = (iH + 2 * p - k) / s + 1, oW = (iW + 2 * p - k) / s + 1;
+    const float *go_p = (const float *)grad_out.data(),
+                *in_p = (const float *)in.data();
+    float *gi_p = (float *)grad_in.data();
+    // Recompute max to route gradient
+    for (int b = 0; b < B; ++b) {
+      for (int c = 0; c < C; ++c) {
+        for (int oh = 0; oh < oH; ++oh) {
+          for (int ow = 0; ow < oW; ++ow) {
+            float max_val = -1e9f;
+            int max_idx = -1;
+            for (int kh = 0; kh < k; ++kh) {
+              for (int kw = 0; kw < k; ++kw) {
+                int ih = oh * s - p + kh, iw = ow * s - p + kw;
+                if (ih >= 0 && ih < iH && iw >= 0 && iw < iW) {
+                  int idx = ((b * C + c) * iH + ih) * iW + iw;
+                  if (*in_p > max_val) {
+                    max_val = *in_p;
+                    max_idx = idx;
+                  }
+                }
+              }
+            }
+            if (max_idx != -1)
+              *gi_p += go_p[((b * C + c) * oH + oh) * oW + ow];
+          }
+        }
+      }
+    }
+  }
+  void upsample2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
+                  int scale) override {
+    int oH = iH * scale, oW = iW * scale;
+    const float *in_p = (const float *)in.data();
+    float *out_p = (float *)out.data();
+    parallel_for(0, B * C * oH * oW, [&](size_t start, size_t end) {
+      for (size_t idx = start; idx < end; ++idx) {
+        int ow = idx % oW, oh = (idx / oW) % oH, c = (idx / (oW * oH)) % C,
+            b = idx / (oW * oH * C);
+        *out_p = in_p[((b * C + c) * iH + (oh / scale)) * iW + (ow / scale)];
+      }
+    });
+  }
+  void upsample2d_backward(const Storage &grad_out, Storage &grad_in, int B,
+                           int C, int iH, int iW, int scale) override {
+    int oH = iH * scale, oW = iW * scale;
+    const float *go_p = (const float *)grad_out.data();
+    float *gi_p = (float *)grad_in.data();
+    for (int b = 0; b < B; ++b) {
+      for (int c = 0; c < C; ++c) {
+        for (int oh = 0; oh < oH; ++oh) {
+          for (int ow = 0; ow < oW; ++ow) {
+            gi_p[((b * C + c) * iH + (oh / scale)) * iW + (ow / scale)] +=
+                go_p[((b * C + c) * oH + oh) * oW + ow];
+          }
+        }
+      }
+    }
+  }
+};
 } // namespace munet

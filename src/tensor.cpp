@@ -66,6 +66,17 @@ Tensor Tensor::matmul(const Tensor &other) const {
 
 Tensor Tensor::relu() const { return ops::relu(*this); }
 
+Tensor Tensor::conv2d(const Tensor &weight, const Tensor &bias, int stride,
+                      int padding) const {
+  return ops::conv2d(*this, weight, bias, stride, padding);
+}
+Tensor Tensor::max_pool2d(int kernel_size, int stride, int padding) const {
+  return ops::max_pool2d(*this, kernel_size, stride, padding);
+}
+Tensor Tensor::upsample2d(int scale_factor) const {
+  return ops::upsample2d(*this, scale_factor);
+}
+
 // --- Utilities ---
 struct ToBackward : public Node {
   Device src_device;
