@@ -1,252 +1,105 @@
 #pragma once
-
-#include "device.hpp"
-#include <cstdlib>
-#include <cstring>
+#include "storage.hpp"
+#include "types.hpp"
 #include <memory>
-#include <numeric>
-#include <stdexcept>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace munet {
-class Tensor {
-public:
-  Tensor(const std::vector<int> &shape, Device dev = Device::CPU,
-         DataType dtype = DataType::FP32);
-  ~Tensor();
 
-  Tensor(const Tensor &) = delete;
-  Tensor &operator=(const Tensor &) = delete;
-  Tensor(Tensor &&) noexcept;
-  Tensor &operator=(Tensor &&) noexcept;
+struct Node; // Autograd Backward Node
 
-  void *data() { return data_ptr_; }
-  void *data() const { return data_ptr_; }
-  size_t size() const;
-  inline size_t bytes() const;
-  const std::vector<int> &shape() const { return shape_; }
-
-  std::shared_ptr<Tensor> grad_tensor_ = nullptr;
-
-  inline Tensor *grad() { return grad_tensor_.get(); }
-  Tensor operator+(const Tensor &other) const;
-  inline void allocate_grad();
-
-  void to_cpu();
-  void to_gpu();
-  void zero();
-  Tensor clone() const;
-  void copy_from(const void *host_data, size_t size);
-
-  Device device_;
-  DataType dtype_;
-
-private:
-  std::vector<int> shape_;
-  void *data_ptr_ =
-      nullptr; // Void pointer handles mixed precision (float vs half)
-
-  void allocate();
-  void deallocate();
+struct ForwardNode {
+  std::string op_name;
+  std::vector<std::string> input_names;
+  std::unordered_map<std::string, float> attributes;
 };
 
-inline Tensor::Tensor(const std::vector<int> &shape, Device dev, DataType dtype)
-    : shape_(shape), device_(dev), dtype_(dtype) {
-  allocate();
-}
+struct TensorImpl {
+  Shape shape;
+  std::shared_ptr<Storage> storage;
+  std::string name = "";
 
-inline size_t Tensor::size() const {
-  if (shape_.empty())
-    return 0;
-  return std::accumulate(shape_.begin(), shape_.end(), 1,
-                         std::multiplies<int>());
-}
+  bool requires_grad = false;
+  std::shared_ptr<TensorImpl> grad = nullptr;
+  std::shared_ptr<Node> grad_fn = nullptr;
 
-inline size_t Tensor::bytes() const {
-  return size() * (dtype_ == DataType::FP32 ? 4 : 2);
-}
+  std::shared_ptr<ForwardNode> trace_node = nullptr;
 
-inline void Tensor::zero() {
-  if (!data_ptr_)
-    return;
-  if (device_ == Device::CPU) {
-    std::memset(data_ptr_, 0, bytes());
+  TensorImpl(Shape s, Device d, DataType dt, bool req_grad)
+      : shape(s), requires_grad(req_grad) {
+    size_t bytes = numel(s) * dtype_size(dt);
+    storage = std::make_shared<Storage>(bytes, d, dt);
   }
-#ifdef MUNET_USE_CUDA
-  else if (device_ == Device::CUDA) {
-    cudaMemset(data_ptr_, 0, bytes());
-  }
-#endif
-  else {
-    throw std::runtime_error("Unsupported device or missing CUDA support");
-  }
-}
 
-inline Tensor Tensor::clone() const {
-  Tensor copy(shape_, device_, dtype_);
-  if (device_ == Device::CPU) {
-    std::memcpy(copy.data(), data(), bytes());
-  }
-#ifdef MUNET_USE_CUDA
-  else if (device_ == Device::CUDA) {
-    cudaMemcpy(copy.data(), data(), bytes(), cudaMemcpyDeviceToDevice);
-  }
-#endif
-  else {
-    throw std::runtime_error("Unsupported device or missing CUDA support");
-  }
-  return copy;
-}
+  Backend &backend() { return storage->backend(); }
+};
 
-inline void Tensor::allocate() {
-  if (size() == 0)
-    return;
+class Tensor {
+public:
+  Tensor() = default;
 
-  if (device_ == Device::CPU) {
-    data_ptr_ = std::malloc(bytes());
-    if (!data_ptr_)
-      throw std::bad_alloc();
+  // Explicitly use Device{...} to avoid braced-init parsing errors on some
+  // compilers
+  Tensor(Shape shape, Device dev = Device{DeviceType::CPU, 0},
+         DataType dtype = DataType::Float32, bool requires_grad = false) {
+    impl_ = std::make_shared<TensorImpl>(shape, dev, dtype, requires_grad);
   }
-#ifdef MUNET_USE_CUDA
-  else if (device_ == Device::CUDA) {
-    if (cudaMalloc(&data_ptr_, bytes()) != cudaSuccess) {
-      throw std::runtime_error("CUDA allocation failed");
-    }
+
+  const Shape &shape() const { return impl_->shape; }
+  Device device() const { return impl_->storage->device(); }
+  DataType dtype() const { return impl_->storage->dtype(); }
+  void *data() { return impl_->storage->data(); }
+  const void *data() const { return impl_->storage->data(); }
+  size_t size() const { return numel(impl_->shape); }
+  size_t bytes() const { return impl_->storage->size_bytes(); }
+
+  const std::string &name() const { return impl_->name; }
+  void set_name(const std::string &name) { impl_->name = name; }
+
+  bool requires_grad() const { return impl_->requires_grad; }
+  void set_requires_grad(bool r) { impl_->requires_grad = r; }
+
+  Tensor grad() const {
+    if (!impl_->grad)
+      return Tensor();
+    Tensor t;
+    t.impl_ = impl_->grad;
+    return t;
   }
-#endif
-  else {
-    throw std::runtime_error("Unsupported device or missing CUDA support");
+  bool has_grad() const { return impl_->grad != nullptr; }
+
+  void zero_grad() {
+    if (impl_->grad)
+      impl_->grad->storage->zero_();
   }
-}
 
-inline void Tensor::deallocate() {
-  if (!data_ptr_)
-    return;
+  // Overloaded instead of default argument to avoid incomplete type errors
+  void backward();
+  void backward(const Tensor &grad);
 
-  if (device_ == Device::CPU) {
-    std::free(data_ptr_);
+  Tensor clone() const {
+    Tensor out(shape(), device(), dtype(), requires_grad());
+    impl_->backend().copy(data(), out.data(), bytes(), device(), out.device());
+    return out;
   }
-#ifdef MUNET_USE_CUDA
-  else if (device_ == Device::CUDA) {
-    cudaFree(data_ptr_);
-  }
-#endif
-  else {
-    throw std::runtime_error("Unsupported device or missing CUDA support");
-  }
-  data_ptr_ = nullptr;
-}
 
-inline Tensor::~Tensor() { deallocate(); }
+  Tensor to(Device dev) const;
 
-inline Tensor::Tensor(Tensor &&other) noexcept
-    : shape_(std::move(other.shape_)), device_(other.device_),
-      dtype_(other.dtype_), data_ptr_(other.data_ptr_),
-      grad_tensor_(std::move(other.grad_tensor_)) { // FIX: Move gradients
-  other.data_ptr_ = nullptr;                        // Take ownership
-}
+  Tensor operator+(const Tensor &other) const;
+  Tensor operator-(const Tensor &other) const;
+  Tensor operator*(const Tensor &other) const;
+  Tensor matmul(const Tensor &other) const;
+  Tensor relu() const;
+  Tensor sum() const;
 
-inline Tensor &Tensor::operator=(Tensor &&other) noexcept {
-  if (this != &other) {
-    deallocate(); // Free existing memory
-    shape_ = std::move(other.shape_);
-    device_ = other.device_;
-    dtype_ = other.dtype_;
-    data_ptr_ = other.data_ptr_;
-    grad_tensor_ = std::move(other.grad_tensor_); // FIX: Move gradients
-    other.data_ptr_ = nullptr;
-  }
-  return *this;
-}
+  // In-place initialization
+  void uniform_(float low = -1.0f, float high = 1.0f);
+  // Optimizer Step
+  void step(float lr);
 
-inline void Tensor::to_gpu() {
-#ifdef MUNET_USE_CUDA
-  if (device_ == Device::CUDA)
-    return;
-  void *new_ptr;
-  if (cudaMalloc(&new_ptr, bytes()) != cudaSuccess)
-    throw std::runtime_error("CUDA alloc failed");
-  if (cudaMemcpy(new_ptr, data_ptr_, bytes(), cudaMemcpyHostToDevice) !=
-      cudaSuccess) {
-    cudaFree(new_ptr);
-    throw std::runtime_error("CUDA memcpy failed");
-  }
-  deallocate();
-  data_ptr_ = new_ptr;
-  device_ = Device::CUDA;
-#else
-  throw std::runtime_error("µNet compiled without CUDA support.");
-#endif
-}
-
-inline void Tensor::to_cpu() {
-  if (device_ == Device::CPU)
-    return;
-#ifdef MUNET_USE_CUDA
-  void *new_ptr = std::malloc(bytes());
-  if (!new_ptr)
-    throw std::bad_alloc();
-  if (cudaMemcpy(new_ptr, data_ptr_, bytes(), cudaMemcpyDeviceToHost) !=
-      cudaSuccess) {
-    std::free(new_ptr);
-    throw std::runtime_error("CUDA memcpy failed");
-  }
-  deallocate();
-  data_ptr_ = new_ptr;
-  device_ = Device::CPU;
-#endif
-}
-
-inline void Tensor::allocate_grad() {
-  if (!grad_tensor_) {
-    grad_tensor_ = std::make_shared<Tensor>(shape_, device_, dtype_);
-  }
-  grad_tensor_->zero();
-}
-
-inline void Tensor::copy_from(const void *host_data, size_t size) {
-  if (size != bytes())
-    throw std::runtime_error("Size mismatch in copy_from");
-
-  if (device_ == Device::CPU) {
-    std::memcpy(data_ptr_, host_data, size);
-  }
-#ifdef MUNET_USE_CUDA
-  else if (device_ == Device::CUDA) {
-    if (cudaMemcpy(data_ptr_, host_data, size, cudaMemcpyHostToDevice) !=
-        cudaSuccess) {
-      throw std::runtime_error("CUDA memcpy failed");
-    }
-  }
-#endif
-  else {
-    throw std::runtime_error("Unsupported device");
-  }
-}
-
-inline Tensor Tensor::operator+(const Tensor &other) const {
-  if (shape_ != other.shape_)
-    throw std::runtime_error("Shape mismatch in Tensor addition");
-  if (device_ != other.device_)
-    throw std::runtime_error("Device mismatch in Tensor addition");
-
-  Tensor result(shape_, device_, dtype_);
-
-  const float *a_ptr = static_cast<const float *>(data());
-  const float *b_ptr = static_cast<const float *>(other.data());
-  float *res_ptr = static_cast<float *>(result.data());
-
-#ifdef MUNET_USE_CUDA
-  if (device_ == Device::CUDA) {
-    cuda_kernels::tensor_add(a_ptr, b_ptr, res_ptr, size());
-    return result;
-  }
-#endif
-
-  for (size_t i = 0; i < size(); ++i) {
-    res_ptr[i] = a_ptr[i] + b_ptr[i];
-  }
-  return result;
-}
+  std::shared_ptr<TensorImpl> impl_ = nullptr;
+};
 
 } // namespace munet

@@ -1,0 +1,122 @@
+#include "tensor.hpp"
+#include "autograd/autograd.hpp"
+#include "backend/cpu_backend.hpp"
+#include "ops.hpp"
+#include <random>
+#include <stdexcept>
+#include <vector>
+
+#ifdef MUNET_USE_CUDA
+#include "backend/cuda_backend.hpp"
+#endif
+
+#ifdef MUNET_USE_VULKAN
+#include "backend/vulkan_backend.hpp"
+#endif
+
+namespace munet {
+
+// --- Backend Management ---
+std::shared_ptr<Backend> BackendManager::get(Device device) {
+  if (device.type == DeviceType::CPU) {
+    static auto cpu_backend = std::make_shared<CPUBackend>();
+    return cpu_backend;
+  }
+#ifdef MUNET_USE_CUDA
+  if (device.type == DeviceType::CUDA) {
+    static auto cuda_backend = std::make_shared<CUDABackend>();
+    return cuda_backend;
+  }
+#endif
+#ifdef MUNET_USE_VULKAN
+  if (device.type == DeviceType::VULKAN) {
+    static auto vulkan_backend = std::make_shared<VulkanBackend>();
+    return vulkan_backend;
+  }
+#endif
+  throw std::runtime_error("Requested backend not compiled or implemented.");
+}
+
+// --- Autograd ---
+void Tensor::backward(const Tensor &grad) {
+  if (!impl_->grad_fn)
+    return;
+  Engine::execute(impl_->grad_fn.get(), grad);
+}
+
+void Tensor::backward() {
+  if (!impl_->grad_fn)
+    return;
+  Tensor root_grad(shape(), device(), dtype());
+  std::vector<float> ones(size(), 1.0f);
+  impl_->backend().copy(ones.data(), root_grad.data(), bytes(),
+                        Device{DeviceType::CPU, 0}, device());
+  Engine::execute(impl_->grad_fn.get(), root_grad);
+}
+
+// --- Ops ---
+Tensor Tensor::operator+(const Tensor &other) const {
+  return ops::add(*this, other);
+}
+
+Tensor Tensor::matmul(const Tensor &other) const {
+  return ops::matmul(*this, other);
+}
+
+Tensor Tensor::relu() const { return ops::relu(*this); }
+
+// --- Utilities ---
+Tensor Tensor::to(Device dev) const {
+  if (device() == dev)
+    return *this;
+
+  Tensor out(shape(), dev, dtype(), requires_grad());
+
+  // Safety routing matrix:
+  if (device().type == DeviceType::CUDA || dev.type == DeviceType::CUDA) {
+    Device cuda_dev = (device().type == DeviceType::CUDA) ? device() : dev;
+    BackendManager::get(cuda_dev)->copy(data(), out.data(), bytes(), device(),
+                                        dev);
+  } else if (device().type == DeviceType::VULKAN ||
+             dev.type == DeviceType::VULKAN) {
+    Device vk_dev = (device().type == DeviceType::VULKAN) ? device() : dev;
+    BackendManager::get(vk_dev)->copy(data(), out.data(), bytes(), device(),
+                                      dev);
+  } else {
+    // CPU -> CPU routing
+    out.impl_->backend().copy(data(), out.data(), bytes(), device(), dev);
+  }
+
+  return out;
+}
+
+Tensor Tensor::operator-(const Tensor &other) const {
+  return ops::sub(*this, other);
+}
+Tensor Tensor::operator*(const Tensor &other) const {
+  return ops::mul(*this, other);
+}
+Tensor Tensor::sum() const { return ops::sum(*this); }
+
+void Tensor::uniform_(float low, float high) {
+  // Initialize on CPU, then copy to Device if needed
+  Tensor cpu_tensor = to(Device{DeviceType::CPU, 0});
+  std::mt19937 gen(42); // fixed seed for predictability
+  std::uniform_real_distribution<float> dis(low, high);
+  float *ptr = (float *)cpu_tensor.data();
+  for (size_t i = 0; i < size(); ++i)
+    ptr[i] = dis(gen); // Fixed: access index i
+
+  if (device().type != DeviceType::CPU) {
+    impl_->backend().copy(cpu_tensor.data(), data(), bytes(),
+                          Device{DeviceType::CPU, 0}, device());
+  }
+}
+
+void Tensor::step(float lr) {
+  if (!impl_->grad)
+    return;
+  impl_->backend().update(*impl_->storage, *impl_->grad->storage, lr, size());
+}
+
+} // namespace munet

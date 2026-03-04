@@ -1,189 +1,87 @@
-#include "munet.hpp"
+#include "ops.hpp"
+#include "tensor.hpp"
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <stdexcept>
 
 namespace py = pybind11;
 using namespace munet;
 
 PYBIND11_MODULE(munet, m) {
-  m.doc() = "MuNet: A lightweight C++ AI framework with Python bindings";
+  m.doc() = "MuNet: C++ Machine Learning Framework";
 
-  py::enum_<Device>(m, "Device")
-      .value("CPU", Device::CPU)
-      .value("CUDA", Device::CUDA)
+  py::enum_<DeviceType>(m, "DeviceType")
+      .value("CPU", DeviceType::CPU)
+      .value("CUDA", DeviceType::CUDA)
+      .value("VULKAN", DeviceType::VULKAN)
+      .value("METAL", DeviceType::METAL)
       .export_values();
 
-  py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
-      .def(py::init<std::vector<int>, Device>(), py::arg("shape"),
-           py::arg("device") = Device::CPU)
-      .def("to_cpu", &Tensor::to_cpu)
-      .def("to_gpu", &Tensor::to_gpu)
+  py::enum_<DataType>(m, "DataType")
+      .value("Float32", DataType::Float32)
+      .value("Float16", DataType::Float16)
+      .value("Int32", DataType::Int32)
+      .export_values();
+
+  py::class_<Device>(m, "Device")
+      .def(py::init<DeviceType, int>(), py::arg("type") = DeviceType::CPU,
+           py::arg("index") = 0)
+      .def("__repr__", &Device::to_string)
+      .def_readwrite("type", &Device::type)
+      .def_readwrite("index", &Device::index);
+
+  py::class_<Tensor>(m, "Tensor", py::buffer_protocol())
+      .def(py::init<Shape, Device, DataType, bool>(), py::arg("shape"),
+           py::arg("device") = Device{DeviceType::CPU, 0},
+           py::arg("dtype") = DataType::Float32,
+           py::arg("requires_grad") = false)
+      .def_property("name", &Tensor::name, &Tensor::set_name)
       .def_property_readonly("shape", &Tensor::shape)
-      .def_readonly("device", &Tensor::device_,
-                    py::return_value_policy::reference)
-      .def("__add__", &Tensor::operator+)
-      .def("grad", &Tensor::grad, py::return_value_policy::reference)
-      .def("numpy",
-           [](Tensor &t) {
-             // Create shape vector compatible with pybind11 (ssize_t)
-             std::vector<ssize_t> shape(t.shape().begin(), t.shape().end());
+      .def_property_readonly("device", &Tensor::device)
+      .def_property_readonly("dtype", &Tensor::dtype)
+      .def_property("requires_grad", &Tensor::requires_grad,
+                    &Tensor::set_requires_grad)
 
-             if (t.device_ == Device::CPU) {
-               // py::array_t makes a copy of the data by default when
-               // constructed from a pointer
-               return py::array_t<float>(shape, static_cast<float *>(t.data()));
-             } else {
-               // Clone to preserve original tensor on GPU, then move clone to
-               // CPU
-               Tensor cpu_copy = t.clone();
-               cpu_copy.to_cpu();
-               return py::array_t<float>(shape,
-                                         static_cast<float *>(cpu_copy.data()));
-             }
-           })
-      .def_static("from_numpy",
-                  [](py::array_t<float> input) {
-                    py::buffer_info buf = input.request();
-                    std::vector<int> shape;
-                    for (auto s : buf.shape)
-                      shape.push_back(s);
-                    Tensor t(shape, Device::CPU);
-                    std::memcpy(t.data(), buf.ptr, t.bytes());
-                    return t;
-                  })
-      .def("copy_from_numpy", [](Tensor &t, py::array_t<float> input) {
-        py::buffer_info buf = input.request();
-        size_t bytes = buf.size * sizeof(float);
-        if (bytes != t.bytes())
-          throw std::runtime_error("Size mismatch in copy_from_numpy");
-        t.copy_from(buf.ptr, bytes);
+      .def_property_readonly("grad", &Tensor::grad)
+      .def("zero_grad", &Tensor::zero_grad)
+
+      .def("to", &Tensor::to, py::arg("device"))
+
+      // Expose both overloads to Python
+      .def("backward", [](Tensor &t) { t.backward(); })
+      .def(
+          "backward", [](Tensor &t, const Tensor &grad) { t.backward(grad); },
+          py::arg("grad"))
+      .def("__add__", [](const Tensor &a, const Tensor &b) { return a + b; })
+      .def("__sub__", [](const Tensor &a, const Tensor &b) { return a - b; })
+      .def("__mul__", [](const Tensor &a, const Tensor &b) { return a * b; })
+      .def("__matmul__",
+           [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
+      .def("relu", &Tensor::relu)
+      .def("sum", &Tensor::sum)
+      .def("uniform_", &Tensor::uniform_, py::arg("low") = -1.0f,
+           py::arg("high") = 1.0f)
+      .def("step", &Tensor::step, py::arg("lr"))
+
+      .def_buffer([](Tensor &t) -> py::buffer_info {
+        // Safety Check: Prevent NumPy from segfaulting by accessing GPU memory
+        // directly
+        if (t.device().type != DeviceType::CPU) {
+          throw std::runtime_error(
+              "Cannot convert GPU tensor to NumPy array directly. Call "
+              "`.to(Device(DeviceType.CPU))` first.");
+        }
+
+        std::vector<py::ssize_t> strides(t.shape().size());
+        py::ssize_t stride = dtype_size(t.dtype());
+        for (int i = (int)t.shape().size() - 1; i >= 0; --i) {
+          strides[i] = stride;
+          stride *= t.shape()[i];
+        }
+
+        return py::buffer_info(t.data(), dtype_size(t.dtype()),
+                               py::format_descriptor<float>::format(),
+                               t.shape().size(), t.shape(), strides);
       });
-
-  py::class_<Layer, std::shared_ptr<Layer>>(m, "Layer");
-
-  py::class_<Linear, Layer, std::shared_ptr<Linear>>(m, "Linear")
-      .def(py::init<int, int>())
-      .def("forward", &Linear::forward)
-      .def("backward", &Linear::backward)
-      .def("parameters", &Linear::get_parameters,
-           py::return_value_policy::reference)
-      .def("get_gradients", &Linear::get_gradients,
-           py::return_value_policy::reference);
-
-  py::class_<ReLU, Layer, std::shared_ptr<ReLU>>(m, "ReLU")
-      .def(py::init<>())
-      .def("forward", &ReLU::forward)
-      .def("backward", &ReLU::backward);
-
-  py::class_<Softmax, Layer, std::shared_ptr<Softmax>>(m, "Softmax")
-      .def(py::init<>())
-      .def("forward", &Softmax::forward)
-      .def("backward", &Softmax::backward);
-
-  py::class_<Flatten, Layer, std::shared_ptr<Flatten>>(m, "Flatten")
-      .def(py::init<>())
-      .def("forward", &Flatten::forward)
-      .def("backward", &Flatten::backward);
-
-  py::class_<Upsample2D, Layer, std::shared_ptr<Upsample2D>>(m, "Upsample2D")
-      .def(py::init<int>(), py::arg("scale_factor"));
-
-  py::class_<Conv2D, Layer, std::shared_ptr<Conv2D>>(m, "Conv2D")
-      .def(py::init<int, int, int, int, int>(), py::arg("in_channels"),
-           py::arg("out_channels"), py::arg("kernel_size"),
-           py::arg("stride") = 1, py::arg("padding") = 0)
-      .def("forward", &Conv2D::forward)
-      .def("backward", &Conv2D::backward)
-      .def("parameters", &Conv2D::get_parameters,
-           py::return_value_policy::reference)
-      .def("get_gradients", &Conv2D::get_gradients,
-           py::return_value_policy::reference);
-
-  py::class_<BatchNorm2D, Layer, std::shared_ptr<BatchNorm2D>>(m, "BatchNorm2D")
-      .def(py::init<int, float, float>(), py::arg("num_features"),
-           py::arg("eps") = 1e-5f, py::arg("momentum") = 0.1f)
-      .def("train", &BatchNorm2D::train)
-      .def("eval", &BatchNorm2D::eval)
-      .def("forward", &BatchNorm2D::forward)
-      .def("backward", &BatchNorm2D::backward)
-      .def("parameters", &BatchNorm2D::get_parameters,
-           py::return_value_policy::reference)
-      .def("get_gradients", &BatchNorm2D::get_gradients,
-           py::return_value_policy::reference);
-
-  py::class_<MaxPool2D, Layer, std::shared_ptr<MaxPool2D>>(m, "MaxPool2D")
-      .def(py::init<int, int>(), py::arg("kernel_size"), py::arg("stride"))
-      .def("forward", &MaxPool2D::forward)
-      .def("backward", &MaxPool2D::backward);
-
-  // Concat is NOT inheriting Layer in Python purely for signature reasons
-  // (forward takes list of tensors), but acts like one.
-  py::class_<Concat, std::shared_ptr<Concat>>(m, "Concat")
-      .def(py::init<>())
-      .def("forward", &Concat::forward)
-      .def("backward", &Concat::backward);
-
-  py::class_<Dropout, Layer, std::shared_ptr<Dropout>>(m, "Dropout")
-      .def(py::init<float>(), py::arg("p") = 0.5f)
-      .def("forward", &Dropout::forward)
-      .def("backward", &Dropout::backward);
-
-  py::class_<Model>(m, "Model")
-      .def(py::init<>())
-      .def("add", &Model::add)
-      .def("forward", &Model::forward)
-      .def("backward", &Model::backward)
-      // FIX: Use reference policy. The Tensors are owned by the C++ Layers, not
-      // Python.
-      .def("parameters", &Model::parameters, py::return_value_policy::reference)
-      .def("train", &Model::train)
-      .def("eval", &Model::eval)
-      .def("save_weights", &Model::save_weights)
-      .def("load_weights", &Model::load_weights);
-
-  py::class_<Optimizer>(m, "Optimizer");
-
-  py::class_<SGD, Optimizer>(m, "SGD")
-      .def(py::init<std::vector<Tensor *>, float>(), py::arg("params"),
-           py::arg("lr"))
-      .def("step", &SGD::step)
-      .def("zero_grad", &SGD::zero_grad);
-
-  py::class_<Adam, Optimizer>(m, "Adam")
-      .def(py::init<std::vector<Tensor *>, float, float, float, float, float>(),
-           py::arg("params"), py::arg("lr") = 0.001f, py::arg("beta1") = 0.9f,
-           py::arg("beta2") = 0.999f, py::arg("eps") = 1e-8f,
-           py::arg("weight_decay") = 0.0f)
-      .def("step", &Adam::step)
-      .def("zero_grad", &Adam::zero_grad);
-
-  py::class_<Sigmoid, Layer, std::shared_ptr<Sigmoid>>(m, "Sigmoid")
-      .def(py::init<>())
-      .def("forward", &Sigmoid::forward)
-      .def("backward", &Sigmoid::backward);
-
-  m.def("cross_entropy_loss", [](const Tensor &logits, const Tensor &targets) {
-    // Output gradient will live on same device as logits
-    auto grad_out = std::make_shared<Tensor>(logits.shape(), logits.device_);
-
-    // No more explicit to_cpu() calls here!
-    // The C++ function now handles dispatching to CUDA kernel or CPU loop.
-
-    // Auto-handle device mismatch:
-    // If logits are on GPU but targets are on CPU (common case),
-    // temporarily move targets to GPU for the calculation.
-    if (logits.device_ != targets.device_) {
-      Tensor targets_tmp = targets.clone();
-      if (logits.device_ == Device::CUDA)
-        targets_tmp.to_gpu();
-      else
-        targets_tmp.to_cpu();
-      float loss = cross_entropy_loss(logits, targets_tmp, *grad_out);
-      return std::make_pair(loss, grad_out);
-    }
-
-    float loss = cross_entropy_loss(logits, targets, *grad_out);
-    return std::make_pair(loss, grad_out);
-  });
 }
