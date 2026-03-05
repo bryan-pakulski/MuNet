@@ -19,7 +19,7 @@ public:
   virtual std::vector<Tensor> parameters() {
     std::vector<Tensor> params;
     for (auto &[name, p] : parameters_) {
-      params.push_back(p);
+      params.push_back(*p);
     }
     for (auto &[name, m] : modules_) {
       auto sub_params = m->parameters();
@@ -32,9 +32,9 @@ public:
   named_parameters(std::string prefix = "") {
     std::map<std::string, Tensor> params;
     for (auto &[name, p] : parameters_)
-      params[prefix + name] = p;
+      params[prefix + name] = *p;
     for (auto &[name, b] : buffers_)
-      params[prefix + name] = b;
+      params[prefix + name] = *b;
     for (auto &[name, m] : modules_) {
       auto sub_params = m->named_parameters(prefix + name + ".");
       params.insert(sub_params.begin(), sub_params.end());
@@ -53,13 +53,13 @@ public:
 
   virtual void to(Device device) {
     for (auto &[name, p] : parameters_) {
-      parameters_[name] = p.to(device);
-      if (p.requires_grad()) {
-        parameters_[name].set_requires_grad(true);
+      *p = p->to(device);
+      if (p->requires_grad()) {
+        p->set_requires_grad(true);
       }
     }
     for (auto &[name, b] : buffers_) {
-      buffers_[name] = b.to(device);
+      *b = b->to(device);
     }
     for (auto &[name, m] : modules_) {
       m->to(device);
@@ -73,18 +73,18 @@ public:
   }
 
 protected:
-  Tensor &register_parameter(std::string name, Tensor t) {
+  Tensor &register_parameter(std::string name, Tensor &t) {
     if (t.name().empty())
       t.set_name(name);
-    parameters_[name] = t;
-    return parameters_[name];
+    parameters_[name] = &t;
+    return t;
   }
 
-  Tensor &register_buffer(std::string name, Tensor t) {
+  Tensor &register_buffer(std::string name, Tensor &t) {
     if (t.name().empty())
       t.set_name(name);
-    buffers_[name] = t;
-    return buffers_[name];
+    buffers_[name] = &t;
+    return t;
   }
 
   std::shared_ptr<Module> register_module(std::string name,
@@ -94,8 +94,8 @@ protected:
   }
 
   bool training_ = true;
-  std::map<std::string, Tensor> parameters_;
-  std::map<std::string, Tensor> buffers_;
+  std::map<std::string, Tensor *> parameters_;
+  std::map<std::string, Tensor *> buffers_;
   std::map<std::string, std::shared_ptr<Module>> modules_;
 };
 
@@ -109,13 +109,15 @@ public:
     // Kaiming Init equivalent for linear: range = sqrt(1/in_features) (simple)
     float limit = 1.0f / std::sqrt((float)in_features);
     w.uniform_(-limit, limit);
-    weight = register_parameter("weight", w);
+    weight = w;
+    register_parameter("weight", weight);
 
     if (bias) {
       Tensor b({out_features}, Device{DeviceType::CPU, 0}, DataType::Float32,
                true);
       b.uniform_(-limit, limit);
-      this->bias = register_parameter("bias", b);
+      this->bias = b;
+      register_parameter("bias", this->bias);
     }
   }
 
@@ -143,12 +145,14 @@ public:
     float n = in_channels * kernel_size * kernel_size;
     float limit = std::sqrt(3.0f / n); // Uniform kaiming
     w.uniform_(-limit, limit);
-    weight = register_parameter("weight", w);
+    weight = w;
+    register_parameter("weight", weight);
 
     Tensor b({out_channels}, Device{DeviceType::CPU, 0}, DataType::Float32,
              true);
     b.uniform_(-limit, limit);
-    bias = register_parameter("bias", b);
+    bias = b;
+    register_parameter("bias", bias);
   }
 
   Tensor forward(Tensor x) override {
@@ -202,22 +206,26 @@ public:
     Tensor w({num_features}, Device{DeviceType::CPU, 0}, DataType::Float32,
              true);
     w.uniform_(1.0f, 1.0f); // Init to 1
-    weight = register_parameter("weight", w);
+    weight = w;
+    register_parameter("weight", weight);
 
     Tensor b({num_features}, Device{DeviceType::CPU, 0}, DataType::Float32,
              true);
     b.uniform_(0.0f, 0.0f); // Init to 0
-    bias = register_parameter("bias", b);
+    bias = b;
+    register_parameter("bias", bias);
 
     Tensor rm({num_features}, Device{DeviceType::CPU, 0}, DataType::Float32,
               false);
     rm.uniform_(0.0f, 0.0f);
-    running_mean = register_buffer("running_mean", rm);
+    running_mean = rm;
+    register_buffer("running_mean", running_mean);
 
     Tensor rv({num_features}, Device{DeviceType::CPU, 0}, DataType::Float32,
               false);
     rv.uniform_(1.0f, 1.0f);
-    running_var = register_buffer("running_var", rv);
+    running_var = rv;
+    register_buffer("running_var", running_var);
   }
 
   Tensor forward(Tensor x) override {

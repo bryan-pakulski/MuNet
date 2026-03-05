@@ -168,27 +168,7 @@ During development or runtime, you can enable debug logging by setting the `MUNE
 Run the C++ unit tests (GoogleTest) and Python integration tests:
 
 ```
- ./build/munet_tests
- python3 tests/test_python.py
+./test.sh
 ```
 
-# Runtime
-
-The library is built as a shared object (munet.cpython-....so) in the build directory. To use it, simply import it in Python:
-
-```
- import sys
- sys.path.append("path/to/build")
- import munet
-
- # Create a tensor on GPU
- dev = munet.Device(munet.DeviceType.VULKAN, 0)
- x = munet.Tensor([2, 2], device=dev, requires_grad=True)
-```
-
-# Examples
-
-See the tests/ folder for functional examples:
-
- • test_python.py: Contains a full end-to-end training loop for a U-Net style segmentation model.
- • test_cuda.cpp: C++ implementation of MNIST training.
+This will run across all available backends.

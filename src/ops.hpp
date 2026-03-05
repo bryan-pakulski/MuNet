@@ -1,6 +1,9 @@
 #pragma once
 #include "autograd/autograd.hpp"
+#include "types.hpp"
+#include "util.hpp"
 #include <cstdint>
+#include <iostream>
 #include <stdexcept>
 
 namespace munet {
@@ -46,24 +49,51 @@ struct AddBackward : public Node {
   }
 };
 
+// Helper: Expand [C] to [N, C] using MatMul (Ones(N,1) * B(1,C))
+// This correctly handles Forward (Copy) and Backward (Sum)
+inline Tensor broadcast_expand(const Tensor &src, int N) {
+  Tensor ones({N, 1}, src.device(), DataType::Float32, false);
+  ones.uniform_(1.0f, 1.0f);
+  return ones.matmul(src.reshape({1, (int)src.size()}));
+}
+
 inline Tensor add(const Tensor &a, const Tensor &b) {
-  if (a.shape() != b.shape())
-    throw std::runtime_error("Add: shape mismatch");
-  if (a.device() != b.device())
-    throw std::runtime_error("Add: device mismatch");
+  // Case 1: Shapes match
+  if (a.shape() == b.shape()) {
+    if (a.device() != b.device()) {
+      MUNET_ERROR << "Add: device mismatch: a=" << a.device().to_string()
+                  << " b=" << b.device().to_string() << std::endl;
+      throw std::runtime_error("Add: device mismatch");
+    }
 
-  Tensor out(a.shape(), a.device(), a.dtype());
-  a.impl_->backend().add(*a.impl_->storage, *b.impl_->storage,
-                         *out.impl_->storage, a.size());
+    Tensor out(a.shape(), a.device(), a.dtype());
+    a.impl_->backend().add(*a.impl_->storage, *b.impl_->storage,
+                           *out.impl_->storage, a.size());
 
-  if (a.requires_grad() || b.requires_grad()) {
-    auto fn = std::make_shared<AddBackward>();
-    link_backward_edges(fn.get(), {a, b});
-    out.set_requires_grad(true);
-    out.impl_->grad_fn = fn;
+    if (a.requires_grad() || b.requires_grad()) {
+      auto fn = std::make_shared<AddBackward>();
+      link_backward_edges(fn.get(), {a, b});
+      out.set_requires_grad(true);
+      out.impl_->grad_fn = fn;
+    }
+    record_trace(out, "Add", {a, b});
+    return out;
   }
-  record_trace(out, "Add", {a, b});
-  return out;
+
+  // Case 2: Broadcast [N, C] + [C]
+  if (a.shape().size() == 2 && b.shape().size() == 1 &&
+      a.shape()[1] == b.shape()[0]) {
+    return add(a, broadcast_expand(b, a.shape()[0]));
+  }
+
+  // Case 3: Broadcast [C] + [N, C]
+  if (b.shape().size() == 2 && a.shape().size() == 1 &&
+      b.shape()[1] == a.shape()[0]) {
+    return add(broadcast_expand(a, b.shape()[0]), b);
+  }
+
+  throw std::runtime_error("Add: shape mismatch " + to_string(a.shape()) +
+                           " vs " + to_string(b.shape()));
 }
 
 // --- CONCAT ---
@@ -159,21 +189,46 @@ struct MSELossBackward : public Node {
 };
 
 inline Tensor mse_loss(const Tensor &pred, const Tensor &target) {
-  if (pred.shape() != target.shape())
-    throw std::runtime_error("MSELoss: shape mismatch");
+  if (pred.shape() == target.shape()) {
+    Tensor out({1}, pred.device(), pred.dtype());
+    MUNET_WARNING << "MSE_LOSS shape mismatch, pred="
+                  << to_string(pred.shape()) + " target="
+                  << to_string(target.shape()) << std::endl;
+    pred.impl_->backend().mse_loss(*pred.impl_->storage, *target.impl_->storage,
+                                   *out.impl_->storage, pred.size());
 
-  Tensor out({1}, pred.device(), pred.dtype());
-  pred.impl_->backend().mse_loss(*pred.impl_->storage, *target.impl_->storage,
-                                 *out.impl_->storage, pred.size());
-
-  if (pred.requires_grad()) {
-    auto fn = std::make_shared<MSELossBackward>(pred, target);
-    link_backward_edges(fn.get(), {pred, target});
-    out.set_requires_grad(true);
-    out.impl_->grad_fn = fn;
+    if (pred.requires_grad()) {
+      auto fn = std::make_shared<MSELossBackward>(pred, target);
+      link_backward_edges(fn.get(), {pred, target});
+      out.set_requires_grad(true);
+      out.impl_->grad_fn = fn;
+    }
+    record_trace(out, "MSELoss", {pred, target});
+    return out;
   }
-  record_trace(out, "MSELoss", {pred, target});
-  return out;
+
+  // Auto-broadcast for NCHW if channels differ (1 vs C)
+  if (pred.shape().size() == 4 && target.shape().size() == 4 &&
+      pred.shape()[0] == target.shape()[0] &&
+      pred.shape()[2] == target.shape()[2] &&
+      pred.shape()[3] == target.shape()[3]) {
+
+    int pC = pred.shape()[1];
+    int tC = target.shape()[1];
+
+    if (pC == 1 && tC > 1) {
+      std::vector<Tensor> expanded(tC, pred);
+      return mse_loss(cat(expanded, 1), target);
+    }
+    if (tC == 1 && pC > 1) {
+      std::vector<Tensor> expanded(pC, target);
+      return mse_loss(pred, cat(expanded, 1));
+    }
+  }
+
+  throw std::runtime_error(
+      "MSELoss: shape mismatch. Pred=" + to_string(pred.shape()) +
+      " Target=" + to_string(target.shape()));
 }
 
 // --- CROSS ENTROPY LOSS ---
@@ -195,8 +250,11 @@ struct CrossEntropyBackward : public Node {
 };
 
 inline Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
-  if (logits.shape() != targets.shape())
-    throw std::runtime_error("CrossEntropy: shape mismatch");
+  if (logits.shape() != targets.shape()) {
+    throw std::runtime_error(
+        "CrossEntropy: shape mismatch. Logits=" + to_string(logits.shape()) +
+        " Targets=" + to_string(targets.shape()));
+  }
 
   int batch_size = logits.shape().size() > 0 ? logits.shape()[0] : 1;
   int num_classes, spatial;
@@ -399,20 +457,38 @@ struct SubBackward : public Node {
 };
 
 inline Tensor sub(const Tensor &a, const Tensor &b) {
-  if (a.shape() != b.shape() || a.device() != b.device())
-    throw std::runtime_error("Sub: shape or device mismatch");
-  Tensor out(a.shape(), a.device(), a.dtype());
-  a.impl_->backend().sub(*a.impl_->storage, *b.impl_->storage,
-                         *out.impl_->storage, a.size());
+  // Case 1: Shapes match
+  if (a.shape() == b.shape()) {
+    if (a.device() != b.device())
+      throw std::runtime_error("Sub: device mismatch");
+    Tensor out(a.shape(), a.device(), a.dtype());
+    a.impl_->backend().sub(*a.impl_->storage, *b.impl_->storage,
+                           *out.impl_->storage, a.size());
 
-  if (a.requires_grad() || b.requires_grad()) {
-    auto fn = std::make_shared<SubBackward>();
-    link_backward_edges(fn.get(), {a, b});
-    out.set_requires_grad(true);
-    out.impl_->grad_fn = fn;
+    if (a.requires_grad() || b.requires_grad()) {
+      auto fn = std::make_shared<SubBackward>();
+      link_backward_edges(fn.get(), {a, b});
+      out.set_requires_grad(true);
+      out.impl_->grad_fn = fn;
+    }
+    record_trace(out, "Sub", {a, b});
+    return out;
   }
-  record_trace(out, "Sub", {a, b});
-  return out;
+
+  // Case 2: Broadcast [N, C] - [C]
+  if (a.shape().size() == 2 && b.shape().size() == 1 &&
+      a.shape()[1] == b.shape()[0]) {
+    return sub(a, broadcast_expand(b, a.shape()[0]));
+  }
+
+  // Case 3: Broadcast [C] - [N, C]
+  if (b.shape().size() == 2 && a.shape().size() == 1 &&
+      b.shape()[1] == a.shape()[0]) {
+    return sub(broadcast_expand(a, b.shape()[0]), b);
+  }
+
+  throw std::runtime_error("Sub: shape mismatch " + to_string(a.shape()) +
+                           " vs " + to_string(b.shape()));
 }
 
 // --- MUL ---
@@ -435,20 +511,35 @@ struct MulBackward : public Node {
 };
 
 inline Tensor mul(const Tensor &a, const Tensor &b) {
-  if (a.shape() != b.shape() || a.device() != b.device())
-    throw std::runtime_error("Mul: shape or device mismatch");
-  Tensor out(a.shape(), a.device(), a.dtype());
-  a.impl_->backend().mul(*a.impl_->storage, *b.impl_->storage,
-                         *out.impl_->storage, a.size());
+  if (a.shape() == b.shape()) {
+    if (a.device() != b.device())
+      throw std::runtime_error("Mul: device mismatch");
+    Tensor out(a.shape(), a.device(), a.dtype());
+    a.impl_->backend().mul(*a.impl_->storage, *b.impl_->storage,
+                           *out.impl_->storage, a.size());
 
-  if (a.requires_grad() || b.requires_grad()) {
-    auto fn = std::make_shared<MulBackward>(a, b);
-    link_backward_edges(fn.get(), {a, b});
-    out.set_requires_grad(true);
-    out.impl_->grad_fn = fn;
+    if (a.requires_grad() || b.requires_grad()) {
+      auto fn = std::make_shared<MulBackward>(a, b);
+      link_backward_edges(fn.get(), {a, b});
+      out.set_requires_grad(true);
+      out.impl_->grad_fn = fn;
+    }
+    record_trace(out, "Mul", {a, b});
+    return out;
   }
-  record_trace(out, "Mul", {a, b});
-  return out;
+
+  // Broadcast [N, C] * [C]
+  if (a.shape().size() == 2 && b.shape().size() == 1 &&
+      a.shape()[1] == b.shape()[0]) {
+    return mul(a, broadcast_expand(b, a.shape()[0]));
+  }
+  // Broadcast [C] * [N, C]
+  if (b.shape().size() == 2 && a.shape().size() == 1 &&
+      b.shape()[1] == a.shape()[0]) {
+    return mul(broadcast_expand(a, b.shape()[0]), b);
+  }
+
+  throw std::runtime_error("Mul: shape mismatch");
 }
 
 // --- SUM (Global) ---

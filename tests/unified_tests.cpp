@@ -148,7 +148,10 @@ TEST(TensorTest, BroadcastingAdd) {
   // This should ideally broadcast b to [2, 3]
   // Currently MuNet ops.hpp will throw std::runtime_error("Add: shape
   // mismatch")
-  EXPECT_THROW(a + b, std::runtime_error);
+  auto c = a + b;
+
+  EXPECT_EQ(c.shape()[0], 2);
+  EXPECT_EQ(c.shape()[1], 3);
 }
 
 TEST(OptimTest, SGDConsistency) {
