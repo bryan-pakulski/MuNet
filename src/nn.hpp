@@ -28,6 +28,20 @@ public:
     return params;
   }
 
+  virtual std::map<std::string, Tensor>
+  named_parameters(std::string prefix = "") {
+    std::map<std::string, Tensor> params;
+    for (auto &[name, p] : parameters_)
+      params[prefix + name] = p;
+    for (auto &[name, b] : buffers_)
+      params[prefix + name] = b;
+    for (auto &[name, m] : modules_) {
+      auto sub_params = m->named_parameters(prefix + name + ".");
+      params.insert(sub_params.begin(), sub_params.end());
+    }
+    return params;
+  }
+
   virtual void train(bool mode = true) {
     training_ = mode;
     for (auto &[name, m] : modules_) {
@@ -60,11 +74,15 @@ public:
 
 protected:
   Tensor &register_parameter(std::string name, Tensor t) {
+    if (t.name().empty())
+      t.set_name(name);
     parameters_[name] = t;
     return parameters_[name];
   }
 
   Tensor &register_buffer(std::string name, Tensor t) {
+    if (t.name().empty())
+      t.set_name(name);
     buffers_[name] = t;
     return buffers_[name];
   }
@@ -166,7 +184,6 @@ public:
       : k_(kernel_size), s_(stride), p_(padding) {}
   Tensor forward(Tensor x) override { return x.max_pool2d(k_, s_, p_); }
 
-private:
   int k_, s_, p_;
 };
 
@@ -175,7 +192,6 @@ public:
   Upsample(int scale_factor) : scale_(scale_factor) {}
   Tensor forward(Tensor x) override { return x.upsample2d(scale_); }
 
-private:
   int scale_;
 };
 
@@ -229,7 +245,6 @@ public:
     return x;
   }
 
-private:
   std::vector<std::shared_ptr<Module>> ordered_modules_;
 };
 

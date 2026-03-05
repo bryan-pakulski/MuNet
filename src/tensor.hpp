@@ -9,11 +9,14 @@
 namespace munet {
 
 struct Node; // Autograd Backward Node
+class Tensor;
 
 struct ForwardNode {
   std::string op_name;
+  std::vector<Tensor> inputs;
   std::vector<std::string> input_names;
   std::unordered_map<std::string, float> attributes;
+  std::unordered_map<std::string, std::vector<int>> int_attributes;
 };
 
 struct TensorImpl {

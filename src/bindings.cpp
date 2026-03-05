@@ -1,8 +1,8 @@
 #include "nn.hpp"
-#include "ops.hpp"
 #include "optim.hpp"
 #include "tensor.hpp"
 #include <optional>
+#include <pybind11/eval.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -122,6 +122,22 @@ PYBIND11_MODULE(munet, m) {
           })
       .def_property_readonly("grad", &Tensor::grad)
       .def("zero_grad", &Tensor::zero_grad)
+      .def("copy_from_numpy",
+           [](Tensor &t, py::array_t<float> input) {
+             if (t.device().type != DeviceType::CPU) {
+               throw std::runtime_error(
+                   "copy_from_numpy: Target tensor must be on CPU.");
+             }
+             py::buffer_info buf = input.request();
+             size_t bytes = buf.size * sizeof(float);
+             if (bytes != t.bytes()) {
+               throw std::runtime_error(
+                   "copy_from_numpy: Size mismatch. Tensor bytes: " +
+                   std::to_string(t.bytes()) +
+                   ", Numpy bytes: " + std::to_string(bytes));
+             }
+             std::memcpy(t.data(), buf.ptr, bytes);
+           })
 
       .def("to", &Tensor::to, py::arg("device"))
 
@@ -213,6 +229,8 @@ PYBIND11_MODULE(munet, m) {
       .def(py::init<>())
       .def("forward", &nn::Module::forward)
       .def("parameters", &nn::Module::parameters)
+      .def("named_parameters", &nn::Module::named_parameters,
+           py::arg("prefix") = "")
       .def("train", &nn::Module::train, py::arg("mode") = true)
       .def("eval", &nn::Module::eval)
       .def("to", &nn::Module::to)
@@ -221,17 +239,25 @@ PYBIND11_MODULE(munet, m) {
 
   py::class_<nn::Linear, nn::Module, std::shared_ptr<nn::Linear>>(nn, "Linear")
       .def(py::init<int, int, bool>(), py::arg("in_features"),
-           py::arg("out_features"), py::arg("bias") = true);
+           py::arg("out_features"), py::arg("bias") = true)
+      .def_readonly("weight", &nn::Linear::weight)
+      .def_readonly("bias", &nn::Linear::bias);
 
   py::class_<nn::Conv2d, nn::Module, std::shared_ptr<nn::Conv2d>>(nn, "Conv2d")
       .def(py::init<int, int, int, int, int>(), py::arg("in_channels"),
            py::arg("out_channels"), py::arg("kernel_size"),
-           py::arg("stride") = 1, py::arg("padding") = 0);
+           py::arg("stride") = 1, py::arg("padding") = 0)
+      .def_readonly("stride", &nn::Conv2d::stride_)
+      .def_readonly("padding", &nn::Conv2d::padding_)
+      .def_readonly("weight", &nn::Conv2d::weight);
 
   py::class_<nn::BatchNorm2d, nn::Module, std::shared_ptr<nn::BatchNorm2d>>(
       nn, "BatchNorm2d")
       .def(py::init<int, float, float>(), py::arg("num_features"),
-           py::arg("eps") = 1e-5f, py::arg("momentum") = 0.1f);
+           py::arg("eps") = 1e-5f, py::arg("momentum") = 0.1f)
+      .def_readonly("eps", &nn::BatchNorm2d::eps_)
+      .def_readonly("momentum", &nn::BatchNorm2d::momentum_)
+      .def_readonly("weight", &nn::BatchNorm2d::weight);
 
   py::class_<nn::Flatten, nn::Module, std::shared_ptr<nn::Flatten>>(nn,
                                                                     "Flatten")
@@ -247,11 +273,16 @@ PYBIND11_MODULE(munet, m) {
   py::class_<nn::MaxPool2d, nn::Module, std::shared_ptr<nn::MaxPool2d>>(
       nn, "MaxPool2d")
       .def(py::init<int, int, int>(), py::arg("kernel_size"),
-           py::arg("stride") = 2, py::arg("padding") = 0);
+           py::arg("stride") = 2, py::arg("padding") = 0)
+      .def_readonly("kernel_size", &nn::MaxPool2d::k_)
+      .def_readonly("stride", &nn::MaxPool2d::s_)
+      .def_readonly("padding", &nn::MaxPool2d::p_);
 
   py::class_<nn::Upsample, nn::Module, std::shared_ptr<nn::Upsample>>(
       nn, "Upsample")
-      .def(py::init<int>(), py::arg("scale_factor"));
+      .def(py::init<int>(), py::arg("scale_factor"))
+      .def(py::init<int>(), py::arg("scale_factor"))
+      .def_readonly("scale_factor", &nn::Upsample::scale_);
 
   py::class_<nn::Sequential, nn::Module, std::shared_ptr<nn::Sequential>>(
       nn, "Sequential")
@@ -262,7 +293,14 @@ PYBIND11_MODULE(munet, m) {
         for (auto l : layers)
           seq->add(l);
         return seq;
-      }));
+      }))
+      .def(
+          "__iter__",
+          [](nn::Sequential &s) {
+            return py::make_iterator(s.ordered_modules_.begin(),
+                                     s.ordered_modules_.end());
+          },
+          py::keep_alive<0, 1>());
 
   // --- Optim Submodule ---
   auto optim = m.def_submodule("optim", "Optimizers");
@@ -276,4 +314,73 @@ PYBIND11_MODULE(munet, m) {
                                                                         "SGD")
       .def(py::init<std::vector<Tensor>, float>(), py::arg("params"),
            py::arg("lr"));
+
+  py::exec(
+      R"(
+def save(module, filename):
+    import numpy as np
+    import json
+
+    def get_config(m):
+        name = type(m).__name__
+        if name == 'Sequential':
+            return {'type': name, 'layers': [get_config(child) for child in m]}
+        elif name == 'Linear':
+            has_bias = hasattr(m, 'bias') and getattr(m, 'bias') is not None and getattr(m, 'bias').numel() > 0
+            return {'type': name, 'in_features': m.weight.shape[0], 'out_features': m.weight.shape[1], 'bias': has_bias}
+        elif name == 'Conv2d':
+            return {'type': name, 'in_channels': m.weight.shape[1], 'out_channels': m.weight.shape[0], 'kernel_size': m.weight.shape[2], 'stride': m.stride, 'padding': m.padding}
+        elif name == 'MaxPool2d':
+            return {'type': name, 'kernel_size': m.kernel_size, 'stride': m.stride, 'padding': m.padding}
+        elif name == 'BatchNorm2d':
+            return {'type': name, 'num_features': m.weight.shape[0], 'eps': m.eps, 'momentum': m.momentum}
+        elif name == 'Upsample':
+            return {'type': name, 'scale_factor': m.scale_factor}
+        elif name in ('ReLU', 'Sigmoid', 'Flatten'):
+            return {'type': name}
+        else:
+            raise ValueError(f"Unknown module type {name}")
+
+    config = get_config(module)
+    state = {name: np.array(p, copy=False) for name, p in module.named_parameters().items()}
+    state['__config__'] = np.array(json.dumps(config))
+    np.savez(filename, **state)
+
+def load(arg, filename=None):
+    import numpy as np
+    import json
+    import munet
+
+    if filename is None:
+        state = np.load(arg, allow_pickle=True)
+        if '__config__' not in state:
+            raise ValueError("File does not contain architecture config. Load into a module using `load(module, filename)` instead.")
+
+        config = json.loads(str(state['__config__']))
+
+        def build_module(cfg):
+            t = cfg['type']
+            if t == 'Sequential': return munet.nn.Sequential([build_module(c) for c in cfg['layers']])
+            elif t == 'Linear': return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'])
+            elif t == 'Conv2d': return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'])
+            elif t == 'MaxPool2d': return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
+            elif t == 'BatchNorm2d': return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'])
+            elif t == 'Upsample': return munet.nn.Upsample(cfg['scale_factor'])
+            elif t == 'ReLU': return munet.nn.ReLU()
+            elif t == 'Sigmoid': return munet.nn.Sigmoid()
+            elif t == 'Flatten': return munet.nn.Flatten()
+            else: raise ValueError(f"Unknown module type {t}")
+
+        module = build_module(config)
+        for name, p in module.named_parameters().items():
+            if name in state: p.copy_from_numpy(state[name])
+        return module
+    else:
+        module = arg
+        state = np.load(filename, allow_pickle=True)
+        for name, p in module.named_parameters().items():
+            if name in state: p.copy_from_numpy(state[name])
+        return module
+)",
+      py::globals(), m.attr("__dict__"));
 }

@@ -90,6 +90,11 @@ Finally, expose the method to Python in src/bindings.cpp.
 
  .def("my_op", &Tensor::my_op, py::arg("param"))
 
+## Debugging
+
+During development or runtime, you can enable debug logging by setting the `MUNET_DEBUG` environment variable:
+
+`MUNET_DEBUG=1 python munet_script.py`
 
 # Building
 

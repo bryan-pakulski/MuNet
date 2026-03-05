@@ -52,13 +52,6 @@ else()
     message(WARNING "Vulkan not found.")
 endif()
 
-# Set ENABLE_PROFILING flag
-option(ENABLE_PROFILING "Enable Profiling" OFF)
-if(ENABLE_PROFILING)
-    message(STATUS "Profiling Enabled!")
-    add_compile_definitions(ENABLE_PROFILING)
-endif()
-
 # --- Core Library ---
 add_library(munet_core ${MUNET_SOURCES})
 target_include_directories(munet_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

@@ -19,8 +19,10 @@ inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
   }
 }
 
-inline void record_trace(Tensor &out, const std::string &op_name,
-                         const std::vector<Tensor> &inputs) {
+inline void record_trace(
+    Tensor &out, const std::string &op_name, const std::vector<Tensor> &inputs,
+    const std::unordered_map<std::string, std::vector<int>> &int_attrs = {},
+    const std::unordered_map<std::string, float> &float_attrs = {}) {
   auto fn = std::make_shared<ForwardNode>();
   fn->op_name = op_name;
   for (const auto &t : inputs) {
@@ -29,7 +31,10 @@ inline void record_trace(Tensor &out, const std::string &op_name,
           "tensor_" +
           std::to_string(reinterpret_cast<uintptr_t>(t.impl_.get()));
     fn->input_names.push_back(t.name());
+    fn->inputs.push_back(t);
   }
+  fn->int_attributes = int_attrs;
+  fn->attributes = float_attrs;
   out.impl_->trace_node = fn;
 }
 
@@ -173,7 +178,7 @@ inline Tensor relu(const Tensor &a) {
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
-  record_trace(out, "ReLU", {a});
+  record_trace(out, "Relu", {a});
   return out;
 }
 
@@ -295,7 +300,7 @@ inline Tensor matmul(const Tensor &a, const Tensor &b) {
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
-  record_trace(out, "Matmul", {a, b});
+  record_trace(out, "MatMul", {a, b});
   return out;
 }
 
@@ -409,7 +414,7 @@ inline Tensor sum(const Tensor &a) {
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
-  record_trace(out, "Sum", {a});
+  record_trace(out, "ReduceSum", {a}, {{"keepdims", {0}}});
   return out;
 }
 
@@ -442,7 +447,7 @@ inline Tensor reshape(const Tensor &in, Shape new_shape) {
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
-  record_trace(out, "Reshape", {in});
+  record_trace(out, "Reshape", {in}, {{"shape", new_shape}});
   return out;
 }
 
@@ -498,6 +503,12 @@ inline Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
+  std::vector<Tensor> inputs = {in, weight};
+  if (bias.impl_)
+    inputs.push_back(bias);
+  record_trace(out, "Conv", inputs,
+               {{"strides", {stride, stride}},
+                {"pads", {padding, padding, padding, padding}}});
   return out;
 }
 // --- MAXPOOL2D ---
@@ -535,6 +546,10 @@ inline Tensor max_pool2d(const Tensor &in, int kernel_size, int stride,
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
+  record_trace(out, "MaxPool", {in},
+               {{"kernel_shape", {kernel_size, kernel_size}},
+                {"strides", {stride, stride}},
+                {"pads", {padding, padding, padding, padding}}});
   return out;
 }
 // --- UPSAMPLE2D ---
@@ -567,6 +582,7 @@ inline Tensor upsample2d(const Tensor &in, int scale_factor) {
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
+  record_trace(out, "Upsample2d", {in}, {{"scale", {scale_factor}}});
   return out;
 }
 
@@ -624,6 +640,9 @@ inline Tensor batch_norm(const Tensor &in, Tensor &running_mean,
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
+  record_trace(out, "BatchNormalization",
+               {in, weight, bias, running_mean, running_var}, {},
+               {{"epsilon", eps}, {"momentum", momentum}});
   return out;
 }
 
