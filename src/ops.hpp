@@ -98,9 +98,9 @@ inline Tensor mse_loss(const Tensor &pred, const Tensor &target) {
 // --- CROSS ENTROPY LOSS ---
 struct CrossEntropyBackward : public Node {
   Tensor logits, targets;
-  int batch_size, num_classes;
-  CrossEntropyBackward(Tensor l, Tensor t, int b, int c)
-      : logits(l), targets(t), batch_size(b), num_classes(c) {}
+  int batch_size, num_classes, spatial;
+  CrossEntropyBackward(Tensor l, Tensor t, int b, int c, int s)
+      : logits(l), targets(t), batch_size(b), num_classes(c), spatial(s) {}
   std::string name() const override { return "CrossEntropyBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
     Tensor grad_out = grads[0];
@@ -108,7 +108,7 @@ struct CrossEntropyBackward : public Node {
     logits.impl_->backend().cross_entropy_backward(
         *grad_out.impl_->storage, *logits.impl_->storage,
         *targets.impl_->storage, *grad_in.impl_->storage, batch_size,
-        num_classes);
+        num_classes, spatial);
     return {grad_in, Tensor()};
   }
 };
@@ -117,17 +117,27 @@ inline Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
   if (logits.shape() != targets.shape())
     throw std::runtime_error("CrossEntropy: shape mismatch");
 
-  int batch_size = logits.shape().size() > 1 ? logits.shape()[0] : 1;
-  int num_classes = logits.size() / batch_size;
+  int batch_size = logits.shape().size() > 0 ? logits.shape()[0] : 1;
+  int num_classes, spatial;
+
+  if (logits.shape().size() == 4) {
+    // NCHW
+    num_classes = logits.shape()[1];
+    spatial = logits.shape()[2] * logits.shape()[3];
+  } else {
+    // NC or flattened
+    num_classes = logits.size() / batch_size;
+    spatial = 1;
+  }
 
   Tensor out({1}, logits.device(), logits.dtype());
   logits.impl_->backend().cross_entropy(
       *logits.impl_->storage, *targets.impl_->storage, *out.impl_->storage,
-      batch_size, num_classes);
+      batch_size, num_classes, spatial);
 
   if (logits.requires_grad()) {
-    auto fn = std::make_shared<CrossEntropyBackward>(logits, targets,
-                                                     batch_size, num_classes);
+    auto fn = std::make_shared<CrossEntropyBackward>(
+        logits, targets, batch_size, num_classes, spatial);
     link_backward_edges(fn.get(), {logits, targets});
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
@@ -366,8 +376,15 @@ struct SumBackward : public Node {
   Device dev;
   SumBackward(Shape s, Device d) : shape(s), dev(d) {}
   std::string name() const override { return "SumBackward"; }
+
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
-    // grad_out is a size 1 scalar. We broadcast it to the full shape.
+    // grad_out is a scalar on the device.
+    // We need to broadcast it.
+    // For simplicity, we can just copy that 1 value to a full tensor.
+    // Since we don't have a "Broadcast" kernel yet, we can fallback to CPU for
+    // the BACKWARD pass only or implement a fill kernel. For now, let's keep
+    // the backward pass simple, but ensure FORWARD is fast.
+
     Tensor grad_out_cpu = grads[0].to(Device{DeviceType::CPU, 0});
     float g = ((float *)grad_out_cpu.data())[0];
 
@@ -375,22 +392,16 @@ struct SumBackward : public Node {
     float *dest = (float *)cpu_grad_in.data();
     for (size_t i = 0; i < numel(shape); ++i)
       dest[i] = g;
+
     return {cpu_grad_in.to(dev)};
   }
 };
 
 inline Tensor sum(const Tensor &a) {
-  // Route sum through CPU to avoid writing tree reductions for CUDA/Vulkan for
-  // now
-  Tensor a_cpu = a.to(Device{DeviceType::CPU, 0});
-  float s = 0;
-  float *data = (float *)a_cpu.data();
-  for (size_t i = 0; i < a.size(); ++i)
-    s += data[i];
+  Tensor out({1}, a.device(), a.dtype());
 
-  Tensor out({1}, Device{DeviceType::CPU, 0}, a.dtype());
-  ((float *)out.data())[0] = s;
-  out = out.to(a.device()); // move scalar back to original device
+  // Use Backend!
+  a.impl_->backend().sum(*a.impl_->storage, *out.impl_->storage, a.size());
 
   if (a.requires_grad()) {
     auto fn = std::make_shared<SumBackward>(a.shape(), a.device());

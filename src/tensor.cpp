@@ -2,8 +2,8 @@
 #include "autograd/autograd.hpp"
 #include "backend/cpu_backend.hpp"
 #include "ops.hpp"
-#include <cstring>
-#include <random>
+#include <cstdlib>
+#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -17,25 +17,248 @@
 
 namespace munet {
 
+// Logging Macros
+#define MUNET_C_RESET "\033[0m"
+#define MUNET_C_RED "\033[31m"
+#define MUNET_C_ORANGE "\033[33m"
+#define MUNET_C_GREEN "\033[32m"
+#define MUNET_C_CYAN "\033[36m"
+
+inline bool is_debug_enabled() {
+  static const bool debug = (std::getenv("MUNET_DEBUG") != nullptr);
+  return debug;
+}
+
+#define MUNET_DEBUG                                                            \
+  if (!munet::is_debug_enabled()) {                                            \
+  } else                                                                       \
+    std::cerr << MUNET_C_CYAN "[DEBUG] " MUNET_C_RESET
+#define MUNET_INFO                                                             \
+  if (!munet::is_debug_enabled()) {                                            \
+  } else                                                                       \
+    std::cerr << MUNET_C_GREEN "[INFO] " MUNET_C_RESET
+#define MUNET_ERROR                                                            \
+  if (!munet::is_debug_enabled()) {                                            \
+  } else                                                                       \
+    std::cerr << MUNET_C_RED "[INFO] " MUNET_C_RESET
+#define MUNET_WARNING                                                          \
+  if (!munet::is_debug_enabled()) {                                            \
+  } else                                                                       \
+    std::cerr << MUNET_C_ORANGE "[WARN] " MUNET_C_RESET
+
+namespace {
+
+// Intercepts all backend calls and enforces a synchronized sanity check
+class DebugBackend : public Backend {
+  std::shared_ptr<Backend> base_;
+
+  void check(const char *name) {
+    try {
+      base_->synchronize();
+      MUNET_DEBUG << name << " OK" << std::endl;
+    } catch (const std::exception &e) {
+      MUNET_ERROR << "CRASH in/after " << name << ": " << e.what() << std::endl;
+      throw;
+    }
+  }
+
+public:
+  DebugBackend(std::shared_ptr<Backend> base) : base_(base) {}
+
+  void *allocate(size_t bytes) override { return base_->allocate(bytes); }
+  void deallocate(void *ptr) override { base_->deallocate(ptr); }
+  void memset(void *ptr, int value, size_t bytes) override {
+    base_->memset(ptr, value, bytes);
+    check("memset");
+  }
+  void copy(const void *src, void *dst, size_t bytes, Device src_dev,
+            Device dst_dev) override {
+    base_->copy(src, dst, bytes, src_dev, dst_dev);
+    check("copy");
+  }
+  void synchronize() override { base_->synchronize(); }
+  void all_reduce(Storage &buffer, size_t num_elements) override {
+    base_->all_reduce(buffer, num_elements);
+    check("all_reduce");
+  }
+
+  void add(const Storage &a, const Storage &b, Storage &out,
+           size_t num_elements) override {
+    base_->add(a, b, out, num_elements);
+    check("add");
+  }
+  void sub(const Storage &a, const Storage &b, Storage &out,
+           size_t num_elements) override {
+    base_->sub(a, b, out, num_elements);
+    check("sub");
+  }
+  void mul(const Storage &a, const Storage &b, Storage &out,
+           size_t num_elements) override {
+    base_->mul(a, b, out, num_elements);
+    check("mul");
+  }
+  void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
+              int N, bool transA, bool transB) override {
+    base_->matmul(a, b, out, M, K, N, transA, transB);
+    check("matmul");
+  }
+  void relu(const Storage &in, Storage &out, size_t num_elements) override {
+    base_->relu(in, out, num_elements);
+    check("relu");
+  }
+  void relu_backward(const Storage &grad_out, const Storage &input,
+                     Storage &grad_in, size_t num_elements) override {
+    base_->relu_backward(grad_out, input, grad_in, num_elements);
+    check("relu_backward");
+  }
+  void sigmoid(const Storage &in, Storage &out, size_t num_elements) override {
+    base_->sigmoid(in, out, num_elements);
+    check("sigmoid");
+  }
+  void sigmoid_backward(const Storage &grad_out, const Storage &out,
+                        Storage &grad_in, size_t num_elements) override {
+    base_->sigmoid_backward(grad_out, out, grad_in, num_elements);
+    check("sigmoid_backward");
+  }
+  void softmax(const Storage &in, Storage &out, int batch_size,
+               int num_classes) override {
+    base_->softmax(in, out, batch_size, num_classes);
+    check("softmax");
+  }
+  void softmax_backward(const Storage &grad_out, const Storage &out,
+                        Storage &grad_in, int batch_size,
+                        int num_classes) override {
+    base_->softmax_backward(grad_out, out, grad_in, batch_size, num_classes);
+    check("softmax_backward");
+  }
+  void cross_entropy(const Storage &logits, const Storage &targets,
+                     Storage &out_loss, int batch_size, int num_classes,
+                     int spatial) override {
+    base_->cross_entropy(logits, targets, out_loss, batch_size, num_classes,
+                         spatial);
+    check("cross_entropy");
+  }
+  void cross_entropy_backward(const Storage &grad_out, const Storage &logits,
+                              const Storage &targets, Storage &grad_in,
+                              int batch_size, int num_classes,
+                              int spatial) override {
+    base_->cross_entropy_backward(grad_out, logits, targets, grad_in,
+                                  batch_size, num_classes, spatial);
+    check("cross_entropy_backward");
+  }
+  void mse_loss(const Storage &pred, const Storage &target, Storage &out_loss,
+                size_t num_elements) override {
+    base_->mse_loss(pred, target, out_loss, num_elements);
+    check("mse_loss");
+  }
+  void mse_loss_backward(const Storage &grad_out, const Storage &pred,
+                         const Storage &target, Storage &grad_in,
+                         size_t num_elements) override {
+    base_->mse_loss_backward(grad_out, pred, target, grad_in, num_elements);
+    check("mse_loss_backward");
+  }
+  void conv2d(const Storage &in, const Storage &weight, const Storage *bias,
+              Storage &out, int B, int iC, int iH, int iW, int oC, int kH,
+              int kW, int s, int p) override {
+    base_->conv2d(in, weight, bias, out, B, iC, iH, iW, oC, kH, kW, s, p);
+    check("conv2d");
+  }
+  void conv2d_backward(const Storage &grad_out, const Storage &in,
+                       const Storage &weight, Storage &grad_in, Storage &grad_w,
+                       Storage *grad_b, int B, int iC, int iH, int iW, int oC,
+                       int kH, int kW, int s, int p) override {
+    base_->conv2d_backward(grad_out, in, weight, grad_in, grad_w, grad_b, B, iC,
+                           iH, iW, oC, kH, kW, s, p);
+    check("conv2d_backward");
+  }
+  void max_pool2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
+                  int k, int s, int p) override {
+    base_->max_pool2d(in, out, B, C, iH, iW, k, s, p);
+    check("max_pool2d");
+  }
+  void max_pool2d_backward(const Storage &grad_out, const Storage &in,
+                           Storage &grad_in, int B, int C, int iH, int iW,
+                           int k, int s, int p) override {
+    base_->max_pool2d_backward(grad_out, in, grad_in, B, C, iH, iW, k, s, p);
+    check("max_pool2d_backward");
+  }
+  void upsample2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
+                  int scale) override {
+    base_->upsample2d(in, out, B, C, iH, iW, scale);
+    check("upsample2d");
+  }
+  void upsample2d_backward(const Storage &grad_out, Storage &grad_in, int B,
+                           int C, int iH, int iW, int scale) override {
+    base_->upsample2d_backward(grad_out, grad_in, B, C, iH, iW, scale);
+    check("upsample2d_backward");
+  }
+  void batch_norm(const Storage &in, const Storage &scale, const Storage &bias,
+                  Storage &running_mean, Storage &running_var,
+                  Storage &save_mean, Storage &save_var, Storage &out, int B,
+                  int C, int H, int W, float momentum, float eps,
+                  bool training) override {
+    base_->batch_norm(in, scale, bias, running_mean, running_var, save_mean,
+                      save_var, out, B, C, H, W, momentum, eps, training);
+    check("batch_norm");
+  }
+  void batch_norm_backward(const Storage &grad_out, const Storage &in,
+                           const Storage &scale, const Storage &save_mean,
+                           const Storage &save_var, Storage &grad_in,
+                           Storage &grad_scale, Storage &grad_bias, int B,
+                           int C, int H, int W, float eps) override {
+    base_->batch_norm_backward(grad_out, in, scale, save_mean, save_var,
+                               grad_in, grad_scale, grad_bias, B, C, H, W, eps);
+    check("batch_norm_backward");
+  }
+  void update(Storage &weight, const Storage &grad, float lr,
+              size_t num_elements) override {
+    base_->update(weight, grad, lr, num_elements);
+    check("update");
+  }
+  void fill_uniform(Storage &out, float low, float high,
+                    size_t num_elements) override {
+    base_->fill_uniform(out, low, high, num_elements);
+    check("fill_uniform");
+  }
+  void sum(const Storage &in, Storage &out, size_t num_elements) override {
+    base_->sum(in, out, num_elements);
+    check("sum");
+  }
+};
+
+} // anonymous namespace
+
 // --- Backend Management ---
 std::shared_ptr<Backend> BackendManager::get(Device device) {
+  static std::unordered_map<int, std::shared_ptr<Backend>> cache;
+  int key = (int)device.type * 1000 + device.index;
+  if (cache.count(key))
+    return cache.at(key);
+
+  std::shared_ptr<Backend> base;
   if (device.type == DeviceType::CPU) {
-    static auto cpu_backend = std::make_shared<CPUBackend>();
-    return cpu_backend;
+    base = std::make_shared<CPUBackend>();
   }
 #ifdef MUNET_USE_CUDA
-  if (device.type == DeviceType::CUDA) {
-    static auto cuda_backend = std::make_shared<CUDABackend>();
-    return cuda_backend;
+  else if (device.type == DeviceType::CUDA) {
+    base = std::make_shared<CUDABackend>();
   }
 #endif
 #ifdef MUNET_USE_VULKAN
-  if (device.type == DeviceType::VULKAN) {
-    static auto vulkan_backend = std::make_shared<VulkanBackend>();
-    return vulkan_backend;
+  else if (device.type == DeviceType::VULKAN) {
+    base = std::make_shared<VulkanBackend>();
   }
 #endif
-  throw std::runtime_error("Requested backend not compiled or implemented.");
+  else {
+    throw std::runtime_error("Requested backend not compiled or implemented.");
+  }
+
+  if (munet::is_debug_enabled()) {
+    base = std::make_shared<DebugBackend>(base);
+  }
+
+  cache[key] = base;
+  return base;
 }
 
 // --- Autograd ---
@@ -90,24 +313,40 @@ struct ToBackward : public Node {
 };
 
 Tensor Tensor::to(Device dev) const {
+  MUNET_DEBUG << "Tensor::to | "
+              << (impl_->name.empty() ? "unnamed" : impl_->name) << " | "
+              << device().to_string() << " -> " << dev.to_string() << std::endl;
+
   if (device() == dev)
     return *this;
 
   Tensor out(shape(), dev, dtype(), requires_grad());
 
-  // Safety routing matrix:
+  // 1. CUDA Handling (Source or Dest is CUDA)
   if (device().type == DeviceType::CUDA || dev.type == DeviceType::CUDA) {
+#ifdef MUNET_USE_CUDA
+    // Always use the CUDA backend to handle transfers involving CUDA
     Device cuda_dev = (device().type == DeviceType::CUDA) ? device() : dev;
     BackendManager::get(cuda_dev)->copy(data(), out.data(), bytes(), device(),
                                         dev);
-  } else if (device().type == DeviceType::VULKAN ||
-             dev.type == DeviceType::VULKAN) {
+#else
+    throw std::runtime_error("CUDA backend not compiled");
+#endif
+  }
+  // 2. Vulkan Handling (Source or Dest is Vulkan)
+  else if (device().type == DeviceType::VULKAN ||
+           dev.type == DeviceType::VULKAN) {
+#ifdef MUNET_USE_VULKAN
     Device vk_dev = (device().type == DeviceType::VULKAN) ? device() : dev;
     BackendManager::get(vk_dev)->copy(data(), out.data(), bytes(), device(),
                                       dev);
-  } else {
-    // CPU -> CPU routing
-    out.impl_->backend().copy(data(), out.data(), bytes(), device(), dev);
+#else
+    throw std::runtime_error("Vulkan backend not compiled");
+#endif
+  }
+  // 3. CPU fallback
+  else {
+    impl_->backend().copy(data(), out.data(), bytes(), device(), dev);
   }
 
   if (requires_grad()) {
@@ -133,27 +372,6 @@ Tensor Tensor::reshape(Shape new_shape) const {
   return ops::reshape(*this, new_shape);
 }
 
-void Tensor::uniform_(float low, float high) {
-  if (size() == 0)
-    return;
-
-  // Initialize a fresh CPU tensor to avoid copying uninitialized garbage from
-  // GPU
-  Tensor cpu_tensor(shape(), Device{DeviceType::CPU, 0}, dtype(), false);
-  std::mt19937 gen(42); // fixed seed for predictability
-  std::uniform_real_distribution<float> dis(low, high);
-  float *ptr = (float *)cpu_tensor.data();
-  for (size_t i = 0; i < size(); ++i)
-    ptr[i] = dis(gen);
-
-  if (device().type != DeviceType::CPU) {
-    impl_->backend().copy(cpu_tensor.data(), data(), bytes(),
-                          Device{DeviceType::CPU, 0}, device());
-  } else {
-    std::memcpy(data(), cpu_tensor.data(), bytes());
-  }
-}
-
 void Tensor::step(float lr) {
   if (!impl_->grad)
     return;
@@ -173,6 +391,13 @@ Tensor Tensor::mse_loss(const Tensor &target) const {
 
 Tensor Tensor::cross_entropy(const Tensor &target) const {
   return ops::cross_entropy(*this, target);
+}
+
+void Tensor::uniform_(float low, float high) {
+  if (size() == 0)
+    return;
+  // Delegate directly to backend. No more CPU roundtrip.
+  impl_->backend().fill_uniform(*impl_->storage, low, high, size());
 }
 
 } // namespace munet

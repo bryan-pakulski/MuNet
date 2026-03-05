@@ -1,7 +1,6 @@
 #pragma once
 #include "backend.hpp"
 #include "types.hpp"
-#include <iostream>
 #include <memory>
 
 namespace munet {

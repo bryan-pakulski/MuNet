@@ -36,13 +36,13 @@ public:
   void softmax_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, int batch_size,
                         int num_classes) override;
-
   void cross_entropy(const Storage &logits, const Storage &targets,
-                     Storage &out_loss, int batch_size,
-                     int num_classes) override;
+                     Storage &out_loss, int batch_size, int num_classes,
+                     int spatial) override;
   void cross_entropy_backward(const Storage &grad_out, const Storage &logits,
                               const Storage &targets, Storage &grad_in,
-                              int batch_size, int num_classes) override;
+                              int batch_size, int num_classes,
+                              int spatial) override;
 
   void mse_loss(const Storage &pred, const Storage &target, Storage &out_loss,
                 size_t num_elements) override;
@@ -82,6 +82,10 @@ public:
                            const Storage &save_var, Storage &grad_in,
                            Storage &grad_scale, Storage &grad_bias, int B,
                            int C, int H, int W, float eps) override;
+
+  void fill_uniform(Storage &out, float low, float high,
+                    size_t num_elements) override;
+  void sum(const Storage &in, Storage &out, size_t num_elements) override;
 };
 
 } // namespace munet

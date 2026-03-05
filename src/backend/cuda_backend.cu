@@ -1,10 +1,8 @@
-#include "../profiler.hpp"
 #include "../storage.hpp"
 #include "cuda_backend.hpp"
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <stdexcept>
-#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -29,25 +27,6 @@ CUDABackend::CUDABackend() {
 }
 
 CUDABackend::~CUDABackend() {}
-
-template <typename F> void profile(const char *name, F func) {
-#ifdef ENABLE_PROFILING
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-  cudaEventRecord(start);
-  func();
-  cudaEventRecord(stop);
-  cudaEventSynchronize(stop); // Warning: syncs pipeline
-  float ms = 0;
-  cudaEventElapsedTime(&ms, start, stop);
-  Profiler::get().log(name, "cuda", ms * 1000.0);
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
-#else
-  func();
-#endif
-}
 
 void *CUDABackend::allocate(size_t bytes) {
   if (!free_blocks[bytes].empty()) {
@@ -93,14 +72,12 @@ __global__ void add_kernel(const float *a, const float *b, float *out,
 
 void CUDABackend::add(const Storage &a, const Storage &b, Storage &out,
                       size_t num_elements) {
-  profile("add", [&]() {
-    int threads = 256;
-    int blocks = (num_elements + threads - 1) / threads;
-    add_kernel<<<blocks, threads>>>((const float *)a.data(),
-                                    (const float *)b.data(),
-                                    (float *)out.data(), num_elements);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  add_kernel<<<blocks, threads>>>((const float *)a.data(),
+                                  (const float *)b.data(), (float *)out.data(),
+                                  num_elements);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void relu_kernel(const float *in, float *out, size_t N) {
@@ -171,7 +148,7 @@ __global__ void mse_loss_kernel(const float *p, const float *t, float *out,
                                 size_t N) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < N) {
-    float diff = p - t;
+    float diff = p[i] - t[i];
     atomicAdd(out, (diff * diff) / (float)N);
   }
 }
@@ -180,70 +157,78 @@ __global__ void mse_loss_backward_kernel(const float *go, const float *p,
                                          const float *t, float *gi, size_t N) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < N) {
-    gi[i] = go[0] * 2.0f * (p - t) / (float)N;
+    gi[i] = go[0] * 2.0f * (p[i] - t[i]) / (float)N;
   }
 }
 
 __global__ void cross_entropy_kernel(const float *logits, const float *targets,
                                      float *out_loss, int batch_size,
-                                     int num_classes) {
-  int b = blockIdx.x * blockDim.x + threadIdx.x;
-  if (b < batch_size) {
-    const float *logit_row = logits + b * num_classes;
-    const float *target_row = targets + b * num_classes;
+                                     int num_classes, int spatial) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  // We parallelize over (Batch * Spatial) pixels
+  if (idx < batch_size * spatial) {
+    int b = idx / spatial;
+    int s = idx % spatial;
+
+    // Offsets for NCHW: b * (C*S) + c * S + s
+    int stride = spatial;
+    int base_offset = b * (num_classes * spatial) + s;
 
     float max_val = -1e30f;
-    for (int i = 0; i < num_classes; ++i) {
-      if (logit_row[i] > max_val)
-        max_val = logit_row[i];
+    for (int c = 0; c < num_classes; ++c) {
+      float val = logits[base_offset + c * stride];
+      if (val > max_val)
+        max_val = val;
     }
 
     float sum_exp = 0.0f;
-    for (int i = 0; i < num_classes; ++i) {
-      sum_exp += expf(logit_row[i] - max_val);
+    for (int c = 0; c < num_classes; ++c) {
+      sum_exp += expf(logits[base_offset + c * stride] - max_val);
     }
-    if (sum_exp < 1e-7f)
-      sum_exp = 1e-7f;
 
-    float sample_loss = 0.0f;
-    for (int i = 0; i < num_classes; ++i) {
-      float p = expf(logit_row[i] - max_val) / sum_exp;
-      float t = target_row[i];
+    float loss = 0.0f;
+    for (int c = 0; c < num_classes; ++c) {
+      float p = expf(logits[base_offset + c * stride] - max_val) / sum_exp;
+      float t = targets[base_offset + c * stride];
       if (t > 0.0f) {
-        sample_loss -= t * logf(p + 1e-9f);
+        loss -= t * logf(p + 1e-9f);
       }
     }
-    atomicAdd(out_loss, sample_loss / (float)batch_size);
+    // Average over batch size
+    atomicAdd(out_loss, loss / (float)batch_size);
   }
 }
 
 __global__ void cross_entropy_backward_kernel(const float *go,
                                               const float *logits,
                                               const float *targets, float *gi,
-                                              int batch_size, int num_classes) {
-  int b = blockIdx.x * blockDim.x + threadIdx.x;
-  if (b < batch_size) {
-    const float *logit_row = logits + b * num_classes;
-    const float *target_row = targets + b * num_classes;
-    float *gi_row = gi + b * num_classes;
+                                              int batch_size, int num_classes,
+                                              int spatial) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < batch_size * spatial) {
+    int b = idx / spatial;
+    int s = idx % spatial;
+
+    int stride = spatial;
+    int base_offset = b * (num_classes * spatial) + s;
 
     float max_val = -1e30f;
-    for (int i = 0; i < num_classes; ++i) {
-      if (logit_row[i] > max_val)
-        max_val = logit_row[i];
+    for (int c = 0; c < num_classes; ++c) {
+      float val = logits[base_offset + c * stride];
+      if (val > max_val)
+        max_val = val;
     }
 
     float sum_exp = 0.0f;
-    for (int i = 0; i < num_classes; ++i) {
-      sum_exp += expf(logit_row[i] - max_val);
+    for (int c = 0; c < num_classes; ++c) {
+      sum_exp += expf(logits[base_offset + c * stride] - max_val);
     }
-    if (sum_exp < 1e-7f)
-      sum_exp = 1e-7f;
 
     float go_val = go[0];
-    for (int i = 0; i < num_classes; ++i) {
-      float p = expf(logit_row[i] - max_val) / sum_exp;
-      gi_row[i] = go_val * (p - target_row[i]) / (float)batch_size;
+    for (int c = 0; c < num_classes; ++c) {
+      float p = expf(logits[base_offset + c * stride] - max_val) / sum_exp;
+      float t = targets[base_offset + c * stride];
+      gi[base_offset + c * stride] = go_val * (p - t) / (float)batch_size;
     }
   }
 }
@@ -268,80 +253,112 @@ __global__ void update_kernel(float *w, const float *g, float lr, size_t N) {
     w[idx] -= lr * g[idx];
 }
 
+// Simple PCG Hash for randomness
+__device__ uint32_t pcg_hash(uint32_t input) {
+  uint32_t state = input * 747796405u + 2891336453u;
+  uint32_t word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+  return (word >> 22u) ^ word;
+}
+
+__global__ void uniform_kernel(float *out, float low, float range, size_t N,
+                               uint32_t seed) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < N) {
+    uint32_t r = pcg_hash(idx + seed);
+    // Normalize to [0, 1]
+    float r_norm = (float)r / 4294967295.0f;
+    out[idx] = low + r_norm * range;
+  }
+}
+
+__global__ void sum_kernel(const float *in, float *out, size_t N) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < N) {
+    atomicAdd(out, in[idx]);
+  }
+}
+
+void CUDABackend::fill_uniform(Storage &out, float low, float high,
+                               size_t num_elements) {
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  uint32_t seed = clock();
+  uniform_kernel<<<blocks, threads>>>((float *)out.data(), low, high - low,
+                                      num_elements, seed);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::sum(const Storage &in, Storage &out, size_t num_elements) {
+  CUDA_CHECK(cudaMemset(out.data(), 0, sizeof(float)));
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  sum_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
+                                  num_elements);
+  CUDA_CHECK(cudaGetLastError());
+}
+
 void CUDABackend::sub(const Storage &a, const Storage &b, Storage &out,
                       size_t num_elements) {
-  profile("sub", [&]() {
-    int threads = 256, blocks = (num_elements + threads - 1) / threads;
-    sub_kernel<<<blocks, threads>>>((const float *)a.data(),
-                                    (const float *)b.data(),
-                                    (float *)out.data(), num_elements);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256, blocks = (num_elements + threads - 1) / threads;
+  sub_kernel<<<blocks, threads>>>((const float *)a.data(),
+                                  (const float *)b.data(), (float *)out.data(),
+                                  num_elements);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::mul(const Storage &a, const Storage &b, Storage &out,
                       size_t num_elements) {
-  profile("mul", [&]() {
-    int threads = 256, blocks = (num_elements + threads - 1) / threads;
-    mul_kernel<<<blocks, threads>>>((const float *)a.data(),
-                                    (const float *)b.data(),
-                                    (float *)out.data(), num_elements);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256, blocks = (num_elements + threads - 1) / threads;
+  mul_kernel<<<blocks, threads>>>((const float *)a.data(),
+                                  (const float *)b.data(), (float *)out.data(),
+                                  num_elements);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::update(Storage &weight, const Storage &grad, float lr,
                          size_t num_elements) {
-  profile("update", [&]() {
-    int threads = 256, blocks = (num_elements + threads - 1) / threads;
-    update_kernel<<<blocks, threads>>>(
-        (float *)weight.data(), (const float *)grad.data(), lr, num_elements);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256, blocks = (num_elements + threads - 1) / threads;
+  update_kernel<<<blocks, threads>>>(
+      (float *)weight.data(), (const float *)grad.data(), lr, num_elements);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::matmul(const Storage &a, const Storage &b, Storage &out,
                          int M, int K, int N, bool transA, bool transB) {
-  profile("matmul", [&]() {
-    float alpha = 1.0f;
-    float beta = 0.0f;
-    cublasOperation_t cuTransA = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
-    cublasOperation_t cuTransB = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
-    int lda = transB ? K : N;
-    int ldb = transA ? M : K;
-    int ldc = N;
+  float alpha = 1.0f;
+  float beta = 0.0f;
+  cublasOperation_t cuTransA = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
+  cublasOperation_t cuTransB = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
+  int lda = transB ? K : N;
+  int ldb = transA ? M : K;
+  int ldc = N;
 
-    cublasStatus_t status =
-        cublasSgemm(cublas_handle_, cuTransA, cuTransB, N, M, K, &alpha,
-                    (const float *)b.data(), lda, (const float *)a.data(), ldb,
-                    &beta, (float *)out.data(), ldc);
+  cublasStatus_t status =
+      cublasSgemm(cublas_handle_, cuTransA, cuTransB, N, M, K, &alpha,
+                  (const float *)b.data(), lda, (const float *)a.data(), ldb,
+                  &beta, (float *)out.data(), ldc);
 
-    if (status != CUBLAS_STATUS_SUCCESS) {
-      throw std::runtime_error("cuBLAS SGEMM failed");
-    }
-  });
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    throw std::runtime_error("cuBLAS SGEMM failed");
+  }
 }
 
 void CUDABackend::relu(const Storage &in, Storage &out, size_t num_elements) {
-  profile("relu", [&]() {
-    int threads = 256;
-    int blocks = (num_elements + threads - 1) / threads;
-    relu_kernel<<<blocks, threads>>>((const float *)in.data(),
-                                     (float *)out.data(), num_elements);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  relu_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                   (float *)out.data(), num_elements);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::relu_backward(const Storage &grad_out, const Storage &input,
                                 Storage &grad_in, size_t num_elements) {
-  profile("relu_backward", [&]() {
-    int threads = 256;
-    int blocks = (num_elements + threads - 1) / threads;
-    relu_backward_kernel<<<blocks, threads>>>(
-        (const float *)grad_out.data(), (const float *)input.data(),
-        (float *)grad_in.data(), num_elements);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  relu_backward_kernel<<<blocks, threads>>>(
+      (const float *)grad_out.data(), (const float *)input.data(),
+      (float *)grad_in.data(), num_elements);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 // --- Spatial Kernels ---
@@ -747,13 +764,11 @@ void CUDABackend::conv2d(const Storage &in, const Storage &weight,
   size_t total = B * oC * oH * oW;
   int threads = 256;
   int blocks = (total + threads - 1) / threads;
-  profile("conv2d", [&]() {
-    conv2d_kernel<<<blocks, threads>>>(
-        (const float *)in.data(), (const float *)weight.data(),
-        bias ? (const float *)bias->data() : nullptr, (float *)out.data(), B,
-        iC, iH, iW, oC, kH, kW, s, p, oH, oW);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  conv2d_kernel<<<blocks, threads>>>(
+      (const float *)in.data(), (const float *)weight.data(),
+      bias ? (const float *)bias->data() : nullptr, (float *)out.data(), B, iC,
+      iH, iW, oC, kH, kW, s, p, oH, oW);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::conv2d_backward(const Storage &grad_out, const Storage &in,
@@ -763,29 +778,26 @@ void CUDABackend::conv2d_backward(const Storage &grad_out, const Storage &in,
                                   int kW, int s, int p) {
   int oH = (iH + 2 * p - kH) / s + 1;
   int oW = (iW + 2 * p - kW) / s + 1;
-  profile("conv2d_backward", [&]() {
-    {
-      size_t total = B * iC * iH * iW;
-      int blocks = (total + 255) / 256;
-      conv2d_grad_input_kernel<<<blocks, 256>>>(
-          (const float *)grad_out.data(), (const float *)weight.data(),
-          (float *)grad_in.data(), B, iC, iH, iW, oC, kH, kW, s, p, oH, oW);
-    }
-    {
-      size_t total = oC * iC * kH * kW;
-      int blocks = (total + 255) / 256;
-      conv2d_grad_weight_kernel<<<blocks, 256>>>(
-          (const float *)grad_out.data(), (const float *)in.data(),
-          (float *)grad_w.data(), B, iC, iH, iW, oC, kH, kW, s, p, oH, oW);
-    }
-    if (grad_b) {
-      int blocks = (oC + 255) / 256;
-      conv2d_grad_bias_kernel<<<blocks, 256>>>((const float *)grad_out.data(),
-                                               (float *)grad_b->data(), B, oC,
-                                               oH, oW);
-    }
-    CUDA_CHECK(cudaGetLastError());
-  });
+  {
+    size_t total = B * iC * iH * iW;
+    int blocks = (total + 255) / 256;
+    conv2d_grad_input_kernel<<<blocks, 256>>>(
+        (const float *)grad_out.data(), (const float *)weight.data(),
+        (float *)grad_in.data(), B, iC, iH, iW, oC, kH, kW, s, p, oH, oW);
+  }
+  {
+    size_t total = oC * iC * kH * kW;
+    int blocks = (total + 255) / 256;
+    conv2d_grad_weight_kernel<<<blocks, 256>>>(
+        (const float *)grad_out.data(), (const float *)in.data(),
+        (float *)grad_w.data(), B, iC, iH, iW, oC, kH, kW, s, p, oH, oW);
+  }
+  if (grad_b) {
+    int blocks = (oC + 255) / 256;
+    conv2d_grad_bias_kernel<<<blocks, 256>>>(
+        (const float *)grad_out.data(), (float *)grad_b->data(), B, oC, oH, oW);
+  }
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::max_pool2d(const Storage &in, Storage &out, int B, int C,
@@ -794,12 +806,10 @@ void CUDABackend::max_pool2d(const Storage &in, Storage &out, int B, int C,
   int oW = (iW + 2 * p - k) / s + 1;
   size_t total = B * C * oH * oW;
   int blocks = (total + 255) / 256;
-  profile("max_pool2d", [&]() {
-    maxpool2d_kernel<<<blocks, 256>>>((const float *)in.data(),
-                                      (float *)out.data(), B, C, iH, iW, k, s,
-                                      p, oH, oW);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  maxpool2d_kernel<<<blocks, 256>>>((const float *)in.data(),
+                                    (float *)out.data(), B, C, iH, iW, k, s, p,
+                                    oH, oW);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::max_pool2d_backward(const Storage &grad_out,
@@ -810,12 +820,10 @@ void CUDABackend::max_pool2d_backward(const Storage &grad_out,
   int oW = (iW + 2 * p - k) / s + 1;
   size_t total = B * C * oH * oW;
   int blocks = (total + 255) / 256;
-  profile("max_pool2d_backward", [&]() {
-    maxpool2d_backward_kernel<<<blocks, 256>>>(
-        (const float *)grad_out.data(), (const float *)in.data(),
-        (float *)grad_in.data(), B, C, iH, iW, k, s, p, oH, oW);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  maxpool2d_backward_kernel<<<blocks, 256>>>(
+      (const float *)grad_out.data(), (const float *)in.data(),
+      (float *)grad_in.data(), B, C, iH, iW, k, s, p, oH, oW);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::upsample2d(const Storage &in, Storage &out, int B, int C,
@@ -824,125 +832,107 @@ void CUDABackend::upsample2d(const Storage &in, Storage &out, int B, int C,
   int oW = iW * scale;
   size_t total = B * C * oH * oW;
   int blocks = (total + 255) / 256;
-  profile("upsample2d", [&]() {
-    upsample2d_kernel<<<blocks, 256>>>(
-        (const float *)in.data(), (float *)out.data(), B, C, iH, iW, scale);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  upsample2d_kernel<<<blocks, 256>>>((const float *)in.data(),
+                                     (float *)out.data(), B, C, iH, iW, scale);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::upsample2d_backward(const Storage &grad_out, Storage &grad_in,
                                       int B, int C, int iH, int iW, int scale) {
   size_t total = B * C * iH * iW;
   int blocks = (total + 255) / 256;
-  profile("upsample2d_backward", [&]() {
-    upsample2d_backward_kernel<<<blocks, 256>>>((const float *)grad_out.data(),
-                                                (float *)grad_in.data(), B, C,
-                                                iH, iW, scale);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  upsample2d_backward_kernel<<<blocks, 256>>>((const float *)grad_out.data(),
+                                              (float *)grad_in.data(), B, C, iH,
+                                              iW, scale);
+  CUDA_CHECK(cudaGetLastError());
 }
 void CUDABackend::sigmoid(const Storage &in, Storage &out,
                           size_t num_elements) {
-  profile("sigmoid", [&]() {
-    int threads = 256;
-    int blocks = (num_elements + threads - 1) / threads;
-    sigmoid_kernel<<<blocks, threads>>>((const float *)in.data(),
-                                        (float *)out.data(), num_elements);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  sigmoid_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                      (float *)out.data(), num_elements);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::sigmoid_backward(const Storage &grad_out, const Storage &out,
                                    Storage &grad_in, size_t num_elements) {
-  profile("sigmoid_backward", [&]() {
-    int threads = 256;
-    int blocks = (num_elements + threads - 1) / threads;
-    sigmoid_backward_kernel<<<blocks, threads>>>(
-        (const float *)grad_out.data(), (const float *)out.data(),
-        (float *)grad_in.data(), num_elements);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  sigmoid_backward_kernel<<<blocks, threads>>>(
+      (const float *)grad_out.data(), (const float *)out.data(),
+      (float *)grad_in.data(), num_elements);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::softmax(const Storage &in, Storage &out, int batch_size,
                           int num_classes) {
-  profile("softmax", [&]() {
-    int threads = 256;
-    int blocks = (batch_size + threads - 1) / threads;
-    softmax_forward_kernel<<<blocks, threads>>>(
-        (const float *)in.data(), (float *)out.data(), batch_size, num_classes);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256;
+  int blocks = (batch_size + threads - 1) / threads;
+  softmax_forward_kernel<<<blocks, threads>>>(
+      (const float *)in.data(), (float *)out.data(), batch_size, num_classes);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::softmax_backward(const Storage &grad_out, const Storage &out,
                                    Storage &grad_in, int batch_size,
                                    int num_classes) {
-  profile("softmax_backward", [&]() {
-    int threads = 256;
-    int blocks = (batch_size + threads - 1) / threads;
-    softmax_backward_kernel<<<blocks, threads>>>(
-        (const float *)grad_out.data(), (const float *)out.data(),
-        (float *)grad_in.data(), batch_size, num_classes);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256;
+  int blocks = (batch_size + threads - 1) / threads;
+  softmax_backward_kernel<<<blocks, threads>>>(
+      (const float *)grad_out.data(), (const float *)out.data(),
+      (float *)grad_in.data(), batch_size, num_classes);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::mse_loss(const Storage &pred, const Storage &target,
                            Storage &out_loss, size_t num_elements) {
-  profile("mse_loss", [&]() {
-    CUDA_CHECK(cudaMemset(out_loss.data(), 0, sizeof(float)));
-    int threads = 256;
-    int blocks = (num_elements + threads - 1) / threads;
-    mse_loss_kernel<<<blocks, threads>>>(
-        (const float *)pred.data(), (const float *)target.data(),
-        (float *)out_loss.data(), num_elements);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  CUDA_CHECK(cudaMemset(out_loss.data(), 0, sizeof(float)));
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  mse_loss_kernel<<<blocks, threads>>>((const float *)pred.data(),
+                                       (const float *)target.data(),
+                                       (float *)out_loss.data(), num_elements);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::mse_loss_backward(const Storage &grad_out,
                                     const Storage &pred, const Storage &target,
                                     Storage &grad_in, size_t num_elements) {
-  profile("mse_loss_backward", [&]() {
-    int threads = 256;
-    int blocks = (num_elements + threads - 1) / threads;
-    mse_loss_backward_kernel<<<blocks, threads>>>(
-        (const float *)grad_out.data(), (const float *)pred.data(),
-        (const float *)target.data(), (float *)grad_in.data(), num_elements);
-    CUDA_CHECK(cudaGetLastError());
-  });
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  mse_loss_backward_kernel<<<blocks, threads>>>(
+      (const float *)grad_out.data(), (const float *)pred.data(),
+      (const float *)target.data(), (float *)grad_in.data(), num_elements);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::cross_entropy(const Storage &logits, const Storage &targets,
                                 Storage &out_loss, int batch_size,
-                                int num_classes) {
-  profile("cross_entropy", [&]() {
-    CUDA_CHECK(cudaMemset(out_loss.data(), 0, sizeof(float)));
-    int threads = 256;
-    int blocks = (batch_size + threads - 1) / threads;
-    cross_entropy_kernel<<<blocks, threads>>>(
-        (const float *)logits.data(), (const float *)targets.data(),
-        (float *)out_loss.data(), batch_size, num_classes);
-    CUDA_CHECK(cudaGetLastError());
-  });
+                                int num_classes, int spatial) {
+  CUDA_CHECK(cudaMemset(out_loss.data(), 0, sizeof(float)));
+  int total_pixels = batch_size * spatial;
+  int threads = 256;
+  int blocks = (total_pixels + threads - 1) / threads;
+  cross_entropy_kernel<<<blocks, threads>>>(
+      (const float *)logits.data(), (const float *)targets.data(),
+      (float *)out_loss.data(), batch_size, num_classes, spatial);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::cross_entropy_backward(const Storage &grad_out,
                                          const Storage &logits,
                                          const Storage &targets,
                                          Storage &grad_in, int batch_size,
-                                         int num_classes) {
-  profile("cross_entropy_backward", [&]() {
-    int threads = 256;
-    int blocks = (batch_size + threads - 1) / threads;
-    cross_entropy_backward_kernel<<<blocks, threads>>>(
-        (const float *)grad_out.data(), (const float *)logits.data(),
-        (const float *)targets.data(), (float *)grad_in.data(), batch_size,
-        num_classes);
-    CUDA_CHECK(cudaGetLastError());
-  });
+                                         int num_classes, int spatial) {
+  int total_pixels = batch_size * spatial;
+  int threads = 256;
+  int blocks = (total_pixels + threads - 1) / threads;
+  cross_entropy_backward_kernel<<<blocks, threads>>>(
+      (const float *)grad_out.data(), (const float *)logits.data(),
+      (const float *)targets.data(), (float *)grad_in.data(), batch_size,
+      num_classes, spatial);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 } // namespace munet

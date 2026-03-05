@@ -1,8 +1,6 @@
 #pragma once
 #include "../backend.hpp"
-#include "../profiler.hpp"
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
@@ -11,6 +9,7 @@
 #include <future>
 #include <mutex>
 #include <queue>
+#include <random>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
@@ -73,18 +72,6 @@ private:
 
 class CPUBackend : public Backend {
 private:
-  template <typename F> void profile(const char *name, F func) {
-#ifdef ENABLE_PROFILING
-    auto start = std::chrono::high_resolution_clock::now();
-    func();
-    auto end = std::chrono::high_resolution_clock::now();
-    double us = std::chrono::duration<double, std::micro>(end - start).count();
-    Profiler::get().log(name, "cpu", us);
-#else
-    func();
-#endif
-  }
-
   // Caching
   std::unordered_map<size_t, std::vector<void *>> free_blocks_;
   std::unordered_map<void *, size_t> alloc_sizes_;
@@ -164,283 +151,274 @@ public:
 
   void add(const Storage &a, const Storage &b, Storage &out,
            size_t num_elements) override {
-    profile("add", [&]() {
-      const float *ap = (const float *)a.data();
-      const float *bp = (const float *)b.data();
-      float *op = (float *)out.data();
-      parallel_for(0, num_elements, [&](size_t s, size_t e) {
-        for (size_t i = s; i < e; ++i)
-          op[i] = ap[i] + bp[i];
-      });
+    const float *ap = (const float *)a.data();
+    const float *bp = (const float *)b.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = ap[i] + bp[i];
     });
   }
 
   void mul(const Storage &a, const Storage &b, Storage &out,
            size_t num_elements) override {
-    profile("mul", [&]() {
-      const float *ap = (const float *)a.data();
-      const float *bp = (const float *)b.data();
-      float *op = (float *)out.data();
-      parallel_for(0, num_elements, [&](size_t s, size_t e) {
-        for (size_t i = s; i < e; ++i)
-          op[i] = ap[i] * bp[i];
-      });
+    const float *ap = (const float *)a.data();
+    const float *bp = (const float *)b.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = ap[i] * bp[i];
     });
   }
 
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override {
-    profile("matmul", [&]() {
-      const float *ap = (const float *)a.data();
-      const float *bp = (const float *)b.data();
-      float *cp = (float *)out.data();
-      parallel_for(0, M, [&](size_t start_m, size_t end_m) {
-        for (int m = start_m; m < end_m; ++m) {
-          for (int n = 0; n < N; ++n) {
-            float sum = 0.0f;
-            for (int k = 0; k < K; ++k) {
-              float a_val = transA ? ap[k * M + m] : ap[m * K + k];
-              float b_val = transB ? bp[n * K + k] : bp[k * N + n];
-              sum += a_val * b_val;
-            }
-            cp[m * N + n] = sum;
+    const float *ap = (const float *)a.data();
+    const float *bp = (const float *)b.data();
+    float *cp = (float *)out.data();
+    parallel_for(0, M, [&](size_t start_m, size_t end_m) {
+      for (int m = start_m; m < end_m; ++m) {
+        for (int n = 0; n < N; ++n) {
+          float sum = 0.0f;
+          for (int k = 0; k < K; ++k) {
+            float a_val = transA ? ap[k * M + m] : ap[m * K + k];
+            float b_val = transB ? bp[n * K + k] : bp[k * N + n];
+            sum += a_val * b_val;
           }
+          cp[m * N + n] = sum;
         }
-      });
+      }
     });
   }
 
   void relu(const Storage &in, Storage &out, size_t num_elements) override {
-    profile("relu", [&]() {
-      const float *ip = (const float *)in.data();
-      float *op = (float *)out.data();
-      parallel_for(0, num_elements, [&](size_t s, size_t e) {
-        for (size_t i = s; i < e; ++i)
-          op[i] = ip[i] > 0 ? ip[i] : 0;
-      });
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = ip[i] > 0 ? ip[i] : 0;
     });
   }
 
   void relu_backward(const Storage &grad_out, const Storage &input,
                      Storage &grad_in, size_t num_elements) override {
-    profile("relu_backward", [&]() {
-      const float *go = (const float *)grad_out.data();
-      const float *in = (const float *)input.data();
-      float *gi = (float *)grad_in.data();
-      parallel_for(0, num_elements, [&](size_t s, size_t e) {
-        for (size_t i = s; i < e; ++i)
-          gi[i] = (in[i] > 0) ? go[i] : 0.0f;
-      });
+    const float *go = (const float *)grad_out.data();
+    const float *in = (const float *)input.data();
+    float *gi = (float *)grad_in.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        gi[i] = (in[i] > 0) ? go[i] : 0.0f;
     });
   }
 
   void sigmoid(const Storage &in, Storage &out, size_t num_elements) override {
-    profile("sigmoid", [&]() {
-      const float *ip = (const float *)in.data();
-      float *op = (float *)out.data();
-      parallel_for(0, num_elements, [&](size_t s, size_t e) {
-        for (size_t i = s; i < e; ++i)
-          op[i] = 1.0f / (1.0f + std::exp(-ip[i]));
-      });
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = 1.0f / (1.0f + std::exp(-ip[i]));
     });
   }
 
   void sigmoid_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, size_t num_elements) override {
-    profile("sigmoid_backward", [&]() {
-      const float *go = (const float *)grad_out.data();
-      const float *o = (const float *)out.data();
-      float *gi = (float *)grad_in.data();
-      parallel_for(0, num_elements, [&](size_t s, size_t e) {
-        for (size_t i = s; i < e; ++i)
-          gi[i] = go[i] * o[i] * (1.0f - o[i]);
-      });
+    const float *go = (const float *)grad_out.data();
+    const float *o = (const float *)out.data();
+    float *gi = (float *)grad_in.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        gi[i] = go[i] * o[i] * (1.0f - o[i]);
     });
   }
 
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
-    profile("softmax", [&]() {
-      const float *ip = (const float *)in.data();
-      float *op = (float *)out.data();
-      parallel_for(0, batch_size, [&](size_t s, size_t e) {
-        for (size_t b = s; b < e; ++b) {
-          const float *in_row = ip + b * num_classes;
-          float *out_row = op + b * num_classes;
-          float max_val = in_row[0];
-          for (int i = 1; i < num_classes; ++i)
-            if (in_row[i] > max_val)
-              max_val = in_row[i];
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, batch_size, [&](size_t s, size_t e) {
+      for (size_t b = s; b < e; ++b) {
+        const float *in_row = ip + b * num_classes;
+        float *out_row = op + b * num_classes;
+        float max_val = in_row[0];
+        for (int i = 1; i < num_classes; ++i)
+          if (in_row[i] > max_val)
+            max_val = in_row[i];
 
-          // Use double for higher precision accumulation
-          double sum_exp = 0.0;
-          for (int i = 0; i < num_classes; ++i) {
-            sum_exp += std::exp((double)in_row[i] - (double)max_val);
-          }
-          for (int i = 0; i < num_classes; ++i) {
-            out_row[i] = (float)(std::exp((double)in_row[i] - (double)max_val) /
-                                 sum_exp);
-          }
+        // Use double for higher precision accumulation
+        double sum_exp = 0.0;
+        for (int i = 0; i < num_classes; ++i) {
+          sum_exp += std::exp((double)in_row[i] - (double)max_val);
         }
-      });
+        for (int i = 0; i < num_classes; ++i) {
+          out_row[i] =
+              (float)(std::exp((double)in_row[i] - (double)max_val) / sum_exp);
+        }
+      }
     });
   }
 
   void softmax_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, int batch_size,
                         int num_classes) override {
-    profile("softmax_backward", [&]() {
-      const float *go = (const float *)grad_out.data();
-      const float *o = (const float *)out.data();
-      float *gi = (float *)grad_in.data();
-      parallel_for(0, batch_size, [&](size_t s, size_t e) {
-        for (size_t b = s; b < e; ++b) {
-          const float *go_row = go + b * num_classes;
-          const float *out_row = o + b * num_classes;
-          float *gi_row = gi + b * num_classes;
+    const float *go = (const float *)grad_out.data();
+    const float *o = (const float *)out.data();
+    float *gi = (float *)grad_in.data();
+    parallel_for(0, batch_size, [&](size_t s, size_t e) {
+      for (size_t b = s; b < e; ++b) {
+        const float *go_row = go + b * num_classes;
+        const float *out_row = o + b * num_classes;
+        float *gi_row = gi + b * num_classes;
 
-          double sum_out_go = 0.0;
-          for (int i = 0; i < num_classes; ++i)
-            sum_out_go += (double)out_row[i] * (double)go_row[i];
+        double sum_out_go = 0.0;
+        for (int i = 0; i < num_classes; ++i)
+          sum_out_go += (double)out_row[i] * (double)go_row[i];
 
-          for (int i = 0; i < num_classes; ++i)
-            gi_row[i] =
-                (float)((double)out_row[i] * ((double)go_row[i] - sum_out_go));
-        }
-      });
+        for (int i = 0; i < num_classes; ++i)
+          gi_row[i] =
+              (float)((double)out_row[i] * ((double)go_row[i] - sum_out_go));
+      }
     });
   }
 
   void mse_loss(const Storage &pred, const Storage &target, Storage &out_loss,
                 size_t num_elements) override {
-    profile("mse_loss", [&]() {
-      const float *p = (const float *)pred.data();
-      const float *t = (const float *)target.data();
-      float *out = (float *)out_loss.data();
+    const float *p = (const float *)pred.data();
+    const float *t = (const float *)target.data();
+    float *out = (float *)out_loss.data();
 
-      // Sequential reduction for simplicity and thread safety
-      float sum = 0.0f;
-      for (size_t i = 0; i < num_elements; ++i) {
-        float diff = p[i] - t[i];
-        sum += diff * diff;
-      }
-      out[0] = sum / (float)num_elements;
-    });
+    // Sequential reduction for simplicity and thread safety
+    float sum = 0.0f;
+    for (size_t i = 0; i < num_elements; ++i) {
+      float diff = p[i] - t[i];
+      sum += diff * diff;
+    }
+    out[0] = sum / (float)num_elements;
   }
 
   void mse_loss_backward(const Storage &grad_out, const Storage &pred,
                          const Storage &target, Storage &grad_in,
                          size_t num_elements) override {
-    profile("mse_loss_backward", [&]() {
-      const float *go = (const float *)grad_out.data();
-      const float *p = (const float *)pred.data();
-      const float *t = (const float *)target.data();
-      float *gi = (float *)grad_in.data();
+    const float *go = (const float *)grad_out.data();
+    const float *p = (const float *)pred.data();
+    const float *t = (const float *)target.data();
+    float *gi = (float *)grad_in.data();
 
-      parallel_for(0, num_elements, [&](size_t s, size_t e) {
-        float go_val = go[0]; // Loss is scalar
-        float scale = 2.0f / (float)num_elements;
-        for (size_t i = s; i < e; ++i) {
-          gi[i] = go_val * scale * (p[i] - t[i]);
-        }
-      });
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      float go_val = go[0]; // Loss is scalar
+      float scale = 2.0f / (float)num_elements;
+      for (size_t i = s; i < e; ++i) {
+        gi[i] = go_val * scale * (p[i] - t[i]);
+      }
     });
   }
 
   void cross_entropy(const Storage &logits, const Storage &targets,
-                     Storage &out_loss, int batch_size,
-                     int num_classes) override {
-    profile("cross_entropy", [&]() {
-      const float *l = (const float *)logits.data();
-      const float *t = (const float *)targets.data();
-      float *out = (float *)out_loss.data();
+                     Storage &out_loss, int batch_size, int num_classes,
+                     int spatial) override {
+    const float *l = (const float *)logits.data();
+    const float *t = (const float *)targets.data();
+    float *out = (float *)out_loss.data();
 
-      float total_loss = 0.0f;
-      for (int b = 0; b < batch_size; ++b) {
-        const float *l_row = l + b * num_classes;
-        const float *t_row = t + b * num_classes;
+    // Sum reduction requires lock or atomic. We use a thread-local accumulation
+    // strategy via sequential loop for simplicity in this fallback backend.
+    double total_loss = 0.0;
 
+    // Iterate over N samples
+    for (int b = 0; b < batch_size; ++b) {
+      // Iterate over spatial locations (pixels)
+      for (int s = 0; s < spatial; ++s) {
+        // Find Max for stability (over classes)
         float max_val = -1e30f;
-        for (int i = 0; i < num_classes; ++i) {
-          if (l_row[i] > max_val)
-            max_val = l_row[i];
+        for (int c = 0; c < num_classes; ++c) {
+          // NCHW offset: b * (C*S) + c * S + s
+          int idx = b * (num_classes * spatial) + c * spatial + s;
+          if (l[idx] > max_val)
+            max_val = l[idx];
         }
 
+        // Sum Exp
         double sum_exp = 0.0;
-        for (int i = 0; i < num_classes; ++i) {
-          sum_exp += std::exp((double)l_row[i] - (double)max_val);
+        for (int c = 0; c < num_classes; ++c) {
+          int idx = b * (num_classes * spatial) + c * spatial + s;
+          sum_exp += std::exp((double)l[idx] - (double)max_val);
         }
 
-        for (int i = 0; i < num_classes; ++i) {
+        // Compute Loss
+        for (int c = 0; c < num_classes; ++c) {
+          int idx = b * (num_classes * spatial) + c * spatial + s;
           float prob =
-              (float)(std::exp((double)l_row[i] - (double)max_val) / sum_exp);
-          if (t_row[i] > 0.0f) {
-            total_loss -= t_row[i] * std::log(prob + 1e-9f);
+              (float)(std::exp((double)l[idx] - (double)max_val) / sum_exp);
+          float tgt = t[idx];
+          if (tgt > 0.0f) {
+            total_loss -= tgt * std::log(prob + 1e-9f);
           }
         }
       }
-      out[0] = total_loss / (float)batch_size;
-    });
+    }
+    // Mean over Batch (standard definition)
+    out[0] = (float)(total_loss / (double)batch_size);
   }
 
   void cross_entropy_backward(const Storage &grad_out, const Storage &logits,
                               const Storage &targets, Storage &grad_in,
-                              int batch_size, int num_classes) override {
-    profile("cross_entropy_backward", [&]() {
-      const float *go = (const float *)grad_out.data();
-      const float *l = (const float *)logits.data();
-      const float *t = (const float *)targets.data();
-      float *gi = (float *)grad_in.data();
+                              int batch_size, int num_classes,
+                              int spatial) override {
+    const float *go = (const float *)grad_out.data();
+    const float *l = (const float *)logits.data();
+    const float *t = (const float *)targets.data();
+    float *gi = (float *)grad_in.data();
 
-      parallel_for(0, batch_size, [&](size_t s, size_t e) {
-        float go_val = go[0]; // Loss is a scalar
-        for (size_t b = s; b < e; ++b) {
-          const float *l_row = l + b * num_classes;
-          const float *t_row = t + b * num_classes;
-          float *gi_row = gi + b * num_classes;
+    float go_val = go[0];
 
-          float max_val = -1e30f;
-          for (int i = 0; i < num_classes; ++i) {
-            if (l_row[i] > max_val)
-              max_val = l_row[i];
-          }
+    parallel_for(0, batch_size * spatial, [&](size_t start, size_t end) {
+      for (size_t i = start; i < end; ++i) {
+        int b = i / spatial;
+        int s = i % spatial;
 
-          double sum_exp = 0.0;
-          for (int i = 0; i < num_classes; ++i) {
-            sum_exp += std::exp((double)l_row[i] - (double)max_val);
-          }
-
-          for (int i = 0; i < num_classes; ++i) {
-            float prob =
-                (float)(std::exp((double)l_row[i] - (double)max_val) / sum_exp);
-            gi_row[i] = go_val * (prob - t_row[i]) / (float)batch_size;
-          }
+        // Find Max
+        float max_val = -1e30f;
+        for (int c = 0; c < num_classes; ++c) {
+          int idx = b * (num_classes * spatial) + c * spatial + s;
+          if (l[idx] > max_val)
+            max_val = l[idx];
         }
-      });
+
+        // Sum Exp
+        double sum_exp = 0.0;
+        for (int c = 0; c < num_classes; ++c) {
+          int idx = b * (num_classes * spatial) + c * spatial + s;
+          sum_exp += std::exp((double)l[idx] - (double)max_val);
+        }
+
+        // Gradient
+        for (int c = 0; c < num_classes; ++c) {
+          int idx = b * (num_classes * spatial) + c * spatial + s;
+          float prob =
+              (float)(std::exp((double)l[idx] - (double)max_val) / sum_exp);
+          // Gradient is (p - t) / N
+          gi[idx] = go_val * (prob - t[idx]) / (float)batch_size;
+        }
+      }
     });
   }
 
   void sub(const Storage &a, const Storage &b, Storage &out,
            size_t num_elements) override {
-    profile("sub", [&]() {
-      const float *ap = (const float *)a.data(), *bp = (const float *)b.data();
-      float *op = (float *)out.data();
-      parallel_for(0, num_elements, [&](size_t s, size_t e) {
-        for (size_t i = s; i < e; ++i)
-          op[i] = ap[i] - bp[i];
-      });
+    const float *ap = (const float *)a.data(), *bp = (const float *)b.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = ap[i] - bp[i];
     });
   }
 
   void update(Storage &weight, const Storage &grad, float lr,
               size_t num_elements) override {
-    profile("update", [&]() {
-      float *w = (float *)weight.data();
-      const float *g = (const float *)grad.data();
-      parallel_for(0, num_elements, [&](size_t s, size_t e) {
-        for (size_t i = s; i < e; ++i)
-          w[i] -= lr * g[i];
-      });
+    float *w = (float *)weight.data();
+    const float *g = (const float *)grad.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        w[i] -= lr * g[i];
     });
   }
 
@@ -696,6 +674,30 @@ public:
         }
       }
     }
+  }
+
+  void fill_uniform(Storage &out, float low, float high,
+                    size_t num_elements) override {
+    float *ptr = (float *)out.data();
+    // Not strictly thread-safe to share generator, creating local one
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      std::mt19937 gen(42 + s); // Seed offset by index
+      std::uniform_real_distribution<float> dis(low, high);
+      for (size_t i = s; i < e; ++i) {
+        ptr[i] = dis(gen);
+      }
+    });
+  }
+
+  void sum(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+
+    // Simple sequential sum for now to avoid atomic overheads on CPU
+    float total = 0.0f;
+    for (size_t i = 0; i < num_elements; ++i)
+      total += ip[i];
+    op[0] = total;
   }
 };
 } // namespace munet

@@ -40,8 +40,6 @@ class Tensor {
 public:
   Tensor() = default;
 
-  // Explicitly use Device{...} to avoid braced-init parsing errors on some
-  // compilers
   Tensor(Shape shape, Device dev = Device{DeviceType::CPU, 0},
          DataType dtype = DataType::Float32, bool requires_grad = false) {
     impl_ = std::make_shared<TensorImpl>(shape, dev, dtype, requires_grad);
@@ -75,7 +73,6 @@ public:
       impl_->grad->storage->zero_();
   }
 
-  // Overloaded instead of default argument to avoid incomplete type errors
   void backward();
   void backward(const Tensor &grad);
 

@@ -46,13 +46,15 @@ public:
                                 int num_classes) = 0;
 
   // --- Loss Functions ---
+  // Updated signatures to support spatial dimensions
   virtual void cross_entropy(const Storage &logits, const Storage &targets,
-                             Storage &out_loss, int batch_size,
-                             int num_classes) = 0;
+                             Storage &out_loss, int batch_size, int num_classes,
+                             int spatial) = 0;
   virtual void cross_entropy_backward(const Storage &grad_out,
                                       const Storage &logits,
                                       const Storage &targets, Storage &grad_in,
-                                      int batch_size, int num_classes) = 0;
+                                      int batch_size, int num_classes,
+                                      int spatial) = 0;
 
   virtual void mse_loss(const Storage &pred, const Storage &target,
                         Storage &out_loss, size_t num_elements) = 0;
@@ -96,6 +98,13 @@ public:
   // In-place SGD update: w = w - lr * grad
   virtual void update(Storage &weight, const Storage &grad, float lr,
                       size_t num_elements) = 0;
+
+  // --- Random ---
+  virtual void fill_uniform(Storage &out, float low, float high,
+                            size_t num_elements) = 0;
+
+  // --- Reduction ---
+  virtual void sum(const Storage &in, Storage &out, size_t num_elements) = 0;
 };
 
 class BackendManager {

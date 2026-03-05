@@ -1,12 +1,11 @@
 #pragma once
 #include <cstddef>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace munet {
 
-enum class DeviceType { CPU, CUDA, VULKAN, METAL };
+enum class DeviceType { CPU, CUDA, VULKAN, UNKNOWN };
 enum class DataType { Float32, Float16, Int32 };
 
 struct Device {
@@ -22,12 +21,23 @@ struct Device {
     std::string t = (type == DeviceType::CPU)      ? "cpu"
                     : (type == DeviceType::CUDA)   ? "cuda"
                     : (type == DeviceType::VULKAN) ? "vulkan"
-                                                   : "metal";
+                                                   : "unknown";
     return t + ":" + std::to_string(index);
   }
 };
 
 using Shape = std::vector<int>;
+
+inline std::string to_string(const Shape &shape) {
+  std::string shape_str = "[";
+  for (size_t i = 0; i < shape.size(); ++i) {
+    shape_str += std::to_string(shape[i]);
+    if (i < shape.size() - 1)
+      shape_str += ", ";
+  }
+  shape_str += "]";
+  return shape_str;
+}
 
 inline size_t numel(const Shape &shape) {
   if (shape.empty())

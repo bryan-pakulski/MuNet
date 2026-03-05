@@ -27,6 +27,6 @@ cleanfile ReadMe.md
 echo "=== Building MuNet ==="
 mkdir -p build
 pushd build/
-	cmake .. -DENABLE_PROFILING=OFF -DCMAKE_BUILD_TYPE=Release
+	cmake .. -DCMAKE_BUILD_TYPE=Release
 	make -j $(nproc)
 popd
