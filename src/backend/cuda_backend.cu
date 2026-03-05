@@ -28,40 +28,6 @@ CUDABackend::CUDABackend() {
 
 CUDABackend::~CUDABackend() {}
 
-void *CUDABackend::allocate(size_t bytes) {
-  if (!free_blocks[bytes].empty()) {
-    void *ptr = free_blocks[bytes].back();
-    free_blocks[bytes].pop_back();
-    return ptr;
-  }
-  void *ptr;
-  CUDA_CHECK(cudaMalloc(&ptr, bytes));
-  alloc_sizes[ptr] = bytes;
-  return ptr;
-}
-
-void CUDABackend::deallocate(void *ptr) {
-  if (alloc_sizes.count(ptr)) {
-    free_blocks[alloc_sizes[ptr]].push_back(ptr);
-  } else {
-    CUDA_CHECK(cudaFree(ptr));
-  }
-}
-
-void CUDABackend::memset(void *ptr, int value, size_t bytes) {
-  CUDA_CHECK(cudaMemset(ptr, value, bytes));
-}
-
-void CUDABackend::copy(const void *src, void *dst, size_t bytes, Device src_dev,
-                       Device dst_dev) {
-  cudaMemcpyKind kind = cudaMemcpyDefault;
-  CUDA_CHECK(cudaMemcpy(dst, src, bytes, kind));
-}
-
-void CUDABackend::synchronize() { CUDA_CHECK(cudaDeviceSynchronize()); }
-
-void CUDABackend::all_reduce(Storage &buffer, size_t num_elements) {}
-
 // --- Kernels ---
 __global__ void add_kernel(const float *a, const float *b, float *out,
                            size_t N) {
@@ -70,14 +36,29 @@ __global__ void add_kernel(const float *a, const float *b, float *out,
     out[idx] = a[idx] + b[idx];
 }
 
-void CUDABackend::add(const Storage &a, const Storage &b, Storage &out,
-                      size_t num_elements) {
-  int threads = 256;
-  int blocks = (num_elements + threads - 1) / threads;
-  add_kernel<<<blocks, threads>>>((const float *)a.data(),
-                                  (const float *)b.data(), (float *)out.data(),
-                                  num_elements);
-  CUDA_CHECK(cudaGetLastError());
+__global__ void concat_slice_kernel(float *src, float *dst, int outer_size,
+                                    int src_dim_size, int dst_dim_size,
+                                    int inner_size, int src_dim_offset,
+                                    bool forward) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int total = outer_size * src_dim_size * inner_size;
+
+  if (idx < total) {
+    int i = idx % inner_size;
+    int tmp = idx / inner_size;
+    int d = tmp % src_dim_size;
+    int o = tmp / src_dim_size;
+
+    int src_idx = (o * src_dim_size + d) * inner_size + i;
+    int dst_idx = (o * dst_dim_size + (src_dim_offset + d)) * inner_size + i;
+
+    // If forward is true, copy from src to dst; otherwise, copy from dst to src
+    if (forward) {
+      dst[dst_idx] = src[src_idx];
+    } else {
+      src[src_idx] = dst[dst_idx];
+    }
+  }
 }
 
 __global__ void relu_kernel(const float *in, float *out, size_t N) {
@@ -277,91 +258,6 @@ __global__ void sum_kernel(const float *in, float *out, size_t N) {
     atomicAdd(out, in[idx]);
   }
 }
-
-void CUDABackend::fill_uniform(Storage &out, float low, float high,
-                               size_t num_elements) {
-  int threads = 256;
-  int blocks = (num_elements + threads - 1) / threads;
-  uint32_t seed = clock();
-  uniform_kernel<<<blocks, threads>>>((float *)out.data(), low, high - low,
-                                      num_elements, seed);
-  CUDA_CHECK(cudaGetLastError());
-}
-
-void CUDABackend::sum(const Storage &in, Storage &out, size_t num_elements) {
-  CUDA_CHECK(cudaMemset(out.data(), 0, sizeof(float)));
-  int threads = 256;
-  int blocks = (num_elements + threads - 1) / threads;
-  sum_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
-                                  num_elements);
-  CUDA_CHECK(cudaGetLastError());
-}
-
-void CUDABackend::sub(const Storage &a, const Storage &b, Storage &out,
-                      size_t num_elements) {
-  int threads = 256, blocks = (num_elements + threads - 1) / threads;
-  sub_kernel<<<blocks, threads>>>((const float *)a.data(),
-                                  (const float *)b.data(), (float *)out.data(),
-                                  num_elements);
-  CUDA_CHECK(cudaGetLastError());
-}
-
-void CUDABackend::mul(const Storage &a, const Storage &b, Storage &out,
-                      size_t num_elements) {
-  int threads = 256, blocks = (num_elements + threads - 1) / threads;
-  mul_kernel<<<blocks, threads>>>((const float *)a.data(),
-                                  (const float *)b.data(), (float *)out.data(),
-                                  num_elements);
-  CUDA_CHECK(cudaGetLastError());
-}
-
-void CUDABackend::update(Storage &weight, const Storage &grad, float lr,
-                         size_t num_elements) {
-  int threads = 256, blocks = (num_elements + threads - 1) / threads;
-  update_kernel<<<blocks, threads>>>(
-      (float *)weight.data(), (const float *)grad.data(), lr, num_elements);
-  CUDA_CHECK(cudaGetLastError());
-}
-
-void CUDABackend::matmul(const Storage &a, const Storage &b, Storage &out,
-                         int M, int K, int N, bool transA, bool transB) {
-  float alpha = 1.0f;
-  float beta = 0.0f;
-  cublasOperation_t cuTransA = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
-  cublasOperation_t cuTransB = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
-  int lda = transB ? K : N;
-  int ldb = transA ? M : K;
-  int ldc = N;
-
-  cublasStatus_t status =
-      cublasSgemm(cublas_handle_, cuTransA, cuTransB, N, M, K, &alpha,
-                  (const float *)b.data(), lda, (const float *)a.data(), ldb,
-                  &beta, (float *)out.data(), ldc);
-
-  if (status != CUBLAS_STATUS_SUCCESS) {
-    throw std::runtime_error("cuBLAS SGEMM failed");
-  }
-}
-
-void CUDABackend::relu(const Storage &in, Storage &out, size_t num_elements) {
-  int threads = 256;
-  int blocks = (num_elements + threads - 1) / threads;
-  relu_kernel<<<blocks, threads>>>((const float *)in.data(),
-                                   (float *)out.data(), num_elements);
-  CUDA_CHECK(cudaGetLastError());
-}
-
-void CUDABackend::relu_backward(const Storage &grad_out, const Storage &input,
-                                Storage &grad_in, size_t num_elements) {
-  int threads = 256;
-  int blocks = (num_elements + threads - 1) / threads;
-  relu_backward_kernel<<<blocks, threads>>>(
-      (const float *)grad_out.data(), (const float *)input.data(),
-      (float *)grad_in.data(), num_elements);
-  CUDA_CHECK(cudaGetLastError());
-}
-
-// --- Spatial Kernels ---
 
 __global__ void conv2d_kernel(const float *__restrict__ in,
                               const float *__restrict__ weight,
@@ -688,6 +584,133 @@ __global__ void bn_bw_pass2_kernel(const float *go, const float *in, float *gi,
   }
 }
 
+void *CUDABackend::allocate(size_t bytes) {
+  if (!free_blocks[bytes].empty()) {
+    void *ptr = free_blocks[bytes].back();
+    free_blocks[bytes].pop_back();
+    return ptr;
+  }
+  void *ptr;
+  CUDA_CHECK(cudaMalloc(&ptr, bytes));
+  alloc_sizes[ptr] = bytes;
+  return ptr;
+}
+
+void CUDABackend::deallocate(void *ptr) {
+  if (alloc_sizes.count(ptr)) {
+    free_blocks[alloc_sizes[ptr]].push_back(ptr);
+  } else {
+    CUDA_CHECK(cudaFree(ptr));
+  }
+}
+
+void CUDABackend::memset(void *ptr, int value, size_t bytes) {
+  CUDA_CHECK(cudaMemset(ptr, value, bytes));
+}
+
+void CUDABackend::copy(const void *src, void *dst, size_t bytes, Device src_dev,
+                       Device dst_dev) {
+  cudaMemcpyKind kind = cudaMemcpyDefault;
+  CUDA_CHECK(cudaMemcpy(dst, src, bytes, kind));
+}
+
+void CUDABackend::synchronize() { CUDA_CHECK(cudaDeviceSynchronize()); }
+
+void CUDABackend::all_reduce(Storage &buffer, size_t num_elements) {}
+
+void CUDABackend::add(const Storage &a, const Storage &b, Storage &out,
+                      size_t num_elements) {
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  add_kernel<<<blocks, threads>>>((const float *)a.data(),
+                                  (const float *)b.data(), (float *)out.data(),
+                                  num_elements);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::fill_uniform(Storage &out, float low, float high,
+                               size_t num_elements) {
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  uint32_t seed = clock();
+  uniform_kernel<<<blocks, threads>>>((float *)out.data(), low, high - low,
+                                      num_elements, seed);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::sum(const Storage &in, Storage &out, size_t num_elements) {
+  CUDA_CHECK(cudaMemset(out.data(), 0, sizeof(float)));
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  sum_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
+                                  num_elements);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::sub(const Storage &a, const Storage &b, Storage &out,
+                      size_t num_elements) {
+  int threads = 256, blocks = (num_elements + threads - 1) / threads;
+  sub_kernel<<<blocks, threads>>>((const float *)a.data(),
+                                  (const float *)b.data(), (float *)out.data(),
+                                  num_elements);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::mul(const Storage &a, const Storage &b, Storage &out,
+                      size_t num_elements) {
+  int threads = 256, blocks = (num_elements + threads - 1) / threads;
+  mul_kernel<<<blocks, threads>>>((const float *)a.data(),
+                                  (const float *)b.data(), (float *)out.data(),
+                                  num_elements);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::update(Storage &weight, const Storage &grad, float lr,
+                         size_t num_elements) {
+  int threads = 256, blocks = (num_elements + threads - 1) / threads;
+  update_kernel<<<blocks, threads>>>(
+      (float *)weight.data(), (const float *)grad.data(), lr, num_elements);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::matmul(const Storage &a, const Storage &b, Storage &out,
+                         int M, int K, int N, bool transA, bool transB) {
+  float alpha = 1.0f;
+  float beta = 0.0f;
+  cublasOperation_t cuTransA = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
+  cublasOperation_t cuTransB = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
+  int lda = transB ? K : N;
+  int ldb = transA ? M : K;
+  int ldc = N;
+
+  cublasStatus_t status =
+      cublasSgemm(cublas_handle_, cuTransA, cuTransB, N, M, K, &alpha,
+                  (const float *)b.data(), lda, (const float *)a.data(), ldb,
+                  &beta, (float *)out.data(), ldc);
+
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    throw std::runtime_error("cuBLAS SGEMM failed");
+  }
+}
+
+void CUDABackend::relu(const Storage &in, Storage &out, size_t num_elements) {
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  relu_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                   (float *)out.data(), num_elements);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::relu_backward(const Storage &grad_out, const Storage &input,
+                                Storage &grad_in, size_t num_elements) {
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  relu_backward_kernel<<<blocks, threads>>>(
+      (const float *)grad_out.data(), (const float *)input.data(),
+      (float *)grad_in.data(), num_elements);
+  CUDA_CHECK(cudaGetLastError());
+}
+
 void CUDABackend::batch_norm(const Storage &in, const Storage &scale,
                              const Storage &bias, Storage &running_mean,
                              Storage &running_var, Storage &save_mean,
@@ -932,6 +955,83 @@ void CUDABackend::cross_entropy_backward(const Storage &grad_out,
       (const float *)grad_out.data(), (const float *)logits.data(),
       (const float *)targets.data(), (float *)grad_in.data(), batch_size,
       num_classes, spatial);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::concat(const std::vector<Storage *> &inputs, Storage &out,
+                         int dim, const std::vector<Shape> &shapes) {
+  int outer_size = 1;
+  // Compute outer size (dimensions before the concatenation dimension)
+  for (int i = 0; i < dim; ++i)
+    outer_size *= shapes[0][i];
+
+  int inner_size = 1;
+  // Compute inner size (dimensions after the concatenation dimension)
+  for (int i = dim + 1; i < (int)shapes[0].size(); ++i) {
+    inner_size *= shapes[0][i];
+  }
+
+  int dst_dim_size = 0;
+  // Compute the size of the concatenation dimension in the output tensor
+  for (const auto &s : shapes)
+    dst_dim_size += s[dim];
+
+  int current_offset = 0;
+  // Iterate through the inputs and concatenate
+  for (size_t j = 0; j < inputs.size(); ++j) {
+    int src_dim_size = shapes[j][dim]; // Get the size of the current input
+                                       // tensor along the concat dimension
+    int total_elements = outer_size * src_dim_size * inner_size;
+    int threads = 256;
+    int blocks = (total_elements + threads - 1) / threads;
+
+    concat_slice_kernel<<<blocks, threads>>>(
+        (float *)inputs[j]->data(), (float *)out.data(), outer_size,
+        src_dim_size, dst_dim_size, inner_size, current_offset, true);
+
+    current_offset += src_dim_size;
+  }
+
+  // Check for errors after kernel execution
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::concat_backward(const Storage &grad_out,
+                                  std::vector<Storage *> &grad_inputs, int dim,
+                                  const std::vector<Shape> &shapes) {
+  int outer_size = 1;
+  // Compute outer size (dimensions before the concatenation dimension)
+  for (int i = 0; i < dim; ++i)
+    outer_size *= shapes[0][i];
+
+  int inner_size = 1;
+  // Compute inner size (dimensions after the concatenation dimension)
+  for (int i = dim + 1; i < (int)shapes[0].size(); ++i) {
+    inner_size *= shapes[0][i];
+  }
+
+  int dst_dim_size = 0;
+  // Compute the size of the concatenation dimension in the output tensor
+  for (const auto &s : shapes)
+    dst_dim_size += s[dim];
+
+  int current_offset = 0;
+  // Iterate through the gradient inputs and backpropagate
+  for (size_t j = 0; j < grad_inputs.size(); ++j) {
+    int src_dim_size = shapes[j][dim]; // Get the size of the current input
+                                       // tensor along the concat dimension
+    int total_elements = outer_size * src_dim_size * inner_size;
+    int threads = 256;
+    int blocks = (total_elements + threads - 1) / threads;
+
+    concat_slice_kernel<<<blocks, threads>>>(
+        (float *)grad_inputs[j]->data(), (float *)grad_out.data(), outer_size,
+        src_dim_size, dst_dim_size, inner_size, current_offset, false);
+
+    current_offset += src_dim_size;
+  }
+
+  // Check for errors after kernel execution
   CUDA_CHECK(cudaGetLastError());
 }
 

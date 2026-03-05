@@ -45,6 +45,12 @@ public:
                                 Storage &grad_in, int batch_size,
                                 int num_classes) = 0;
 
+  virtual void concat(const std::vector<Storage *> &inputs, Storage &out,
+                      int dim, const std::vector<Shape> &shapes) = 0;
+  virtual void concat_backward(const Storage &grad_out,
+                               std::vector<Storage *> &grad_inputs, int dim,
+                               const std::vector<Shape> &shapes) = 0;
+
   // --- Loss Functions ---
   // Updated signatures to support spatial dimensions
   virtual void cross_entropy(const Storage &logits, const Storage &targets,

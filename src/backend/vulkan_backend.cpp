@@ -536,7 +536,7 @@ VulkanBackend::VulkanBackend() {
 						if (i >= u.N) return;
 
 						float diff = p[i] - t[i];
-						float val = diff * diff;
+						float val = (diff * diff) / u.N;
 
 						ATOMIC_ADD_FLOAT(out_u, 0, val);
 				}
@@ -629,7 +629,7 @@ VulkanBackend::VulkanBackend() {
 										loss -= target * log(prob + 1e-9);
 						}
 
-						ATOMIC_ADD_FLOAT(out_u, 0, loss);
+						ATOMIC_ADD_FLOAT(out_u, 0, loss / u.B);
 				}
       )");
 
@@ -1162,6 +1162,39 @@ VulkanBackend::VulkanBackend() {
          }
      )");
 
+  concatPipeline = createComputePipeline("concat", R"(
+      #version 450
+      layout(local_size_x = 256) in;
+      layout(binding = 0) buffer Src { float src[]; };
+      layout(binding = 1) buffer Dst { float dst[]; };
+      layout(push_constant) uniform P {
+          int outer_size;
+          int src_dim_size;
+          int dst_dim_size;
+          int inner_size;
+          int offset;
+          int forward;
+      } u;
+      void main() {
+          int idx = int(gl_GlobalInvocationID.x);
+          int total = u.outer_size * u.src_dim_size * u.inner_size;
+          if (idx >= total) return;
+
+          int i = idx % u.inner_size;
+          int tmp = idx / u.inner_size;
+          int d = tmp % u.src_dim_size;
+          int o = tmp / u.src_dim_size;
+
+          int src_idx = (o * u.src_dim_size + d) * u.inner_size + i;
+          int dst_idx = (o * u.dst_dim_size + (u.offset + d)) * u.inner_size + i;
+
+          if (u.forward == 1)
+              dst[dst_idx] = src[src_idx];
+          else
+              src[src_idx] = dst[dst_idx];
+      }
+  )");
+
   // Collect Stats (Training): Sum and SqSum
   bnCollectPipeline = createComputePipeline("bn_collect", R"(
 		#version 450
@@ -1459,6 +1492,8 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyPipeline(device, maxPoolPipeline, nullptr);
   vkDestroyPipeline(device, maxPoolBackPipeline, nullptr);
 
+  vkDestroyPipeline(device, concatPipeline, nullptr);
+
   vkDestroyPipeline(device, upsamplePipeline, nullptr);
   vkDestroyPipeline(device, upsampleBackPipeline, nullptr);
 
@@ -1563,9 +1598,6 @@ void ensure_recording() {
     }
   }
   deferred_frees[currentFrame].clear();
-
-  // Reset Descriptor Pool logic: wipe the slate clean for this frame
-  VK_CHECK(vkResetDescriptorPool(device, *descriptorPools, 0));
 
   // Reset Descriptor Pool logic: wipe the slate clean for this frame
   VK_CHECK(vkResetDescriptorPool(device, descriptorPools[currentFrame], 0));
@@ -2120,6 +2152,75 @@ void VulkanBackend::sum(const Storage &in, Storage &out, size_t num_elements) {
   uint32_t N = num_elements;
   dispatch_kernel(sumPipeline, {in.data(), out.data()}, &N, sizeof(N),
                   (num_elements + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::concat(const std::vector<Storage *> &inputs, Storage &out,
+                           int dim, const std::vector<Shape> &shapes) {
+  int outer_size = 1;
+  for (int i = 0; i < dim; ++i)
+    outer_size *= shapes[0][i];
+
+  int inner_size = 1;
+  for (int i = dim + 1; i < shapes[0].size(); ++i)
+    inner_size *= shapes[0][i];
+
+  int dst_dim_size = 0;
+  for (const auto &s : shapes)
+    dst_dim_size += s[dim];
+
+  int current_offset = 0;
+  for (size_t j = 0; j < inputs.size(); ++j) {
+    int src_dim_size =
+        shapes[j][dim]; // Use the correct shape for each input tensor
+
+    // Define push constants
+    struct {
+      int outer_size, src_dim_size, dst_dim_size, inner_size, offset, forward;
+    } pc = {outer_size, src_dim_size,   dst_dim_size,
+            inner_size, current_offset, 1};
+
+    // Dispatch the Vulkan compute kernel with the correct data
+    dispatch_kernel(concatPipeline, {inputs[j]->data(), out.data()}, &pc,
+                    sizeof(pc),
+                    (outer_size * src_dim_size * inner_size + 255) / 256, 1, 1);
+
+    current_offset += src_dim_size; // Update offset for the next tensor
+  }
+}
+
+void VulkanBackend::concat_backward(const Storage &grad_out,
+                                    std::vector<Storage *> &grad_inputs,
+                                    int dim, const std::vector<Shape> &shapes) {
+  int outer_size = 1;
+  for (int i = 0; i < dim; ++i)
+    outer_size *= shapes[0][i];
+
+  int inner_size = 1;
+  for (int i = dim + 1; i < shapes[0].size(); ++i)
+    inner_size *= shapes[0][i];
+
+  int dst_dim_size = 0;
+  for (const auto &s : shapes)
+    dst_dim_size += s[dim];
+
+  int current_offset = 0;
+  for (size_t j = 0; j < grad_inputs.size(); ++j) {
+    int src_dim_size =
+        shapes[j][dim]; // Use the correct shape for each gradient input tensor
+
+    // Define push constants for backward pass
+    struct {
+      int outer_size, src_dim_size, dst_dim_size, inner_size, offset, forward;
+    } pc = {outer_size, src_dim_size,   dst_dim_size,
+            inner_size, current_offset, 0};
+
+    // Dispatch the Vulkan compute kernel with the correct data
+    dispatch_kernel(
+        concatPipeline, {grad_inputs[j]->data(), (void *)grad_out.data()}, &pc,
+        sizeof(pc), (outer_size * src_dim_size * inner_size + 255) / 256, 1, 1);
+
+    current_offset += src_dim_size; // Update offset for the next gradient input
+  }
 }
 
 } // namespace munet

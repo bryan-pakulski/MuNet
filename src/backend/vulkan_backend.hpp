@@ -26,6 +26,13 @@ public:
            size_t num_elements) override;
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override;
+
+  void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
+              const std::vector<Shape> &shapes) override;
+  void concat_backward(const Storage &grad_out,
+                       std::vector<Storage *> &grad_inputs, int dim,
+                       const std::vector<Shape> &shapes) override;
+
   void relu(const Storage &in, Storage &out, size_t num_elements) override;
   void relu_backward(const Storage &grad_out, const Storage &input,
                      Storage &grad_in, size_t num_elements) override;
@@ -103,6 +110,7 @@ private:
   VkPipeline maxPoolBackPipeline;
   VkPipeline upsamplePipeline;
   VkPipeline upsampleBackPipeline;
+  VkPipeline concatPipeline;
 
   VkPipeline uniformPipeline;
   VkPipeline sumPipeline;

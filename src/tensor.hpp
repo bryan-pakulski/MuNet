@@ -87,6 +87,7 @@ public:
 
   Tensor to(Device dev) const;
 
+  static Tensor cat(const std::vector<Tensor> &inputs, int dim = 1);
   Tensor operator+(const Tensor &other) const;
   Tensor operator-(const Tensor &other) const;
   Tensor operator*(const Tensor &other) const;

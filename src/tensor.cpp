@@ -110,6 +110,19 @@ public:
     base_->matmul(a, b, out, M, K, N, transA, transB);
     check("matmul");
   }
+  void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
+              const std::vector<Shape> &shapes) override {
+    MUNET_DEBUG << "concat | " << dim << " dimension" << std::endl;
+    base_->concat(inputs, out, dim, shapes);
+    check("concat");
+  }
+  void concat_backward(const Storage &grad_out,
+                       std::vector<Storage *> &grad_inputs, int dim,
+                       const std::vector<Shape> &shapes) override {
+    MUNET_DEBUG << "concat_backward | " << dim << " dimension" << std::endl;
+    base_->concat_backward(grad_out, grad_inputs, dim, shapes);
+    check("concat_backward");
+  }
   void relu(const Storage &in, Storage &out, size_t num_elements) override {
     MUNET_DEBUG << "relu | " << num_elements << " elements" << std::endl;
     base_->relu(in, out, num_elements);
@@ -424,6 +437,11 @@ Tensor Tensor::operator-(const Tensor &other) const {
 Tensor Tensor::operator*(const Tensor &other) const {
   return ops::mul(*this, other);
 }
+
+Tensor Tensor::cat(const std::vector<Tensor> &inputs, int dim) {
+  return ops::cat(inputs, dim);
+}
+
 Tensor Tensor::sum() const { return ops::sum(*this); }
 
 Tensor Tensor::reshape(Shape new_shape) const {

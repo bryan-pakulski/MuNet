@@ -191,6 +191,83 @@ public:
     });
   }
 
+  void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
+              const std::vector<Shape> &shapes) override {
+    float *out_ptr = (float *)out.data();
+    int outer_size = 1;
+    // Calculate the outer dimensions up to the concatenation axis.
+    for (int i = 0; i < dim; ++i) {
+      outer_size *= shapes[0][i];
+    }
+
+    int inner_size = 1;
+    // Calculate the inner dimensions after the concatenation axis.
+    for (int i = dim + 1; i < shapes[0].size(); ++i) {
+      inner_size *= shapes[0][i];
+    }
+
+    int out_dim_size = 0;
+    // Calculate the total size of the concatenation dimension.
+    for (const auto &s : shapes) {
+      out_dim_size += s[dim];
+    }
+
+    // Perform the concatenation operation across all input tensors.
+    for (int i = 0; i < outer_size; ++i) {
+      int out_offset = i * out_dim_size * inner_size; // Set the output offset.
+      for (size_t j = 0; j < inputs.size(); ++j) {
+        int dim_size =
+            shapes[j][dim]; // Get the size of the current input tensor along
+                            // the concatenation dimension.
+        int copy_bytes =
+            dim_size * inner_size * sizeof(float); // Number of bytes to copy.
+        std::memcpy(out_ptr + out_offset,
+                    (float *)inputs[j]->data() + i * dim_size * inner_size,
+                    copy_bytes);             // Copy from input to output.
+        out_offset += dim_size * inner_size; // Increment the output offset.
+      }
+    }
+  }
+
+  void concat_backward(const Storage &grad_out,
+                       std::vector<Storage *> &grad_inputs, int dim,
+                       const std::vector<Shape> &shapes) override {
+    float *go_ptr = (float *)grad_out.data();
+    int outer_size = 1;
+    // Calculate the outer dimensions up to the concatenation axis.
+    for (int i = 0; i < dim; ++i) {
+      outer_size *= shapes[0][i];
+    }
+
+    int inner_size = 1;
+    // Calculate the inner dimensions after the concatenation axis.
+    for (int i = dim + 1; i < shapes[0].size(); ++i) {
+      inner_size *= shapes[0][i];
+    }
+
+    int out_dim_size = 0;
+    // Calculate the total size of the concatenation dimension.
+    for (const auto &s : shapes) {
+      out_dim_size += s[dim];
+    }
+
+    // Perform the backward gradient propagation operation across all input
+    // tensors.
+    for (int i = 0; i < outer_size; ++i) {
+      int out_offset = i * out_dim_size * inner_size; // Set the output offset.
+      for (size_t j = 0; j < grad_inputs.size(); ++j) {
+        int dim_size =
+            shapes[j][dim]; // Get the size of the current input tensor along
+                            // the concatenation dimension.
+        int copy_bytes =
+            dim_size * inner_size * sizeof(float); // Number of bytes to copy.
+        std::memcpy((float *)grad_inputs[j]->data() + i * dim_size * inner_size,
+                    go_ptr + out_offset, copy_bytes); // Copy gradient to input.
+        out_offset += dim_size * inner_size; // Increment the output offset.
+      }
+    }
+  }
+
   void relu(const Storage &in, Storage &out, size_t num_elements) override {
     const float *ip = (const float *)in.data();
     float *op = (float *)out.data();

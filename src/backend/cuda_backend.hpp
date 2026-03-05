@@ -55,6 +55,12 @@ public:
   void update(Storage &weight, const Storage &grad, float lr,
               size_t num_elements) override;
 
+  void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
+              const std::vector<Shape> &shapes) override;
+  void concat_backward(const Storage &grad_out,
+                       std::vector<Storage *> &grad_inputs, int dim,
+                       const std::vector<Shape> &shapes) override;
+
   void conv2d(const Storage &in, const Storage &weight, const Storage *bias,
               Storage &out, int B, int iC, int iH, int iW, int oC, int kH,
               int kW, int s, int p) override;

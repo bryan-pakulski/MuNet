@@ -70,7 +70,7 @@ target_link_libraries(munet PRIVATE munet_core)
 
 # --- Unit Tests ---
 enable_testing()
-add_executable(munet_tests tests/test_tensor.cpp tests/test_autograd.cpp tests/test_vulkan.cpp tests/test_cuda.cpp tests/test_spatial.cpp tests/test_loss.cpp)
+add_executable(munet_tests tests/unified_tests.cpp tests/test_tensor.cpp tests/test_autograd.cpp tests/test_spatial.cpp tests/test_loss.cpp)
 target_link_libraries(munet_tests PRIVATE munet_core gtest_main)
 
 include(GoogleTest)

@@ -66,6 +66,82 @@ inline Tensor add(const Tensor &a, const Tensor &b) {
   return out;
 }
 
+// --- CONCAT ---
+struct ConcatBackward : public Node {
+  int dim;
+  std::vector<Shape> input_shapes;
+  ConcatBackward(int d, const std::vector<Shape> &s)
+      : dim(d), input_shapes(s) {}
+
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_out = grads[0];
+    std::vector<Tensor> grad_ins;
+    std::vector<Storage *> grad_stors;
+
+    for (const auto &s : input_shapes) {
+      grad_ins.emplace_back(s, grad_out.device(), grad_out.dtype());
+      grad_stors.push_back(grad_ins.back().impl_->storage.get());
+    }
+
+    grad_out.impl_->backend().concat_backward(*grad_out.impl_->storage,
+                                              grad_stors, dim, input_shapes);
+    return grad_ins;
+  }
+};
+
+inline Tensor cat(const std::vector<Tensor> &inputs, int dim = 1) {
+  if (inputs.empty())
+    return Tensor();
+
+  Shape out_shape = inputs[0].shape();
+  std::vector<Shape> shapes;
+  std::vector<Storage *> storages;
+  int concat_size = 0;
+
+  // Collect shapes and storages
+  for (const auto &t : inputs) {
+    const auto &s = t.shape();
+    if (s.size() != out_shape.size())
+      throw std::runtime_error(
+          "All tensors must have the same number of dimensions for cat");
+
+    // Check other dims match
+    for (size_t d = 0; d < s.size(); ++d) {
+      if (d != dim && s[d] != out_shape[d])
+        throw std::runtime_error(
+            "Tensor shapes must match except along concat dim");
+    }
+
+    concat_size += s[dim]; // Add size along the concat axis
+    shapes.push_back(s);
+    storages.push_back(t.impl_->storage.get());
+  }
+
+  // Set concatenated dimension in output shape
+  out_shape[dim] = concat_size;
+
+  Tensor out(out_shape, inputs[0].device(), inputs[0].dtype());
+
+  // Call backend to perform actual concatenation
+  inputs[0].impl_->backend().concat(storages, *out.impl_->storage, dim, shapes);
+
+  // Setup backward graph if any input requires grad
+  bool req = false;
+  for (auto &t : inputs)
+    if (t.requires_grad())
+      req = true;
+
+  if (req) {
+    auto fn = std::make_shared<ConcatBackward>(dim, shapes);
+    link_backward_edges(fn.get(), inputs);
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+
+  record_trace(out, "Concat", inputs, {{"axis", {dim}}});
+  return out;
+}
+
 // --- MSE LOSS ---
 struct MSELossBackward : public Node {
   Tensor pred, target;

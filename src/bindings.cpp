@@ -1,4 +1,5 @@
 #include "nn.hpp"
+#include "ops.hpp"
 #include "optim.hpp"
 #include "tensor.hpp"
 #include <optional>
@@ -43,6 +44,8 @@ PYBIND11_MODULE(munet, m) {
       .def_readwrite("index", &Device::index);
 
   // --- Factory Functions ---
+  m.def("cat", &ops::cat, py::arg("tensors"), py::arg("dim") = 1,
+        "Concatenates a sequence of tensors along the specified dimension.");
   m.def(
       "zeros",
       [](Shape shape, std::optional<Device> device, bool requires_grad) {

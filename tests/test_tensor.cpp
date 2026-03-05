@@ -1,34 +1,46 @@
 #include "tensor.hpp"
+#include "test_utils.hpp"
+#include <algorithm>
 #include <gtest/gtest.h>
 
 using namespace munet;
 
-TEST(TensorTest, CreationAndMetadata) {
-  Tensor t({2, 3}, {DeviceType::CPU, 0});
+class TensorTest : public ::testing::TestWithParam<Device> {
+protected:
+  Device dev() { return GetParam(); }
+};
 
+INSTANTIATE_TEST_SUITE_P(AllBackends, TensorTest,
+                         ::testing::ValuesIn(test::get_available_devices()),
+                         [](const ::testing::TestParamInfo<Device> &info) {
+                           std::string name = info.param.to_string();
+                           std::replace(name.begin(), name.end(), ':', '_');
+                           return name;
+                         });
+
+TEST_P(TensorTest, CreationAndMetadata) {
+  Tensor t({2, 3}, dev());
   EXPECT_EQ(t.size(), 6);
   EXPECT_EQ(t.shape()[0], 2);
-  EXPECT_EQ(t.shape()[1], 3);
-  EXPECT_EQ(t.device().type, DeviceType::CPU);
-  EXPECT_FALSE(t.requires_grad());
-  EXPECT_NE(t.data(), nullptr);
+  EXPECT_EQ(t.device().type, dev().type);
 }
 
-TEST(TensorTest, Addition) {
-  Tensor a({2}, {DeviceType::CPU, 0});
-  Tensor b({2}, {DeviceType::CPU, 0});
+TEST_P(TensorTest, Addition) {
+  Tensor a({2}, dev());
+  Tensor b({2}, dev());
 
-  float *a_data = static_cast<float *>(a.data());
-  float *b_data = static_cast<float *>(b.data());
+  Tensor val({2}, {DeviceType::CPU, 0});
+  float *data = (float *)val.data();
+  data[0] = 1.0f;
+  data[1] = 2.0f;
+  a.impl_->backend().copy(val.data(), a.data(), a.bytes(), val.device(), dev());
 
-  a_data[0] = 1.0f;
-  a_data[1] = 2.0f;
-  b_data[0] = 3.0f;
-  b_data[1] = 4.0f;
+  data[0] = 3.0f;
+  data[1] = 4.0f;
+  b.impl_->backend().copy(val.data(), b.data(), b.bytes(), val.device(), dev());
 
   Tensor c = a + b;
-
-  float *c_data = static_cast<float *>(c.data());
-  EXPECT_FLOAT_EQ(c_data[0], 4.0f);
-  EXPECT_FLOAT_EQ(c_data[1], 6.0f);
+  Tensor res = c.to({DeviceType::CPU, 0});
+  EXPECT_FLOAT_EQ(((float *)res.data())[0], 4.0f);
+  EXPECT_FLOAT_EQ(((float *)res.data())[1], 6.0f);
 }

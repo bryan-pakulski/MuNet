@@ -77,6 +77,27 @@ class TestLoss(unittest.TestCase):
 
 class TestMuNetPythonBindings(unittest.TestCase):
 
+    def test_save_load_consistency(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(10, 5),
+            munet.nn.ReLU(),
+            munet.nn.Linear(5, 2)
+        ])
+        
+        # Save original weights
+        original_params = {n: np.array(p, copy=True) for n, p in model.named_parameters().items()}
+        
+        munet.save(model, "test_model.npz")
+        
+        # Create new model and load
+        new_model = munet.load("test_model.npz")
+        
+        for name, p in new_model.named_parameters().items():
+            loaded_val = np.array(p, copy=False)
+            self.assertTrue(np.allclose(loaded_val, original_params), f"Mismatch in {name}")
+        
+        os.remove("test_model.npz")
+
     def test_tensor_creation(self):
         """Test basic tensor creation and properties mapping."""
         t = munet.Tensor([2, 3], requires_grad=True)

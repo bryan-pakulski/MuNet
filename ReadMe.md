@@ -41,12 +41,61 @@ features a PyTorch-like API, making it familiar to use while handling low-level 
 - **Sum** (Scalar reduction).
 
 # Future Plans
-- [ ] Implement Adam and RMSProp optimizers.
-- [ ] Add Softmax and CrossEntropyLoss.
-- [ ] Support for proper tensor broadcasting in arithmetic ops.
-- [ ] SPIR-V Shader caching for faster Vulkan startup.
-- [ ] ONNX model loading support.
-- [ ] Winograd convolution algorithms for performance optimization.
+
+Multi-GPU RoadMap:
+
+ 1 Device Switching: Update CUDABackend and VulkanBackend to ensure they explicitly select the correct hardware index before executing any commands.
+ 2 Functional Collectives: Implement all_reduce in the Backend interface.
+    • CUDA: Use ncclAllReduce.
+    • Vulkan: Use timeline semaphores and cross-device buffer copies.
+ 3 Stream Management: Currently, you use the default stream (0) in CUDA. To allow the CPU to "fire and forget" kernels to multiple GPUs simultaneously, give each Device its own compute
+   stream/queue.
+ 4 Data Parallel Wrapper: Create a nn::DataParallel modcule that:
+    • Copies the model to all target devices.
+    • Splits the input Tensor along the batch dimension.
+    • Triggers the all_reduce on gradients automatically.
+
+
+Additional Layers & Operators:
+    1. Essential Tensor Operators
+
+     • Division & Power: operator/, pow(), sqrt(), exp(), log(). (Crucial for custom loss functions and variance calculations).
+     • Transposition/Permutation: transpose(dim1, dim2) and permute(dims). (Required for handling different data layouts and attention mechanisms).
+     • Mean & Variance: mean(dim), var(dim). (Currently you only have sum()).
+     • Broadcasting Logic: Upgrading existing math ops to handle tensors of different ranks (e.g., adding a bias vector [C] to an image batch [N, C, H, W]).
+     • Slice/Narrow: slice(dim, start, end). (Necessary for splitting tensors or taking sub-sections).
+
+    2. Core Neural Network Layers
+
+     • Dropout: nn::Dropout. (Essential for preventing overfitting; requires a training flag to disable during inference).
+     • Global Average Pooling: nn::GlobalAvgPool2d. (Used in almost all modern CNNs before the final classifier).
+     • LeakyReLU: nn::LeakyReLU. (Standard improvement over basic ReLU to prevent "dying neurons").
+     • Tanh: nn::Tanh. (Standard activation for Recurrent Neural Networks).
+     • LayerNorm: nn::LayerNorm. (The standard normalization layer for Transformers/NLP, which is easier to implement than BatchNorm for variable sequences).
+
+    3. Advanced Modules
+
+     • Embedding: nn::Embedding. (Mapping integer IDs to vectors; the foundation of all NLP models).
+     • RNN/LSTM: nn::LSTM or nn::GRU. (To handle sequential or time-series data).
+     • Padding Layers: nn::ZeroPad2d. (When you need padding outside of the convolution operation).
+
+    4. Mathematical Foundation (Optimizers & Loss)
+
+     • Adam Optimizer: optim::Adam. (The industry standard. Requires tracking first and second moments: m and v).
+     • BCEWithLogitsLoss: Binary Cross Entropy for multi-label classification.
+     • NLLLoss: Negative Log Likelihood (often used with LogSoftmax).
+
+    5. Backend-Specific Kernels
+
+     • Vectorized CPU Ops: Using AVX/SIMD for the CPUBackend to compete with the GPU backends on small batches.
+     • Im2Col Convolution: Moving your Conv2d from the current "naive" nested loops to an im2col + GEMM approach for significantly higher performance on all backends.
+
+    Priority Implementation Order Recommendation:
+
+     1 Adam Optimizer (Crucial for training stability).
+     2 Dropout (Crucial for generalization).
+     3 Transpose/Permute (Unlocks more complex model architectures).
+     4 GlobalAvgPool2d (Allows you to build modern CNNs like ResNet).
 
 # Development
 
