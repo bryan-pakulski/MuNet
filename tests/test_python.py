@@ -17,68 +17,63 @@ except ImportError as e:
 
 
 class TestLoss(unittest.TestCase):
-    def test_mse_loss(self):                                                                                                                                                                     
-        pred_np = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)                                                                                                                           
-        target_np = np.array([0.0, 0.0, 2.0, 2.0], dtype=np.float32)                                                                                                                         
-                                                                                                                                                                                      
-        # Load into MuNet tensors                                                                                                                                                            
-        pred = munet.Tensor(pred_np.shape)                                                                                                                                                   
-        target = munet.Tensor(target_np.shape)                                                                                                                                               
-                                                                                                                                                                                      
-        # We can use the buffer protocol via np.array to write directly to C++ memory                                                                                                        
-        np.array(pred, copy=False)[:] = pred_np                                                                                                                                              
-        np.array(target, copy=False)[:] = target_np                                                                                                                                          
-                                                                                                                                                                                      
-        pred.requires_grad = True                                                                                                                                                            
-                                                                                                                                                                                      
-        loss = pred.mse_loss(target)                                                                                                                                                         
-        loss_val = np.array(loss, copy=False)[0]                                                                                                                                             
-                                                                                                                                                                                      
-        # MSE Forward Check                                                                                                                                                                  
-        self.assertTrue(np.isclose(loss_val, 0.5))                                                                                                                                           
-                                                                                                                                                                                      
-        loss.backward()                                                                                                                                                                      
-        grad = np.array(pred.grad, copy=False)                                                                                                                                               
-                                                                                                                                                                                      
-        # MSE Backward Check                                                                                                                                                                 
-        expected_grad = np.array([0.0, 0.5, 0.0, 0.5], dtype=np.float32)                                                                                                                     
-        self.assertTrue(np.allclose(grad, expected_grad, atol=1e-6))                                                                                                                        
-                                                                                                                                                                                          
-    def test_cross_entropy_loss(self):                                                                                                                                                           
-        logits_np = np.array([                                                                                                                                                               
-         [2.0, 1.0, 0.1],                                                                                                                                                                 
-         [0.1, 1.0, 2.0]                                                                                                                                                                  
-        ], dtype=np.float32)                                                                                                                                                                 
-                                                                                                                                                                                          
-        targets_np = np.array([                                                                                                                                                              
-         [1.0, 0.0, 0.0],                                                                                                                                                                 
-         [0.0, 0.0, 1.0]                                                                                                                                                                  
-        ], dtype=np.float32)                                                                                                                                                                 
-                                                                                                                                                                                          
-        logits = munet.Tensor(list(logits_np.shape))                                                                                                                                         
-        targets = munet.Tensor(list(targets_np.shape))                                                                                                                                       
-                                                                                                                                                                                          
-        np.array(logits, copy=False)[:] = logits_np.flatten()                                                                                                                                
-        np.array(targets, copy=False)[:] = targets_np.flatten()                                                                                                                              
-                                                                                                                                                                                          
-        logits.requires_grad = True                                                                                                                                                          
-                                                                                                                                                                                          
-        loss = logits.cross_entropy(targets)                                                                                                                                                 
-        loss_val = np.array(loss, copy=False)[0]                                                                                                                                             
-                                                                                                                                                                                          
-        # CE Forward Check (Matches PyTorch F.cross_entropy)                                                                                                                                 
-        self.assertTrue(np.isclose(loss_val, 0.417022, atol=1e-4))                                                                                                                                     
-                                                                                                                                                                                          
-        loss.backward()                                                                                                                                                                      
-        grad = np.array(logits.grad, copy=False)                                                                                                                                             
-                                                                                                                                                                                          
-        # CE Backward Check                                                                                                                                                                  
-        expected_grad = np.array([                                                                                                                                                           
-         [-0.17049,  0.12101,  0.04948],                                                                                                                                                  
-         [ 0.04948,  0.12101, -0.17049]                                                                                                                                                   
-        ], dtype=np.float32).flatten()                                                                                                                                                       
-                                                                                                                                                                                          
-        self.assertTrue(np.allclose(grad, expected_grad, atol=1e-4))        
+    def test_mse_loss(self):
+        pred_np = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
+        target_np = np.array([0.0, 0.0, 2.0, 2.0], dtype=np.float32)
+
+        # Load into MuNet tensors
+        pred = munet.Tensor(pred_np.shape)
+        target = munet.Tensor(target_np.shape)
+
+        # We can use the buffer protocol via np.array to write directly to C++ memory
+        np.array(pred, copy=False)[:] = pred_np
+        np.array(target, copy=False)[:] = target_np
+
+        pred.requires_grad = True
+
+        loss = pred.mse_loss(target)
+        loss_val = np.array(loss, copy=False)[0]
+
+        # MSE Forward Check
+        self.assertTrue(np.isclose(loss_val, 0.5))
+
+        loss.backward()
+        grad = np.array(pred.grad, copy=False)
+
+        # MSE Backward Check
+        expected_grad = np.array([0.0, 0.5, 0.0, 0.5], dtype=np.float32)
+        self.assertTrue(np.allclose(grad, expected_grad, atol=1e-6))
+
+    def test_cross_entropy_loss(self):
+        logits_np = np.array([[2.0, 1.0, 0.1], [0.1, 1.0, 2.0]], dtype=np.float32)
+
+        targets_np = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+
+        logits = munet.Tensor(list(logits_np.shape))
+        targets = munet.Tensor(list(targets_np.shape))
+
+        np.array(logits, copy=False)[:] = logits_np
+        np.array(targets, copy=False)[:] = targets_np
+
+        logits.requires_grad = True
+
+        loss = logits.cross_entropy(targets)
+        loss_val = np.array(loss, copy=False)[0]
+
+        # CE Forward Check (Matches PyTorch F.cross_entropy)
+        self.assertTrue(np.isclose(loss_val, 0.417022, atol=1e-4))
+
+        loss.backward()
+        grad = np.array(logits.grad, copy=False)
+
+        # CE Backward Check
+        expected_grad = np.array(
+            [[-0.17050, 0.12122, 0.04928], [0.04928, 0.12122, -0.17050]],
+            dtype=np.float32,
+        )
+
+        self.assertTrue(np.allclose(grad, expected_grad, atol=1e-4))
+
 
 class TestMuNetPythonBindings(unittest.TestCase):
 
@@ -203,107 +198,113 @@ class TestMuNetPythonBindings(unittest.TestCase):
         self.assertEqual(result[0], 9.0)
         self.assertEqual(result[1], 10.0)
 
-    def test_neural_network_forward_backward(self):                            
-        """Test a mini neural network forward and backward pass!"""            
-                                                                               
-        # We will create a mini computational graph:                           
-        # y = relu(X @ W1) @ W2                                                
-        # Then calculate gradients for W1 and W2.                              
-                                                                               
-        X = munet.Tensor([1, 3], requires_grad=False)                          
-        W1 = munet.Tensor([3, 4], requires_grad=True)                          
-        W2 = munet.Tensor([4, 1], requires_grad=True)                          
-                                                                               
-        np.array(X, copy=False)[:] = [[1.0, 2.0, -1.0]]                        
-                                                                               
-        # W1                                                                   
-        np.array(W1, copy=False)[:] = [                                        
-            [ 1.0,  0.5, -1.0,  2.0],                                          
-            [-2.0,  1.0,  0.5, -0.5],                                          
-            [ 0.0, -1.0,  1.0,  1.0]                                           
-        ]                                                                      
-                                                                               
-        # W2                                                                   
-        np.array(W2, copy=False)[:] = [[1.0], [-1.0], [2.0], [0.5]]            
-                                                                               
-        # --- Forward Pass ---                                                 
-        hidden = X @ W1                                                        
-        activation = hidden.relu()                                             
-        output = activation @ W2                                               
-                                                                               
-        # Verify Forward Pass Math                                             
-        # X @ W1 = [[-3.0, 3.5, -1.0, 0.0]]                                    
-        # relu(X @ W1) = [[0.0, 3.5, 0.0, 0.0]]                                
-        # relu @ W2 = 0*1 + 3.5*-1 + 0*2 + 0*0.5 = -3.5                        
-                                                                               
-        self.assertEqual(np.array(output, copy=False)[0][0], -3.5)             
-                                                                               
-        # --- Backward Pass ---                                                
-        output.backward()                                                      
-                                                                               
-        # Verify Backward Pass                                                 
-        # dOutput = 1.0                                                        
-        # dW2 = activation.T @ dOutput = [[0.0], [3.5], [0.0], [0.0]]          
-        dw2_result = np.array(W2.grad, copy=False)                             
-        self.assertEqual(dw2_result[1][0], 3.5)                                
-        self.assertEqual(dw2_result[0][0], 0.0)                                
-                                                                               
-        # dActivation = dOutput @ W2.T = [[1.0, -1.0, 2.0, 0.5]]               
+    def test_neural_network_forward_backward(self):
+        """Test a mini neural network forward and backward pass!"""
+
+        # We will create a mini computational graph:
+        # y = relu(X @ W1) @ W2
+        # Then calculate gradients for W1 and W2.
+
+        X = munet.Tensor([1, 3], requires_grad=False)
+        W1 = munet.Tensor([3, 4], requires_grad=True)
+        W2 = munet.Tensor([4, 1], requires_grad=True)
+
+        np.array(X, copy=False)[:] = [[1.0, 2.0, -1.0]]
+
+        # W1
+        np.array(W1, copy=False)[:] = [
+            [1.0, 0.5, -1.0, 2.0],
+            [-2.0, 1.0, 0.5, -0.5],
+            [0.0, -1.0, 1.0, 1.0],
+        ]
+
+        # W2
+        np.array(W2, copy=False)[:] = [[1.0], [-1.0], [2.0], [0.5]]
+
+        # --- Forward Pass ---
+        hidden = X @ W1
+        activation = hidden.relu()
+        output = activation @ W2
+
+        # Verify Forward Pass Math
+        # X @ W1 = [[-3.0, 3.5, -1.0, 0.0]]
+        # relu(X @ W1) = [[0.0, 3.5, 0.0, 0.0]]
+        # relu @ W2 = 0*1 + 3.5*-1 + 0*2 + 0*0.5 = -3.5
+
+        self.assertEqual(np.array(output, copy=False)[0][0], -3.5)
+
+        # --- Backward Pass ---
+        output.backward()
+
+        # Verify Backward Pass
+        # dOutput = 1.0
+        # dW2 = activation.T @ dOutput = [[0.0], [3.5], [0.0], [0.0]]
+        dw2_result = np.array(W2.grad, copy=False)
+        self.assertEqual(dw2_result[1][0], 3.5)
+        self.assertEqual(dw2_result[0][0], 0.0)
+
+        # dActivation = dOutput @ W2.T = [[1.0, -1.0, 2.0, 0.5]]
         # dHidden = dActivation * (hidden > 0) -> only the 2nd element was > 0.
-        # dHidden = [[0.0, -1.0, 0.0, 0.0]]                                    
-        # dW1 = X.T @ dHidden = [[1], [2], [-1]] @ [[0.0, -1.0, 0.0, 0.0]]     
-                                                                               
-        dw1_result = np.array(W1.grad, copy=False)                             
-        self.assertEqual(dw1_result[0][1], -1.0) # 1.0 * -1.0                  
-        self.assertEqual(dw1_result[1][1], -2.0) # 2.0 * -1.0                  
-        self.assertEqual(dw1_result[2][1],  1.0) # -1.0 * -1.0                 
+        # dHidden = [[0.0, -1.0, 0.0, 0.0]]
+        # dW1 = X.T @ dHidden = [[1], [2], [-1]] @ [[0.0, -1.0, 0.0, 0.0]]
+
+        dw1_result = np.array(W1.grad, copy=False)
+        self.assertEqual(dw1_result[0][1], -1.0)  # 1.0 * -1.0
+        self.assertEqual(dw1_result[1][1], -2.0)  # 2.0 * -1.0
+        self.assertEqual(dw1_result[2][1], 1.0)  # -1.0 * -1.0
 
     def test_full_training_loop(self):
         """Train a 2-layer MLP to overfit on dummy data."""
         # GPU or CPU
         dev = munet.Device(munet.DeviceType.CPU, 0)
-        
+
         # Data: Predict sum of features
         x = munet.Tensor([2, 2], device=dev, requires_grad=False)
         y = munet.Tensor([2, 1], device=dev, requires_grad=False)
-        
+
         np.array(x, copy=False)[:] = [[1.0, 1.0], [1.0, 0.0]]
         np.array(y, copy=False)[:] = [[0.0], [1.0]]  # Targets
-        
+
         # Weights
         w1 = munet.Tensor([2, 4], device=dev, requires_grad=True)
         w2 = munet.Tensor([4, 1], device=dev, requires_grad=True)
         w1.uniform_(-1.0, 1.0)
         w2.uniform_(-1.0, 1.0)
-        
+
         lr = 0.01
-        
+
         for epoch in range(50):
             w1.zero_grad()
             w2.zero_grad()
-            
+
             # Forward
             h = (x @ w1).relu()
             pred = h @ w2
-            
+
             # MSE Loss
             diff = pred - y
             loss = (diff * diff).sum()
-            
+
             # Backward
             loss.backward()
-            
+
             # Optimize
             w1.step(lr)
             w2.step(lr)
-            
+
             if epoch == 0:
-                loss_start = np.array(loss.to(munet.Device(munet.DeviceType.CPU, 0)), copy=False)[0]
+                loss_start = np.array(
+                    loss.to(munet.Device(munet.DeviceType.CPU, 0)), copy=False
+                )[0]
             if epoch == 49:
-                loss_end = np.array(loss.to(munet.Device(munet.DeviceType.CPU, 0)), copy=False)[0]
-                
+                loss_end = np.array(
+                    loss.to(munet.Device(munet.DeviceType.CPU, 0)), copy=False
+                )[0]
+
         # The network should have learned, meaning loss went down significantly!
-        print(f"\nTraining Loop -> Start Loss: {loss_start:.4f} | End Loss: {loss_end:.4f}")
+        print(
+            f"\nTraining Loop -> Start Loss: {loss_start:.4f} | End Loss: {loss_end:.4f}"
+        )
         self.assertLess(loss_end, loss_start)
 
     def test_multi_device_model_parallelism(self):
@@ -316,7 +317,7 @@ class TestMuNetPythonBindings(unittest.TestCase):
                 break
             except RuntimeError:
                 continue
-        
+
         if gpu_dev is None:
             print("\nSkipping multi-device test (No GPU available).")
             return
@@ -333,10 +334,10 @@ class TestMuNetPythonBindings(unittest.TestCase):
         h_cpu = x_cpu @ w1_cpu
         h_gpu = h_cpu.to(gpu_dev)  # Autograd boundary crossing!
         pred_gpu = h_gpu @ w2_gpu
-        
+
         target_gpu = munet.Tensor([1, 2], device=gpu_dev)
         target_gpu.uniform_(-1.0, 1.0)
-        
+
         diff = pred_gpu - target_gpu
         loss = (diff * diff).sum()
         # --- Backward Pass ---

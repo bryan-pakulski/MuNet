@@ -412,54 +412,53 @@ VulkanBackend::VulkanBackend() {
 
   mseLossPipeline = createComputePipeline("mse_loss",
                                           R"(
-        #version 450
-        layout(local_size_x = 256) in;
-        layout(binding = 0) buffer P { float p[]; };
-        layout(binding = 1) buffer T { float t[]; };
-        layout(binding = 2) buffer O { uint out_u[]; };
-        layout(push_constant) uniform Push { uint N; } u;
+         #version 450
+         layout(local_size_x = 256) in;
+         layout(binding = 0) buffer P { float p[]; };
+         layout(binding = 1) buffer T { float t[]; };
+         layout(binding = 2) buffer O { uint out_u[]; };
+         layout(push_constant) uniform Push { uint N; } u;
 
-        #define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) \
-        do { \
-             uint expected = BUFFER[IDX]; \
-             uint current; \
-             while(true) { \
-                    uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); \
-                    current = atomicCompSwap(BUFFER[IDX], expected, next); \
-                    if (current == expected) break; \
-                    expected = current; \
-             } \
-        } while(false)
+         #define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) \
+         do { \
+              uint expected = BUFFER[IDX]; \
+              uint current; \
+              while(true) { \
+                     uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); \
+                     current = atomicCompSwap(BUFFER[IDX], expected, next); \
+                     if (current == expected) break; \
+                     expected = current; \
+              } \
+         } while(false)
 
-        void main() {
-            uint i = gl_GlobalInvocationID.x;
-            if (i < u.N) {
-                float diff = p[i] - t[i];
-                float val = (diff * diff) / float(u.N);
-                ATOMIC_ADD_FLOAT(out_u, 0, val);
-            }
-        }
-    )");
+         void main() {
+             uint i = gl_GlobalInvocationID.x;
+             if (i < u.N) {
+                 float diff = p[i] - t[i];
+                 float val = (diff * diff) / float(u.N);
+                 ATOMIC_ADD_FLOAT(out_u, 0, val);
+             }
+         }
+     )");
   mseLossBackwardPipeline = createComputePipeline("mse_loss_back",
                                                   R"(
-        #version 450
-        layout(local_size_x = 256) in;
-        layout(binding = 0) buffer GO { float go[]; };
-        layout(binding = 1) buffer P { float p[]; };
-        layout(binding = 2) buffer T { float t[]; };
-        layout(binding = 3) buffer GI { float gi[]; };
-        layout(push_constant) uniform Push { uint N; } u;
-        void main() {
-            uint i = gl_GlobalInvocationID.x;
-            if (i < u.N) {
-                gi[i] = go[0] * 2.0 * (p[i] - t[i]) / float(u.N);
-            }
-        }
-    )");
+         #version 450
+         layout(local_size_x = 256) in;
+         layout(binding = 0) buffer GO { float go[]; };
+         layout(binding = 1) buffer P { float p[]; };
+         layout(binding = 2) buffer T { float t[]; };
+         layout(binding = 3) buffer GI { float gi[]; };
+         layout(push_constant) uniform Push { uint N; } u;
+         void main() {
+             uint i = gl_GlobalInvocationID.x;
+             if (i < u.N) {
+                 gi[i] = go[0] * 2.0 * (p[i] - t[i]) / float(u.N);
+             }
+         }
+     )");
 
-  crossEntropyPipeline = createComputePipeline(
-      "ce_loss",
-      R"(
+  crossEntropyPipeline = createComputePipeline("ce_loss",
+                                               R"(
          #version 450
          layout(local_size_x = 256) in;
          layout(binding = 0) buffer L { float logits[]; };
@@ -497,9 +496,8 @@ VulkanBackend::VulkanBackend() {
          }
      )");
 
-  crossEntropyBackwardPipeline = createComputePipeline(
-      "ce_loss_back",
-      R"(
+  crossEntropyBackwardPipeline = createComputePipeline("ce_loss_back",
+                                                       R"(
          #version 450
          layout(local_size_x = 256) in;
          layout(binding = 0) buffer GO { float go[]; };

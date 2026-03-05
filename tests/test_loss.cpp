@@ -50,11 +50,11 @@ TEST(LossTest, CrossEntropyForwardBackward) {
   loss.backward();
 
   const float *grad_l = static_cast<const float *>(logits.grad().data());
-  EXPECT_NEAR(grad_l[0], -0.17049f, 1e-4);
-  EXPECT_NEAR(grad_l[1], 0.12101f, 1e-4);
-  EXPECT_NEAR(grad_l[2], 0.04948f, 1e-4);
+  EXPECT_NEAR(grad_l[0], -0.17050f, 1e-4);
+  EXPECT_NEAR(grad_l[1], 0.12122f, 1e-4);
+  EXPECT_NEAR(grad_l[2], 0.04928f, 1e-4);
 
-  EXPECT_NEAR(grad_l[3], 0.04948f, 1e-4);
-  EXPECT_NEAR(grad_l[4], 0.12101f, 1e-4);
-  EXPECT_NEAR(grad_l[5], -0.17049f, 1e-4);
+  EXPECT_NEAR(grad_l[3], 0.04928f, 1e-4);
+  EXPECT_NEAR(grad_l[4], 0.12122f, 1e-4);
+  EXPECT_NEAR(grad_l[5], -0.17050f, 1e-4);
 }

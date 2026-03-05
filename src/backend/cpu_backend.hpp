@@ -271,13 +271,16 @@ public:
           for (int i = 1; i < num_classes; ++i)
             if (in_row[i] > max_val)
               max_val = in_row[i];
-          float sum_exp = 0.0f;
+
+          // Use double for higher precision accumulation
+          double sum_exp = 0.0;
           for (int i = 0; i < num_classes; ++i) {
-            out_row[i] = std::exp(in_row[i] - max_val);
-            sum_exp += out_row[i];
+            sum_exp += std::exp((double)in_row[i] - (double)max_val);
           }
-          for (int i = 0; i < num_classes; ++i)
-            out_row[i] /= sum_exp;
+          for (int i = 0; i < num_classes; ++i) {
+            out_row[i] = (float)(std::exp((double)in_row[i] - (double)max_val) /
+                                 sum_exp);
+          }
         }
       });
     });
@@ -295,11 +298,14 @@ public:
           const float *go_row = go + b * num_classes;
           const float *out_row = o + b * num_classes;
           float *gi_row = gi + b * num_classes;
-          float sum_out_go = 0.0f;
+
+          double sum_out_go = 0.0;
           for (int i = 0; i < num_classes; ++i)
-            sum_out_go += out_row[i] * go_row[i];
+            sum_out_go += (double)out_row[i] * (double)go_row[i];
+
           for (int i = 0; i < num_classes; ++i)
-            gi_row[i] = out_row[i] * (go_row[i] - sum_out_go);
+            gi_row[i] =
+                (float)((double)out_row[i] * ((double)go_row[i] - sum_out_go));
         }
       });
     });
@@ -360,13 +366,14 @@ public:
             max_val = l_row[i];
         }
 
-        float sum_exp = 0.0f;
+        double sum_exp = 0.0;
         for (int i = 0; i < num_classes; ++i) {
-          sum_exp += std::exp(l_row[i] - max_val);
+          sum_exp += std::exp((double)l_row[i] - (double)max_val);
         }
 
         for (int i = 0; i < num_classes; ++i) {
-          float prob = std::exp(l_row[i] - max_val) / sum_exp;
+          float prob =
+              (float)(std::exp((double)l_row[i] - (double)max_val) / sum_exp);
           if (t_row[i] > 0.0f) {
             total_loss -= t_row[i] * std::log(prob + 1e-9f);
           }
@@ -398,13 +405,14 @@ public:
               max_val = l_row[i];
           }
 
-          float sum_exp = 0.0f;
+          double sum_exp = 0.0;
           for (int i = 0; i < num_classes; ++i) {
-            sum_exp += std::exp(l_row[i] - max_val);
+            sum_exp += std::exp((double)l_row[i] - (double)max_val);
           }
 
           for (int i = 0; i < num_classes; ++i) {
-            float prob = std::exp(l_row[i] - max_val) / sum_exp;
+            float prob =
+                (float)(std::exp((double)l_row[i] - (double)max_val) / sum_exp);
             gi_row[i] = go_val * (prob - t_row[i]) / (float)batch_size;
           }
         }
