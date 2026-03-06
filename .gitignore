@@ -2,5 +2,6 @@ artifacts/
 build/
 demo/
 .cache/
+*.npz
 compile_commands.json
 docs/
