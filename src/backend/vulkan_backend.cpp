@@ -294,28 +294,30 @@ VulkanBackend::VulkanBackend() {
   addPipeline = createComputePipeline("add",
                                       R"(
         #version 450
-				layout(local_size_x = 256) in;
+        layout(local_size_x = 256) in;
 
-				layout(binding = 0) readonly buffer A { float a[]; };
-				layout(binding = 1) readonly buffer B { float b[]; };
-				layout(binding = 2) writeonly buffer C { float c[]; };
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer B { float b[]; };
+        layout(binding = 2) buffer C { float c[]; };
 
-				layout(push_constant) uniform Push { uint N; } p;
+        layout(push_constant) uniform Push { uint N; } p;
 
-				void main() {
-						uint i = gl_GlobalInvocationID.x;
-						if (i >= p.N) return;
-						c[i] = a[i] + b[i];
-				}
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N) {
+                c[i] = a[i] + b[i];
+            }
+        }
     )");
+
   mulPipeline = createComputePipeline("mul",
                                       R"(
         #version 450
         layout(local_size_x = 256) in;
 
-        layout(binding = 0) readonly buffer A { float a[]; };
-        layout(binding = 1) readonly buffer B { float b[]; };
-        layout(binding = 2) writeonly buffer C { float c[]; };
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer B { float b[]; };
+        layout(binding = 2) buffer C { float c[]; };
 
         layout(push_constant) uniform Push { uint N; } p;
 
@@ -330,9 +332,9 @@ VulkanBackend::VulkanBackend() {
         #version 450
         layout(local_size_x = 256) in;
 
-        layout(binding = 0) readonly buffer A { float a[]; };
-        layout(binding = 1) readonly buffer B { float b[]; };
-        layout(binding = 2) writeonly buffer C { float c[]; };
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer B { float b[]; };
+        layout(binding = 2) buffer C { float c[]; };
 
         layout(push_constant) uniform Push { uint N; } p;
 
@@ -342,21 +344,40 @@ VulkanBackend::VulkanBackend() {
 							c[i] = a[i] - b[i];
         }
     )");
+
   updatePipeline = createComputePipeline("update",
                                          R"(
         #version 450
         layout(local_size_x = 256) in;
 
-        layout(binding = 0) writeonly buffer W { float w[]; };
-        layout(binding = 1) readonly buffer G { float g[]; };
+        layout(binding = 0) buffer W { float w[]; };
+        layout(binding = 1) buffer G { float g[]; };
 
         layout(push_constant) uniform Push { uint N; float lr; } p;
 
         void main() {
             uint i = gl_GlobalInvocationID.x;
-            if (i < p.N)
-                w[i] -= p.lr * g[i]; }
+            if (i < p.N) {
+                // Fetch to register to ensure safety if memory aliases
+                float grad = g[i];
+                w[i] -= (p.lr * grad);
+            }
+        }
     )");
+
+  broadcastRowPipeline = createComputePipeline("broadcast_row",
+                                               R"(
+         #version 450
+         layout(local_size_x = 256) in;
+         layout(binding = 0) buffer Src { float src[]; };
+         layout(binding = 1) buffer Dst { float dst[]; };
+         layout(push_constant) uniform P { int rows; int cols; } u;
+         void main() {
+             int idx = int(gl_GlobalInvocationID.x);
+             if (idx >= u.rows * u.cols) return;
+             dst[idx] = src[idx % u.cols];
+         }
+     )");
 
   reluPipeline = createComputePipeline("relu",
                                        R"(
@@ -511,38 +532,65 @@ VulkanBackend::VulkanBackend() {
 
   mseLossPipeline = createComputePipeline("mse_loss",
                                           R"(
-        #version 450
+				#version 450
+
 				layout(local_size_x = 256) in;
 
-				layout(binding = 0) readonly buffer P { float p[]; };
-				layout(binding = 1) readonly buffer T { float t[]; };
-				layout(binding = 2) buffer O { uint out_u[]; };
-
-				layout(push_constant) uniform Push {
+				layout(push_constant) uniform PushConsts {
 						uint N;
 				} u;
 
-#define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) \
-				do { \
-						uint expected = BUFFER[IDX]; \
-						uint current; \
-						while(true) { \
-								uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); \
-								current = atomicCompSwap(BUFFER[IDX], expected, next); \
-								if (current == expected) break; \
-								expected = current; \
-						} \
-				} while(false)
+				layout(binding = 0) readonly buffer A { float a[]; };
+				layout(binding = 1) readonly buffer B { float b[]; };
+				layout(binding = 2) buffer O { uint out_u[]; };
 
-				void main() {
+				shared float sdata[256];
 
-						uint i = gl_GlobalInvocationID.x;
-						if (i >= u.N) return;
+				void main()
+				{
+						uint gid = gl_GlobalInvocationID.x;
+						uint lid = gl_LocalInvocationID.x;
 
-						float diff = p[i] - t[i];
-						float val = (diff * diff) / u.N;
+						float sum = 0.0;
 
-						ATOMIC_ADD_FLOAT(out_u, 0, val);
+						// grid-stride loop
+						for (uint i = gid; i < u.N; i += gl_WorkGroupSize.x * gl_NumWorkGroups.x)
+						{
+								float d = a[i] - b[i];
+								sum += d * d;
+						}
+
+						sdata[lid] = sum;
+						barrier();
+
+						// reduction in shared memory
+						for (uint s = gl_WorkGroupSize.x >> 1; s > 0; s >>= 1)
+						{
+								if (lid < s)
+										sdata[lid] += sdata[lid + s];
+								barrier();
+						}
+
+						// one atomic add per workgroup
+						if (lid == 0)
+						{
+								uint old = out_u[0];
+								uint assumed;
+
+								do {
+										assumed = old;
+
+										float f = uintBitsToFloat(assumed);
+										f += sdata[0] / float(u.N);
+
+										old = atomicCompSwap(
+												out_u[0],
+												assumed,
+												floatBitsToUint(f)
+										);
+
+								} while (assumed != old);
+						}
 				}
      )");
   mseLossBackwardPipeline = createComputePipeline("mse_loss_back",
@@ -1416,7 +1464,7 @@ VulkanBackend::VulkanBackend() {
 
 				layout(local_size_x = 256) in;
 
-				layout(binding = 0) readonly buffer I { float in_d[]; };
+				layout(binding = 0) buffer I { float in_d[]; };
 				layout(binding = 1) buffer O { uint out_u[]; };
 
 				layout(push_constant) uniform P {
@@ -1498,6 +1546,7 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyPipeline(device, maxPoolBackPipeline, nullptr);
 
   vkDestroyPipeline(device, concatPipeline, nullptr);
+  vkDestroyPipeline(device, broadcastRowPipeline, nullptr);
 
   vkDestroyPipeline(device, upsamplePipeline, nullptr);
   vkDestroyPipeline(device, upsampleBackPipeline, nullptr);
@@ -1785,7 +1834,7 @@ void VulkanBackend::synchronize() {
         (currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
 
     VkResult res = vkGetQueryPoolResults(
-        device, queryPools[currentFrame], 0, 2, sizeof(uint64_t) * 2, results,
+        device, queryPools[frameToQuery], 0, 2, sizeof(uint64_t) * 2, results,
         sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
 
     if (res == VK_SUCCESS) {
@@ -1837,10 +1886,14 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   VkMemoryBarrier memoryBarrier{};
   memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
   memoryBarrier.srcAccessMask =
-      VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+      VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
+      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
   memoryBarrier.dstAccessMask =
-      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+  vkCmdPipelineBarrier(cmd,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                           VK_PIPELINE_STAGE_TRANSFER_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
                        &memoryBarrier, 0, nullptr, 0, nullptr);
 
@@ -2250,6 +2303,15 @@ void VulkanBackend::concat_backward(const Storage &grad_out,
 
     current_offset += src_dim_size; // Update offset for the next gradient input
   }
+}
+
+void VulkanBackend::broadcast_row(const Storage &src, Storage &dst, int rows,
+                                  int cols) {
+  struct {
+    int rows, cols;
+  } pc = {rows, cols};
+  dispatch_kernel(broadcastRowPipeline, {src.data(), dst.data()}, &pc,
+                  sizeof(pc), (rows * cols + 255) / 256, 1, 1);
 }
 
 } // namespace munet

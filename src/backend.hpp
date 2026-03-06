@@ -19,6 +19,9 @@ public:
   virtual void synchronize() = 0;
   virtual void all_reduce(Storage &buffer, size_t num_elements) = 0;
 
+  virtual void broadcast_row(const Storage &src, Storage &dst, int rows,
+                             int cols) = 0;
+
   // Timing retrieval
   virtual double get_last_kernel_time_us() = 0;
 

@@ -45,7 +45,6 @@ class DebugBackend : public Backend {
           if (!std::isfinite(data[i])) {
             MUNET_ERROR << "Non-finite value detected in output of " << name
                         << " at index " << i << std::endl;
-            break;
           }
         }
       }
@@ -123,6 +122,15 @@ public:
     base_->matmul(a, b, out, M, K, N, transA, transB);
     check("matmul", t.elapsed_us(), &out);
   }
+  void broadcast_row(const Storage &src, Storage &dst, int rows,
+                     int cols) override {
+    MUNET_DEBUG << "broadcast_row | " << rows << "x" << cols << " matrix"
+                << std::endl;
+    Timer t;
+    base_->broadcast_row(src, dst, rows, cols);
+    check("broadcast_row", t.elapsed_us(), &dst);
+  }
+
   void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
               const std::vector<Shape> &shapes) override {
     MUNET_DEBUG << "concat | " << dim << " dimension" << std::endl;
@@ -378,11 +386,28 @@ void Tensor::backward(const Tensor &grad) {
 void Tensor::backward() {
   if (!impl_->grad_fn)
     return;
+
+  if (size() != 1)
+    throw std::runtime_error("backward() requires scalar tensor");
+
   Tensor root_grad(shape(), device(), dtype());
-  std::vector<float> ones(size(), 1.0f);
-  impl_->backend().copy(ones.data(), root_grad.data(), bytes(),
+
+  float one = 1.0f;
+
+  impl_->backend().copy(&one, root_grad.data(), sizeof(float),
                         Device{DeviceType::CPU, 0}, device());
+
   Engine::execute(impl_->grad_fn.get(), root_grad);
+}
+
+Tensor Tensor::detach() const {
+  // Create a new tensor with the same shape, device, and dtype, but NO grad
+  Tensor out(shape(), device(), dtype(), false);
+
+  // Share the underlying storage (no physical memory copy needed yet)
+  out.impl_->storage = impl_->storage;
+
+  return out;
 }
 
 // --- Ops ---
@@ -466,12 +491,23 @@ Tensor Tensor::to(Device dev) const {
 
   // 4. Autograd and Tracing
   if (requires_grad()) {
-    auto fn = std::make_shared<ToBackward>(device());
-    ops::link_backward_edges(fn.get(), {*this});
-    out.set_requires_grad(true);
-    out.impl_->grad_fn = fn;
+    // Only link ToBackward if the current tensor is already part of a graph
+    // (non-leaf). If it's a leaf (no grad_fn), moving it to a new device
+    // creates a new leaf on that device.
+    if (impl_->grad_fn) {
+      auto fn = std::make_shared<ToBackward>(device());
+      ops::link_backward_edges(fn.get(), {*this});
+      out.set_requires_grad(true);
+      out.impl_->grad_fn = fn;
+    } else {
+      out.set_requires_grad(true);
+      // out.impl_->grad_fn remains nullptr, making 'out' a proper leaf tensor.
+    }
   }
-  ops::record_trace(out, "To", {*this});
+
+  if (impl_->grad_fn) {
+    ops::record_trace(out, "To", {*this});
+  }
 
   return out;
 }
@@ -494,8 +530,10 @@ Tensor Tensor::reshape(Shape new_shape) const {
 }
 
 void Tensor::step(float lr) {
-  if (!impl_->grad)
+  if (!impl_ || !impl_->grad) {
+    MUNET_WARNING << "Skipping tensor step with no grad" << std::endl;
     return;
+  }
   impl_->backend().update(*impl_->storage, *impl_->grad->storage, lr, size());
 }
 

@@ -54,7 +54,7 @@ TEST_P(ModelTest, UnetRegistration) {
 
   ASSERT_NO_THROW({
     auto out = model->forward(x);
-    out.backward();
+    out.sum().backward();
   });
 }
 
@@ -66,9 +66,10 @@ TEST_P(ModelTest, UnetTraining) {
   y.uniform_();
 
   int batches = 100;
-  auto optimizer = munet::optim::SGD({model->parameters()}, 0.01f);
+  auto optimizer = munet::optim::SGD(model->parameters(), 0.01f);
 
   for (int i = 0; i < batches; ++i) {
+    optimizer.zero_grad();
 
     Tensor x({1, 1, 32, 32}, dev());
     x.uniform_();

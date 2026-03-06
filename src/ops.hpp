@@ -10,12 +10,13 @@ namespace munet {
 namespace ops {
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
-  for (const auto &t : inputs) {
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    const auto &t = inputs[i];
     if (t.impl_->grad_fn) {
-      node->next_edges.push_back({t.impl_->grad_fn, 0});
+      node->next_edges.push_back({t.impl_->grad_fn, (int)i});
     } else if (t.requires_grad()) {
       auto acc_node = std::make_shared<AccumulateGrad>(t.impl_);
-      node->next_edges.push_back({acc_node, 0});
+      node->next_edges.push_back({acc_node, (int)i});
     } else {
       node->next_edges.push_back({nullptr, 0});
     }
@@ -49,12 +50,14 @@ struct AddBackward : public Node {
   }
 };
 
-// Helper: Expand [C] to [N, C] using MatMul (Ones(N,1) * B(1,C))
-// This correctly handles Forward (Copy) and Backward (Sum)
 inline Tensor broadcast_expand(const Tensor &src, int N) {
-  Tensor ones({N, 1}, src.device(), DataType::Float32, false);
-  ones.uniform_(1.0f, 1.0f);
-  return ones.matmul(src.reshape({1, (int)src.size()}));
+
+  Tensor out({N, (int)src.size()}, src.device(), src.dtype());
+
+  src.impl_->backend().broadcast_row(*src.impl_->storage, *out.impl_->storage,
+                                     N, src.size());
+
+  return out;
 }
 
 inline Tensor add(const Tensor &a, const Tensor &b) {

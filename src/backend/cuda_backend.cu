@@ -68,6 +68,16 @@ __global__ void concat_slice_kernel(float *src, float *dst, int outer_size,
   }
 }
 
+__global__ void broadcast_row_kernel(const float *src, float *dst, int rows,
+                                     int cols) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int total = rows * cols;
+  if (idx < total) {
+    int col = idx % cols;
+    dst[idx] = src[col];
+  }
+}
+
 __global__ void relu_kernel(const float *in, float *out, size_t N) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < N)
@@ -1148,6 +1158,19 @@ void CUDABackend::concat_backward(const Storage &grad_out,
   cudaEventRecord((cudaEvent_t)stop_event_);
 
   // Check for errors after kernel execution
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::broadcast_row(const Storage &src, Storage &dst, int rows,
+                                int cols) {
+  cudaSetDevice(device_index_);
+  int total = rows * cols;
+  int threads = 256;
+  int blocks = (total + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  broadcast_row_kernel<<<blocks, threads>>>((const float *)src.data(),
+                                            (float *)dst.data(), rows, cols);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 

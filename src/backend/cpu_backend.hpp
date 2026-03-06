@@ -784,5 +784,16 @@ public:
       total += ip[i];
     op[0] = total;
   }
+
+  void broadcast_row(const Storage &src, Storage &dst, int rows,
+                     int cols) override {
+    const float *sp = (const float *)src.data();
+    float *dp = (float *)dst.data();
+    parallel_for(0, rows, [&](size_t s, size_t e) {
+      for (size_t r = s; r < e; ++r) {
+        std::memcpy(dp + r * cols, sp, cols * sizeof(float));
+      }
+    });
+  }
 };
 } // namespace munet

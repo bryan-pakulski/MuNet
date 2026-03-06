@@ -78,6 +78,7 @@ public:
 
   void backward();
   void backward(const Tensor &grad);
+  Tensor detach() const;
 
   Tensor clone() const {
     Tensor out(shape(), device(), dtype(), requires_grad());

@@ -24,6 +24,8 @@ public:
             Device dst_dev) override;
   void synchronize() override;
   void all_reduce(Storage &buffer, size_t num_elements) override;
+  void broadcast_row(const Storage &src, Storage &dst, int rows,
+                     int cols) override;
 
   // --- Compute Kernels ---
   void add(const Storage &a, const Storage &b, Storage &out,

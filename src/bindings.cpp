@@ -108,6 +108,8 @@ PYBIND11_MODULE(munet, m) {
              return (!t.impl_ || t.shape().empty()) ? 0 : t.shape()[0];
            })
       .def("numel", [](const Tensor &t) { return t.impl_ ? t.size() : 0; })
+      .def("detach", &Tensor::detach,
+           "Returns a new Tensor, detached from the current graph.")
       .def("__repr__",
            [](const Tensor &t) {
              if (!t.impl_)
@@ -276,7 +278,8 @@ PYBIND11_MODULE(munet, m) {
            py::arg("stride") = 1, py::arg("padding") = 0)
       .def_readonly("stride", &nn::Conv2d::stride_)
       .def_readonly("padding", &nn::Conv2d::padding_)
-      .def_readonly("weight", &nn::Conv2d::weight);
+      .def_readonly("weight", &nn::Conv2d::weight)
+      .def_readonly("bias", &nn::Conv2d::bias);
 
   py::class_<nn::BatchNorm2d, nn::Module, std::shared_ptr<nn::BatchNorm2d>>(
       nn, "BatchNorm2d")
@@ -284,7 +287,10 @@ PYBIND11_MODULE(munet, m) {
            py::arg("eps") = 1e-5f, py::arg("momentum") = 0.1f)
       .def_readonly("eps", &nn::BatchNorm2d::eps_)
       .def_readonly("momentum", &nn::BatchNorm2d::momentum_)
-      .def_readonly("weight", &nn::BatchNorm2d::weight);
+      .def_readonly("weight", &nn::BatchNorm2d::weight)
+      .def_readonly("bias", &nn::BatchNorm2d::bias)
+      .def_readonly("running_mean", &nn::BatchNorm2d::running_mean)
+      .def_readonly("running_var", &nn::BatchNorm2d::running_var);
 
   py::class_<nn::Flatten, nn::Module, std::shared_ptr<nn::Flatten>>(nn,
                                                                     "Flatten")
@@ -296,7 +302,6 @@ PYBIND11_MODULE(munet, m) {
   py::class_<nn::Sigmoid, nn::Module, std::shared_ptr<nn::Sigmoid>>(nn,
                                                                     "Sigmoid")
       .def(py::init<>());
-
   py::class_<nn::MaxPool2d, nn::Module, std::shared_ptr<nn::MaxPool2d>>(
       nn, "MaxPool2d")
       .def(py::init<int, int, int>(), py::arg("kernel_size"),
