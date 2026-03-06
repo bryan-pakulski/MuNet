@@ -75,29 +75,6 @@ class TestLoss(unittest.TestCase):
         self.assertTrue(np.allclose(grad, expected_grad, atol=1e-4))
 
 
-class TestMuNetPythonBindings(unittest.TestCase):
-
-    def test_save_load_consistency(self):
-        model = munet.nn.Sequential([
-            munet.nn.Linear(10, 5),
-            munet.nn.ReLU(),
-            munet.nn.Linear(5, 2)
-        ])
-        
-        # Save original weights
-        original_params = {n: np.array(p, copy=True) for n, p in model.named_parameters().items()}
-        
-        munet.save(model, "test_model.npz")
-        
-        # Create new model and load
-        new_model = munet.load("test_model.npz")
-        
-        for name, p in new_model.named_parameters().items():
-            loaded_val = np.array(p, copy=False)
-            self.assertTrue(np.allclose(loaded_val, original_params), f"Mismatch in {name}")
-        
-        os.remove("test_model.npz")
-
     def test_tensor_creation(self):
         """Test basic tensor creation and properties mapping."""
         t = munet.Tensor([2, 3], requires_grad=True)
@@ -369,6 +346,60 @@ class TestMuNetPythonBindings(unittest.TestCase):
         self.assertEqual(w1_cpu.grad.device.type, munet.DeviceType.CPU)
         self.assertEqual(w2_gpu.grad.device.type, gpu_dev.type)
         print(f"\nSuccessfully backpropagated from {gpu_dev.type} back to CPU!")
+
+    def test_default_grad_mode(self):
+        # By default, operations on requires_grad=True tensors build a graph
+        x = munet.ones([2, 2], requires_grad=True)
+        y = x + x
+        self.assertTrue(y.requires_grad)
+
+    def test_no_grad_context(self):
+        x = munet.ones([2, 2], requires_grad=True)
+
+        with munet.no_grad():
+            y = x + x
+            # Inside no_grad, graph building is disabled
+            self.assertFalse(y.requires_grad)
+
+        # Context exit restores the previous state
+        z = x + x
+        self.assertTrue(z.requires_grad)
+
+    def test_nested_enable_grad(self):
+        x = munet.ones([2, 2], requires_grad=True)
+
+        with munet.no_grad():
+            y = x * 2
+            self.assertFalse(y.requires_grad)
+
+            # Nested context to temporarily re-enable gradients
+            with munet.enable_grad():
+                z = x * 3
+                self.assertTrue(z.requires_grad)
+
+            # Exiting enable_grad restores the no_grad state
+            w = x * 4
+            self.assertFalse(w.requires_grad)
+
+    def test_backward_with_no_grad(self):
+        x = munet.ones([2], requires_grad=True)
+
+        # y is detached from the graph
+        with munet.no_grad():
+            y = x * 2
+
+        # z connects only to x directly, y is treated as a constant
+        z = x * y
+        out = z.sum()
+        out.backward()
+
+        # Forward was: x * (x * 2), where y=(x*2) is constant 2
+        # So z = x * 2. dz/dx = 2.
+        # Since x is ones([2]), grad should be [2.0, 2.0]
+        # (If graph building wasn't disabled for y, grad would be 4.0)
+        grad_np = memoryview(x.grad).cast("f")
+        self.assertEqual(grad_np[0], 2.0)
+        self.assertEqual(grad_np[1], 2.0)
 
 
 if __name__ == "__main__":

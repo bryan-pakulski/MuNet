@@ -490,7 +490,7 @@ Tensor Tensor::to(Device dev) const {
   }
 
   // 4. Autograd and Tracing
-  if (requires_grad()) {
+  if (GradMode::is_enabled() && requires_grad()) {
     // Only link ToBackward if the current tensor is already part of a graph
     // (non-leaf). If it's a leaf (no grad_fn), moving it to a new device
     // creates a new leaf on that device.

@@ -73,7 +73,7 @@ inline Tensor add(const Tensor &a, const Tensor &b) {
     a.impl_->backend().add(*a.impl_->storage, *b.impl_->storage,
                            *out.impl_->storage, a.size());
 
-    if (a.requires_grad() || b.requires_grad()) {
+    if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
       auto fn = std::make_shared<AddBackward>();
       link_backward_edges(fn.get(), {a, b});
       out.set_requires_grad(true);
@@ -164,7 +164,7 @@ inline Tensor cat(const std::vector<Tensor> &inputs, int dim = 1) {
     if (t.requires_grad())
       req = true;
 
-  if (req) {
+  if (GradMode::is_enabled() && req) {
     auto fn = std::make_shared<ConcatBackward>(dim, shapes);
     link_backward_edges(fn.get(), inputs);
     out.set_requires_grad(true);
@@ -197,7 +197,7 @@ inline Tensor mse_loss(const Tensor &pred, const Tensor &target) {
     pred.impl_->backend().mse_loss(*pred.impl_->storage, *target.impl_->storage,
                                    *out.impl_->storage, pred.size());
 
-    if (pred.requires_grad()) {
+    if (GradMode::is_enabled() && pred.requires_grad()) {
       auto fn = std::make_shared<MSELossBackward>(pred, target);
       link_backward_edges(fn.get(), {pred, target});
       out.set_requires_grad(true);
@@ -274,7 +274,7 @@ inline Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
       *logits.impl_->storage, *targets.impl_->storage, *out.impl_->storage,
       batch_size, num_classes, spatial);
 
-  if (logits.requires_grad()) {
+  if (GradMode::is_enabled() && logits.requires_grad()) {
     auto fn = std::make_shared<CrossEntropyBackward>(
         logits, targets, batch_size, num_classes, spatial);
     link_backward_edges(fn.get(), {logits, targets});
@@ -306,7 +306,7 @@ inline Tensor relu(const Tensor &a) {
   Tensor out(a.shape(), a.device(), a.dtype());
   a.impl_->backend().relu(*a.impl_->storage, *out.impl_->storage, a.size());
 
-  if (a.requires_grad()) {
+  if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<ReluBackward>(a);
     link_backward_edges(fn.get(), {a});
     out.set_requires_grad(true);
@@ -335,7 +335,7 @@ inline Tensor sigmoid(const Tensor &a) {
   Tensor out(a.shape(), a.device(), a.dtype());
   a.impl_->backend().sigmoid(*a.impl_->storage, *out.impl_->storage, a.size());
 
-  if (a.requires_grad()) {
+  if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<SigmoidBackward>(out);
     link_backward_edges(fn.get(), {a});
     out.set_requires_grad(true);
@@ -369,7 +369,7 @@ inline Tensor softmax(const Tensor &a) {
   a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage, batch_size,
                              num_classes);
 
-  if (a.requires_grad()) {
+  if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<SoftmaxBackward>(out, batch_size, num_classes);
     link_backward_edges(fn.get(), {a});
     out.set_requires_grad(true);
@@ -428,7 +428,7 @@ inline Tensor matmul(const Tensor &a, const Tensor &b) {
 
   Tensor out = matmul_internal(a, b, false, false);
 
-  if (a.requires_grad() || b.requires_grad()) {
+  if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
     auto fn = std::make_shared<MatmulBackward>(a, b);
     link_backward_edges(fn.get(), {a, b});
     out.set_requires_grad(true);
@@ -465,7 +465,7 @@ inline Tensor sub(const Tensor &a, const Tensor &b) {
     a.impl_->backend().sub(*a.impl_->storage, *b.impl_->storage,
                            *out.impl_->storage, a.size());
 
-    if (a.requires_grad() || b.requires_grad()) {
+    if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
       auto fn = std::make_shared<SubBackward>();
       link_backward_edges(fn.get(), {a, b});
       out.set_requires_grad(true);
@@ -518,7 +518,7 @@ inline Tensor mul(const Tensor &a, const Tensor &b) {
     a.impl_->backend().mul(*a.impl_->storage, *b.impl_->storage,
                            *out.impl_->storage, a.size());
 
-    if (a.requires_grad() || b.requires_grad()) {
+    if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
       auto fn = std::make_shared<MulBackward>(a, b);
       link_backward_edges(fn.get(), {a, b});
       out.set_requires_grad(true);
@@ -575,7 +575,7 @@ inline Tensor sum(const Tensor &a) {
   // Use Backend!
   a.impl_->backend().sum(*a.impl_->storage, *out.impl_->storage, a.size());
 
-  if (a.requires_grad()) {
+  if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<SumBackward>(a.shape(), a.device());
     link_backward_edges(fn.get(), {a});
     out.set_requires_grad(true);
@@ -608,7 +608,7 @@ inline Tensor reshape(const Tensor &in, Shape new_shape) {
                                            in.requires_grad());
   out.impl_->storage = in.impl_->storage;
 
-  if (in.requires_grad()) {
+  if (GradMode::is_enabled() && in.requires_grad()) {
     auto fn = std::make_shared<ReshapeBackward>(in.shape());
     link_backward_edges(fn.get(), {in});
     out.set_requires_grad(true);
@@ -682,8 +682,8 @@ inline Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
                              bias.impl_ ? bias.impl_->storage.get() : nullptr,
                              *out.impl_->storage, B, iC, iH, iW, oC, kH, kW,
                              stride, padding);
-  if (in.requires_grad() || weight.requires_grad() ||
-      (bias.impl_ && bias.requires_grad())) {
+  if (GradMode::is_enabled() && (in.requires_grad() || weight.requires_grad() ||
+                                 (bias.impl_ && bias.requires_grad()))) {
     auto fn =
         std::make_shared<Conv2DBackward>(in, weight, bias, stride, padding);
     std::vector<Tensor> inputs = {in, weight};
@@ -729,7 +729,7 @@ inline Tensor max_pool2d(const Tensor &in, int kernel_size, int stride,
   in.impl_->backend().max_pool2d(*in.impl_->storage, *out.impl_->storage, B, C,
                                  iH, iW, kernel_size, stride, padding);
 
-  if (in.requires_grad()) {
+  if (GradMode::is_enabled() && in.requires_grad()) {
     auto fn =
         std::make_shared<MaxPool2DBackward>(in, kernel_size, stride, padding);
     link_backward_edges(fn.get(), {in});
@@ -766,7 +766,7 @@ inline Tensor upsample2d(const Tensor &in, int scale_factor) {
   in.impl_->backend().upsample2d(*in.impl_->storage, *out.impl_->storage, B, C,
                                  iH, iW, scale_factor);
 
-  if (in.requires_grad()) {
+  if (GradMode::is_enabled() && in.requires_grad()) {
     auto fn = std::make_shared<Upsample2DBackward>(in, scale_factor);
     link_backward_edges(fn.get(), {in});
     out.set_requires_grad(true);
@@ -820,7 +820,7 @@ inline Tensor batch_norm(const Tensor &in, Tensor &running_mean,
       *save_mean.impl_->storage, *save_var.impl_->storage, *out.impl_->storage,
       B, C, H, W, momentum, eps, training);
 
-  if (training &&
+  if (GradMode::is_enabled() && training &&
       (in.requires_grad() || weight.requires_grad() || bias.requires_grad())) {
     auto fn = std::make_shared<BatchNormBackward>(in, weight, save_mean,
                                                   save_var, eps);

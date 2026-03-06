@@ -3,3 +3,4 @@ build/
 demo/
 .cache/
 compile_commands.json
+docs/

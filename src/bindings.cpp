@@ -1,3 +1,4 @@
+#include "autograd/autograd.hpp"
 #include "nn.hpp"
 #include "ops.hpp"
 #include "optim.hpp"
@@ -24,28 +25,201 @@ public:
 PYBIND11_MODULE(munet, m) {
   m.doc() = "MuNet: C++ Machine Learning Framework";
 
-  py::enum_<DeviceType>(m, "DeviceType")
+  // ============================================================================
+  // Enums and Devices
+  // ============================================================================
+  py::enum_<DeviceType>(m, "DeviceType", "Types of compute devices available.")
       .value("CPU", DeviceType::CPU)
       .value("CUDA", DeviceType::CUDA)
       .value("VULKAN", DeviceType::VULKAN)
       .export_values();
 
-  py::enum_<DataType>(m, "DataType")
+  py::enum_<DataType>(m, "DataType", "Supported data types for tensors.")
       .value("Float32", DataType::Float32)
       .value("Float16", DataType::Float16)
       .value("Int32", DataType::Int32)
       .export_values();
 
-  py::class_<Device>(m, "Device")
-      .def(py::init<DeviceType, int>(), py::arg("type") = DeviceType::CPU,
-           py::arg("index") = 0)
+  py::class_<Device>(
+      m, "Device",
+      "Represents a compute device (e.g., CPU, CUDA) and its index.")
+      .def(py::init<DeviceType, int>(),
+           py::arg_v("type", DeviceType::CPU, "munet.DeviceType.CPU"),
+           py::arg("index") = 0, "Initializes a new Device.")
       .def("__repr__", &Device::to_string)
-      .def_readwrite("type", &Device::type)
-      .def_readwrite("index", &Device::index);
+      .def_readwrite("type", &Device::type, "The type of the device.")
+      .def_readwrite("index", &Device::index, "The index of the device.");
 
-  // --- Factory Functions ---
+  // ============================================================================
+  // Tensor Core (Moved above factory functions for correct return type parsing)
+  // ============================================================================
+  py::class_<Tensor>(m, "Tensor", py::buffer_protocol(),
+                     "Multi-dimensional matrix with autograd support.")
+      .def(py::init<Shape, Device, DataType, bool>(), py::arg("shape"),
+           py::arg_v("device", Device{DeviceType::CPU, 0},
+                     "munet.Device(munet.DeviceType.CPU, 0)"),
+           py::arg_v("dtype", DataType::Float32, "munet.DataType.Float32"),
+           py::arg("requires_grad") = false)
+
+      // Properties
+      .def_property(
+          "name",
+          [](const Tensor &t) { return t.impl_ ? t.name() : "uninitialized"; },
+          [](Tensor &t, const std::string &n) {
+            if (t.impl_)
+              t.set_name(n);
+          },
+          "Optional name for debugging purposes.")
+      .def_property_readonly(
+          "shape",
+          [](const Tensor &t) { return t.impl_ ? t.shape() : Shape{}; },
+          "The shape (dimensions) of the tensor.")
+      .def_property_readonly(
+          "device",
+          [](const Tensor &t) {
+            return t.impl_ ? t.device() : Device{DeviceType::UNKNOWN, 0};
+          },
+          "The device where this tensor is allocated.")
+      .def_property_readonly(
+          "dtype",
+          [](const Tensor &t) {
+            return t.impl_ ? t.dtype() : DataType::Float32;
+          },
+          "The data type of the tensor elements.")
+      .def_property(
+          "requires_grad",
+          [](const Tensor &t) { return t.impl_ ? t.requires_grad() : false; },
+          [](Tensor &t, bool req) {
+            if (t.impl_)
+              t.set_requires_grad(req);
+          },
+          "Whether this tensor tracks operations for automatic "
+          "differentiation.")
+      .def_property_readonly("grad", &Tensor::grad,
+                             "The gradient of this tensor.")
+
+      // Core Methods
+      .def("__len__",
+           [](const Tensor &t) {
+             return (!t.impl_ || t.shape().empty()) ? 0 : t.shape()[0];
+           })
+      .def(
+          "numel", [](const Tensor &t) { return t.impl_ ? t.size() : 0; },
+          "Returns the total number of elements in the tensor.")
+      .def("detach", &Tensor::detach,
+           "Returns a new Tensor, detached from the current autograd graph.")
+      .def("__repr__",
+           [](const Tensor &t) {
+             if (!t.impl_)
+               return std::string("Tensor(uninitialized)");
+             return "Tensor(shape=" + to_string(t.shape()) + ", device='" +
+                    t.device().to_string() + "'" +
+                    (t.requires_grad() ? ", requires_grad=True)" : ")");
+           })
+      .def("to", &Tensor::to, py::arg("device"),
+           "Moves the tensor to the specified device.")
+      .def(
+          "copy_from_numpy",
+          [](Tensor &t, py::array_t<float> input) {
+            if (t.device().type != DeviceType::CPU)
+              throw std::runtime_error("Target tensor must be on CPU.");
+            py::buffer_info buf = input.request();
+            size_t bytes = buf.size * sizeof(float);
+            if (bytes != t.bytes())
+              throw std::runtime_error("Size mismatch.");
+            std::memcpy(t.data(), buf.ptr, bytes);
+          },
+          py::arg("input"), "Copies data from a NumPy array into this tensor.")
+      .def(
+          "replace_",
+          [](Tensor &self, const Tensor &other) { self.impl_ = other.impl_; },
+          py::arg("other"),
+          "In-place replacement of underlying tensor implementation.")
+
+      // Autograd
+      .def("zero_grad", &Tensor::zero_grad,
+           "Clears the gradient of the tensor.")
+      .def(
+          "backward", [](Tensor &t) { t.backward(); },
+          "Computes the gradient of current tensor w.r.t. graph leaves.")
+      .def(
+          "backward", [](Tensor &t, const Tensor &grad) { t.backward(grad); },
+          py::arg("grad"),
+          "Computes the gradient with a given upstream gradient.")
+
+      // Math & Ops
+      .def("__add__", [](const Tensor &a, const Tensor &b) { return a + b; })
+      .def("__sub__", [](const Tensor &a, const Tensor &b) { return a - b; })
+      .def("__mul__", [](const Tensor &a, const Tensor &b) { return a * b; })
+      .def("__matmul__",
+           [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
+      .def("sum", &Tensor::sum,
+           "Returns the sum of all elements in the tensor.")
+      .def("reshape", &Tensor::reshape, py::arg("shape"),
+           "Returns a tensor with the same data and number of elements, but "
+           "with the specified shape.")
+      .def("uniform_", &Tensor::uniform_, py::arg("low") = -1.0f,
+           py::arg("high") = 1.0f,
+           "Fills the tensor with values from a uniform distribution.")
+      .def("step", &Tensor::step, py::arg("lr"),
+           "Applies a simple SGD step manually directly to the tensor.")
+
+      // NN & Activations
+      .def("relu", &Tensor::relu,
+           "Applies the Rectified Linear Unit function element-wise.")
+      .def("sigmoid", &Tensor::sigmoid,
+           "Applies the Sigmoid function element-wise.")
+      .def("softmax", &Tensor::softmax, "Applies the Softmax function.")
+      .def("conv2d", &Tensor::conv2d, py::arg("weight"),
+           py::arg_v("bias", Tensor(), "munet.Tensor()"), py::arg("stride") = 1,
+           py::arg("padding") = 0,
+           "Applies a 2D convolution over an input signal.")
+      .def("max_pool2d", &Tensor::max_pool2d, py::arg("kernel_size"),
+           py::arg("stride"), py::arg("padding") = 0,
+           "Applies a 2D max pooling over an input signal.")
+      .def("upsample2d", &Tensor::upsample2d, py::arg("scale_factor"),
+           "Upsamples the input by the given scale factor.")
+      .def("batch_norm", &Tensor::batch_norm, py::arg("running_mean"),
+           py::arg("running_var"), py::arg("weight"), py::arg("bias"),
+           py::arg("training"), py::arg("momentum") = 0.1,
+           py::arg("eps") = 1e-5, "Applies Batch Normalization.")
+      .def("mse_loss", &Tensor::mse_loss, py::arg("target"),
+           "Computes Mean Squared Error against the target tensor.")
+      .def("cross_entropy", &Tensor::cross_entropy, py::arg("target"),
+           "Computes Cross Entropy loss against the target tensor.")
+
+      // Buffer Protocol (Zero-copy to NumPy)
+      .def_buffer([](Tensor &t) -> py::buffer_info {
+        if (t.device().type != DeviceType::CPU) {
+          throw std::runtime_error(
+              "Cannot convert GPU tensor to NumPy array directly. Call "
+              "`.to(Device(DeviceType.CPU))` first.");
+        }
+
+        std::vector<py::ssize_t> py_shape;
+        py_shape.reserve(t.shape().size());
+        for (int dim : t.shape()) {
+          py_shape.push_back(static_cast<py::ssize_t>(dim));
+        }
+
+        std::vector<py::ssize_t> py_strides(py_shape.size());
+        py::ssize_t stride = dtype_size(t.dtype());
+        for (int i = (int)py_shape.size() - 1; i >= 0; --i) {
+          py_strides = stride;
+          stride *= py_shape;
+        }
+
+        return py::buffer_info(t.data(), dtype_size(t.dtype()),
+                               py::format_descriptor<float>::format(),
+                               py_shape.size(), py_shape, py_strides);
+      });
+
+  // ============================================================================
+  // Factory Functions
+  // ============================================================================
   m.def("cat", &ops::cat, py::arg("tensors"), py::arg("dim") = 1,
         "Concatenates a sequence of tensors along the specified dimension.");
+
   m.def(
       "zeros",
       [](Shape shape, std::optional<Device> device, bool requires_grad) {
@@ -54,8 +228,9 @@ PYBIND11_MODULE(munet, m) {
         t.impl_->backend().memset(t.data(), 0, t.bytes());
         return t;
       },
-      py::arg("shape"), py::arg("device") = py::none(),
-      py::arg("requires_grad") = false);
+      py::arg("shape"), py::arg_v("device", py::none(), "None"),
+      py::arg("requires_grad") = false,
+      "Creates a tensor of the specified shape filled with zeros.");
 
   m.def(
       "ones",
@@ -65,8 +240,9 @@ PYBIND11_MODULE(munet, m) {
         t.uniform_(1.0f, 1.0f);
         return t;
       },
-      py::arg("shape"), py::arg("device") = py::none(),
-      py::arg("requires_grad") = false);
+      py::arg("shape"), py::arg_v("device", py::none(), "None"),
+      py::arg("requires_grad") = false,
+      "Creates a tensor of the specified shape filled with ones.");
 
   m.def(
       "rand",
@@ -76,203 +252,90 @@ PYBIND11_MODULE(munet, m) {
         t.uniform_(0.0f, 1.0f);
         return t;
       },
-      py::arg("shape"), py::arg("device") = py::none(),
-      py::arg("requires_grad") = false);
+      py::arg("shape"), py::arg_v("device", py::none(), "None"),
+      py::arg("requires_grad") = false,
+      "Creates a tensor of the specified shape filled with random values from "
+      "U[0, 1).");
 
-  py::class_<Tensor>(m, "Tensor", py::buffer_protocol())
-      .def(py::init<Shape, Device, DataType, bool>(), py::arg("shape"),
-           py::arg("device") = Device{DeviceType::CPU, 0},
-           py::arg("dtype") = DataType::Float32,
-           py::arg("requires_grad") = false)
-      .def_property(
-          "name",
-          [](const Tensor &t) { return t.impl_ ? t.name() : "uninitialized"; },
-          [](Tensor &t, const std::string &n) {
-            if (t.impl_)
-              t.set_name(n);
-          })
-      .def_property_readonly(
-          "shape",
-          [](const Tensor &t) { return t.impl_ ? t.shape() : Shape{}; })
-      .def_property_readonly("device",
-                             [](const Tensor &t) {
-                               return t.impl_ ? t.device()
-                                              : Device{DeviceType::UNKNOWN, 0};
-                             })
-      .def_property_readonly("dtype",
-                             [](const Tensor &t) {
-                               return t.impl_ ? t.dtype() : DataType::Float32;
-                             })
-      .def("__len__",
-           [](const Tensor &t) {
-             return (!t.impl_ || t.shape().empty()) ? 0 : t.shape()[0];
-           })
-      .def("numel", [](const Tensor &t) { return t.impl_ ? t.size() : 0; })
-      .def("detach", &Tensor::detach,
-           "Returns a new Tensor, detached from the current graph.")
-      .def("__repr__",
-           [](const Tensor &t) {
-             if (!t.impl_)
-               return std::string("Tensor(uninitialized)");
-             return "Tensor(shape=" + to_string(t.shape()) + ", device='" +
-                    t.device().to_string() + "'" +
-                    (t.requires_grad() ? ", requires_grad=True)" : ")");
-           })
-      .def_property(
-          "requires_grad",
-          [](const Tensor &t) { return t.impl_ ? t.requires_grad() : false; },
-          [](Tensor &t, bool req) {
-            if (t.impl_)
-              t.set_requires_grad(req);
-          })
-      .def_property_readonly("grad", &Tensor::grad)
-      .def("zero_grad", &Tensor::zero_grad)
-      .def("copy_from_numpy",
-           [](Tensor &t, py::array_t<float> input) {
-             if (t.device().type != DeviceType::CPU) {
-               throw std::runtime_error(
-                   "copy_from_numpy: Target tensor must be on CPU.");
-             }
-             py::buffer_info buf = input.request();
-             size_t bytes = buf.size * sizeof(float);
-             if (bytes != t.bytes()) {
-               throw std::runtime_error(
-                   "copy_from_numpy: Size mismatch. Tensor bytes: " +
-                   std::to_string(t.bytes()) +
-                   ", Numpy bytes: " + std::to_string(bytes));
-             }
-             std::memcpy(t.data(), buf.ptr, bytes);
-           })
+  m.def(
+      "from_numpy",
+      [](py::array_t<float> input) {
+        py::buffer_info buf = input.request();
+        std::vector<int> shape(buf.shape.begin(), buf.shape.end());
+        Tensor t(shape, Device{DeviceType::CPU, 0});
+        std::memcpy(t.data(), buf.ptr, t.bytes());
+        return t;
+      },
+      py::arg("input"), "Creates a CPU Tensor from a NumPy array.");
 
-      .def("to", &Tensor::to, py::arg("device"))
-
-      // Expose both overloads to Python
-      .def("backward", [](Tensor &t) { t.backward(); })
-      .def(
-          "backward", [](Tensor &t, const Tensor &grad) { t.backward(grad); },
-          py::arg("grad"))
-      .def("__add__", [](const Tensor &a, const Tensor &b) { return a + b; })
-      .def("__sub__", [](const Tensor &a, const Tensor &b) { return a - b; })
-      .def("__mul__", [](const Tensor &a, const Tensor &b) { return a * b; })
-      .def("__matmul__",
-           [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
-      .def("relu", &Tensor::relu)
-      .def("sigmoid", &Tensor::sigmoid)
-      .def("softmax", &Tensor::softmax)
-      .def("sum", &Tensor::sum)
-      .def("reshape", &Tensor::reshape, py::arg("shape"))
-      .def("conv2d", &Tensor::conv2d, py::arg("weight"),
-           py::arg("bias") = Tensor(), py::arg("stride") = 1,
-           py::arg("padding") = 0)
-      .def("max_pool2d", &Tensor::max_pool2d, py::arg("kernel_size"),
-           py::arg("stride"), py::arg("padding") = 0)
-      .def("upsample2d", &Tensor::upsample2d, py::arg("scale_factor"))
-      .def("batch_norm", &Tensor::batch_norm, py::arg("running_mean"),
-           py::arg("running_var"), py::arg("weight"), py::arg("bias"),
-           py::arg("training"), py::arg("momentum") = 0.1,
-           py::arg("eps") = 1e-5)
-      .def("mse_loss", &Tensor::mse_loss, py::arg("target"))
-      .def("cross_entropy", &Tensor::cross_entropy, py::arg("target"))
-      .def("uniform_", &Tensor::uniform_, py::arg("low") = -1.0f,
-           py::arg("high") = 1.0f)
-      .def("step", &Tensor::step, py::arg("lr"))
-      .def("replace_",
-           [](Tensor &self, const Tensor &other) { self.impl_ = other.impl_; })
-
-      .def_buffer([](Tensor &t) -> py::buffer_info {
-        // Safety Check: Prevent NumPy from segfaulting by accessing GPU memory
-        // directly
-        if (t.device().type != DeviceType::CPU) {
+  // Alias copy_from_numpy to module level as well
+  m.def(
+      "copy_from_numpy",
+      [](Tensor &t, py::array_t<float> input) {
+        if (t.device().type != DeviceType::CPU)
           throw std::runtime_error(
-              "Cannot convert GPU tensor to NumPy array directly. Call "
-              "`.to(Device(DeviceType.CPU))` first.");
-        }
+              "copy_from_numpy: Target tensor must be on CPU.");
+        py::buffer_info buf = input.request();
+        size_t bytes = buf.size * sizeof(float);
+        if (bytes != t.bytes())
+          throw std::runtime_error("copy_from_numpy: Size mismatch.");
+        std::memcpy(t.data(), buf.ptr, bytes);
+      },
+      py::arg("tensor"), py::arg("input"),
+      "Copies data from a NumPy array into the given CPU tensor.");
 
-        std::vector<py::ssize_t> strides(t.shape().size());
-        py::ssize_t stride = dtype_size(t.dtype());
-        for (int i = (int)t.shape().size() - 1; i >= 0; --i) {
-          strides[i] = stride;
-          stride *= t.shape()[i];
-        }
+  // ============================================================================
+  // Neural Network Layers (munet.nn)
+  // ============================================================================
+  auto nn = m.def_submodule("nn", "Neural Network Modules and Layers");
 
-        return py::buffer_info(t.data(), dtype_size(t.dtype()),
-                               py::format_descriptor<float>::format(),
-                               t.shape().size(), t.shape(), strides);
-      });
-
-  // --- Tensor Helpers ---
-  m.def("copy_from_numpy", [](Tensor &t, py::array_t<float> input) {
-    if (t.device().type != DeviceType::CPU) {
-      throw std::runtime_error(
-          "copy_from_numpy: Target tensor must be on CPU.");
-    }
-    py::buffer_info buf = input.request();
-    size_t bytes = buf.size * sizeof(float);
-    if (bytes != t.bytes()) {
-      throw std::runtime_error(
-          "copy_from_numpy: Size mismatch. Tensor bytes: " +
-          std::to_string(t.bytes()) +
-          ", Numpy bytes: " + std::to_string(bytes));
-    }
-    std::memcpy(t.data(), buf.ptr, bytes);
-  });
-
-  m.def("from_numpy", [](py::array_t<float> input) {
-    py::buffer_info buf = input.request();
-    std::vector<int> shape;
-    for (auto s : buf.shape)
-      shape.push_back((int)s);
-    Tensor t(shape, Device{DeviceType::CPU, 0});
-    std::memcpy(t.data(), buf.ptr, t.bytes());
-    return t;
-  });
-
-  // --- NN Submodule ---
-  auto nn = m.def_submodule("nn", "Neural Network Layers");
-
-  py::class_<nn::Module, std::shared_ptr<nn::Module>, PyModule>(nn, "Module")
+  py::class_<nn::Module, std::shared_ptr<nn::Module>, PyModule>(
+      nn, "Module", "Base class for all neural network modules.")
       .def(py::init<>())
-      .def("forward", &nn::Module::forward)
-      .def("parameters", &nn::Module::parameters)
+      .def("forward", &nn::Module::forward, py::arg("x"),
+           "Defines the computation performed at every call.")
+      .def("parameters", &nn::Module::parameters,
+           "Returns an iterator over module parameters.")
       .def("named_parameters", &nn::Module::named_parameters,
-           py::arg("prefix") = "")
-      .def("named_modules", &nn::Module::named_modules, py::arg("prefix") = "")
-      .def("train", &nn::Module::train, py::arg("mode") = true)
-      .def("eval", &nn::Module::eval)
-      .def("to", &nn::Module::to)
-      .def("zero_grad", &nn::Module::zero_grad)
+           py::arg("prefix") = "",
+           "Returns an iterator over module parameters, yielding both the name "
+           "of the parameter as well as the parameter itself.")
+      .def("named_modules", &nn::Module::named_modules, py::arg("prefix") = "",
+           "Returns an iterator over all modules in the network.")
+      .def("train", &nn::Module::train, py::arg("mode") = true,
+           "Sets the module in training mode.")
+      .def("eval", &nn::Module::eval, "Sets the module in evaluation mode.")
+      .def("to", &nn::Module::to, py::arg("device"),
+           "Moves all parameters and buffers to the specified device.")
+      .def("zero_grad", &nn::Module::zero_grad,
+           "Clears the gradients of all optimized parameters.")
       .def("__call__", &nn::Module::forward)
       .def("__setattr__", [](py::object self, const std::string &name,
                              py::object value) {
         auto &mod = self.cast<nn::Module &>();
-
-        // 1. If value is a Module, auto-register it
         if (py::isinstance<nn::Module>(value)) {
           mod.register_module(name, value.cast<std::shared_ptr<nn::Module>>());
-        }
-        // 2. If value is a Tensor, auto-register as parameter or buffer
-        else if (py::isinstance<Tensor>(value)) {
+        } else if (py::isinstance<Tensor>(value)) {
           auto &t = value.cast<Tensor &>();
-          if (t.requires_grad()) {
+          if (t.requires_grad())
             mod.register_parameter(name, t);
-          } else {
+          else
             mod.register_buffer(name, t);
-          }
         }
-
-        // 3. Always perform the standard attribute assignment
-        // This ensures the attribute is actually available on the Python object
-        auto dict = self.attr("__dict__");
-        dict[py::cast(name)] = value;
+        self.attr("__dict__") = value;
       });
 
-  py::class_<nn::Linear, nn::Module, std::shared_ptr<nn::Linear>>(nn, "Linear")
+  py::class_<nn::Linear, nn::Module, std::shared_ptr<nn::Linear>>(
+      nn, "Linear", "Applies a linear transformation to the incoming data.")
       .def(py::init<int, int, bool>(), py::arg("in_features"),
            py::arg("out_features"), py::arg("bias") = true)
-      .def_readonly("weight", &nn::Linear::weight)
-      .def_readonly("bias", &nn::Linear::bias);
+      .def_readonly("weight", &nn::Linear::weight,
+                    "The learnable weights of the module.")
+      .def_readonly("bias", &nn::Linear::bias,
+                    "The learnable bias of the module.");
 
-  py::class_<nn::Conv2d, nn::Module, std::shared_ptr<nn::Conv2d>>(nn, "Conv2d")
+  py::class_<nn::Conv2d, nn::Module, std::shared_ptr<nn::Conv2d>>(
+      nn, "Conv2d", "Applies a 2D convolution over an input signal.")
       .def(py::init<int, int, int, int, int>(), py::arg("in_channels"),
            py::arg("out_channels"), py::arg("kernel_size"),
            py::arg("stride") = 1, py::arg("padding") = 0)
@@ -282,7 +345,7 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("bias", &nn::Conv2d::bias);
 
   py::class_<nn::BatchNorm2d, nn::Module, std::shared_ptr<nn::BatchNorm2d>>(
-      nn, "BatchNorm2d")
+      nn, "BatchNorm2d", "Applies Batch Normalization over a 4D input.")
       .def(py::init<int, float, float>(), py::arg("num_features"),
            py::arg("eps") = 1e-5f, py::arg("momentum") = 0.1f)
       .def_readonly("eps", &nn::BatchNorm2d::eps_)
@@ -292,18 +355,20 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("running_mean", &nn::BatchNorm2d::running_mean)
       .def_readonly("running_var", &nn::BatchNorm2d::running_var);
 
-  py::class_<nn::Flatten, nn::Module, std::shared_ptr<nn::Flatten>>(nn,
-                                                                    "Flatten")
+  py::class_<nn::Flatten, nn::Module, std::shared_ptr<nn::Flatten>>(
+      nn, "Flatten", "Flattens a contiguous range of dims into a tensor.")
       .def(py::init<>());
 
-  py::class_<nn::ReLU, nn::Module, std::shared_ptr<nn::ReLU>>(nn, "ReLU")
+  py::class_<nn::ReLU, nn::Module, std::shared_ptr<nn::ReLU>>(
+      nn, "ReLU", "Applies the rectified linear unit function element-wise.")
       .def(py::init<>());
 
-  py::class_<nn::Sigmoid, nn::Module, std::shared_ptr<nn::Sigmoid>>(nn,
-                                                                    "Sigmoid")
+  py::class_<nn::Sigmoid, nn::Module, std::shared_ptr<nn::Sigmoid>>(
+      nn, "Sigmoid", "Applies the element-wise Sigmoid function.")
       .def(py::init<>());
+
   py::class_<nn::MaxPool2d, nn::Module, std::shared_ptr<nn::MaxPool2d>>(
-      nn, "MaxPool2d")
+      nn, "MaxPool2d", "Applies a 2D max pooling over an input signal.")
       .def(py::init<int, int, int>(), py::arg("kernel_size"),
            py::arg("stride") = 2, py::arg("padding") = 0)
       .def_readonly("kernel_size", &nn::MaxPool2d::k_)
@@ -311,20 +376,24 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("padding", &nn::MaxPool2d::p_);
 
   py::class_<nn::Upsample, nn::Module, std::shared_ptr<nn::Upsample>>(
-      nn, "Upsample")
+      nn, "Upsample", "Upsamples a given multi-channel 2D spatial data.")
       .def(py::init<int>(), py::arg("scale_factor"))
       .def_readonly("scale_factor", &nn::Upsample::scale_);
 
   py::class_<nn::Sequential, nn::Module, std::shared_ptr<nn::Sequential>>(
-      nn, "Sequential")
+      nn, "Sequential",
+      "A sequential container. Modules will be added to it in the order they "
+      "are passed in.")
       .def(py::init<>())
-      .def("add", &nn::Sequential::add)
+      .def("add", &nn::Sequential::add, py::arg("module"),
+           "Appends a module to the sequence.")
       .def(py::init([](const std::vector<std::shared_ptr<nn::Module>> &layers) {
-        auto seq = std::make_shared<nn::Sequential>();
-        for (auto l : layers)
-          seq->add(l);
-        return seq;
-      }))
+             auto seq = std::make_shared<nn::Sequential>();
+             for (auto l : layers)
+               seq->add(l);
+             return seq;
+           }),
+           py::arg("layers"))
       .def(
           "__iter__",
           [](nn::Sequential &s) {
@@ -333,90 +402,135 @@ PYBIND11_MODULE(munet, m) {
           },
           py::keep_alive<0, 1>());
 
-  // --- Optim Submodule ---
-  auto optim = m.def_submodule("optim", "Optimizers");
+  // ============================================================================
+  // Optimizers (munet.optim)
+  // ============================================================================
+  auto optim = m.def_submodule("optim", "Optimization Algorithms");
 
-  py::class_<optim::Optimizer, std::shared_ptr<optim::Optimizer>>(optim,
-                                                                  "Optimizer")
-      .def("step", &optim::Optimizer::step)
-      .def("zero_grad", &optim::Optimizer::zero_grad);
+  py::class_<optim::Optimizer, std::shared_ptr<optim::Optimizer>>(
+      optim, "Optimizer", "Base class for all optimizers.")
+      .def("step", &optim::Optimizer::step,
+           "Performs a single optimization step.")
+      .def("zero_grad", &optim::Optimizer::zero_grad,
+           "Clears the gradients of all optimized Tensors.");
 
-  py::class_<optim::SGD, optim::Optimizer, std::shared_ptr<optim::SGD>>(optim,
-                                                                        "SGD")
+  py::class_<optim::SGD, optim::Optimizer, std::shared_ptr<optim::SGD>>(
+      optim, "SGD", "Stochastic Gradient Descent optimizer.")
       .def(py::init<std::vector<Tensor>, float>(), py::arg("params"),
            py::arg("lr"));
 
-  m.def("print_profiler_stats", []() { Profiler::get().print_summary(); });
+  // ============================================================================
+  // Utilities
+  // ============================================================================
+  py::class_<GradMode>(m, "GradMode",
+                       "Controls whether autograd graph is recorded.")
+      .def_static("is_enabled", &GradMode::is_enabled,
+                  "Check if grad mode is enabled.")
+      .def_static("set_enabled", &GradMode::set_enabled, py::arg("enabled"),
+                  "Enable or disable grad mode.");
+
+  m.def(
+      "print_profiler_stats", []() { Profiler::get().print_summary(); },
+      "Prints current memory and compute profiler stats to stdout.");
   m.def(
       "reset_profiler", []() { Profiler::get().reset(); },
       "Clears all collected performance statistics and resets peak memory "
       "tracking.");
 
+  // ============================================================================
+  // Python Injected Helpers
+  // ============================================================================
   py::exec(
       R"(
-def save(module, filename):
-    import numpy as np
-    import json
+ class no_grad:
+     """Context-manager that disables gradient calculation."""
+     def __enter__(self):
+         import munet
+         self.prev = munet.GradMode.is_enabled()
+         munet.GradMode.set_enabled(False)
+     def __exit__(self, exc_type, exc_val, exc_tb):
+         import munet
+         munet.GradMode.set_enabled(self.prev)
 
-    def get_config(m):
-        name = type(m).__name__
-        if name == 'Sequential':
-            return {'type': name, 'layers': [get_config(child) for child in m]}
-        elif name == 'Linear':
-            has_bias = hasattr(m, 'bias') and getattr(m, 'bias') is not None and getattr(m, 'bias').numel() > 0
-            return {'type': name, 'in_features': m.weight.shape[0], 'out_features': m.weight.shape[1], 'bias': has_bias}
-        elif name == 'Conv2d':
-            return {'type': name, 'in_channels': m.weight.shape[1], 'out_channels': m.weight.shape[0], 'kernel_size': m.weight.shape[2], 'stride': m.stride, 'padding': m.padding}
-        elif name == 'MaxPool2d':
-            return {'type': name, 'kernel_size': m.kernel_size, 'stride': m.stride, 'padding': m.padding}
-        elif name == 'BatchNorm2d':
-            return {'type': name, 'num_features': m.weight.shape[0], 'eps': m.eps, 'momentum': m.momentum}
-        elif name == 'Upsample':
-            return {'type': name, 'scale_factor': m.scale_factor}
-        elif name in ('ReLU', 'Sigmoid', 'Flatten'):
-            return {'type': name}
-        else:
-            raise ValueError(f"Unknown module type {name}")
+ class enable_grad:
+     """Context-manager that enables gradient calculation."""
+     def __enter__(self):
+         import munet
+         self.prev = munet.GradMode.is_enabled()
+         munet.GradMode.set_enabled(True)
+     def __exit__(self, exc_type, exc_val, exc_tb):
+         import munet
+         munet.GradMode.set_enabled(self.prev)
 
-    config = get_config(module)
-    state = {name: np.array(p, copy=False) for name, p in module.named_parameters().items()}
-    state['__config__'] = np.array(json.dumps(config))
-    np.savez(filename, **state)
+ def save(module, filename):
+     """
+     Saves a module's architecture and weights to a compressed .npz file.
+     """
+     import numpy as np
+     import json
 
-def load(arg, filename=None):
-    import numpy as np
-    import json
-    import munet
+     def get_config(m):
+         name = type(m).__name__
+         if name == 'Sequential':
+             return {'type': name, 'layers': }
+         elif name == 'Linear':
+             has_bias = hasattr(m, 'bias') and getattr(m, 'bias') is not None and getattr(m, 'bias').numel() > 0
+             return {'type': name, 'in_features': m.weight.shape[0], 'out_features': m.weight.shape[1], 'bias': has_bias}
+         elif name == 'Conv2d':
+             return {'type': name, 'in_channels': m.weight.shape[1], 'out_channels': m.weight.shape[0], 'kernel_size': m.weight.shape[2], 'stride': m.stride, 'padding': m.padding}
+         elif name == 'MaxPool2d':
+             return {'type': name, 'kernel_size': m.kernel_size, 'stride': m.stride, 'padding': m.padding}
+         elif name == 'BatchNorm2d':
+             return {'type': name, 'num_features': m.weight.shape[0], 'eps': m.eps, 'momentum': m.momentum}
+         elif name == 'Upsample':
+             return {'type': name, 'scale_factor': m.scale_factor}
+         elif name in ('ReLU', 'Sigmoid', 'Flatten'):
+             return {'type': name}
+         else:
+             raise ValueError(f"Unknown module type {name}")
 
-    if filename is None:
-        state = np.load(arg, allow_pickle=True)
-        if '__config__' not in state:
-            raise ValueError("File does not contain architecture config. Load into a module using `load(module, filename)` instead.")
+     config = get_config(module)
+     state = {name: np.array(p, copy=False) for name, p in module.named_parameters().items()}
+     state['__config__'] = np.array(json.dumps(config))
+     np.savez(filename, **state)
 
-        config = json.loads(str(state['__config__']))
+ def load(arg, filename=None):
+     """
+     Loads a previously saved module state.
+     """
+     import numpy as np
+     import json
+     import munet
 
-        def build_module(cfg):
-            t = cfg['type']
-            if t == 'Sequential': return munet.nn.Sequential([build_module(c) for c in cfg['layers']])
-            elif t == 'Linear': return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'])
-            elif t == 'Conv2d': return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'])
-            elif t == 'MaxPool2d': return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
-            elif t == 'BatchNorm2d': return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'])
-            elif t == 'Upsample': return munet.nn.Upsample(cfg['scale_factor'])
-            elif t == 'ReLU': return munet.nn.ReLU()
-            elif t == 'Sigmoid': return munet.nn.Sigmoid()
-            elif t == 'Flatten': return munet.nn.Flatten()
+     if filename is None:
+         state = np.load(arg, allow_pickle=True)
+         if '__config__' not in state:
+             raise ValueError("File does not contain architecture config. Load into a module using `load(module, filename)` instead.")
 
-        module = build_module(config)
-        for name, p in module.named_parameters().items():
-            if name in state: p.copy_from_numpy(state[name])
-        return module
-    else:
-        module = arg
-        state = np.load(filename, allow_pickle=True)
-        for name, p in module.named_parameters().items():
-            if name in state: p.copy_from_numpy(state[name])
-        return module
-)",
+         config = json.loads(str(state['__config__']))
+
+         def build_module(cfg):
+             t = cfg['type']
+             if t == 'Sequential': return munet.nn.Sequential([build_module(c) for c in cfg['layers']])
+             elif t == 'Linear': return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'])
+             elif t == 'Conv2d': return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'])
+             elif t == 'MaxPool2d': return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
+             elif t == 'BatchNorm2d': return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'])
+             elif t == 'Upsample': return munet.nn.Upsample(cfg['scale_factor'])
+             elif t == 'ReLU': return munet.nn.ReLU()
+             elif t == 'Sigmoid': return munet.nn.Sigmoid()
+             elif t == 'Flatten': return munet.nn.Flatten()
+
+         module = build_module(config)
+         for name, p in module.named_parameters().items():
+             if name in state: p.copy_from_numpy(state)
+         return module
+     else:
+         module = arg
+         state = np.load(filename, allow_pickle=True)
+         for name, p in module.named_parameters().items():
+             if name in state: p.copy_from_numpy(state)
+         return module
+ )",
       py::globals(), m.attr("__dict__"));
 }

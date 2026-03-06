@@ -7,6 +7,15 @@
 
 namespace munet {
 
+class GradMode {
+public:
+  static bool is_enabled() { return enabled_; }
+  static void set_enabled(bool enabled) { enabled_ = enabled; }
+
+private:
+  inline static thread_local bool enabled_ = true;
+};
+
 struct Edge {
   std::shared_ptr<Node> node;
   int input_nr;
