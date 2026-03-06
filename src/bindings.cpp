@@ -205,8 +205,8 @@ PYBIND11_MODULE(munet, m) {
         std::vector<py::ssize_t> py_strides(py_shape.size());
         py::ssize_t stride = dtype_size(t.dtype());
         for (int i = (int)py_shape.size() - 1; i >= 0; --i) {
-          py_strides = stride;
-          stride *= py_shape;
+          py_strides[i] = stride;
+          stride *= py_shape[i];
         }
 
         return py::buffer_info(t.data(), dtype_size(t.dtype()),
@@ -472,7 +472,7 @@ PYBIND11_MODULE(munet, m) {
      def get_config(m):
          name = type(m).__name__
          if name == 'Sequential':
-             return {'type': name, 'layers': }
+             return {'type': name, 'layers': [get_config(child) for child in m]}
          elif name == 'Linear':
              has_bias = hasattr(m, 'bias') and getattr(m, 'bias') is not None and getattr(m, 'bias').numel() > 0
              return {'type': name, 'in_features': m.weight.shape[0], 'out_features': m.weight.shape[1], 'bias': has_bias}
@@ -523,13 +523,13 @@ PYBIND11_MODULE(munet, m) {
 
          module = build_module(config)
          for name, p in module.named_parameters().items():
-             if name in state: p.copy_from_numpy(state)
+             if name in state: p.copy_from_numpy(state[name])
          return module
      else:
          module = arg
          state = np.load(filename, allow_pickle=True)
          for name, p in module.named_parameters().items():
-             if name in state: p.copy_from_numpy(state)
+             if name in state: p.copy_from_numpy(state[name])
          return module
  )",
       py::globals(), m.attr("__dict__"));
