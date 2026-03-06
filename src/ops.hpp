@@ -191,9 +191,6 @@ struct MSELossBackward : public Node {
 inline Tensor mse_loss(const Tensor &pred, const Tensor &target) {
   if (pred.shape() == target.shape()) {
     Tensor out({1}, pred.device(), pred.dtype());
-    MUNET_WARNING << "MSE_LOSS shape mismatch, pred="
-                  << to_string(pred.shape()) + " target="
-                  << to_string(target.shape()) << std::endl;
     pred.impl_->backend().mse_loss(*pred.impl_->storage, *target.impl_->storage,
                                    *out.impl_->storage, pred.size());
 
@@ -649,6 +646,29 @@ struct Conv2DBackward : public Node {
 };
 inline Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
                      int stride, int padding) {
+  if (in.device() != weight.device() ||
+      (bias.impl_ && bias.device() != in.device())) {
+    MUNET_ERROR << "conv2d: inputs not on same device: "
+                << in.device().to_string()
+                << " != " << weight.device().to_string() << std::endl;
+    throw std::runtime_error("Conv2d: inputs must be on same device");
+  }
+
+  if (in.shape().size() != 4 || weight.shape().size() != 4) {
+    MUNET_ERROR << "conv2d: inputs must be 4D, in.shape: "
+                << to_string(in.shape())
+                << " weight shape: " << to_string(weight.shape()) << std::endl;
+    throw std::runtime_error("Conv2d: inputs must be 4D (NCHW)");
+  }
+
+  if (in.shape()[1] != weight.shape()[1]) {
+    MUNET_ERROR << "conv2d: channel mismatch. input=" << in.shape()[1]
+                << ", weight=" << weight.shape()[1] << std::endl;
+    throw std::runtime_error("Conv2d: input channels mismatch. Input=" +
+                             std::to_string(in.shape()[1]) +
+                             ", Weight=" + std::to_string(weight.shape()[1]));
+  }
+
   int B = in.shape()[0], iC = in.shape()[1], iH = in.shape()[2],
       iW = in.shape()[3];
   int oC = weight.shape()[0], kH = weight.shape()[2], kW = weight.shape()[3];

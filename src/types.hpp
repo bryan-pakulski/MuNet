@@ -1,8 +1,8 @@
 #pragma once
+
 #include <cstddef>
 #include <string>
 #include <vector>
-
 namespace munet {
 
 enum class DeviceType { CPU, CUDA, VULKAN, UNKNOWN };

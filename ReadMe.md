@@ -42,6 +42,10 @@ features a PyTorch-like API, making it familiar to use while handling low-level 
 
 # Future Plans
 
+Serialization:
+    - Save and Load of arbitrarily complex models i.e. Costum Modules and Layers extending munet.nn.Module
+    - Preserve layers, paramers, buffers, skip connections etc.. as well as forward pass
+
 Multi-GPU RoadMap:
 
  1 Device Switching: Update CUDABackend and VulkanBackend to ensure they explicitly select the correct hardware index before executing any commands.
@@ -141,9 +145,14 @@ Finally, expose the method to Python in src/bindings.cpp.
 
 ## Debugging
 
-During development or runtime, you can enable debug logging by setting the `MUNET_DEBUG` environment variable:
+You can enable different levels of debug / profiling via the following environment flags:
 
-`MUNET_DEBUG=1 python munet_script.py`
+```
+ python script.py                                Full speed. No overhead.
+ MUNET_PROFILE=1 python script.py                Measures tensor transfers & kernels kernels.
+ MUNET_DEBUG=1 python script.py                  Prints logs and checks for NaNs. Slows down significantly.
+ MUNET_DEBUG=1 MUNET_PROFILE=1 python script.py  Full visibility. Logs, NaNs, and complete performance summary.
+```
 
 # Building
 

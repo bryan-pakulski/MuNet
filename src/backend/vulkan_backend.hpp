@@ -6,6 +6,9 @@
 namespace munet {
 
 class VulkanBackend : public Backend {
+private:
+  double last_kernel_us_ = 0.0;
+
 public:
   VulkanBackend();
   ~VulkanBackend() override;
@@ -13,6 +16,8 @@ public:
   void *allocate(size_t bytes) override;
   void deallocate(void *ptr) override;
   void memset(void *ptr, int value, size_t bytes) override;
+
+  double get_last_kernel_time_us() override { return last_kernel_us_; }
 
   void copy(const void *src, void *dst, size_t bytes, Device src_dev,
             Device dst_dev) override;

@@ -19,6 +19,9 @@ public:
   virtual void synchronize() = 0;
   virtual void all_reduce(Storage &buffer, size_t num_elements) = 0;
 
+  // Timing retrieval
+  virtual double get_last_kernel_time_us() = 0;
+
   // --- Compute Operations ---
   virtual void add(const Storage &a, const Storage &b, Storage &out,
                    size_t num_elements) = 0;

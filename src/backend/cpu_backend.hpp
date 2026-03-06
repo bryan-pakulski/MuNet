@@ -1,5 +1,6 @@
 #pragma once
-#include "../backend.hpp"
+#include "backend.hpp"
+#include "util.hpp"
 #include <algorithm>
 #include <cmath>
 #include <condition_variable>
@@ -77,6 +78,8 @@ private:
   std::unordered_map<void *, size_t> alloc_sizes_;
   std::mutex mem_mutex_;
 
+  double last_kernel_time_us_ = 0.0;
+
   static ThreadPool &get_pool() {
     static ThreadPool pool(std::thread::hardware_concurrency());
     return pool;
@@ -84,6 +87,7 @@ private:
 
   template <typename Func>
   void parallel_for(size_t start, size_t end, Func func) {
+    Timer t;
     size_t len = end - start;
     static const size_t num_threads = std::thread::hardware_concurrency();
 
@@ -105,6 +109,8 @@ private:
     }
     for (auto &f : futures)
       f.wait();
+
+    last_kernel_time_us_ = t.elapsed_us();
   }
 
 public:
@@ -115,6 +121,8 @@ public:
       }
     }
   }
+
+  double get_last_kernel_time_us() override { return last_kernel_time_us_; }
 
   void *allocate(size_t bytes) override {
     std::lock_guard<std::mutex> lock(mem_mutex_);

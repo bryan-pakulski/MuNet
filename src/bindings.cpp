@@ -234,11 +234,35 @@ PYBIND11_MODULE(munet, m) {
       .def("parameters", &nn::Module::parameters)
       .def("named_parameters", &nn::Module::named_parameters,
            py::arg("prefix") = "")
+      .def("named_modules", &nn::Module::named_modules, py::arg("prefix") = "")
       .def("train", &nn::Module::train, py::arg("mode") = true)
       .def("eval", &nn::Module::eval)
       .def("to", &nn::Module::to)
       .def("zero_grad", &nn::Module::zero_grad)
-      .def("__call__", &nn::Module::forward);
+      .def("__call__", &nn::Module::forward)
+      .def("__setattr__", [](py::object self, const std::string &name,
+                             py::object value) {
+        auto &mod = self.cast<nn::Module &>();
+
+        // 1. If value is a Module, auto-register it
+        if (py::isinstance<nn::Module>(value)) {
+          mod.register_module(name, value.cast<std::shared_ptr<nn::Module>>());
+        }
+        // 2. If value is a Tensor, auto-register as parameter or buffer
+        else if (py::isinstance<Tensor>(value)) {
+          auto &t = value.cast<Tensor &>();
+          if (t.requires_grad()) {
+            mod.register_parameter(name, t);
+          } else {
+            mod.register_buffer(name, t);
+          }
+        }
+
+        // 3. Always perform the standard attribute assignment
+        // This ensures the attribute is actually available on the Python object
+        auto dict = self.attr("__dict__");
+        dict[py::cast(name)] = value;
+      });
 
   py::class_<nn::Linear, nn::Module, std::shared_ptr<nn::Linear>>(nn, "Linear")
       .def(py::init<int, int, bool>(), py::arg("in_features"),
@@ -284,7 +308,6 @@ PYBIND11_MODULE(munet, m) {
   py::class_<nn::Upsample, nn::Module, std::shared_ptr<nn::Upsample>>(
       nn, "Upsample")
       .def(py::init<int>(), py::arg("scale_factor"))
-      .def(py::init<int>(), py::arg("scale_factor"))
       .def_readonly("scale_factor", &nn::Upsample::scale_);
 
   py::class_<nn::Sequential, nn::Module, std::shared_ptr<nn::Sequential>>(
@@ -317,6 +340,12 @@ PYBIND11_MODULE(munet, m) {
                                                                         "SGD")
       .def(py::init<std::vector<Tensor>, float>(), py::arg("params"),
            py::arg("lr"));
+
+  m.def("print_profiler_stats", []() { Profiler::get().print_summary(); });
+  m.def(
+      "reset_profiler", []() { Profiler::get().reset(); },
+      "Clears all collected performance statistics and resets peak memory "
+      "tracking.");
 
   py::exec(
       R"(
@@ -372,7 +401,6 @@ def load(arg, filename=None):
             elif t == 'ReLU': return munet.nn.ReLU()
             elif t == 'Sigmoid': return munet.nn.Sigmoid()
             elif t == 'Flatten': return munet.nn.Flatten()
-            else: raise ValueError(f"Unknown module type {t}")
 
         module = build_module(config)
         for name, p in module.named_parameters().items():

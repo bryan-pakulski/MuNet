@@ -42,6 +42,17 @@ public:
     return params;
   }
 
+  virtual std::map<std::string, std::shared_ptr<Module>>
+  named_modules(std::string prefix = "") {
+    std::map<std::string, std::shared_ptr<Module>> mods;
+    for (auto &[name, m] : modules_) {
+      mods[prefix + name] = m;
+      auto sub = m->named_modules(prefix + name + ".");
+      mods.insert(sub.begin(), sub.end());
+    }
+    return mods;
+  }
+
   virtual void train(bool mode = true) {
     training_ = mode;
     for (auto &[name, m] : modules_) {
@@ -72,7 +83,6 @@ public:
     }
   }
 
-protected:
   Tensor &register_parameter(std::string name, Tensor &t) {
     if (t.name().empty())
       t.set_name(name);
@@ -93,6 +103,7 @@ protected:
     return m;
   }
 
+protected:
   bool training_ = true;
   std::map<std::string, Tensor *> parameters_;
   std::map<std::string, Tensor *> buffers_;

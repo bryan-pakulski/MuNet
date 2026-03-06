@@ -21,12 +21,19 @@ static std::unordered_map<size_t, std::vector<void *>> free_blocks;
 static std::unordered_map<void *, size_t> alloc_sizes;
 static cublasHandle_t cublas_handle_ = nullptr;
 
-CUDABackend::CUDABackend() {
+CUDABackend::CUDABackend(int device_index) : device_index_(device_index) {
+  cudaSetDevice(device_index_);
   if (!cublas_handle_)
     cublasCreate(&cublas_handle_);
+  cudaEventCreate((cudaEvent_t *)&start_event_);
+  cudaEventCreate((cudaEvent_t *)&stop_event_);
 }
 
-CUDABackend::~CUDABackend() {}
+CUDABackend::~CUDABackend() {
+  cudaSetDevice(device_index_);
+  cudaEventDestroy((cudaEvent_t)start_event_);
+  cudaEventDestroy((cudaEvent_t)stop_event_);
+}
 
 // --- Kernels ---
 __global__ void add_kernel(const float *a, const float *b, float *out,
@@ -585,6 +592,8 @@ __global__ void bn_bw_pass2_kernel(const float *go, const float *in, float *gi,
 }
 
 void *CUDABackend::allocate(size_t bytes) {
+  cudaSetDevice(device_index_);
+  cudaEventRecord((cudaEvent_t)start_event_);
   if (!free_blocks[bytes].empty()) {
     void *ptr = free_blocks[bytes].back();
     free_blocks[bytes].pop_back();
@@ -593,88 +602,134 @@ void *CUDABackend::allocate(size_t bytes) {
   void *ptr;
   CUDA_CHECK(cudaMalloc(&ptr, bytes));
   alloc_sizes[ptr] = bytes;
+  cudaEventRecord((cudaEvent_t)stop_event_);
   return ptr;
 }
 
 void CUDABackend::deallocate(void *ptr) {
+  cudaSetDevice(device_index_);
+  cudaEventRecord((cudaEvent_t)start_event_);
   if (alloc_sizes.count(ptr)) {
     free_blocks[alloc_sizes[ptr]].push_back(ptr);
   } else {
     CUDA_CHECK(cudaFree(ptr));
   }
+  cudaEventRecord((cudaEvent_t)stop_event_);
 }
 
 void CUDABackend::memset(void *ptr, int value, size_t bytes) {
+  cudaSetDevice(device_index_);
+  cudaEventRecord((cudaEvent_t)start_event_);
   CUDA_CHECK(cudaMemset(ptr, value, bytes));
+  cudaEventRecord((cudaEvent_t)stop_event_);
 }
 
 void CUDABackend::copy(const void *src, void *dst, size_t bytes, Device src_dev,
                        Device dst_dev) {
+  cudaSetDevice(device_index_);
+  cudaEventRecord((cudaEvent_t)start_event_);
   cudaMemcpyKind kind = cudaMemcpyDefault;
   CUDA_CHECK(cudaMemcpy(dst, src, bytes, kind));
+  cudaEventRecord((cudaEvent_t)stop_event_);
 }
 
-void CUDABackend::synchronize() { CUDA_CHECK(cudaDeviceSynchronize()); }
+void CUDABackend::synchronize() {
+  cudaSetDevice(device_index_);
+  CUDA_CHECK(cudaDeviceSynchronize());
+  float ms = 0;
+  // This should always succeed under the assumption that every op records
+  // events
+  cudaError_t err = cudaEventElapsedTime(&ms, (cudaEvent_t)start_event_,
+                                         (cudaEvent_t)stop_event_);
+  if (err == cudaSuccess) {
+    last_kernel_us_ = (double)ms * 1000.0;
+  } else {
+    last_kernel_us_ = 0.0;
+  }
+}
 
 void CUDABackend::all_reduce(Storage &buffer, size_t num_elements) {}
 
 void CUDABackend::add(const Storage &a, const Storage &b, Storage &out,
                       size_t num_elements) {
+
+  cudaSetDevice(device_index_);
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
+
+  cudaEventRecord((cudaEvent_t)start_event_);
   add_kernel<<<blocks, threads>>>((const float *)a.data(),
                                   (const float *)b.data(), (float *)out.data(),
                                   num_elements);
+
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::fill_uniform(Storage &out, float low, float high,
                                size_t num_elements) {
+  cudaSetDevice(device_index_);
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
-  uint32_t seed = clock();
+  static uint32_t seed_counter = 0;
+  uint32_t seed = (uint32_t)time(NULL) + (seed_counter++ * 1337);
+  cudaEventRecord((cudaEvent_t)start_event_);
   uniform_kernel<<<blocks, threads>>>((float *)out.data(), low, high - low,
                                       num_elements, seed);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::sum(const Storage &in, Storage &out, size_t num_elements) {
+  cudaSetDevice(device_index_);
   CUDA_CHECK(cudaMemset(out.data(), 0, sizeof(float)));
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   sum_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
                                   num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::sub(const Storage &a, const Storage &b, Storage &out,
                       size_t num_elements) {
+  cudaSetDevice(device_index_);
   int threads = 256, blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   sub_kernel<<<blocks, threads>>>((const float *)a.data(),
                                   (const float *)b.data(), (float *)out.data(),
                                   num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::mul(const Storage &a, const Storage &b, Storage &out,
                       size_t num_elements) {
+  cudaSetDevice(device_index_);
   int threads = 256, blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   mul_kernel<<<blocks, threads>>>((const float *)a.data(),
                                   (const float *)b.data(), (float *)out.data(),
                                   num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::update(Storage &weight, const Storage &grad, float lr,
                          size_t num_elements) {
+  cudaSetDevice(device_index_);
   int threads = 256, blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   update_kernel<<<blocks, threads>>>(
       (float *)weight.data(), (const float *)grad.data(), lr, num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::matmul(const Storage &a, const Storage &b, Storage &out,
                          int M, int K, int N, bool transA, bool transB) {
+  cudaSetDevice(device_index_);
   float alpha = 1.0f;
   float beta = 0.0f;
   cublasOperation_t cuTransA = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
@@ -683,31 +738,39 @@ void CUDABackend::matmul(const Storage &a, const Storage &b, Storage &out,
   int ldb = transA ? M : K;
   int ldc = N;
 
+  cudaEventRecord((cudaEvent_t)start_event_);
   cublasStatus_t status =
       cublasSgemm(cublas_handle_, cuTransA, cuTransB, N, M, K, &alpha,
                   (const float *)b.data(), lda, (const float *)a.data(), ldb,
                   &beta, (float *)out.data(), ldc);
 
+  cudaEventRecord((cudaEvent_t)stop_event_);
   if (status != CUBLAS_STATUS_SUCCESS) {
     throw std::runtime_error("cuBLAS SGEMM failed");
   }
 }
 
 void CUDABackend::relu(const Storage &in, Storage &out, size_t num_elements) {
+  cudaSetDevice(device_index_);
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   relu_kernel<<<blocks, threads>>>((const float *)in.data(),
                                    (float *)out.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::relu_backward(const Storage &grad_out, const Storage &input,
                                 Storage &grad_in, size_t num_elements) {
+  cudaSetDevice(device_index_);
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   relu_backward_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)input.data(),
       (float *)grad_in.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -717,11 +780,13 @@ void CUDABackend::batch_norm(const Storage &in, const Storage &scale,
                              Storage &save_var, Storage &out, int B, int C,
                              int H, int W, float momentum, float eps,
                              bool training) {
+  cudaSetDevice(device_index_);
   int Spatial = H * W;
   int total = B * C * Spatial;
   int threads = 256;
   int blocks = (total + threads - 1) / threads;
 
+  cudaEventRecord((cudaEvent_t)start_event_);
   if (training) {
     CUDA_CHECK(cudaMemset(save_mean.data(), 0, C * sizeof(float)));
     CUDA_CHECK(cudaMemset(save_var.data(), 0, C * sizeof(float)));
@@ -748,6 +813,7 @@ void CUDABackend::batch_norm(const Storage &in, const Storage &scale,
       (const float *)in.data(), (const float *)scale.data(),
       (const float *)bias.data(), m_ptr, v_ptr, (float *)out.data(), B, C,
       Spatial, eps);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -758,6 +824,7 @@ void CUDABackend::batch_norm_backward(const Storage &grad_out,
                                       Storage &grad_scale, Storage &grad_bias,
                                       int B, int C, int H, int W, float eps) {
 
+  cudaSetDevice(device_index_);
   int total = B * C * H * W;
   int threads = 256;
   int blocks = (total + threads - 1) / threads;
@@ -765,6 +832,7 @@ void CUDABackend::batch_norm_backward(const Storage &grad_out,
   CUDA_CHECK(cudaMemset(grad_scale.data(), 0, C * sizeof(float)));
   CUDA_CHECK(cudaMemset(grad_bias.data(), 0, C * sizeof(float)));
 
+  cudaEventRecord((cudaEvent_t)start_event_);
   bn_bw_pass1_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)in.data(),
       (const float *)save_mean.data(), (const float *)save_var.data(),
@@ -776,21 +844,25 @@ void CUDABackend::batch_norm_backward(const Storage &grad_out,
       (const float *)save_var.data(), (const float *)scale.data(),
       (const float *)grad_scale.data(), (const float *)grad_bias.data(), B, C,
       H, W, eps);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::conv2d(const Storage &in, const Storage &weight,
                          const Storage *bias, Storage &out, int B, int iC,
                          int iH, int iW, int oC, int kH, int kW, int s, int p) {
+  cudaSetDevice(device_index_);
   int oH = (iH + 2 * p - kH) / s + 1;
   int oW = (iW + 2 * p - kW) / s + 1;
   size_t total = B * oC * oH * oW;
   int threads = 256;
   int blocks = (total + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   conv2d_kernel<<<blocks, threads>>>(
       (const float *)in.data(), (const float *)weight.data(),
       bias ? (const float *)bias->data() : nullptr, (float *)out.data(), B, iC,
       iH, iW, oC, kH, kW, s, p, oH, oW);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -799,8 +871,10 @@ void CUDABackend::conv2d_backward(const Storage &grad_out, const Storage &in,
                                   Storage &grad_w, Storage *grad_b, int B,
                                   int iC, int iH, int iW, int oC, int kH,
                                   int kW, int s, int p) {
+  cudaSetDevice(device_index_);
   int oH = (iH + 2 * p - kH) / s + 1;
   int oW = (iW + 2 * p - kW) / s + 1;
+  cudaEventRecord((cudaEvent_t)start_event_);
   {
     size_t total = B * iC * iH * iW;
     int blocks = (total + 255) / 256;
@@ -820,18 +894,22 @@ void CUDABackend::conv2d_backward(const Storage &grad_out, const Storage &in,
     conv2d_grad_bias_kernel<<<blocks, 256>>>(
         (const float *)grad_out.data(), (float *)grad_b->data(), B, oC, oH, oW);
   }
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::max_pool2d(const Storage &in, Storage &out, int B, int C,
                              int iH, int iW, int k, int s, int p) {
+  cudaSetDevice(device_index_);
   int oH = (iH + 2 * p - k) / s + 1;
   int oW = (iW + 2 * p - k) / s + 1;
   size_t total = B * C * oH * oW;
   int blocks = (total + 255) / 256;
+  cudaEventRecord((cudaEvent_t)start_event_);
   maxpool2d_kernel<<<blocks, 256>>>((const float *)in.data(),
                                     (float *)out.data(), B, C, iH, iW, k, s, p,
                                     oH, oW);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -839,107 +917,137 @@ void CUDABackend::max_pool2d_backward(const Storage &grad_out,
                                       const Storage &in, Storage &grad_in,
                                       int B, int C, int iH, int iW, int k,
                                       int s, int p) {
+  cudaSetDevice(device_index_);
   int oH = (iH + 2 * p - k) / s + 1;
   int oW = (iW + 2 * p - k) / s + 1;
   size_t total = B * C * oH * oW;
   int blocks = (total + 255) / 256;
+  cudaEventRecord((cudaEvent_t)start_event_);
   maxpool2d_backward_kernel<<<blocks, 256>>>(
       (const float *)grad_out.data(), (const float *)in.data(),
       (float *)grad_in.data(), B, C, iH, iW, k, s, p, oH, oW);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::upsample2d(const Storage &in, Storage &out, int B, int C,
                              int iH, int iW, int scale) {
+  cudaSetDevice(device_index_);
   int oH = iH * scale;
   int oW = iW * scale;
   size_t total = B * C * oH * oW;
   int blocks = (total + 255) / 256;
+  cudaEventRecord((cudaEvent_t)start_event_);
   upsample2d_kernel<<<blocks, 256>>>((const float *)in.data(),
                                      (float *)out.data(), B, C, iH, iW, scale);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::upsample2d_backward(const Storage &grad_out, Storage &grad_in,
                                       int B, int C, int iH, int iW, int scale) {
+  cudaSetDevice(device_index_);
   size_t total = B * C * iH * iW;
   int blocks = (total + 255) / 256;
+  cudaEventRecord((cudaEvent_t)start_event_);
   upsample2d_backward_kernel<<<blocks, 256>>>((const float *)grad_out.data(),
                                               (float *)grad_in.data(), B, C, iH,
                                               iW, scale);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 void CUDABackend::sigmoid(const Storage &in, Storage &out,
                           size_t num_elements) {
+  cudaSetDevice(device_index_);
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   sigmoid_kernel<<<blocks, threads>>>((const float *)in.data(),
                                       (float *)out.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::sigmoid_backward(const Storage &grad_out, const Storage &out,
                                    Storage &grad_in, size_t num_elements) {
+  cudaSetDevice(device_index_);
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   sigmoid_backward_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)out.data(),
       (float *)grad_in.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::softmax(const Storage &in, Storage &out, int batch_size,
                           int num_classes) {
+  cudaSetDevice(device_index_);
   int threads = 256;
   int blocks = (batch_size + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   softmax_forward_kernel<<<blocks, threads>>>(
       (const float *)in.data(), (float *)out.data(), batch_size, num_classes);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::softmax_backward(const Storage &grad_out, const Storage &out,
                                    Storage &grad_in, int batch_size,
                                    int num_classes) {
+  cudaSetDevice(device_index_);
   int threads = 256;
   int blocks = (batch_size + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   softmax_backward_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)out.data(),
       (float *)grad_in.data(), batch_size, num_classes);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::mse_loss(const Storage &pred, const Storage &target,
                            Storage &out_loss, size_t num_elements) {
+  cudaSetDevice(device_index_);
   CUDA_CHECK(cudaMemset(out_loss.data(), 0, sizeof(float)));
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   mse_loss_kernel<<<blocks, threads>>>((const float *)pred.data(),
                                        (const float *)target.data(),
                                        (float *)out_loss.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::mse_loss_backward(const Storage &grad_out,
                                     const Storage &pred, const Storage &target,
                                     Storage &grad_in, size_t num_elements) {
+  cudaSetDevice(device_index_);
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   mse_loss_backward_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)pred.data(),
       (const float *)target.data(), (float *)grad_in.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::cross_entropy(const Storage &logits, const Storage &targets,
                                 Storage &out_loss, int batch_size,
                                 int num_classes, int spatial) {
+  cudaSetDevice(device_index_);
   CUDA_CHECK(cudaMemset(out_loss.data(), 0, sizeof(float)));
   int total_pixels = batch_size * spatial;
   int threads = 256;
   int blocks = (total_pixels + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   cross_entropy_kernel<<<blocks, threads>>>(
       (const float *)logits.data(), (const float *)targets.data(),
       (float *)out_loss.data(), batch_size, num_classes, spatial);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -948,18 +1056,22 @@ void CUDABackend::cross_entropy_backward(const Storage &grad_out,
                                          const Storage &targets,
                                          Storage &grad_in, int batch_size,
                                          int num_classes, int spatial) {
+  cudaSetDevice(device_index_);
   int total_pixels = batch_size * spatial;
   int threads = 256;
   int blocks = (total_pixels + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
   cross_entropy_backward_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)logits.data(),
       (const float *)targets.data(), (float *)grad_in.data(), batch_size,
       num_classes, spatial);
+  cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::concat(const std::vector<Storage *> &inputs, Storage &out,
                          int dim, const std::vector<Shape> &shapes) {
+  cudaSetDevice(device_index_);
   int outer_size = 1;
   // Compute outer size (dimensions before the concatenation dimension)
   for (int i = 0; i < dim; ++i)
@@ -978,19 +1090,20 @@ void CUDABackend::concat(const std::vector<Storage *> &inputs, Storage &out,
 
   int current_offset = 0;
   // Iterate through the inputs and concatenate
+  cudaEventRecord((cudaEvent_t)start_event_);
   for (size_t j = 0; j < inputs.size(); ++j) {
     int src_dim_size = shapes[j][dim]; // Get the size of the current input
                                        // tensor along the concat dimension
     int total_elements = outer_size * src_dim_size * inner_size;
     int threads = 256;
     int blocks = (total_elements + threads - 1) / threads;
-
     concat_slice_kernel<<<blocks, threads>>>(
         (float *)inputs[j]->data(), (float *)out.data(), outer_size,
         src_dim_size, dst_dim_size, inner_size, current_offset, true);
 
     current_offset += src_dim_size;
   }
+  cudaEventRecord((cudaEvent_t)stop_event_);
 
   // Check for errors after kernel execution
   CUDA_CHECK(cudaGetLastError());
@@ -999,6 +1112,7 @@ void CUDABackend::concat(const std::vector<Storage *> &inputs, Storage &out,
 void CUDABackend::concat_backward(const Storage &grad_out,
                                   std::vector<Storage *> &grad_inputs, int dim,
                                   const std::vector<Shape> &shapes) {
+  cudaSetDevice(device_index_);
   int outer_size = 1;
   // Compute outer size (dimensions before the concatenation dimension)
   for (int i = 0; i < dim; ++i)
@@ -1017,6 +1131,7 @@ void CUDABackend::concat_backward(const Storage &grad_out,
 
   int current_offset = 0;
   // Iterate through the gradient inputs and backpropagate
+  cudaEventRecord((cudaEvent_t)start_event_);
   for (size_t j = 0; j < grad_inputs.size(); ++j) {
     int src_dim_size = shapes[j][dim]; // Get the size of the current input
                                        // tensor along the concat dimension
@@ -1030,6 +1145,7 @@ void CUDABackend::concat_backward(const Storage &grad_out,
 
     current_offset += src_dim_size;
   }
+  cudaEventRecord((cudaEvent_t)stop_event_);
 
   // Check for errors after kernel execution
   CUDA_CHECK(cudaGetLastError());

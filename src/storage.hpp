@@ -7,8 +7,8 @@ namespace munet {
 
 class Storage {
 public:
-  Storage(size_t size_bytes, Device device, DataType dtype)
-      : size_bytes_(size_bytes), device_(device), dtype_(dtype) {
+  Storage(size_t size_bytes, Device device, DataType dtype, Shape shape = {})
+      : size_bytes_(size_bytes), device_(device), dtype_(dtype), shape_(shape) {
 
     backend_ = BackendManager::get(device);
     data_ptr_ = backend_->allocate(size_bytes_);
@@ -28,6 +28,7 @@ public:
   size_t size_bytes() const { return size_bytes_; }
   Device device() const { return device_; }
   DataType dtype() const { return dtype_; }
+  const Shape &shape() const { return shape_; }
 
   void zero_() { backend_->memset(data_ptr_, 0, size_bytes_); }
 
@@ -38,6 +39,7 @@ private:
   size_t size_bytes_;
   Device device_;
   DataType dtype_;
+  Shape shape_;
   std::shared_ptr<Backend> backend_;
 };
 

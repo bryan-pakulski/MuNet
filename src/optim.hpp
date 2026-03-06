@@ -16,6 +16,11 @@ public:
     for (auto &p : params_) {
       p.zero_grad();
     }
+
+    // Ensure all zeroing is complete across devices
+    if (!params_.empty()) {
+      params_[0].impl_->backend().synchronize();
+    }
   }
 
 protected:
@@ -31,6 +36,10 @@ public:
     for (auto &p : params_) {
       // p.step() uses the backend update kernel (w = w - lr * g)
       p.step(lr_);
+    }
+    // Ensure weight updates are visible before next forward pass
+    if (!params_.empty()) {
+      params_[0].impl_->backend().synchronize();
     }
   }
 };

@@ -4,9 +4,17 @@
 namespace munet {
 
 class CUDABackend : public Backend {
+private:
+  void *start_event_; // Using void* to avoid nvcc requirement in header
+  void *stop_event_;
+  int device_index_ = 0;
+  double last_kernel_us_ = 0.0;
+
 public:
-  CUDABackend();
+  CUDABackend(int device_index);
   ~CUDABackend() override;
+
+  double get_last_kernel_time_us() override { return last_kernel_us_; }
 
   void *allocate(size_t bytes) override;
   void deallocate(void *ptr) override;

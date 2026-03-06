@@ -33,7 +33,7 @@ struct TensorImpl {
   TensorImpl(Shape s, Device d, DataType dt, bool req_grad)
       : shape(s), requires_grad(req_grad) {
     size_t bytes = numel(s) * dtype_size(dt);
-    storage = std::make_shared<Storage>(bytes, d, dt);
+    storage = std::make_shared<Storage>(bytes, d, dt, s);
   }
 
   Backend &backend() { return storage->backend(); }

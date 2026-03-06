@@ -1,5 +1,6 @@
 #include "vulkan_backend.hpp"
-#include "../storage.hpp"
+#include "storage.hpp"
+#include "util.hpp"
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -244,6 +245,9 @@ VulkanBackend::VulkanBackend() {
 
   for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
     VK_CHECK(vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]));
+    // Create query pools for profiling
+    VK_CHECK(
+        vkCreateQueryPool(device, &queryPoolInfo, nullptr, &queryPools[i]));
     // Create one descriptor pool per frame
     // We have 8 bindings per set. So poolSize should be roughly 8x maxSets
     VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1474,6 +1478,7 @@ VulkanBackend::~VulkanBackend() {
   for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
     vkDestroyFence(device, inFlightFences[i], nullptr);
     vkDestroyDescriptorPool(device, descriptorPools[i], nullptr);
+    vkDestroyQueryPool(device, queryPools[i], nullptr);
   }
   for (auto &pair : allocation_memory) {
     vkDestroyBuffer(device, (VkBuffer)pair.first, nullptr);
@@ -1770,6 +1775,26 @@ void VulkanBackend::synchronize() {
   if (isRecording)
     flush_batch();
   VK_CHECK(vkQueueWaitIdle(computeQueue));
+
+  // Only attempt to fetch results if profiling is actually active and work was
+  // done
+  if (is_profile_enabled()) {
+    uint64_t results[2];
+    // The work we want to measure is in the frame we JUST flushed
+    int frameToQuery =
+        (currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
+
+    VkResult res = vkGetQueryPoolResults(
+        device, queryPools[currentFrame], 0, 2, sizeof(uint64_t) * 2, results,
+        sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+
+    if (res == VK_SUCCESS) {
+      double nanoseconds = (double)(results[1] - results[0]) * timestampPeriod;
+      last_kernel_us_ = nanoseconds / 1000.0;
+    } else {
+      last_kernel_us_ = 0.0;
+    }
+  }
 }
 void VulkanBackend::all_reduce(Storage &buffer, size_t num_elements) {}
 
@@ -1824,7 +1849,11 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                           0, 1, &ds, 0, nullptr);
   vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                      pcSize, pc);
+  vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                      queryPools[currentFrame], 0);
   vkCmdDispatch(cmd, x, y, z);
+  vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                      queryPools[currentFrame], 1);
 
   currentBatchSize++;
   if (currentBatchSize >= BATCH_SIZE_LIMIT) {
