@@ -3,5 +3,7 @@ build/
 demo/
 .cache/
 *.npz
+*.pyc
+__pycache__
 compile_commands.json
 docs/

@@ -290,7 +290,8 @@ PYBIND11_MODULE(munet, m) {
   auto nn = m.def_submodule("nn", "Neural Network Modules and Layers");
 
   py::class_<nn::Module, std::shared_ptr<nn::Module>, PyModule>(
-      nn, "Module", "Base class for all neural network modules.")
+      nn, "Module", py::dynamic_attr(),
+      "Base class for all neural network modules.")
       .def(py::init<>())
       .def("forward", &nn::Module::forward, py::arg("x"),
            "Defines the computation performed at every call.")
@@ -322,7 +323,11 @@ PYBIND11_MODULE(munet, m) {
           else
             mod.register_buffer(name, t);
         }
-        self.attr("__dict__") = value;
+        py::str py_name(name);
+        if (PyObject_GenericSetAttr(self.ptr(), py_name.ptr(), value.ptr()) !=
+            0) {
+          throw py::error_already_set();
+        }
       });
 
   py::class_<nn::Linear, nn::Module, std::shared_ptr<nn::Linear>>(
@@ -496,7 +501,7 @@ PYBIND11_MODULE(munet, m) {
 
  def load(arg, filename=None):
      """
-     Loads a previously saved module state.
+    Loads a previously saved module state.
      """
      import numpy as np
      import json
