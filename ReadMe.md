@@ -1,19 +1,3 @@
-
-The Broadcasting Roadmap                                                                                                                                                                  
-
- 1 Phase 1: Shape & Stride Logic (Current Task)                                                                                                                                           
-    • Implement BroadcastInfo to calculate output shapes and "virtual" 0-strides.                                                                                                         
-    • Write exhaustive unit tests for the shape/stride calculator.                                                                                                                        
- 2 Phase 2: CPU Kernel Generalization                                                                                                                                                     
-    • Update CPUBackend to support N-dimensional iteration using BroadcastInfo.                                                                                                           
-    • Optimize for the common "Contiguous" case to avoid performance regression.                                                                                                          
- 3 Phase 3: GPU Kernel Generalization (CUDA/Vulkan)                                                                                                                                       
-    • Pass BroadcastInfo via Push Constants (Vulkan) or Uniforms (CUDA).                                                                                                                  
-    • Implement a generic N-dim index-to-offset mapper inside the kernels.                                                                                                                
- 4 Phase 4: Op Integration                                                                                                                                                                
-    • Refactor ops.hpp (add, sub, mul) to remove hardcoded if checks and use the broadcast system.
-
-
 # μNet: A lightweight C++ GPU agnostic AI framework for training & inference
 
 μNet is a lightweight C++ AI framework with Python bindings.
@@ -42,6 +26,8 @@ make doc
 You can then open the generated `docs/index.html` in your browser.
 
 # Future Plans
+- Fused Kernels (i.e. conv2d calls 3 kernels -> conv, add (bias) and relu, can merge together)
+- Adaptive Pooling
 
 Serialization:
     - Save and Load of arbitrarily complex models i.e. Costum Modules and Layers extending munet.nn.Module
