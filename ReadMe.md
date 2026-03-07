@@ -12,33 +12,15 @@ features a PyTorch-like API, making it familiar to use while handling low-level 
 - **Cross Platform**: Built for Linux/Unix systems.
 - **Model Parallelism**: tensors can exist on different devices within the same graph (e.g., Layer 1 on CPU, Layer 2 on Vulkan).
 
-# Supported Operations
+# Documentation
+Documentation can be generated using pydoc:
 
-## Core Engine
-- **Tensor Operations**: `add`, `sub`, `mul`, `div`, `matmul`.
-- **Memory Management**: Automatic reference counting and storage management.
-- **Device Support**:
- - `DeviceType.CPU`
- - `DeviceType.CUDA`
- - `DeviceType.VULKAN`
-- **Data Types**: Float32 (primary), Float16, Int32 support structure.
+```
+pip install pydoc
+make doc
+```
 
-## Layers & Transformations
-- **Convolution**: `Conv2d` (Forward & Backward) with stride and padding support.
-- **Pooling**: `MaxPool2d` (Forward & Backward).
-- **Normalization**: `BatchNorm2d` (Train & Eval modes, Running stats tracking).
-- **Upsampling**: `Upsample2d` (Nearest neighbor).
-- **Reshaping**: `view`/`reshape` operations.
-
-## Activations
-- **ReLU** (Rectified Linear Unit).
-
-## Optimizers
-- **SGD** (Stochastic Gradient Descent) with learning rate control.
-
-## Loss Functions
-- **MSE** (Mean Squared Error) via reduction operations.
-- **Sum** (Scalar reduction).
+You can then open the generated `docs/index.html` in your browser.
 
 # Future Plans
 
@@ -48,58 +30,78 @@ Serialization:
 
 Multi-GPU RoadMap:
 
- 1 Device Switching: Update CUDABackend and VulkanBackend to ensure they explicitly select the correct hardware index before executing any commands.
- 2 Functional Collectives: Implement all_reduce in the Backend interface.
-    • CUDA: Use ncclAllReduce.
-    • Vulkan: Use timeline semaphores and cross-device buffer copies.
- 3 Stream Management: Currently, you use the default stream (0) in CUDA. To allow the CPU to "fire and forget" kernels to multiple GPUs simultaneously, give each Device its own compute
+ 1. Device Switching: Update CUDABackend and VulkanBackend to ensure they explicitly select the correct hardware index before executing any commands.
+ 2. Functional Collectives: Implement all_reduce in the Backend interface.
+    - CUDA: Use ncclAllReduce.
+    - Vulkan: Use timeline semaphores and cross-device buffer copies.
+ 3. Stream Management: Currently, you use the default stream (0) in CUDA. To allow the CPU to "fire and forget" kernels to multiple GPUs simultaneously, give each Device its own compute
    stream/queue.
- 4 Data Parallel Wrapper: Create a nn::DataParallel modcule that:
-    • Copies the model to all target devices.
-    • Splits the input Tensor along the batch dimension.
-    • Triggers the all_reduce on gradients automatically.
+ 4. Data Parallel Wrapper: Create a nn::DataParallel modcule that:
+    - Copies the model to all target devices.
+    - Splits the input Tensor along the batch dimension.
+    - Triggers the all_reduce on gradients automatically.
+
+Production Ready Improvements:                                                                                                                                                          
+
+ 1. Performance (Kernels): Most kernels (especially in Vulkan/CUDA) are "naive." They don't use tiled memory, shared memory optimization, or vendor-tuned libraries like cuDNN or oneDNN.  
+ 2. Memory Management: You use a simple caching allocator, but it lacks a memory-fragmentation strategy or a "Memory Arena."                                                               
+ 3. Missing Dtypes: You are essentially locked into Float32. Production requires BFloat16, Int8 (quantization), and Float16.                                                               
+ 4. Error Handling: There is limited validation for tensor strides, broadcast safety, or device-side out-of-memory errors.                                                                 
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Core Autograd Features                                                                                                                                                                 
+
+ - In-place Operations: Your engine doesn't track versioning to prevent gradients from being calculated on modified data.                                                                 
+ - Higher-Order Gradients: You cannot currently take the gradient of a gradient (needed for specialized GANs or MAML).                                                                    
+ - Functionality: Missing detach_() (in-place) and retain_graph.                                                                                                                          
+
+Optimization & Layers                                                                                                                                                                  
+
+ - Advanced Optimizers: You only have SGD. You need Adam, AdamW, and RMSProp.                                                                                                             
+ - Attention/Transformers: You lack optimized MultiHeadAttention or even a LayerNorm.                                                                                                     
+ - Dropout: Essential for preventing overfitting in production models.                                                                                                                    
+
+Engineering Infrastructure                                                                                                                                                             
+
+ - Data Loading: You need a Dataset and DataLoader with multi-threaded prefetching.                                                                                                       
+ - Model Serialization: While you have .npz support, production usually requires a more robust format like Protobuf or ONNX export.                                                       
+ - Lazy Execution: Currently, every op is dispatched immediately. Production frameworks often use a JIT (like TorchScript) to fuse kernels (e.g., ReLU(Add(x,y))) into a single GPU pass. 
 
 
 Additional Layers & Operators:
-    1. Essential Tensor Operators
+1. Essential Tensor Operators
 
-     • Division & Power: operator/, pow(), sqrt(), exp(), log(). (Crucial for custom loss functions and variance calculations).
-     • Transposition/Permutation: transpose(dim1, dim2) and permute(dims). (Required for handling different data layouts and attention mechanisms).
-     • Mean & Variance: mean(dim), var(dim). (Currently you only have sum()).
-     • Broadcasting Logic: Upgrading existing math ops to handle tensors of different ranks (e.g., adding a bias vector [C] to an image batch [N, C, H, W]).
-     • Slice/Narrow: slice(dim, start, end). (Necessary for splitting tensors or taking sub-sections).
+     - Division & Power: operator/, pow(), sqrt(), exp(), log(). (Crucial for custom loss functions and variance calculations).
+     - Transposition/Permutation: transpose(dim1, dim2) and permute(dims). (Required for handling different data layouts and attention mechanisms).
+     - Mean & Variance: mean(dim), var(dim). (Currently you only have sum()).
+     - Broadcasting Logic: Upgrading existing math ops to handle tensors of different ranks (e.g., adding a bias vector [C] to an image batch [N, C, H, W]).
+     - Slice/Narrow: slice(dim, start, end). (Necessary for splitting tensors or taking sub-sections).
 
-    2. Core Neural Network Layers
+2. Core Neural Network Layers
 
-     • Dropout: nn::Dropout. (Essential for preventing overfitting; requires a training flag to disable during inference).
-     • Global Average Pooling: nn::GlobalAvgPool2d. (Used in almost all modern CNNs before the final classifier).
-     • LeakyReLU: nn::LeakyReLU. (Standard improvement over basic ReLU to prevent "dying neurons").
-     • Tanh: nn::Tanh. (Standard activation for Recurrent Neural Networks).
-     • LayerNorm: nn::LayerNorm. (The standard normalization layer for Transformers/NLP, which is easier to implement than BatchNorm for variable sequences).
+     - Dropout: nn::Dropout. (Essential for preventing overfitting; requires a training flag to disable during inference).
+     - Global Average Pooling: nn::GlobalAvgPool2d. (Used in almost all modern CNNs before the final classifier).
+     - LeakyReLU: nn::LeakyReLU. (Standard improvement over basic ReLU to prevent "dying neurons").
+     - Tanh: nn::Tanh. (Standard activation for Recurrent Neural Networks).
+     - LayerNorm: nn::LayerNorm. (The standard normalization layer for Transformers/NLP, which is easier to implement than BatchNorm for variable sequences).
 
-    3. Advanced Modules
+3. Advanced Modules
 
-     • Embedding: nn::Embedding. (Mapping integer IDs to vectors; the foundation of all NLP models).
-     • RNN/LSTM: nn::LSTM or nn::GRU. (To handle sequential or time-series data).
-     • Padding Layers: nn::ZeroPad2d. (When you need padding outside of the convolution operation).
+     - Embedding: nn::Embedding. (Mapping integer IDs to vectors; the foundation of all NLP models).
+     - RNN/LSTM: nn::LSTM or nn::GRU. (To handle sequential or time-series data).
+     - Padding Layers: nn::ZeroPad2d. (When you need padding outside of the convolution operation).
 
-    4. Mathematical Foundation (Optimizers & Loss)
+4. Mathematical Foundation (Optimizers & Loss)
 
-     • Adam Optimizer: optim::Adam. (The industry standard. Requires tracking first and second moments: m and v).
-     • BCEWithLogitsLoss: Binary Cross Entropy for multi-label classification.
-     • NLLLoss: Negative Log Likelihood (often used with LogSoftmax).
+     - Adam Optimizer: optim::Adam. (The industry standard. Requires tracking first and second moments: m and v).
+     - BCEWithLogitsLoss: Binary Cross Entropy for multi-label classification.
+     - NLLLoss: Negative Log Likelihood (often used with LogSoftmax).
 
-    5. Backend-Specific Kernels
+5. Backend-Specific Kernels
 
-     • Vectorized CPU Ops: Using AVX/SIMD for the CPUBackend to compete with the GPU backends on small batches.
-     • Im2Col Convolution: Moving your Conv2d from the current "naive" nested loops to an im2col + GEMM approach for significantly higher performance on all backends.
-
-    Priority Implementation Order Recommendation:
-
-     1 Adam Optimizer (Crucial for training stability).
-     2 Dropout (Crucial for generalization).
-     3 Transpose/Permute (Unlocks more complex model architectures).
-     4 GlobalAvgPool2d (Allows you to build modern CNNs like ResNet).
+     - Vectorized CPU Ops: Using AVX/SIMD for the CPUBackend to compete with the GPU backends on small batches.
+     - Im2Col Convolution: Moving your Conv2d from the current "naive" nested loops to an im2col + GEMM approach for significantly higher performance on all backends.
 
 # Development
 
@@ -108,40 +110,39 @@ Additional Layers & Operators:
 ### 1. Define the Interface
 Modify `src/backend.hpp` to add the virtual function definitions for your new operation (both forward and backward if applicable).
 
-
-`virtual void my_op(const Storage &in, Storage &out, int param) = 0;`
+```virtual void my_op(const Storage &in, Storage &out, int param) = 0;```
 
 ### 2. Implement the Kernels
 
 Implement the specific logic for each backend:
 
- • CPU (src/backend/cpu_backend.hpp): Implement using parallel for loops or SIMD.
- • CUDA (src/backend/cuda_backend.cu): Write the CUDA kernel (__global__ void ...) and the host dispatch function.
- • Vulkan (src/backend/vulkan_backend.cpp):
-    1 Write the GLSL compute shader source string.
-    2 In the constructor, compile it using createComputePipeline.
-    3 Implement the dispatch logic using dispatch_kernel.
+ - CPU (src/backend/cpu_backend.hpp): Implement using parallel for loops or SIMD.
+ - CUDA (src/backend/cuda_backend.cu & src/backend/cuda_backend.hpp): Write the CUDA kernel (__global__ void ...) and the host dispatch function.
+ - Vulkan (src/backend/vulkan_backend.cpp & src/backend/vulkan_backend.hpp):
+    1. Write the GLSL compute shader source string.
+    2. In the constructor, compile it using createComputePipeline.
+    3. Implement the dispatch logic using dispatch_kernel.
 
 ### 3. Register the Operation
 
 Add the high-level logic in src/ops.hpp. This is where the Autograd magic happens.
 
- 1 Create a struct MyOpBackward : public Node that defines how to calculate gradients.
- 2 Create a function inline Tensor my_op(...) that:
-    • Allocates the output tensor.
-    • Calls backend->my_op(...).
-    • If requires_grad is true, creates the MyOpBackward node and links edges.
+ 1. Create a struct MyOpBackward : public Node that defines how to calculate gradients.
+ 2. Create a function inline Tensor my_op(...) that:
+    - Allocates the output tensor.
+    - Calls backend->my_op(...).
+    - If requires_grad is true, creates the MyOpBackward node and links edges.
 
-4. Expose to Tensor API
+### 4. Expose to Tensor API
 
-Add a method to the Tensor class in src/tensor.hpp and src/tensor.cpp that delegates to ops::my_op.
+Add a method to the Tensor class in `src/tensor.hpp` and `src/tensor.cpp` that delegates to `ops::my_op`.
 
-5. Python Binding
+### 5. Python Binding
 
 Finally, expose the method to Python in src/bindings.cpp.
 
 
- .def("my_op", &Tensor::my_op, py::arg("param"))
+```.def("my_op", &Tensor::my_op, py::arg("param"))```
 
 ## Debugging
 
@@ -167,17 +168,21 @@ You can enable different levels of debug / profiling via the following environme
 ## Build Steps
 
 ```
- mkdir build && cd build
- cmake ..
- make -j$(nproc)
+make build-release
 ```
 
 # Testing
 
-Run the C++ unit tests (GoogleTest) and Python integration tests:
+Run the C++ unit tests (GoogleTest) 
 
 ```
-./test.sh
+make unit-test
 ```
 
 This will run across all available backends.
+
+Run the Python integration tests:
+
+```
+make py-test
+```
