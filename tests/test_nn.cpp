@@ -32,11 +32,12 @@ TEST(NNTest, BatchNormTrainEval) {
   // Training mode: running mean should update from 0
   bn->train(true);
   auto out1 = bn->forward(x);
-  
+
   float rm = ((float *)bn->running_mean.data())[0];
   EXPECT_GT(rm, 0.0f);
 
-  // Eval mode: should use running mean, output shouldn't be zero-centered if stats differ
+  // Eval mode: should use running mean, output shouldn't be zero-centered if
+  // stats differ
   bn->eval();
   float prev_rm = rm;
   auto out2 = bn->forward(x);

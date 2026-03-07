@@ -601,6 +601,22 @@ __global__ void bn_bw_pass2_kernel(const float *go, const float *in, float *gi,
   }
 }
 
+__global__ void adam_step_kernel(float *p, const float *g, float *m, float *v,
+                                 float lr, float beta1, float beta2, float eps,
+                                 int step, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N) {
+    float grad = g[i];
+    m[i] = beta1 * m[i] + (1.0f - beta1) * grad;
+    v[i] = beta2 * v[i] + (1.0f - beta2) * grad * grad;
+
+    float m_hat = m[i] / (1.0f - powf(beta1, (float)step));
+    float v_hat = v[i] / (1.0f - powf(beta2, (float)step));
+
+    p[i] -= lr * m_hat / (sqrtf(v_hat) + eps);
+  }
+}
+
 void *CUDABackend::allocate(size_t bytes) {
   cudaSetDevice(device_index_);
   cudaEventRecord((cudaEvent_t)start_event_);
@@ -1170,6 +1186,22 @@ void CUDABackend::broadcast_row(const Storage &src, Storage &dst, int rows,
   cudaEventRecord((cudaEvent_t)start_event_);
   broadcast_row_kernel<<<blocks, threads>>>((const float *)src.data(),
                                             (float *)dst.data(), rows, cols);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::adam_step(Storage &params, const Storage &grads,
+                            Storage &exp_avg, Storage &exp_avg_sq, float lr,
+                            float beta1, float beta2, float eps, int step,
+                            size_t num_elements) {
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  adam_step_kernel<<<blocks, threads>>>(
+      (float *)params.data(), (const float *)grads.data(),
+      (float *)exp_avg.data(), (float *)exp_avg_sq.data(), lr, beta1, beta2,
+      eps, step, num_elements);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }

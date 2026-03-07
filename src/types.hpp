@@ -27,6 +27,17 @@ struct Device {
 };
 
 using Shape = std::vector<int>;
+using Strides = std::vector<int>;
+
+inline Strides default_strides(const Shape &shape) {
+  Strides strides(shape.size());
+  int s = 1;
+  for (int i = (int)shape.size() - 1; i >= 0; --i) {
+    strides[i] = s;
+    s *= shape[i];
+  }
+  return strides;
+}
 
 inline std::string to_string(const Shape &shape) {
   std::string shape_str = "[";

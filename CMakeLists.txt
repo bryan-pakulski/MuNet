@@ -78,6 +78,7 @@ add_executable(munet_tests
 				tests/test_loss.cpp
 				tests/test_models.cpp
 				tests/test_ops.cpp
+        tests/test_optim.cpp
         tests/test_nn.cpp
 )
 

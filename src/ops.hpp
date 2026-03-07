@@ -61,7 +61,7 @@ inline Tensor expand_scalar(const Tensor &scalar, const Shape &target_shape) {
   Tensor out(target_shape, scalar.device(), scalar.dtype());
   // Use uniform_ to fill the tensor with the scalar value
   Tensor cpu_scalar = scalar.to(Device{DeviceType::CPU, 0});
-  float val = ((float*)cpu_scalar.data())[0];
+  float val = ((float *)cpu_scalar.data())[0];
   out.uniform_(val, val);
   return out;
 }
@@ -90,12 +90,12 @@ inline Tensor add(const Tensor &a, const Tensor &b) {
   }
 
   // Case: scalar broadcast
-	if (b.size() == 1 && a.size() > 1) {
-		return add(a, expand_scalar(b, a.shape()));
-	}
-	if (a.size() == 1 && b.size() > 1) {
-		return add(expand_scalar(a, b.shape()), b);
-	}
+  if (b.size() == 1 && a.size() > 1) {
+    return add(a, expand_scalar(b, a.shape()));
+  }
+  if (a.size() == 1 && b.size() > 1) {
+    return add(expand_scalar(a, b.shape()), b);
+  }
 
   // Case 2: Broadcast [N, C] + [C]
   if (a.shape().size() == 2 && b.shape().size() == 1 &&
@@ -864,6 +864,35 @@ inline Tensor batch_norm(const Tensor &in, Tensor &running_mean,
                {in, weight, bias, running_mean, running_var}, {},
                {{"epsilon", eps}, {"momentum", momentum}});
   return out;
+}
+
+struct TransposeBackward : public Node {
+  int d0, d1;
+  TransposeBackward(int dim0, int dim1) : d0(dim0), d1(dim1) {}
+  std::string name() const override { return "TransposeBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    // Transpose is its own inverse
+    return {grads[0].transpose(d0, d1)};
+  }
+};
+
+inline Tensor transpose(const Tensor &in, int dim0, int dim1) {
+  Tensor out = in.transpose(dim0, dim1);
+  if (GradMode::is_enabled() && in.requires_grad()) {
+    auto fn = std::make_shared<TransposeBackward>(dim0, dim1);
+    link_backward_edges(fn.get(), {in});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_trace(out, "Transpose", {in}, {{"dims", {dim0, dim1}}});
+  return out;
+}
+
+inline Tensor zeros(Shape shape, Device device = Device{DeviceType::CPU, 0},
+                    bool requires_grad = false) {
+  Tensor t(shape, device, DataType::Float32, requires_grad);
+  t.impl_->storage->zero_();
+  return t;
 }
 
 } // namespace ops

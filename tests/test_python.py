@@ -112,7 +112,7 @@ class TestBindings(unittest.TestCase):
         # Set values natively using NumPy
         np.array(a, copy=False)[:] = 10.0
         np.array(b, copy=False)[:] = 20.0
-        
+
         a.requires_grad = True
         b.requires_grad = True
 
@@ -149,7 +149,7 @@ class TestBindings(unittest.TestCase):
 
         np.array(a_cpu, copy=False)[:] = [1.0, 2.0]
         np.array(b_cpu, copy=False)[:] = [3.0, 4.0]
-        
+
         a_cpu.requires_grad = True
         b_cpu.requires_grad = True
 
@@ -172,7 +172,7 @@ class TestBindings(unittest.TestCase):
 
         # 4. Bring result back to CPU to verify
         c_cpu = c_gpu.to(munet.Device(munet.DeviceType.CPU, 0))
-        
+
         result = c_cpu.detach().numpy()
         self.assertEqual(result[0], 4.0)
         self.assertEqual(result[1], 6.0)
@@ -240,7 +240,7 @@ class TestBindings(unittest.TestCase):
         # X @ W1 = [[-3.0, 3.5, -1.0, 0.0]]
         # relu(X @ W1) = [[0.0, 3.5, 0.0, 0.0]]
         # relu @ W2 = 0*1 + 3.5*-1 + 0*2 + 0*0.5 = -3.5
-        
+
         fp_result = output.detach().numpy()
         self.assertEqual(fp_result[0], -3.5)
 
@@ -258,7 +258,7 @@ class TestBindings(unittest.TestCase):
         # dHidden = dActivation * (hidden > 0) -> only the 2nd element was > 0.
         # dHidden = [[0.0, -1.0, 0.0, 0.0]]
         # dW1 = X.T @ dHidden = [[1], [2], [-1]] @ [[0.0, -1.0, 0.0, 0.0]]
-        
+
         dw1_result = W1.grad.detach().numpy()
         self.assertEqual(dw1_result[0][1], -1.0)  # 1.0 * -1.0
         self.assertEqual(dw1_result[1][1], -2.0)  # 2.0 * -1.0
@@ -476,9 +476,79 @@ class TestBindings(unittest.TestCase):
         if gpu_dev:
             t_gpu = munet.ones([2], device=gpu_dev)
             with self.assertRaisesRegex(
-                RuntimeError, "Cannot convert GPU tensor to NumPy array directly. Call `.to\(Device\(DeviceType.CPU\)\)` first."
+                RuntimeError,
+                "Cannot convert GPU tensor to NumPy array directly. Call `.to\(Device\(DeviceType.CPU\)\)` first.",
             ):
                 t_gpu.numpy()
+
+    def test_adam_optimizer(self):
+        """Test Adam optimizer convergence in Python."""
+        params = [munet.Tensor([1], requires_grad=False)]
+        np.array(params[0], copy=False)[0] = 1.0
+        params[0].requires_grad = True
+
+        # Optimize f(x) = x^2
+        optimizer = munet.optim.Adam(params, lr=1e-1)
+
+        for _ in range(10):
+            optimizer.zero_grad()
+            x = params[0]
+            loss = x * x
+            loss.backward()
+            optimizer.step()
+
+        final_val = params[0].item()
+        self.assertLess(abs(final_val), 1.0)
+        self.assertGreater(abs(final_val), 0.0)
+
+    def test_transpose_view(self):
+        """Test that transpose creates a view with swapped strides."""
+        t = munet.Tensor([2, 3])
+        # Default strides for [2, 3] should be [3, 1]
+        self.assertEqual(t.strides, [3, 1])
+
+        t_t = t.transpose(0, 1)
+        self.assertEqual(t_t.shape, [3, 2])
+        # Transposed strides should be [1, 3]
+        self.assertEqual(t_t.strides, [1, 3])
+        self.assertFalse(t_t.is_contiguous)
+
+        # Verify contiguous() restores default stride order [2, 1] for [3, 2]
+        t_c = t_t.contiguous()
+        self.assertEqual(t_c.shape, [3, 2])
+        self.assertEqual(t_c.strides, [2, 1])
+        self.assertTrue(t_c.is_contiguous)
+
+    def test_transpose_autograd(self):
+        """Test that gradients flow through transpose views."""
+        x = munet.Tensor([2, 2])
+        x_np = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        np.array(x, copy=False)[:] = x_np
+        x.requires_grad = True
+
+        y = x.transpose(0, 1)
+        # z = y[0,0] + y[0,1] + ...
+        # basically sum(x.T) = sum(x)
+        loss = y.sum()
+        loss.backward()
+
+        grad = x.grad.detach().numpy()
+        self.assertTrue(np.allclose(grad, np.ones((2, 2))))
+
+    def test_sgd_optimizer(self):
+        """Test SGD optimizer in Python."""
+        params = [munet.Tensor([1], requires_grad=False)]
+        np.array(params[0], copy=False)[0] = 1.0
+        params[0].requires_grad = True
+
+        optimizer = munet.optim.SGD(params, lr=0.1)
+
+        # 1 step: x = 1.0, grad = 2.0, x_new = 1.0 - 0.2 = 0.8
+        optimizer.zero_grad()
+        (params[0] * params[0]).backward()
+        optimizer.step()
+
+        self.assertAlmostEqual(params[0].item(), 0.8, places=6)
 
 
 if __name__ == "__main__":

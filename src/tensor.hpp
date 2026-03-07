@@ -21,6 +21,8 @@ struct ForwardNode {
 
 struct TensorImpl {
   Shape shape;
+  Strides strides;
+  size_t storage_offset = 0;
   std::shared_ptr<Storage> storage;
   std::string name = "";
 
@@ -31,9 +33,19 @@ struct TensorImpl {
   std::shared_ptr<ForwardNode> trace_node = nullptr;
 
   TensorImpl(Shape s, Device d, DataType dt, bool req_grad)
-      : shape(s), requires_grad(req_grad) {
+      : shape(s), strides(default_strides(s)), requires_grad(req_grad) {
     size_t bytes = numel(s) * dtype_size(dt);
     storage = std::make_shared<Storage>(bytes, d, dt, s);
+  }
+
+  bool is_contiguous() const {
+    int expected = 1;
+    for (int i = (int)shape.size() - 1; i >= 0; --i) {
+      if (strides[i] != expected)
+        return false;
+      expected *= shape[i];
+    }
+    return true;
   }
 
   Backend &backend() { return storage->backend(); }
@@ -49,6 +61,9 @@ public:
   }
 
   const Shape &shape() const { return impl_->shape; }
+  const Strides &strides() const { return impl_->strides; }
+  size_t storage_offset() const { return impl_->storage_offset; }
+  bool is_contiguous() const { return impl_->is_contiguous(); }
   Device device() const { return impl_->storage->device(); }
   DataType dtype() const { return impl_->storage->dtype(); }
   void *data() { return impl_->storage->data(); }
@@ -61,6 +76,9 @@ public:
 
   bool requires_grad() const { return impl_->requires_grad; }
   void set_requires_grad(bool r) { impl_->requires_grad = r; }
+
+  Tensor transpose(int dim0, int dim1) const;
+  Tensor contiguous() const;
 
   Tensor grad() const {
     if (!impl_->grad)

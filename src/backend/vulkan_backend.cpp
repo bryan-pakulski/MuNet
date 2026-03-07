@@ -379,6 +379,41 @@ VulkanBackend::VulkanBackend() {
          }
      )");
 
+  adamStepPipeline = createComputePipeline(
+      "adam_step",
+      R"(
+         #version 450
+         layout(local_size_x = 256) in;
+
+         layout(binding = 0) buffer P { float p[]; };
+         layout(binding = 1) buffer G { float g[]; };
+         layout(binding = 2) buffer M { float m[]; };
+         layout(binding = 3) buffer V { float v[]; };
+
+         layout(push_constant) uniform Push {
+             uint N;
+             float lr;
+             float beta1;
+             float beta2;
+             float eps;
+             int step;
+         } u;
+
+         void main() {
+             uint i = gl_GlobalInvocationID.x;
+             if (i < u.N) {
+                 float grad = g[i];
+                 m[i] = u.beta1 * m[i] + (1.0 - u.beta1) * grad;
+                 v[i] = u.beta2 * v[i] + (1.0 - u.beta2) * (grad * grad);
+
+                 float m_hat = m[i] / (1.0 - pow(u.beta1, float(u.step)));
+                 float v_hat = v[i] / (1.0 - pow(u.beta2, float(u.step)));
+
+                 p[i] -= u.lr * m_hat / (sqrt(v_hat) + u.eps);
+             }
+         }
+     )");
+
   reluPipeline = createComputePipeline("relu",
                                        R"(
         #version 450
@@ -1537,6 +1572,8 @@ VulkanBackend::~VulkanBackend() {
     vkDestroyBuffer(device, stagingBuffer, nullptr);
     vkFreeMemory(device, stagingMemory, nullptr);
   }
+  vkDestroyPipeline(device, adamStepPipeline, nullptr);
+
   vkDestroyPipeline(device, conv2dPipeline, nullptr);
   vkDestroyPipeline(device, conv2dBackInputPipeline, nullptr);
   vkDestroyPipeline(device, conv2dBackWeightPipeline, nullptr);
@@ -2312,6 +2349,23 @@ void VulkanBackend::broadcast_row(const Storage &src, Storage &dst, int rows,
   } pc = {rows, cols};
   dispatch_kernel(broadcastRowPipeline, {src.data(), dst.data()}, &pc,
                   sizeof(pc), (rows * cols + 255) / 256, 1, 1);
+}
+
+// Add method implementation
+void VulkanBackend::adam_step(Storage &params, const Storage &grads,
+                              Storage &exp_avg, Storage &exp_avg_sq, float lr,
+                              float beta1, float beta2, float eps, int step,
+                              size_t num_elements) {
+  struct {
+    uint32_t N;
+    float lr, beta1, beta2, eps;
+    int step;
+  } pc = {(uint32_t)num_elements, lr, beta1, beta2, eps, step};
+
+  dispatch_kernel(
+      adamStepPipeline,
+      {params.data(), grads.data(), exp_avg.data(), exp_avg_sq.data()}, &pc,
+      sizeof(pc), (num_elements + 255) / 256, 1, 1);
 }
 
 } // namespace munet

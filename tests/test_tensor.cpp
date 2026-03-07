@@ -48,11 +48,11 @@ TEST_P(TensorTest, Addition) {
 TEST_P(TensorTest, ItemMethod) {
   Tensor t({1}, dev());
   Tensor val({1}, {DeviceType::CPU, 0});
-  ((float*)val.data())[0] = 3.14f;
-  
+  ((float *)val.data())[0] = 3.14f;
+
   // Copy to device
   t.impl_->backend().copy(val.data(), t.data(), t.bytes(), val.device(), dev());
-  
+
   EXPECT_FLOAT_EQ(t.item(), 3.14f);
 }
 

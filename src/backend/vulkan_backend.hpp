@@ -106,9 +106,15 @@ public:
                     size_t num_elements) override;
   void sum(const Storage &in, Storage &out, size_t num_elements) override;
 
+  void adam_step(Storage &params, const Storage &grads, Storage &exp_avg,
+                 Storage &exp_avg_sq, float lr, float beta1, float beta2,
+                 float eps, int step, size_t num_elements) override;
+
 private:
   void dispatch_kernel(VkPipeline pipeline, const std::vector<void *> &buffers,
                        void *pc, size_t pcSize, int x, int y, int z);
+
+  VkPipeline adamStepPipeline;
 
   VkPipeline conv2dPipeline;
   VkPipeline conv2dBackInputPipeline;

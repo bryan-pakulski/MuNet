@@ -795,5 +795,27 @@ public:
       }
     });
   }
+
+  void adam_step(Storage &params, const Storage &grads, Storage &exp_avg,
+                 Storage &exp_avg_sq, float lr, float beta1, float beta2,
+                 float eps, int step, size_t num_elements) override {
+    float *p = (float *)params.data();
+    const float *g = (const float *)grads.data();
+    float *m = (float *)exp_avg.data();
+    float *v = (float *)exp_avg_sq.data();
+
+    float bias_correction1 = 1.0f - std::pow(beta1, step);
+    float bias_correction2 = 1.0f - std::pow(beta2, step);
+    float step_size = lr / bias_correction1;
+
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i) {
+        m[i] = beta1 * m[i] + (1.0f - beta1) * g[i];
+        v[i] = beta2 * v[i] + (1.0f - beta2) * (g[i] * g[i]);
+        float denom = (std::sqrt(v[i]) / std::sqrt(bias_correction2)) + eps;
+        p[i] -= step_size * m[i] / denom;
+      }
+    });
+  }
 };
 } // namespace munet

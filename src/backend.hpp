@@ -107,7 +107,12 @@ public:
                                    int B, int C, int H, int W, float eps) = 0;
 
   // --- Optimizers ---
-  // In-place SGD update: w = w - lr * grad
+  virtual void adam_step(Storage &params, const Storage &grads,
+                         Storage &exp_avg, Storage &exp_avg_sq, float lr,
+                         float beta1, float beta2, float eps, int step,
+                         size_t num_elements) = 0;
+
+  // update: w = w - lr * grad
   virtual void update(Storage &weight, const Storage &grad, float lr,
                       size_t num_elements) = 0;
 

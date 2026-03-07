@@ -122,6 +122,17 @@ public:
     base_->matmul(a, b, out, M, K, N, transA, transB);
     check("matmul", t.elapsed_us(), &out);
   }
+
+  void adam_step(Storage &params, const Storage &grads, Storage &exp_avg,
+                 Storage &exp_avg_sq, float lr, float beta1, float beta2,
+                 float eps, int step, size_t num_elements) override {
+    MUNET_DEBUG << "adam_step | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->adam_step(params, grads, exp_avg, exp_avg_sq, lr, beta1, beta2, eps,
+                     step, num_elements);
+    check("adam_step", t.elapsed_us(), &params);
+  }
+
   void broadcast_row(const Storage &src, Storage &dst, int rows,
                      int cols) override {
     MUNET_DEBUG << "broadcast_row | " << rows << "x" << cols << " matrix"
@@ -531,9 +542,10 @@ Tensor Tensor::reshape(Shape new_shape) const {
 
 float Tensor::item() const {
   if (size() != 1) {
-    throw std::runtime_error("item() can only be called on tensors with 1 element");
+    throw std::runtime_error(
+        "item() can only be called on tensors with 1 element");
   }
-  
+
   if (device().type == DeviceType::CPU) {
     impl_->backend().synchronize();
     return static_cast<const float *>(data())[0];
@@ -571,6 +583,22 @@ void Tensor::uniform_(float low, float high) {
     return;
   // Delegate directly to backend. No more CPU roundtrip.
   impl_->backend().fill_uniform(*impl_->storage, low, high, size());
+}
+
+Tensor Tensor::transpose(int dim0, int dim1) const {
+  Tensor out = *this; // Shallow copy of TensorImpl
+  out.impl_ = std::make_shared<TensorImpl>(*impl_);
+  std::swap(out.impl_->shape[dim0], out.impl_->shape[dim1]);
+  std::swap(out.impl_->strides[dim0], out.impl_->strides[dim1]);
+  return out;
+}
+
+Tensor Tensor::contiguous() const {
+  if (is_contiguous())
+    return *this;
+  // Implementation would involve a specific "copy_strided" kernel
+  // For now, clone() effectively creates a contiguous copy
+  return clone();
 }
 
 } // namespace munet

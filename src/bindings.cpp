@@ -86,6 +86,9 @@ PYBIND11_MODULE(munet, m) {
             return t.impl_ ? t.dtype() : DataType::Float32;
           },
           "The data type of the tensor elements.")
+      .def_property_readonly("strides", &Tensor::strides)
+      .def_property_readonly("storage_offset", &Tensor::storage_offset)
+      .def_property_readonly("is_contiguous", &Tensor::is_contiguous)
       .def_property(
           "requires_grad",
           [](const Tensor &t) { return t.impl_ ? t.requires_grad() : false; },
@@ -135,6 +138,11 @@ PYBIND11_MODULE(munet, m) {
           [](Tensor &self, const Tensor &other) { self.impl_ = other.impl_; },
           py::arg("other"),
           "In-place replacement of underlying tensor implementation.")
+      .def("transpose", &ops::transpose, py::arg("dim0"), py::arg("dim1"),
+           "Returns a tensor that is a transposed version of this tensor.")
+      .def("contiguous", &Tensor::contiguous,
+           "Returns a contiguous tensor containing the same data as this "
+           "tensor.")
 
       // Autograd
       .def("zero_grad", &Tensor::zero_grad,
@@ -176,9 +184,10 @@ PYBIND11_MODULE(munet, m) {
       .def("reshape", &Tensor::reshape, py::arg("shape"),
            "Returns a tensor with the same data and number of elements, but "
            "with the specified shape.")
-      .def("numpy", [](py::object self) {                                                                                                                                                
-         return py::cast<py::array>(self);                                                                                                                                                          
-      }, "Returns the tensor as a NumPy ndarray. The returned array and the tensor will share their storage (CPU only).")  
+      .def(
+          "numpy", [](py::object self) { return py::cast<py::array>(self); },
+          "Returns the tensor as a NumPy ndarray. The returned array and the "
+          "tensor will share their storage (CPU only).")
       .def("item", &Tensor::item,
            "Returns the value of this tensor as a standard Python number. Only "
            "works for tensors with one element.")
@@ -448,6 +457,12 @@ PYBIND11_MODULE(munet, m) {
            "Performs a single optimization step.")
       .def("zero_grad", &optim::Optimizer::zero_grad,
            "Clears the gradients of all optimized Tensors.");
+
+  py::class_<optim::Adam, optim::Optimizer, std::shared_ptr<optim::Adam>>(
+      optim, "Adam", "Adam optimizer.")
+      .def(py::init<std::vector<Tensor>, float, float, float, float>(),
+           py::arg("params"), py::arg("lr") = 1e-3, py::arg("beta1") = 0.9,
+           py::arg("beta2") = 0.999, py::arg("eps") = 1e-8);
 
   py::class_<optim::SGD, optim::Optimizer, std::shared_ptr<optim::SGD>>(
       optim, "SGD", "Stochastic Gradient Descent optimizer.")

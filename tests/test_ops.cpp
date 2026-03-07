@@ -1,7 +1,7 @@
 #include "tensor.hpp"
 #include "test_utils.hpp"
-#include <gtest/gtest.h>
 #include <algorithm>
+#include <gtest/gtest.h>
 
 using namespace munet;
 
@@ -32,7 +32,7 @@ TEST_P(OpsTest, ReshapeGradient) {
 
   Tensor g = x.grad().to({DeviceType::CPU, 0});
   for (size_t i = 0; i < 4; ++i)
-    EXPECT_FLOAT_EQ((*(float*)g.data()), 1.0f);
+    EXPECT_FLOAT_EQ((*(float *)g.data()), 1.0f);
 }
 
 TEST_P(OpsTest, CatDim0) {
@@ -60,12 +60,14 @@ TEST_P(OpsTest, BroadCastSubMul) {
   ((float *)val_a.data())[1] = 20;
   ((float *)val_a.data())[2] = 30;
   ((float *)val_a.data())[3] = 40;
-  a.impl_->backend().copy(val_a.data(), a.data(), a.bytes(), val_a.device(), dev());
+  a.impl_->backend().copy(val_a.data(), a.data(), a.bytes(), val_a.device(),
+                          dev());
 
   Tensor val_b({2}, {DeviceType::CPU, 0});
   ((float *)val_b.data())[0] = 1;
   ((float *)val_b.data())[1] = 2;
-  b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), val_b.device(), dev());
+  b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), val_b.device(),
+                          dev());
 
   Tensor c = a - b; // [10-1, 20-2, 30-1, 40-2]
   Tensor res = c.to({DeviceType::CPU, 0});
