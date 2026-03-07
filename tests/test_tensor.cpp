@@ -44,3 +44,20 @@ TEST_P(TensorTest, Addition) {
   EXPECT_FLOAT_EQ(((float *)res.data())[0], 4.0f);
   EXPECT_FLOAT_EQ(((float *)res.data())[1], 6.0f);
 }
+
+TEST_P(TensorTest, ItemMethod) {
+  Tensor t({1}, dev());
+  Tensor val({1}, {DeviceType::CPU, 0});
+  ((float*)val.data())[0] = 3.14f;
+  
+  // Copy to device
+  t.impl_->backend().copy(val.data(), t.data(), t.bytes(), val.device(), dev());
+  
+  EXPECT_FLOAT_EQ(t.item(), 3.14f);
+}
+
+TEST_P(TensorTest, ItemMethodFailure) {
+  Tensor t({2}, dev());
+  // item() should throw if size != 1
+  EXPECT_THROW(t.item(), std::runtime_error);
+}

@@ -51,12 +51,18 @@ struct AddBackward : public Node {
 };
 
 inline Tensor broadcast_expand(const Tensor &src, int N) {
-
   Tensor out({N, (int)src.size()}, src.device(), src.dtype());
-
   src.impl_->backend().broadcast_row(*src.impl_->storage, *out.impl_->storage,
                                      N, src.size());
+  return out;
+}
 
+inline Tensor expand_scalar(const Tensor &scalar, const Shape &target_shape) {
+  Tensor out(target_shape, scalar.device(), scalar.dtype());
+  // Use uniform_ to fill the tensor with the scalar value
+  Tensor cpu_scalar = scalar.to(Device{DeviceType::CPU, 0});
+  float val = ((float*)cpu_scalar.data())[0];
+  out.uniform_(val, val);
   return out;
 }
 
@@ -82,6 +88,14 @@ inline Tensor add(const Tensor &a, const Tensor &b) {
     record_trace(out, "Add", {a, b});
     return out;
   }
+
+  // Case: scalar broadcast
+	if (b.size() == 1 && a.size() > 1) {
+		return add(a, expand_scalar(b, a.shape()));
+	}
+	if (a.size() == 1 && b.size() > 1) {
+		return add(expand_scalar(a, b.shape()), b);
+	}
 
   // Case 2: Broadcast [N, C] + [C]
   if (a.shape().size() == 2 && b.shape().size() == 1 &&
@@ -475,6 +489,14 @@ inline Tensor sub(const Tensor &a, const Tensor &b) {
     return out;
   }
 
+  // Case: scalar broadcast
+  if (b.size() == 1 && a.size() > 1) {
+    return sub(a, expand_scalar(b, a.shape()));
+  }
+  if (a.size() == 1 && b.size() > 1) {
+    return sub(expand_scalar(a, b.shape()), b);
+  }
+
   // Case 2: Broadcast [N, C] - [C]
   if (a.shape().size() == 2 && b.shape().size() == 1 &&
       a.shape()[1] == b.shape()[0]) {
@@ -526,6 +548,14 @@ inline Tensor mul(const Tensor &a, const Tensor &b) {
     }
     record_trace(out, "Mul", {a, b});
     return out;
+  }
+
+  // Case: scalar broadcast
+  if (b.size() == 1 && a.size() > 1) {
+    return mul(a, expand_scalar(b, a.shape()));
+  }
+  if (a.size() == 1 && b.size() > 1) {
+    return mul(expand_scalar(a, b.shape()), b);
   }
 
   // Broadcast [N, C] * [C]

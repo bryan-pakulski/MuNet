@@ -98,6 +98,7 @@ public:
   Tensor softmax() const;
   Tensor sum() const;
   Tensor reshape(Shape new_shape) const;
+  float item() const;
 
   Tensor conv2d(const Tensor &weight, const Tensor &bias, int stride = 1,
                 int padding = 0) const;

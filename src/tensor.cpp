@@ -529,6 +529,20 @@ Tensor Tensor::reshape(Shape new_shape) const {
   return ops::reshape(*this, new_shape);
 }
 
+float Tensor::item() const {
+  if (size() != 1) {
+    throw std::runtime_error("item() can only be called on tensors with 1 element");
+  }
+  
+  if (device().type == DeviceType::CPU) {
+    impl_->backend().synchronize();
+    return static_cast<const float *>(data())[0];
+  } else {
+    // Recursively call item() on a CPU copy
+    return to(Device{DeviceType::CPU, 0}).item();
+  }
+}
+
 void Tensor::step(float lr) {
   if (!impl_ || !impl_->grad) {
     MUNET_WARNING << "Skipping tensor step with no grad" << std::endl;

@@ -13,7 +13,7 @@ include(FetchContent)
 
 # optimization flags
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -flto=auto")
 endif()
 
 # --- Dependencies ---
@@ -70,7 +70,17 @@ target_link_libraries(munet PRIVATE munet_core)
 
 # --- Unit Tests ---
 enable_testing()
-add_executable(munet_tests tests/unified_tests.cpp tests/test_tensor.cpp tests/test_autograd.cpp tests/test_spatial.cpp tests/test_loss.cpp tests/test_models.cpp)
+add_executable(munet_tests
+				tests/unified_tests.cpp
+				tests/test_tensor.cpp
+				tests/test_autograd.cpp
+				tests/test_spatial.cpp
+				tests/test_loss.cpp
+				tests/test_models.cpp
+				tests/test_ops.cpp
+        tests/test_nn.cpp
+)
+
 target_link_libraries(munet_tests PRIVATE munet_core gtest_main)
 
 include(GoogleTest)

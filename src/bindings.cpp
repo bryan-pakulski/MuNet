@@ -149,8 +149,26 @@ PYBIND11_MODULE(munet, m) {
 
       // Math & Ops
       .def("__add__", [](const Tensor &a, const Tensor &b) { return a + b; })
+      .def("__add__",
+           [](const Tensor &a, float b) {
+             Tensor bt({1}, a.device(), a.dtype());
+             bt.uniform_(b, b);
+             return a + bt;
+           })
       .def("__sub__", [](const Tensor &a, const Tensor &b) { return a - b; })
+      .def("__sub__",
+           [](const Tensor &a, float b) {
+             Tensor bt({1}, a.device(), a.dtype());
+             bt.uniform_(b, b);
+             return a - bt;
+           })
       .def("__mul__", [](const Tensor &a, const Tensor &b) { return a * b; })
+      .def("__mul__",
+           [](const Tensor &a, float b) {
+             Tensor bt({1}, a.device(), a.dtype());
+             bt.uniform_(b, b);
+             return a * bt;
+           })
       .def("__matmul__",
            [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
       .def("sum", &Tensor::sum,
@@ -158,6 +176,12 @@ PYBIND11_MODULE(munet, m) {
       .def("reshape", &Tensor::reshape, py::arg("shape"),
            "Returns a tensor with the same data and number of elements, but "
            "with the specified shape.")
+      .def("numpy", [](py::object self) {                                                                                                                                                
+         return py::cast<py::array>(self);                                                                                                                                                          
+      }, "Returns the tensor as a NumPy ndarray. The returned array and the tensor will share their storage (CPU only).")  
+      .def("item", &Tensor::item,
+           "Returns the value of this tensor as a standard Python number. Only "
+           "works for tensors with one element.")
       .def("uniform_", &Tensor::uniform_, py::arg("low") = -1.0f,
            py::arg("high") = 1.0f,
            "Fills the tensor with values from a uniform distribution.")
@@ -194,6 +218,12 @@ PYBIND11_MODULE(munet, m) {
           throw std::runtime_error(
               "Cannot convert GPU tensor to NumPy array directly. Call "
               "`.to(Device(DeviceType.CPU))` first.");
+        }
+
+        if (t.requires_grad()) {
+          throw std::runtime_error(
+              "Can't access buffer on a tensor that requires grad. "
+              "Use .detach().numpy() instead.");
         }
 
         std::vector<py::ssize_t> py_shape;

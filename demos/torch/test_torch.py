@@ -103,7 +103,7 @@ for i in range(iters):
         loss = pred.mse_loss(ty)
         loss.backward()
         m_opt.step()
-        return np.array(loss.to(munet.Device(munet.DeviceType.CPU)), copy=False)[0]
+        return loss.item()
 
     # Torch Step
     def torch_step():
