@@ -27,11 +27,11 @@ public:
 
   // --- Compute Operations ---
   virtual void add(const Storage &a, const Storage &b, Storage &out,
-                   size_t num_elements) = 0;
+                   const BroadcastInfo &info) = 0;
   virtual void sub(const Storage &a, const Storage &b, Storage &out,
-                   size_t num_elements) = 0;
+                   const BroadcastInfo &info) = 0;
   virtual void mul(const Storage &a, const Storage &b, Storage &out,
-                   size_t num_elements) = 0;
+                   const BroadcastInfo &info) = 0;
 
   virtual void matmul(const Storage &a, const Storage &b, Storage &out, int M,
                       int K, int N, bool transA, bool transB) = 0;
@@ -121,6 +121,8 @@ public:
                             size_t num_elements) = 0;
 
   // --- Reduction ---
+  virtual void sum_to_shape(const Storage &in, Storage &out,
+                            const Shape &in_shape, const Shape &out_shape) = 0;
   virtual void sum(const Storage &in, Storage &out, size_t num_elements) = 0;
 };
 

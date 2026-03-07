@@ -9,6 +9,11 @@
 namespace munet {
 namespace ops {
 
+// 1. Forward Declarations (so structs can see the functions)
+inline Tensor add(const Tensor &a, const Tensor &b);
+inline Tensor sub(const Tensor &a, const Tensor &b);
+inline Tensor mul(const Tensor &a, const Tensor &b);
+
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
   for (size_t i = 0; i < inputs.size(); ++i) {
     const auto &t = inputs[i];
@@ -42,11 +47,23 @@ inline void record_trace(
   out.impl_->trace_node = fn;
 }
 
+inline Tensor sum_to_shape(const Tensor &t, const Shape &target_shape) {
+  if (t.shape() == target_shape)
+    return t;
+
+  Tensor out(target_shape, t.device(), t.dtype());
+  t.impl_->backend().sum_to_shape(*t.impl_->storage, *out.impl_->storage,
+                                  t.shape(), target_shape);
+  return out;
+}
+
 // --- ADD ---
 struct AddBackward : public Node {
+  Shape shape_a, shape_b;
+  AddBackward(Shape a, Shape b) : shape_a(a), shape_b(b) {}
   std::string name() const override { return "AddBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
-    return {grads[0], grads[0]};
+    return {sum_to_shape(grads[0], shape_a), sum_to_shape(grads[0], shape_b)};
   }
 };
 
@@ -67,50 +84,27 @@ inline Tensor expand_scalar(const Tensor &scalar, const Shape &target_shape) {
 }
 
 inline Tensor add(const Tensor &a, const Tensor &b) {
-  // Case 1: Shapes match
-  if (a.shape() == b.shape()) {
-    if (a.device() != b.device()) {
-      MUNET_ERROR << "Add: device mismatch: a=" << a.device().to_string()
-                  << " b=" << b.device().to_string() << std::endl;
-      throw std::runtime_error("Add: device mismatch");
-    }
+  if (a.device() != b.device())
+    throw std::runtime_error("Add: device mismatch");
 
-    Tensor out(a.shape(), a.device(), a.dtype());
-    a.impl_->backend().add(*a.impl_->storage, *b.impl_->storage,
-                           *out.impl_->storage, a.size());
-
-    if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
-      auto fn = std::make_shared<AddBackward>();
-      link_backward_edges(fn.get(), {a, b});
-      out.set_requires_grad(true);
-      out.impl_->grad_fn = fn;
-    }
-    record_trace(out, "Add", {a, b});
-    return out;
+  auto info = compute_broadcast(a.shape(), a.strides(), b.shape(), b.strides());
+  if (!info.can_broadcast) {
+    throw std::runtime_error("Add: shape mismatch " + to_string(a.shape()) +
+                             " vs " + to_string(b.shape()));
   }
 
-  // Case: scalar broadcast
-  if (b.size() == 1 && a.size() > 1) {
-    return add(a, expand_scalar(b, a.shape()));
-  }
-  if (a.size() == 1 && b.size() > 1) {
-    return add(expand_scalar(a, b.shape()), b);
-  }
+  Tensor out(info.out_shape, a.device(), a.dtype());
+  a.impl_->backend().add(*a.impl_->storage, *b.impl_->storage,
+                         *out.impl_->storage, info);
 
-  // Case 2: Broadcast [N, C] + [C]
-  if (a.shape().size() == 2 && b.shape().size() == 1 &&
-      a.shape()[1] == b.shape()[0]) {
-    return add(a, broadcast_expand(b, a.shape()[0]));
+  if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
+    auto fn = std::make_shared<AddBackward>(a.shape(), b.shape());
+    link_backward_edges(fn.get(), {a, b});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
   }
-
-  // Case 3: Broadcast [C] + [N, C]
-  if (b.shape().size() == 2 && a.shape().size() == 1 &&
-      b.shape()[1] == a.shape()[0]) {
-    return add(broadcast_expand(a, b.shape()[0]), b);
-  }
-
-  throw std::runtime_error("Add: shape mismatch " + to_string(a.shape()) +
-                           " vs " + to_string(b.shape()));
+  record_trace(out, "Add", {a, b});
+  return out;
 }
 
 // --- CONCAT ---
@@ -454,63 +448,43 @@ inline Tensor matmul(const Tensor &a, const Tensor &b) {
 
 // --- SUB ---
 struct SubBackward : public Node {
+  Shape shape_a, shape_b;
+  SubBackward(Shape a, Shape b) : shape_a(a), shape_b(b) {}
   std::string name() const override { return "SubBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
     Tensor grad_out = grads[0];
-
-    // db = -grad_out. To avoid writing a 'neg' kernel, we do `0 - grad_out`
+    // db = -grad_out.
     Tensor zeros(grad_out.shape(), grad_out.device(), grad_out.dtype());
     zeros.impl_->storage->zero_();
-    Tensor neg_grad_out(grad_out.shape(), grad_out.device(), grad_out.dtype());
-    grad_out.impl_->backend().sub(
-        *zeros.impl_->storage, *grad_out.impl_->storage,
-        *neg_grad_out.impl_->storage, grad_out.size());
+    Tensor neg_grad_out = sub(zeros, grad_out); // Recursive call is safe here
 
-    return {grad_out, neg_grad_out};
+    return {sum_to_shape(grad_out, shape_a),
+            sum_to_shape(neg_grad_out, shape_b)};
   }
 };
 
 inline Tensor sub(const Tensor &a, const Tensor &b) {
-  // Case 1: Shapes match
-  if (a.shape() == b.shape()) {
-    if (a.device() != b.device())
-      throw std::runtime_error("Sub: device mismatch");
-    Tensor out(a.shape(), a.device(), a.dtype());
-    a.impl_->backend().sub(*a.impl_->storage, *b.impl_->storage,
-                           *out.impl_->storage, a.size());
+  if (a.device() != b.device())
+    throw std::runtime_error("Sub: device mismatch");
 
-    if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
-      auto fn = std::make_shared<SubBackward>();
-      link_backward_edges(fn.get(), {a, b});
-      out.set_requires_grad(true);
-      out.impl_->grad_fn = fn;
-    }
-    record_trace(out, "Sub", {a, b});
-    return out;
+  auto info = compute_broadcast(a.shape(), a.strides(), b.shape(), b.strides());
+  if (!info.can_broadcast) {
+    throw std::runtime_error("Sub: shape mismatch " + to_string(a.shape()) +
+                             " vs " + to_string(b.shape()));
   }
 
-  // Case: scalar broadcast
-  if (b.size() == 1 && a.size() > 1) {
-    return sub(a, expand_scalar(b, a.shape()));
-  }
-  if (a.size() == 1 && b.size() > 1) {
-    return sub(expand_scalar(a, b.shape()), b);
-  }
+  Tensor out(info.out_shape, a.device(), a.dtype());
+  a.impl_->backend().sub(*a.impl_->storage, *b.impl_->storage,
+                         *out.impl_->storage, info);
 
-  // Case 2: Broadcast [N, C] - [C]
-  if (a.shape().size() == 2 && b.shape().size() == 1 &&
-      a.shape()[1] == b.shape()[0]) {
-    return sub(a, broadcast_expand(b, a.shape()[0]));
+  if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
+    auto fn = std::make_shared<SubBackward>(a.shape(), b.shape());
+    link_backward_edges(fn.get(), {a, b});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
   }
-
-  // Case 3: Broadcast [C] - [N, C]
-  if (b.shape().size() == 2 && a.shape().size() == 1 &&
-      b.shape()[1] == a.shape()[0]) {
-    return sub(broadcast_expand(a, b.shape()[0]), b);
-  }
-
-  throw std::runtime_error("Sub: shape mismatch " + to_string(a.shape()) +
-                           " vs " + to_string(b.shape()));
+  record_trace(out, "Sub", {a, b});
+  return out;
 }
 
 // --- MUL ---
@@ -520,56 +494,36 @@ struct MulBackward : public Node {
   std::string name() const override { return "MulBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
     Tensor grad_out = grads[0];
-    // dC/dA = B * grad_out
-    Tensor da(A.shape(), A.device(), A.dtype());
-    A.impl_->backend().mul(*B.impl_->storage, *grad_out.impl_->storage,
-                           *da.impl_->storage, A.size());
-    // dC/dB = A * grad_out
-    Tensor db(B.shape(), B.device(), B.dtype());
-    A.impl_->backend().mul(*A.impl_->storage, *grad_out.impl_->storage,
-                           *db.impl_->storage, B.size());
-    return {da, db};
+    // dC/dA = B * grad_out, then reduce to A's shape
+    Tensor da = mul(B, grad_out);
+    // dC/dB = A * grad_out, then reduce to B's shape
+    Tensor db = mul(A, grad_out);
+
+    return {sum_to_shape(da, A.shape()), sum_to_shape(db, B.shape())};
   }
 };
 
 inline Tensor mul(const Tensor &a, const Tensor &b) {
-  if (a.shape() == b.shape()) {
-    if (a.device() != b.device())
-      throw std::runtime_error("Mul: device mismatch");
-    Tensor out(a.shape(), a.device(), a.dtype());
-    a.impl_->backend().mul(*a.impl_->storage, *b.impl_->storage,
-                           *out.impl_->storage, a.size());
+  if (a.device() != b.device())
+    throw std::runtime_error("Mul: device mismatch");
 
-    if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
-      auto fn = std::make_shared<MulBackward>(a, b);
-      link_backward_edges(fn.get(), {a, b});
-      out.set_requires_grad(true);
-      out.impl_->grad_fn = fn;
-    }
-    record_trace(out, "Mul", {a, b});
-    return out;
+  auto info = compute_broadcast(a.shape(), a.strides(), b.shape(), b.strides());
+  if (!info.can_broadcast) {
+    throw std::runtime_error("Mul: shape mismatch");
   }
 
-  // Case: scalar broadcast
-  if (b.size() == 1 && a.size() > 1) {
-    return mul(a, expand_scalar(b, a.shape()));
-  }
-  if (a.size() == 1 && b.size() > 1) {
-    return mul(expand_scalar(a, b.shape()), b);
-  }
+  Tensor out(info.out_shape, a.device(), a.dtype());
+  a.impl_->backend().mul(*a.impl_->storage, *b.impl_->storage,
+                         *out.impl_->storage, info);
 
-  // Broadcast [N, C] * [C]
-  if (a.shape().size() == 2 && b.shape().size() == 1 &&
-      a.shape()[1] == b.shape()[0]) {
-    return mul(a, broadcast_expand(b, a.shape()[0]));
+  if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
+    auto fn = std::make_shared<MulBackward>(a, b);
+    link_backward_edges(fn.get(), {a, b});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
   }
-  // Broadcast [C] * [N, C]
-  if (b.shape().size() == 2 && a.shape().size() == 1 &&
-      b.shape()[1] == a.shape()[0]) {
-    return mul(broadcast_expand(a, b.shape()[0]), b);
-  }
-
-  throw std::runtime_error("Mul: shape mismatch");
+  record_trace(out, "Mul", {a, b});
+  return out;
 }
 
 // --- SUM (Global) ---

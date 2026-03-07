@@ -617,6 +617,94 @@ __global__ void adam_step_kernel(float *p, const float *g, float *m, float *v,
   }
 }
 
+__device__ __forceinline__ size_t get_offset(size_t idx, int ndim,
+                                             const int *shape,
+                                             const int *out_strides,
+                                             const int *strides) {
+  size_t offset = 0;
+
+  for (int i = 0; i < ndim; ++i) {
+    int coord = (idx / out_strides[i]) % shape[i];
+    offset += coord * strides[i];
+  }
+
+  return offset;
+}
+
+__global__ void add_broadcast_kernel(const float *a, const float *b, float *out,
+                                     size_t N, GPUBroadcastInfo info) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (idx >= N)
+    return;
+
+  size_t off_a =
+      get_offset(idx, info.ndim, info.shape, info.out_strides, info.strides_a);
+
+  size_t off_b =
+      get_offset(idx, info.ndim, info.shape, info.out_strides, info.strides_b);
+
+  out[idx] = a[off_a] + b[off_b];
+}
+
+__global__ void sub_broadcast_kernel(const float *a, const float *b, float *out,
+                                     size_t N, GPUBroadcastInfo info) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (idx >= N)
+    return;
+
+  size_t off_a =
+      get_offset(idx, info.ndim, info.shape, info.out_strides, info.strides_a);
+
+  size_t off_b =
+      get_offset(idx, info.ndim, info.shape, info.out_strides, info.strides_b);
+
+  out[idx] = a[off_a] - b[off_b];
+}
+
+__global__ void mul_broadcast_kernel(const float *a, const float *b, float *out,
+                                     size_t N, GPUBroadcastInfo info) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (idx >= N)
+    return;
+
+  size_t off_a =
+      get_offset(idx, info.ndim, info.shape, info.out_strides, info.strides_a);
+
+  size_t off_b =
+      get_offset(idx, info.ndim, info.shape, info.out_strides, info.strides_b);
+
+  out[idx] = a[off_a] * b[off_b];
+}
+
+__global__ void sum_to_shape_kernel(const float *in, float *out, int ndim,
+                                    int out_ndim, const int *in_shape,
+                                    const int *out_shape,
+                                    const int *out_strides, size_t N) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N)
+    return;
+
+  size_t out_off = 0;
+  size_t curr = i;
+
+  for (int d = ndim - 1; d >= 0; --d) {
+
+    int coord = curr % in_shape[d];
+    curr /= in_shape[d];
+
+    int out_d_idx = d - (ndim - out_ndim);
+
+    if (out_d_idx >= 0 && out_shape[out_d_idx] != 1) {
+      out_off += coord * out_strides[out_d_idx];
+    }
+  }
+
+  atomicAdd(&out[out_off], in[i]);
+}
+
 void *CUDABackend::allocate(size_t bytes) {
   cudaSetDevice(device_index_);
   cudaEventRecord((cudaEvent_t)start_event_);
@@ -674,20 +762,74 @@ void CUDABackend::synchronize() {
   }
 }
 
+// TODO: IMPL
 void CUDABackend::all_reduce(Storage &buffer, size_t num_elements) {}
 
 void CUDABackend::add(const Storage &a, const Storage &b, Storage &out,
-                      size_t num_elements) {
-
+                      const BroadcastInfo &info) {
+  size_t total = numel(info.out_shape);
   cudaSetDevice(device_index_);
   int threads = 256;
-  int blocks = (num_elements + threads - 1) / threads;
-
+  int blocks = (total + threads - 1) / threads;
   cudaEventRecord((cudaEvent_t)start_event_);
-  add_kernel<<<blocks, threads>>>((const float *)a.data(),
-                                  (const float *)b.data(), (float *)out.data(),
-                                  num_elements);
 
+  if (info.strides_a == default_strides(info.out_shape) &&
+      info.strides_b == default_strides(info.out_shape)) {
+    add_kernel<<<blocks, threads>>>((const float *)a.data(),
+                                    (const float *)b.data(),
+                                    (float *)out.data(), total);
+  } else {
+    add_broadcast_kernel<<<blocks, threads>>>(
+        (const float *)a.data(), (const float *)b.data(), (float *)out.data(),
+        total, to_gpu_info(info));
+  }
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::sub(const Storage &a, const Storage &b, Storage &out,
+                      const BroadcastInfo &info) {
+  size_t total = numel(info.out_shape);
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (total + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+
+  if (info.strides_a == default_strides(info.out_shape) &&
+      info.strides_b == default_strides(info.out_shape)) {
+    sub_kernel<<<blocks, threads>>>((const float *)a.data(),
+                                    (const float *)b.data(),
+                                    (float *)out.data(), total);
+  } else {
+    sub_broadcast_kernel<<<blocks, threads>>>(
+        (const float *)a.data(), (const float *)b.data(), (float *)out.data(),
+        total, to_gpu_info(info));
+  }
+
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::mul(const Storage &a, const Storage &b, Storage &out,
+                      const BroadcastInfo &info) {
+  size_t total = numel(info.out_shape);
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (total + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+
+  if (info.strides_a == default_strides(info.out_shape) &&
+      info.strides_b == default_strides(info.out_shape)) {
+    // Fast path: simple elementwise
+    mul_kernel<<<blocks, threads>>>((const float *)a.data(),
+                                    (const float *)b.data(),
+                                    (float *)out.data(), total);
+  } else {
+    // Slow path: broadcasting
+    mul_broadcast_kernel<<<blocks, threads>>>(
+        (const float *)a.data(), (const float *)b.data(), (float *)out.data(),
+        total, to_gpu_info(info));
+  }
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
@@ -713,30 +855,6 @@ void CUDABackend::sum(const Storage &in, Storage &out, size_t num_elements) {
   int blocks = (num_elements + threads - 1) / threads;
   cudaEventRecord((cudaEvent_t)start_event_);
   sum_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
-                                  num_elements);
-  cudaEventRecord((cudaEvent_t)stop_event_);
-  CUDA_CHECK(cudaGetLastError());
-}
-
-void CUDABackend::sub(const Storage &a, const Storage &b, Storage &out,
-                      size_t num_elements) {
-  cudaSetDevice(device_index_);
-  int threads = 256, blocks = (num_elements + threads - 1) / threads;
-  cudaEventRecord((cudaEvent_t)start_event_);
-  sub_kernel<<<blocks, threads>>>((const float *)a.data(),
-                                  (const float *)b.data(), (float *)out.data(),
-                                  num_elements);
-  cudaEventRecord((cudaEvent_t)stop_event_);
-  CUDA_CHECK(cudaGetLastError());
-}
-
-void CUDABackend::mul(const Storage &a, const Storage &b, Storage &out,
-                      size_t num_elements) {
-  cudaSetDevice(device_index_);
-  int threads = 256, blocks = (num_elements + threads - 1) / threads;
-  cudaEventRecord((cudaEvent_t)start_event_);
-  mul_kernel<<<blocks, threads>>>((const float *)a.data(),
-                                  (const float *)b.data(), (float *)out.data(),
                                   num_elements);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
@@ -1204,6 +1322,50 @@ void CUDABackend::adam_step(Storage &params, const Storage &grads,
       eps, step, num_elements);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::sum_to_shape(const Storage &in, Storage &out,
+                               const Shape &in_shape, const Shape &out_shape) {
+
+  cudaSetDevice(device_index_);
+
+  CUDA_CHECK(cudaMemset(out.data(), 0, out.size_bytes()));
+
+  size_t N = numel(in_shape);
+
+  int threads = 256;
+  int blocks = (N + threads - 1) / threads;
+
+  int *d_in_shape;
+  int *d_out_shape;
+  int *d_out_strides;
+
+  size_t in_bytes = in_shape.size() * sizeof(int);
+  size_t out_bytes = out_shape.size() * sizeof(int);
+
+  CUDA_CHECK(cudaMalloc(&d_in_shape, in_bytes));
+  CUDA_CHECK(cudaMalloc(&d_out_shape, out_bytes));
+  CUDA_CHECK(cudaMalloc(&d_out_strides, out_bytes));
+
+  CUDA_CHECK(cudaMemcpy(d_in_shape, in_shape.data(), in_bytes,
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_out_shape, out_shape.data(), out_bytes,
+                        cudaMemcpyHostToDevice));
+
+  Strides ost = default_strides(out_shape);
+
+  CUDA_CHECK(
+      cudaMemcpy(d_out_strides, ost.data(), out_bytes, cudaMemcpyHostToDevice));
+
+  sum_to_shape_kernel<<<blocks, threads>>>(
+      (const float *)in.data(), (float *)out.data(), (int)in_shape.size(),
+      (int)out_shape.size(), d_in_shape, d_out_shape, d_out_strides, N);
+
+  CUDA_CHECK(cudaGetLastError());
+
+  CUDA_CHECK(cudaFree(d_in_shape));
+  CUDA_CHECK(cudaFree(d_out_shape));
+  CUDA_CHECK(cudaFree(d_out_strides));
 }
 
 } // namespace munet

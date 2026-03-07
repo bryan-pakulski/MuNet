@@ -66,8 +66,10 @@ static void *stagingMapped = nullptr;
 static VkCommandBuffer immediateCmdBuffer = VK_NULL_HANDLE;
 
 static VkPipelineLayout pipelineLayout;
-static VkPipeline addPipeline, mulPipeline, subPipeline, updatePipeline;
-static VkPipeline matmulPipeline, reluPipeline, reluBackwardPipeline;
+static VkPipeline addPipeline, mulPipeline, subPipeline, matmulPipeline;
+static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline,
+    sumToShapePipeline;
+static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
 static VkPipeline sigmoidPipeline, sigmoidBackwardPipeline;
 static VkPipeline softmaxPipeline, softmaxBackwardPipeline;
 static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
@@ -290,60 +292,160 @@ VulkanBackend::VulkanBackend() {
   // AMD	256
   // Apple	64
   // Intel	128
+  addPipeline = createComputePipeline("add", R"(
+				#version 450
+				layout(local_size_x = 256) in;
+				layout(binding = 0) buffer A { float a[]; };
+				layout(binding = 1) buffer B { float b[]; };
+				layout(binding = 2) buffer C { float c[]; };
+				layout(push_constant) uniform Push { uint N; } p;
+				void main() {
+						uint i = gl_GlobalInvocationID.x;
+						if (i < p.N) {
+								c[i] = a[i] + b[i];
+						}
+				}
+  )");
 
-  addPipeline = createComputePipeline("add",
-                                      R"(
+  mulPipeline = createComputePipeline("mul", R"(
+				#version 450
+				layout(local_size_x = 256) in;
+				layout(binding = 0) buffer A { float a[]; };
+				layout(binding = 1) buffer B { float b[]; };
+				layout(binding = 2) buffer C { float c[]; };
+				layout(push_constant) uniform Push { uint N; } p;
+				void main() {
+						uint i = gl_GlobalInvocationID.x;
+						if (i < p.N) c[i] = a[i] * b[i];
+				}
+  )");
+
+  subPipeline = createComputePipeline("sub", R"(
+				#version 450
+				layout(local_size_x = 256) in;
+				layout(binding = 0) buffer A { float a[]; };
+				layout(binding = 1) buffer B { float b[]; };
+				layout(binding = 2) buffer C { float c[]; };
+				layout(push_constant) uniform Push { uint N; } p;
+				void main() {
+						uint i = gl_GlobalInvocationID.x;
+						if (i < p.N) c[i] = a[i] - b[i];
+				}
+  )");
+
+  addBCPipeline = createComputePipeline("add_bc_fast", R"(
         #version 450
-        layout(local_size_x = 256) in;
 
-        layout(binding = 0) buffer A { float a[]; };
-        layout(binding = 1) buffer B { float b[]; };
-        layout(binding = 2) buffer C { float c[]; };
+				layout(local_size_x = 256) in;
+				layout(binding = 0) buffer A { float a[]; };
+				layout(binding = 1) buffer B { float b[]; };
+				layout(binding = 2) buffer C { float c[]; };
+				layout(push_constant) uniform P { int info[26]; } u;
+				void main() {
+						uint total = uint(u.info[25]);
+						uint idx = gl_GlobalInvocationID.x;
+						if (idx >= total) return;
+						int ndim = u.info[0];
+						uint off_a = 0;
+						uint off_b = 0;
+						for (int d = 0; d < ndim; ++d) {
+								uint stride = uint(u.info[7 + d]);
+								uint coord  = (idx / stride) % uint(u.info[1 + d]);
+								off_a += coord * uint(u.info[13 + d]);
+								off_b += coord * uint(u.info[19 + d]);
+						}
+						c[idx] = a[off_a] + b[off_b];
+				}
+				)");
 
-        layout(push_constant) uniform Push { uint N; } p;
-
-        void main() {
-            uint i = gl_GlobalInvocationID.x;
-            if (i < p.N) {
-                c[i] = a[i] + b[i];
-            }
-        }
-    )");
-
-  mulPipeline = createComputePipeline("mul",
-                                      R"(
+  mulBCPipeline = createComputePipeline("mul_bc_fast", R"(
         #version 450
-        layout(local_size_x = 256) in;
 
-        layout(binding = 0) buffer A { float a[]; };
-        layout(binding = 1) buffer B { float b[]; };
-        layout(binding = 2) buffer C { float c[]; };
+				layout(local_size_x = 256) in;
+				layout(binding = 0) buffer A { float a[]; };
+				layout(binding = 1) buffer B { float b[]; };
+				layout(binding = 2) buffer C { float c[]; };
+				layout(push_constant) uniform P { int info[26]; } u;
+				void main() {
+						uint total = uint(u.info[25]);
+						uint idx = gl_GlobalInvocationID.x;
+						if (idx >= total) return;
+						int ndim = u.info[0];
+						uint off_a = 0;
+						uint off_b = 0;
+						for (int d = 0; d < ndim; ++d) {
+								uint stride = uint(u.info[7 + d]);
+								uint coord  = (idx / stride) % uint(u.info[1 + d]);
+								off_a += coord * uint(u.info[13 + d]);
+								off_b += coord * uint(u.info[19 + d]);
+						}
+						c[idx] = a[off_a] * b[off_b];
+				}
+				)");
 
-        layout(push_constant) uniform Push { uint N; } p;
-
-        void main() {
-            uint i = gl_GlobalInvocationID.x;
-            if (i < p.N)
-							c[i] = a[i] * b[i];
-        }
-    )");
-  subPipeline = createComputePipeline("sub",
-                                      R"(
+  subBCPipeline = createComputePipeline("sub_bc_fast", R"(
         #version 450
-        layout(local_size_x = 256) in;
 
-        layout(binding = 0) buffer A { float a[]; };
-        layout(binding = 1) buffer B { float b[]; };
-        layout(binding = 2) buffer C { float c[]; };
+				layout(local_size_x = 256) in;
+				layout(binding = 0) buffer A { float a[]; };
+				layout(binding = 1) buffer B { float b[]; };
+				layout(binding = 2) buffer C { float c[]; };
+				layout(push_constant) uniform P { int info[26]; } u;
+				void main() {
+						uint total = uint(u.info[25]);
+						uint idx = gl_GlobalInvocationID.x;
+						if (idx >= total) return;
+						int ndim = u.info[0];
+						uint off_a = 0;
+						uint off_b = 0;
+						for (int d = 0; d < ndim; ++d) {
+								uint stride = uint(u.info[7 + d]);
+								uint coord  = (idx / stride) % uint(u.info[1 + d]);
+								off_a += coord * uint(u.info[13 + d]);
+								off_b += coord * uint(u.info[19 + d]);
+						}
+						c[idx] = a[off_a] - b[off_b];
+				}
+				)");
 
-        layout(push_constant) uniform Push { uint N; } p;
+  sumToShapePipeline = createComputePipeline("sum_to_shape", R"(
+        #version 450
 
-        void main() {
-            uint i = gl_GlobalInvocationID.x;
-            if (i < p.N)
-							c[i] = a[i] - b[i];
-        }
-    )");
+				layout(local_size_x = 256) in;
+				layout(binding = 0) readonly buffer I { float in_d[]; };
+				layout(binding = 1) buffer O { uint out_u[]; };
+				layout(push_constant) uniform P { int info[21]; } u;
+				void main() {
+						uint N = uint(u.info[20]);
+						uint i = gl_GlobalInvocationID.x;
+						if (i >= N) return;
+						int ndim = u.info[0];
+						int out_ndim = u.info[1];
+						uint out_off = 0;
+						uint curr = i;
+						for (int d = ndim - 1; d >= 0; --d) {
+								uint shape_d = uint(u.info[2 + d]);
+								uint coord = curr % shape_d;
+								curr /= shape_d;
+								int out_d_idx = d - (ndim - out_ndim);
+								if (out_d_idx >= 0) {
+										uint out_shape_d = uint(u.info[8 + out_d_idx]);
+										if (out_shape_d != 1) {
+												out_off += coord * uint(u.info[14 + out_d_idx]);
+										}
+								}
+						}
+						uint expected = out_u[out_off];
+						while (true) {
+								float current_f = uintBitsToFloat(expected);
+								float next_f = current_f + in_d[i];
+								uint next = floatBitsToUint(next_f);
+								uint current = atomicCompSwap(out_u[out_off], expected, next);
+								if (current == expected) break;
+								expected = current;
+						}
+				}
+			  )");
 
   updatePipeline = createComputePipeline("update",
                                          R"(
@@ -379,9 +481,8 @@ VulkanBackend::VulkanBackend() {
          }
      )");
 
-  adamStepPipeline = createComputePipeline(
-      "adam_step",
-      R"(
+  adamStepPipeline = createComputePipeline("adam_step",
+                                           R"(
          #version 450
          layout(local_size_x = 256) in;
 
@@ -1600,6 +1701,12 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyPipeline(device, addPipeline, nullptr);
   vkDestroyPipeline(device, mulPipeline, nullptr);
   vkDestroyPipeline(device, subPipeline, nullptr);
+
+  vkDestroyPipeline(device, addBCPipeline, nullptr);
+  vkDestroyPipeline(device, mulBCPipeline, nullptr);
+  vkDestroyPipeline(device, subBCPipeline, nullptr);
+  vkDestroyPipeline(device, sumToShapePipeline, nullptr);
+
   vkDestroyPipeline(device, updatePipeline, nullptr);
 
   vkDestroyPipeline(device, reluPipeline, nullptr);
@@ -1953,23 +2060,54 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
 
 // --- Kernel Wrappers ---
 void VulkanBackend::add(const Storage &a, const Storage &b, Storage &out,
-                        size_t num_elements) {
-  uint32_t N = num_elements;
-  dispatch_kernel(addPipeline, {a.data(), b.data(), out.data()}, &N, sizeof(N),
-                  (N + 255) / 256, 1, 1);
+                        const BroadcastInfo &info) {
+  size_t total = numel(info.out_shape);
+  // Fast Path: Check if inputs are contiguous and match output shape
+  if (info.strides_a == default_strides(info.out_shape) &&
+      info.strides_b == default_strides(info.out_shape)) {
+    uint32_t N = (uint32_t)total;
+    dispatch_kernel(addPipeline, {a.data(), b.data(), out.data()}, &N,
+                    sizeof(N), (N + 255) / 256, 1, 1);
+  } else {
+    auto gpu_info = to_gpu_info(info);
+    size_t total = numel(info.out_shape);
+    dispatch_kernel(addBCPipeline, {a.data(), b.data(), out.data()}, &gpu_info,
+                    sizeof(gpu_info), (total + 255) / 256, 1, 1);
+  }
 }
+
 void VulkanBackend::mul(const Storage &a, const Storage &b, Storage &out,
-                        size_t num_elements) {
-  uint32_t N = num_elements;
-  dispatch_kernel(mulPipeline, {a.data(), b.data(), out.data()}, &N, sizeof(N),
-                  (N + 255) / 256, 1, 1);
+                        const BroadcastInfo &info) {
+  size_t total = numel(info.out_shape);
+  if (info.strides_a == default_strides(info.out_shape) &&
+      info.strides_b == default_strides(info.out_shape)) {
+    uint32_t N = (uint32_t)total;
+    dispatch_kernel(mulPipeline, {a.data(), b.data(), out.data()}, &N,
+                    sizeof(N), (N + 255) / 256, 1, 1);
+  } else {
+    auto gpu_info = to_gpu_info(info);
+    size_t total = numel(info.out_shape);
+    dispatch_kernel(mulBCPipeline, {a.data(), b.data(), out.data()}, &gpu_info,
+                    sizeof(gpu_info), (total + 255) / 256, 1, 1);
+  }
 }
+
 void VulkanBackend::sub(const Storage &a, const Storage &b, Storage &out,
-                        size_t num_elements) {
-  uint32_t N = num_elements;
-  dispatch_kernel(subPipeline, {a.data(), b.data(), out.data()}, &N, sizeof(N),
-                  (N + 255) / 256, 1, 1);
+                        const BroadcastInfo &info) {
+  size_t total = numel(info.out_shape);
+  if (info.strides_a == default_strides(info.out_shape) &&
+      info.strides_b == default_strides(info.out_shape)) {
+    uint32_t N = (uint32_t)total;
+    dispatch_kernel(subPipeline, {a.data(), b.data(), out.data()}, &N,
+                    sizeof(N), (N + 255) / 256, 1, 1);
+  } else {
+    auto gpu_info = to_gpu_info(info);
+    size_t total = numel(info.out_shape);
+    dispatch_kernel(subBCPipeline, {a.data(), b.data(), out.data()}, &gpu_info,
+                    sizeof(gpu_info), (total + 255) / 256, 1, 1);
+  }
 }
+
 void VulkanBackend::relu(const Storage &in, Storage &out, size_t num_elements) {
   uint32_t N = num_elements;
   dispatch_kernel(reluPipeline, {in.data(), out.data()}, &N, sizeof(N),
@@ -2366,6 +2504,37 @@ void VulkanBackend::adam_step(Storage &params, const Storage &grads,
       adamStepPipeline,
       {params.data(), grads.data(), exp_avg.data(), exp_avg_sq.data()}, &pc,
       sizeof(pc), (num_elements + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::sum_to_shape(const Storage &in, Storage &out,
+                                 const Shape &in_shape,
+                                 const Shape &out_shape) {
+
+  memset(out.data(), 0, out.size_bytes());
+
+  struct {
+    int ndim;
+    int out_ndim;
+    int in_shape[6];
+    int out_shape[6];
+    int out_strides[6];
+    uint32_t N;
+  } pc{};
+
+  pc.ndim = in_shape.size();
+  pc.out_ndim = out_shape.size();
+  pc.N = numel(in_shape);
+
+  auto ost = default_strides(out_shape);
+
+  for (int i = 0; i < 6; ++i) {
+    pc.in_shape[i] = i < pc.ndim ? in_shape[i] : 1;
+    pc.out_shape[i] = i < pc.out_ndim ? out_shape[i] : 1;
+    pc.out_strides[i] = i < pc.out_ndim ? ost[i] : 0;
+  }
+
+  dispatch_kernel(sumToShapePipeline, {in.data(), out.data()}, &pc, sizeof(pc),
+                  (pc.N + 255) / 256, 1, 1);
 }
 
 } // namespace munet

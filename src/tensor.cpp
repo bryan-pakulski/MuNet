@@ -93,26 +93,30 @@ public:
   }
 
   void add(const Storage &a, const Storage &b, Storage &out,
-           size_t num_elements) override {
-    MUNET_DEBUG << "add | " << num_elements << " elements" << std::endl;
+           const BroadcastInfo &info) override {
+    MUNET_DEBUG << "add (broadcast) | " << to_string(info.out_shape)
+                << std::endl;
     Timer t;
-    base_->add(a, b, out, num_elements);
+    base_->add(a, b, out, info);
     check("add", t.elapsed_us(), &out);
   }
+
   void sub(const Storage &a, const Storage &b, Storage &out,
-           size_t num_elements) override {
-    MUNET_DEBUG << "sub | " << num_elements << " elements" << std::endl;
-    base_->sub(a, b, out, num_elements);
+           const BroadcastInfo &info) override {
+    MUNET_DEBUG << "sub (broadcast)" << std::endl;
     Timer t;
+    base_->sub(a, b, out, info);
     check("sub", t.elapsed_us(), &out);
   }
+
   void mul(const Storage &a, const Storage &b, Storage &out,
-           size_t num_elements) override {
-    MUNET_DEBUG << "mul | " << num_elements << " elements" << std::endl;
+           const BroadcastInfo &info) override {
+    MUNET_DEBUG << "mul (broadcast)" << std::endl;
     Timer t;
-    base_->mul(a, b, out, num_elements);
+    base_->mul(a, b, out, info);
     check("mul", t.elapsed_us(), &out);
   }
+
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override {
     MUNET_DEBUG << "matmul | " << M << "x" << K << "x" << N << " matrix"
@@ -349,6 +353,15 @@ public:
     Timer t;
     base_->sum(in, out, num_elements);
     check("sum", t.elapsed_us(), &out);
+  }
+
+  void sum_to_shape(const Storage &in, Storage &out, const Shape &in_shape,
+                    const Shape &out_shape) override {
+    MUNET_DEBUG << "sum_to_shape | " << to_string(in_shape) << " -> "
+                << to_string(out_shape) << std::endl;
+    Timer t;
+    base_->sum_to_shape(in, out, in_shape, out_shape);
+    check("sum_to_shape", t.elapsed_us(), &out);
   }
 };
 

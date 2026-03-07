@@ -50,9 +50,10 @@ struct AccumulateGrad : public Node {
 
         var->grad->storage->zero_();
       }
-
+      auto info = compute_broadcast(var->grad->shape, var->grad->strides,
+                                    grads[0].shape(), grads[0].strides());
       var->backend().add(*var->grad->storage, *grads[0].impl_->storage,
-                         *var->grad->storage, numel(var->shape));
+                         *var->grad->storage, info);
     }
 
     return {};
@@ -128,9 +129,12 @@ public:
 
       for (size_t i = 1; i < inputs.size(); ++i) {
         if (inputs[i].impl_) {
+          auto info = compute_broadcast(accumulated_grad.shape(),
+                                        accumulated_grad.strides(),
+                                        inputs[i].shape(), inputs[i].strides());
           accumulated_grad.impl_->backend().add(
               *accumulated_grad.impl_->storage, *inputs[i].impl_->storage,
-              *accumulated_grad.impl_->storage, accumulated_grad.size());
+              *accumulated_grad.impl_->storage, info);
         }
       }
 

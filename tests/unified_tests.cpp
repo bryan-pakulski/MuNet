@@ -11,6 +11,11 @@ protected:
   Device dev() { return GetParam(); }
 };
 
+class BroadcastTest : public ::testing::TestWithParam<Device> {
+protected:
+  Device dev() { return GetParam(); }
+};
+
 INSTANTIATE_TEST_SUITE_P(AllBackends, BackendTest,
                          ::testing::ValuesIn(test::get_available_devices()),
                          [](const ::testing::TestParamInfo<Device> &info) {
@@ -20,6 +25,14 @@ INSTANTIATE_TEST_SUITE_P(AllBackends, BackendTest,
                            std::replace(name.begin(), name.end(), ':', '_');
                            return name;
                          });
+
+INSTANTIATE_TEST_SUITE_P(AllBackends, BroadcastTest,                        
+                         ::testing::ValuesIn(test::get_available_devices()),
+                         [](const ::testing::TestParamInfo<Device> &info) { 
+                           std::string name = info.param.to_string();       
+                           std::replace(name.begin(), name.end(), ':', '_');
+                           return name;                                     
+                         });                                                
 
 TEST_P(BackendTest, ElementwiseAdd) {
   Tensor a({2, 2}, dev());
@@ -48,25 +61,6 @@ TEST_P(BackendTest, MatMul) {
   const float *data = static_cast<const float *>(res.data());
   for (size_t i = 0; i < 4; ++i)
     EXPECT_FLOAT_EQ(data[i], 3.0f);
-}
-
-TEST_P(BackendTest, SimpleAutograd) {
-  Tensor w({2, 2}, dev(), DataType::Float32, true);
-  Tensor x({2, 2}, dev(), DataType::Float32, false);
-
-  w.uniform_(1.0f, 1.0f);
-  x.uniform_(1.0f, 1.0f);
-
-  Tensor z = w * x;
-  Tensor loss = z.sum();
-  loss.backward();
-
-  ASSERT_TRUE(w.has_grad());
-  Tensor grad = w.grad().to({DeviceType::CPU, 0});
-  const float *g_ptr = static_cast<const float *>(grad.data());
-  // d(sum(w*x))/dw = x. Since x is all 1s, grad is all 1s.
-  for (size_t i = 0; i < 4; ++i)
-    EXPECT_FLOAT_EQ(g_ptr[i], 1.0f);
 }
 
 TEST_P(BackendTest, Conv2DForward) {
@@ -109,41 +103,9 @@ TEST_P(BackendTest, Concatenation) {
     EXPECT_FLOAT_EQ(data[i], 2.0f);
 }
 
-TEST_P(BackendTest, CrossEntropyLoss) {
-  Tensor logits({1, 3}, dev(), DataType::Float32, true);
-  Tensor target({1, 3}, dev());
-
-  // Fill CPU then copy to ensure exact values
-  Tensor l_cpu({1, 3}, {DeviceType::CPU, 0});
-  float *l_ptr = (float *)l_cpu.data();
-  l_ptr[0] = 0.1f;
-  l_ptr[1] = 0.2f;
-  l_ptr[2] = 0.7f;
-
-  Tensor t_cpu({1, 3}, {DeviceType::CPU, 0});
-  float *t_ptr = (float *)t_cpu.data();
-  t_ptr[0] = 0.0f;
-  t_ptr[1] = 0.0f;
-  t_ptr[2] = 1.0f;
-
-  logits.impl_->backend().copy(l_cpu.data(), logits.data(), logits.bytes(),
-                               l_cpu.device(), dev());
-  target.impl_->backend().copy(t_cpu.data(), target.data(), target.bytes(),
-                               t_cpu.device(), dev());
-
-  Tensor loss = logits.cross_entropy(target);
-  loss.backward();
-
-  Tensor loss_cpu = loss.to({DeviceType::CPU, 0});
-  // -log(exp(0.7) / (exp(0.1)+exp(0.2)+exp(0.7)))
-  EXPECT_NEAR(((float *)loss_cpu.data())[0], 0.7679f, 1e-3);
-  EXPECT_TRUE(logits.has_grad());
-}
-
-TEST(TensorTest, BroadcastingAdd) {
-  Device dev{DeviceType::CPU, 0};
-  Tensor a({2, 3}, dev); // Matrix
-  Tensor b({3}, dev);    // Vector
+TEST_P(BroadcastTest, BroadcastingAdd) {
+  Tensor a({2, 3}, dev()); // Matrix
+  Tensor b({3}, dev());    // Vector
 
   // This should ideally broadcast b to [2, 3]
   // Currently MuNet ops.hpp will throw std::runtime_error("Add: shape
@@ -154,19 +116,96 @@ TEST(TensorTest, BroadcastingAdd) {
   EXPECT_EQ(c.shape()[1], 3);
 }
 
-TEST(OptimTest, SGDConsistency) {
-  Device dev{DeviceType::CPU, 0};
-  Tensor w({1}, dev, DataType::Float32, true);
-  ((float *)w.data())[0] = 1.0f;
+TEST(BroadcastTest, ShapeAndStrideLogic) {
+  // Case 1: Identical Shapes [2, 3] + [2, 3]
+  {
+    Shape s1 = {2, 3};
+    Strides st1 = default_strides(s1); // [3, 1]
+    auto info = compute_broadcast(s1, st1, s1, st1);
 
-  // Simulate a gradient
-  Tensor loss = w * w; // y = x^2, dy/dx = 2x
-  loss.backward();
+    EXPECT_TRUE(info.can_broadcast);
+    EXPECT_EQ(info.out_shape, Shape({2, 3}));
+    EXPECT_EQ(info.strides_a, Strides({3, 1}));
+    EXPECT_EQ(info.strides_b, Strides({3, 1}));
+  }
 
-  munet::optim::SGD opt({w}, 0.1f);
-  opt.step();
+  // Case 2: Prepending Dimensions [3] + [2, 3]
+  {
+    Shape s1 = {3};
+    Strides st1 = default_strides(s1); // [1]
+    Shape s2 = {2, 3};
+    Strides st2 = default_strides(s2); // [3, 1]
 
-  // w_new = 1.0 - (0.1 * 2.0) = 0.8
-  float val = ((float *)w.to({DeviceType::CPU, 0}).data())[0];
-  EXPECT_NEAR(val, 0.8f, 1e-6);
+    auto info = compute_broadcast(s1, st1, s2, st2);
+    EXPECT_TRUE(info.can_broadcast);
+    EXPECT_EQ(info.out_shape, Shape({2, 3}));
+    // Tensor A gets a 0-stride for the prepended dimension
+    EXPECT_EQ(info.strides_a, Strides({0, 1}));
+    EXPECT_EQ(info.strides_b, Strides({3, 1}));
+  }
+
+  // Case 3: Middle Dimension Expansion [2, 1, 4] + [1, 3, 4]
+  {
+    Shape s1 = {2, 1, 4};
+    Strides st1 = default_strides(s1); // [4, 4, 1]
+    Shape s2 = {1, 3, 4};
+    Strides st2 = default_strides(s2); // [12, 4, 1]
+
+    auto info = compute_broadcast(s1, st1, s2, st2);
+    EXPECT_TRUE(info.can_broadcast);
+    EXPECT_EQ(info.out_shape, Shape({2, 3, 4}));
+    // A is [2, 1, 4] -> strides [4, 0, 1]
+    EXPECT_EQ(info.strides_a, Strides({4, 0, 1}));
+    // B is [1, 3, 4] -> strides [0, 4, 1]
+    EXPECT_EQ(info.strides_b, Strides({0, 4, 1}));
+  }
+
+  // Case 4: Incompatible [2, 2] + [2, 3]
+  {
+    auto info = compute_broadcast({2, 2}, {2, 1}, {2, 3}, {3, 1});
+    EXPECT_FALSE(info.can_broadcast);
+  }
+}
+
+TEST(BroadcastTest, ScalarBroadcasting) {
+  // [2, 2] + [1]
+  Shape s1 = {2, 2};
+  Strides st1 = default_strides(s1);
+  Shape s2 = {1};
+  Strides st2 = {1};
+
+  auto info = compute_broadcast(s1, st1, s2, st2);
+  EXPECT_TRUE(info.can_broadcast);
+  EXPECT_EQ(info.out_shape, Shape({2, 2}));
+  EXPECT_EQ(info.strides_a, Strides({2, 1}));
+  EXPECT_EQ(info.strides_b, Strides({0, 0})); // All 0s for scalar
+}
+
+TEST(BroadcastTest, CPUExecution) {
+  Device cpu{DeviceType::CPU, 0};
+
+  // Test [2, 3] + [3]
+  Tensor a({2, 3}, cpu);
+  a.uniform_(10.0f, 10.0f); // All 10s
+
+  Tensor b({3}, cpu);
+  Tensor val_b({3}, cpu);
+  ((float *)val_b.data())[0] = 1.0f;
+  ((float *)val_b.data())[1] = 2.0f;
+  ((float *)val_b.data())[2] = 3.0f;
+  b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), cpu, cpu);
+
+  Tensor c = a + b;
+  EXPECT_EQ(c.shape(), Shape({2, 3}));
+
+  Tensor c_cpu = c.to(cpu);
+  float *data = (float *)c_cpu.data();
+  // Row 1
+  EXPECT_FLOAT_EQ(data[0], 11.0f);
+  EXPECT_FLOAT_EQ(data[1], 12.0f);
+  EXPECT_FLOAT_EQ(data[2], 13.0f);
+  // Row 2 (should be identical because b was broadcasted)
+  EXPECT_FLOAT_EQ(data[3], 11.0f);
+  EXPECT_FLOAT_EQ(data[4], 12.0f);
+  EXPECT_FLOAT_EQ(data[5], 13.0f);
 }

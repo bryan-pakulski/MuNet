@@ -29,9 +29,11 @@ public:
 
   // --- Compute Kernels ---
   void add(const Storage &a, const Storage &b, Storage &out,
-           size_t num_elements) override;
+           const BroadcastInfo &info) override;
   void mul(const Storage &a, const Storage &b, Storage &out,
-           size_t num_elements) override;
+           const BroadcastInfo &info) override;
+  void sub(const Storage &a, const Storage &b, Storage &out,
+           const BroadcastInfo &info) override;
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override;
   void relu(const Storage &in, Storage &out, size_t num_elements) override;
@@ -59,9 +61,6 @@ public:
   void mse_loss_backward(const Storage &grad_out, const Storage &pred,
                          const Storage &target, Storage &grad_in,
                          size_t num_elements) override;
-
-  void sub(const Storage &a, const Storage &b, Storage &out,
-           size_t num_elements) override;
   void update(Storage &weight, const Storage &grad, float lr,
               size_t num_elements) override;
 
@@ -102,6 +101,8 @@ public:
   void fill_uniform(Storage &out, float low, float high,
                     size_t num_elements) override;
   void sum(const Storage &in, Storage &out, size_t num_elements) override;
+  void sum_to_shape(const Storage &in, Storage &out, const Shape &in_shape,
+                    const Shape &out_shape) override;
   void adam_step(Storage &params, const Storage &grads, Storage &exp_avg,
                  Storage &exp_avg_sq, float lr, float beta1, float beta2,
                  float eps, int step, size_t num_elements) override;

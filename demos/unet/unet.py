@@ -96,12 +96,7 @@ if __name__ == "__main__":
             loss.backward()
             optimizer.step()
 
-            # Retrieve scalar loss to CPU for printing
-            # .to(CPU) creates a copy, then we access the data pointer via numpy
-            loss_val = np.array(
-                loss.to(munet.Device(munet.DeviceType.CPU, 0)), copy=False
-            )[0]
-            epoch_loss += loss_val
+            epoch_loss += loss.item()
             batches += 1
 
         print(f"Epoch {epoch}: Avg Loss {epoch_loss / batches:.6f}")

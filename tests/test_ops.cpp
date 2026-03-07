@@ -81,3 +81,86 @@ TEST_P(OpsTest, BroadCastSubMul) {
   EXPECT_FLOAT_EQ(((float *)res.data())[0], 10.0f);
   EXPECT_FLOAT_EQ(((float *)res.data())[1], 40.0f);
 }
+
+TEST_P(OpsTest, VectorToMatrixAdd) {
+  // [2, 3] + [3]
+  Tensor a({2, 3}, dev());
+  a.uniform_(10.0f, 10.0f); // All 10s
+
+  Tensor b({3}, dev());
+  Tensor val_b({3}, {DeviceType::CPU, 0});
+  ((float *)val_b.data())[0] = 1.0f;
+  ((float *)val_b.data())[1] = 2.0f;
+  ((float *)val_b.data())[2] = 3.0f;
+  b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), val_b.device(),
+                          dev());
+
+  Tensor c = a + b;
+  EXPECT_EQ(c.shape(), Shape({2, 3}));
+
+  Tensor c_cpu = c.to({DeviceType::CPU, 0});
+  float *data = (float *)c_cpu.data();
+  // Row 1: 10+1, 10+2, 10+3
+  EXPECT_FLOAT_EQ(data[0], 11.0f);
+  EXPECT_FLOAT_EQ(data[1], 12.0f);
+  EXPECT_FLOAT_EQ(data[2], 13.0f);
+  // Row 2: (Identical due to broadcast)
+  EXPECT_FLOAT_EQ(data[3], 11.0f);
+  EXPECT_FLOAT_EQ(data[4], 12.0f);
+  EXPECT_FLOAT_EQ(data[5], 13.0f);
+}
+
+TEST_P(OpsTest, ScalarToTensorMul) {
+  // [2, 2] * [1]
+  Tensor a({2, 2}, dev());
+  a.uniform_(5.0f, 5.0f);
+
+  Tensor b({1}, dev());
+  Tensor val_b({1}, {DeviceType::CPU, 0});
+  ((float *)val_b.data())[0] = 2.0f;
+  b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), val_b.device(),
+                          dev());
+
+  Tensor c = a * b;
+  Tensor res = c.to({DeviceType::CPU, 0});
+  float *data = (float *)res.data();
+  for (int i = 0; i < 4; ++i)
+    EXPECT_FLOAT_EQ(*data, 10.0f);
+}
+
+TEST_P(OpsTest, MultiDimExpansion) {
+  // [1, 3, 1] + [2, 1, 2] -> [2, 3, 2]
+  Tensor a({1, 3, 1}, dev()); // All 1s
+  a.uniform_(1.0f, 1.0f);
+  Tensor b({2, 1, 2}, dev()); // All 2s
+  b.uniform_(2.0f, 2.0f);
+
+  Tensor c = a + b;
+  EXPECT_EQ(c.shape(), Shape({2, 3, 2}));
+
+  Tensor res = c.to({DeviceType::CPU, 0});
+  float *data = (float *)res.data();
+  for (int i = 0; i < 12; ++i)
+    EXPECT_FLOAT_EQ(*data, 3.0f);
+}
+
+TEST_P(OpsTest, ScalarAutograd) {
+  // Testing the path where target_shape.numel() == 1
+  Tensor a({2, 2}, dev(), DataType::Float32, true);
+  a.uniform_(1.0f, 1.0f);
+
+  Tensor b({1}, dev(), DataType::Float32, true);
+  Tensor val_b({1}, {DeviceType::CPU, 0});
+  ((float *)val_b.data())[0] = 10.0f;
+  b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), val_b.device(),
+                          dev());
+
+  Tensor c = a + b; // Result is [2, 2]
+  Tensor loss = c.sum();
+  loss.backward();
+
+  // grad for 'a' should be [1, 1, 1, 1]
+  // grad for 'b' should be 4.0 (sum of all gradients in c)
+  Tensor gb = b.grad().to({DeviceType::CPU, 0});
+  EXPECT_FLOAT_EQ(((float *)gb.data())[0], 4.0f);
+}

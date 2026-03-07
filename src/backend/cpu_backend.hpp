@@ -1,5 +1,6 @@
 #pragma once
 #include "backend.hpp"
+#include "storage.hpp"
 #include "util.hpp"
 #include <algorithm>
 #include <cmath>
@@ -158,24 +159,77 @@ public:
   void all_reduce(Storage &buffer, size_t num_elements) override {}
 
   void add(const Storage &a, const Storage &b, Storage &out,
-           size_t num_elements) override {
+           const BroadcastInfo &info) override {
     const float *ap = (const float *)a.data();
     const float *bp = (const float *)b.data();
     float *op = (float *)out.data();
-    parallel_for(0, num_elements, [&](size_t s, size_t e) {
-      for (size_t i = s; i < e; ++i)
-        op[i] = ap[i] + bp[i];
+    size_t total = numel(info.out_shape);
+    int ndim = (int)info.out_shape.size();
+
+    // Fast Path: Identical shapes and contiguous
+    if (info.strides_a == default_strides(info.out_shape) &&
+        info.strides_b == default_strides(info.out_shape)) {
+      parallel_for(0, total, [&](size_t s, size_t e) {
+        for (size_t i = s; i < e; ++i)
+          op[i] = ap[i] + bp[i];
+      });
+      return;
+    }
+
+    // General Broadcast Path
+    parallel_for(0, total, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i) {
+        size_t off_a = 0, off_b = 0, curr = i;
+        for (int d = ndim - 1; d >= 0; --d) {
+          size_t coord = curr % info.out_shape[d];
+          off_a += coord * info.strides_a[d];
+          off_b += coord * info.strides_b[d];
+          curr /= info.out_shape[d];
+        }
+        op[i] = ap[off_a] + bp[off_b];
+      }
+    });
+  }
+
+  void sub(const Storage &a, const Storage &b, Storage &out,
+           const BroadcastInfo &info) override {
+    const float *ap = (const float *)a.data(), *bp = (const float *)b.data();
+    float *op = (float *)out.data();
+    size_t total = numel(info.out_shape);
+    int ndim = (int)info.out_shape.size();
+
+    parallel_for(0, total, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i) {
+        size_t off_a = 0, off_b = 0, curr = i;
+        for (int d = ndim - 1; d >= 0; --d) {
+          size_t coord = curr % info.out_shape[d];
+          off_a += coord * info.strides_a[d];
+          off_b += coord * info.strides_b[d];
+          curr /= info.out_shape[d];
+        }
+        op[i] = ap[off_a] - bp[off_b];
+      }
     });
   }
 
   void mul(const Storage &a, const Storage &b, Storage &out,
-           size_t num_elements) override {
-    const float *ap = (const float *)a.data();
-    const float *bp = (const float *)b.data();
+           const BroadcastInfo &info) override {
+    const float *ap = (const float *)a.data(), *bp = (const float *)b.data();
     float *op = (float *)out.data();
-    parallel_for(0, num_elements, [&](size_t s, size_t e) {
-      for (size_t i = s; i < e; ++i)
-        op[i] = ap[i] * bp[i];
+    size_t total = numel(info.out_shape);
+    int ndim = (int)info.out_shape.size();
+
+    parallel_for(0, total, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i) {
+        size_t off_a = 0, off_b = 0, curr = i;
+        for (int d = ndim - 1; d >= 0; --d) {
+          size_t coord = curr % info.out_shape[d];
+          off_a += coord * info.strides_a[d];
+          off_b += coord * info.strides_b[d];
+          curr /= info.out_shape[d];
+        }
+        op[i] = ap[off_a] * bp[off_b];
+      }
     });
   }
 
@@ -484,16 +538,6 @@ public:
           gi[idx] = go_val * (prob - t[idx]) / (float)batch_size;
         }
       }
-    });
-  }
-
-  void sub(const Storage &a, const Storage &b, Storage &out,
-           size_t num_elements) override {
-    const float *ap = (const float *)a.data(), *bp = (const float *)b.data();
-    float *op = (float *)out.data();
-    parallel_for(0, num_elements, [&](size_t s, size_t e) {
-      for (size_t i = s; i < e; ++i)
-        op[i] = ap[i] - bp[i];
     });
   }
 
@@ -816,6 +860,46 @@ public:
         p[i] -= step_size * m[i] / denom;
       }
     });
+  }
+
+  void sum_to_shape(const Storage &in, Storage &out, const Shape &in_shape,
+                    const Shape &out_shape) override {
+
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+
+    // Zero output
+    std::memset(op, 0, out.size_bytes());
+
+    int ndim = (int)in_shape.size();
+    int out_ndim = (int)out_shape.size();
+
+    Strides in_strides = default_strides(in_shape);
+    Strides out_strides = default_strides(out_shape);
+
+    size_t total = numel(in_shape);
+
+    for (size_t i = 0; i < total; ++i) {
+
+      size_t out_off = 0;
+      size_t curr = i;
+
+      for (int d = ndim - 1; d >= 0; --d) {
+
+        size_t coord = curr % in_shape[d];
+        curr /= in_shape[d];
+
+        int out_d_idx = d - (ndim - out_ndim);
+
+        if (out_d_idx >= 0) {
+          if (out_shape[out_d_idx] != 1) {
+            out_off += coord * out_strides[out_d_idx];
+          }
+        }
+      }
+
+      op[out_off] += ip[i];
+    }
   }
 };
 } // namespace munet

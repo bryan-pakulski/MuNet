@@ -80,3 +80,34 @@ TEST_P(LossTest, CrossEntropyForwardBackward) {
   EXPECT_NEAR(grad_l[0], -0.17050f, 1e-4);
   EXPECT_NEAR(grad_l[5], -0.17050f, 1e-4);
 }
+
+TEST_P(LossTest, CrossEntropyLoss) {
+  Tensor logits({1, 3}, dev(), DataType::Float32, true);
+  Tensor target({1, 3}, dev());
+
+  // Fill CPU then copy to ensure exact values
+  Tensor l_cpu({1, 3}, {DeviceType::CPU, 0});
+  float *l_ptr = (float *)l_cpu.data();
+  l_ptr[0] = 0.1f;
+  l_ptr[1] = 0.2f;
+  l_ptr[2] = 0.7f;
+
+  Tensor t_cpu({1, 3}, {DeviceType::CPU, 0});
+  float *t_ptr = (float *)t_cpu.data();
+  t_ptr[0] = 0.0f;
+  t_ptr[1] = 0.0f;
+  t_ptr[2] = 1.0f;
+
+  logits.impl_->backend().copy(l_cpu.data(), logits.data(), logits.bytes(),
+                               l_cpu.device(), dev());
+  target.impl_->backend().copy(t_cpu.data(), target.data(), target.bytes(),
+                               t_cpu.device(), dev());
+
+  Tensor loss = logits.cross_entropy(target);
+  loss.backward();
+
+  Tensor loss_cpu = loss.to({DeviceType::CPU, 0});
+  // -log(exp(0.7) / (exp(0.1)+exp(0.2)+exp(0.7)))
+  EXPECT_NEAR(((float *)loss_cpu.data())[0], 0.7679f, 1e-3);
+  EXPECT_TRUE(logits.has_grad());
+}

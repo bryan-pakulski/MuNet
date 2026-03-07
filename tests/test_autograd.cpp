@@ -79,3 +79,22 @@ TEST(AutogradTest, GradCheckLinear) {
 
   EXPECT_NEAR(analytical, numerical, 1e-3);
 }
+
+TEST_P(AutogradTest, SimpleAutograd) {
+  Tensor w({2, 2}, dev(), DataType::Float32, true);
+  Tensor x({2, 2}, dev(), DataType::Float32, false);
+
+  w.uniform_(1.0f, 1.0f);
+  x.uniform_(1.0f, 1.0f);
+
+  Tensor z = w * x;
+  Tensor loss = z.sum();
+  loss.backward();
+
+  ASSERT_TRUE(w.has_grad());
+  Tensor grad = w.grad().to({DeviceType::CPU, 0});
+  const float *g_ptr = static_cast<const float *>(grad.data());
+  // d(sum(w*x))/dw = x. Since x is all 1s, grad is all 1s.
+  for (size_t i = 0; i < 4; ++i)
+    EXPECT_FLOAT_EQ(g_ptr[i], 1.0f);
+}
