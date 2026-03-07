@@ -1,4 +1,4 @@
-# μNet: A lightweight C++ GPU agnostic AI framework
+# μNet: A lightweight C++ GPU agnostic AI framework for training & inference
 
 μNet is a lightweight C++ AI framework with Python bindings.
 
@@ -50,6 +50,8 @@ Production Ready Improvements:
  2. Memory Management: You use a simple caching allocator, but it lacks a memory-fragmentation strategy or a "Memory Arena."                                                               
  3. Missing Dtypes: You are essentially locked into Float32. Production requires BFloat16, Int8 (quantization), and Float16.                                                               
  4. Error Handling: There is limited validation for tensor strides, broadcast safety, or device-side out-of-memory errors.                                                                 
+
+Inference Engine:
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -119,9 +121,9 @@ Modify `src/backend.hpp` to add the virtual function definitions for your new op
 
 Implement the specific logic for each backend:
 
- - CPU (src/backend/cpu_backend.hpp): Implement using parallel for loops or SIMD.
- - CUDA (src/backend/cuda_backend.cu & src/backend/cuda_backend.hpp): Write the CUDA kernel (__global__ void ...) and the host dispatch function.
- - Vulkan (src/backend/vulkan_backend.cpp & src/backend/vulkan_backend.hpp):
+ - CPU (`src/backend/cpu_backend.hpp`): Implement using parallel for loops or SIMD.
+ - CUDA (`src/backend/cuda_backend.cu` & `src/backend/cuda_backend.hpp`): Write the CUDA kernel `(__global__ void ...)` and the host dispatch function.
+ - Vulkan (`src/backend/vulkan_backend.cpp` & `src/backend/vulkan_backend.hpp`):
     1. Write the GLSL compute shader source string.
     2. In the constructor, compile it using createComputePipeline.
     3. Implement the dispatch logic using dispatch_kernel.
@@ -130,11 +132,11 @@ Implement the specific logic for each backend:
 
 Add the high-level logic in src/ops.hpp. This is where the Autograd magic happens.
 
- 1. Create a struct MyOpBackward : public Node that defines how to calculate gradients.
- 2. Create a function inline Tensor my_op(...) that:
+ 1. Create a `struct MyOpBackward : public Node` that defines how to calculate gradients.
+ 2. Create a function `inline Tensor my_op(...)` that:
     - Allocates the output tensor.
-    - Calls backend->my_op(...).
-    - If requires_grad is true, creates the MyOpBackward node and links edges.
+    - Calls `backend->my_op(...)`.
+    - If `requires_grad` is true, creates the `MyOpBackward` node and links edges.
 
 ### 4. Expose to Tensor API
 
@@ -142,7 +144,7 @@ Add a method to the Tensor class in `src/tensor.hpp` and `src/tensor.cpp` that d
 
 ### 5. Python Binding
 
-Finally, expose the method to Python in src/bindings.cpp.
+Finally, expose the method to Python in `src/bindings.cpp`.
 
 
 ```.def("my_op", &Tensor::my_op, py::arg("param"))```
@@ -162,11 +164,11 @@ You can enable different levels of debug / profiling via the following environme
 
 ## Requirements
 
- • CMake 3.10+
- • C++17 Compiler
- • Optional: CUDA Toolkit (nvcc)
- • Optional: Vulkan SDK (glslc must be in PATH)
- • Python 3.10+ (and development headers)
+ - CMake 3.10+
+ - C++17 Compiler
+ - Optional: CUDA Toolkit (nvcc)
+ - Optional: Vulkan SDK (glslc must be in PATH)
+ - Python 3.10+ (and development headers)
 
 ## Build Steps
 
