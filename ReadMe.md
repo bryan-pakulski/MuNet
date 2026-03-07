@@ -1,7 +1,10 @@
 # μNet: A lightweight C++ GPU agnostic AI framework
 
-μNet is a lightweight C++ AI framework with Python bindings. It is designed to be GPU agnostic with the intended final goal of running on edge devices with limited resources. It
-features a PyTorch-like API, making it familiar to use while handling low-level memory management and compute dispatch across CPU, CUDA, and Vulkan backends.
+μNet is a lightweight C++ AI framework with Python bindings.
+
+It is designed to be GPU agnostic with the intended final goal of running on edge devices with limited resources.
+
+It features a PyTorch-like API, making it familiar to use while handling low-level memory management and compute dispatch across CPU, CUDA, and Vulkan backends.
 
 # Features
 
