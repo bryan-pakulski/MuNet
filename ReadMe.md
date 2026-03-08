@@ -14,6 +14,14 @@ It features a PyTorch-like API, making it familiar to use while handling low-lev
 - **Dynamic Autograd**: define-by-run automatic differentiation engine (DAG).
 - **Cross Platform**: Built for Linux/Unix systems.
 - **Model Parallelism**: tensors can exist on different devices within the same graph (e.g., Layer 1 on CPU, Layer 2 on Vulkan).
+- **Shared Module Core**: `munet::core::Module` now owns parameter/buffer/module registration so training (`munet::nn`) and future inference libraries can share the same model graph foundation.
+- **Library Split for Extensibility**:
+  - `munet_core`: backend + tensor runtime shared by all products.
+  - `munet_training`: training APIs (`nn`, optimizers) on top of core.
+  - `munet_inference`: deploy/edge-focused inference APIs on top of core.
+- **Backend Modularity**:
+  - Debug/profiling interception now lives in a dedicated backend module (`munet_backend_debug`) instead of being embedded in tensor runtime code.
+  - Backends are now factory-registered via `BackendManager::register_backend(...)`, making new backend integrations and swapping implementations simpler.
 
 # Documentation
 Documentation can be generated using pydoc:
@@ -113,6 +121,15 @@ Additional Layers & Operators:
 
 μNet is designed to be modular. Adding new functionality involves touching the backend interface, the specific implementations, and the autograd engine.
 
+### Backend Registration (New)
+Use `BackendManager::register_backend(DeviceType, factory)` to plug in a backend implementation without editing tensor dispatch logic.
+
+```cpp
+BackendManager::register_backend(DeviceType::CPU, [](Device d) {
+    return std::make_shared<MyCPUBackend>(d.index);
+});
+```
+
 ### 1. Define the Interface
 Modify `src/backend.hpp` to add the virtual function definitions for your new operation (both forward and backward if applicable).
 
@@ -156,10 +173,13 @@ You can enable different levels of debug / profiling via the following environme
 
 ```
  python script.py                                Full speed. No overhead.
- MUNET_PROFILE=1 python script.py                Measures tensor transfers & kernels kernels.
- MUNET_DEBUG=1 python script.py                  Prints logs and checks for NaNs. Slows down significantly.
- MUNET_DEBUG=1 MUNET_PROFILE=1 python script.py  Full visibility. Logs, NaNs, and complete performance summary.
+ MUNET_PROFILE=1 python script.py                Enables kernel/memory profiling and auto-prints a summary at process exit.
+ MUNET_DEBUG=1 python script.py                  Enables verbose debug logs and NaN checks.
+ MUNET_DEBUG=1 MUNET_PROFILE=1 python script.py  Full visibility: debug logs + profiler summaries.
+ MUNET_LOG_LEVEL=0..3 python script.py           Control log verbosity (0=error, 1=warn, 2=info, 3=debug).
 ```
+
+Profiler summaries are now printed automatically on shutdown when `MUNET_PROFILE=1`, even if `print_profiler_stats()` is not called explicitly from Python.
 
 # Building
 

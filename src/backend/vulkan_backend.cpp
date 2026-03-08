@@ -1,6 +1,7 @@
 #include "vulkan_backend.hpp"
 #include "storage.hpp"
 #include "util.hpp"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -26,7 +27,7 @@ namespace munet {
 
 // --- Configuration ---
 static const int MAX_FRAMES_IN_FLIGHT = 2;
-static const int BATCH_SIZE_LIMIT = 1000; // Flush after this many ops
+static const int BATCH_SIZE_LIMIT = 2048; // Flush after this many ops
 static const int MAX_DESCRIPTORS_PER_FRAME = 2048;
 
 // --- Global Vulkan State ---
@@ -40,6 +41,8 @@ static VkDescriptorSetLayout descriptorSetLayout;
 
 // Per-Frame Resources
 static VkDescriptorPool descriptorPools[MAX_FRAMES_IN_FLIGHT];
+static std::vector<VkDescriptorSet> frameDescriptorSets[MAX_FRAMES_IN_FLIGHT];
+static uint32_t descriptorSetCursor[MAX_FRAMES_IN_FLIGHT] = {0};
 static VkCommandBuffer commandBuffers[MAX_FRAMES_IN_FLIGHT];
 static VkFence inFlightFences[MAX_FRAMES_IN_FLIGHT];
 static VkQueryPool queryPools[MAX_FRAMES_IN_FLIGHT];
@@ -145,7 +148,24 @@ static std::vector<uint32_t> compileShader(const std::string &name,
   return buffer;
 }
 
-VulkanBackend::VulkanBackend() {
+
+
+static void allocate_frame_descriptor_sets(int frame) {
+  std::vector<VkDescriptorSetLayout> layouts(MAX_DESCRIPTORS_PER_FRAME,
+                                             descriptorSetLayout);
+  frameDescriptorSets[frame].resize(MAX_DESCRIPTORS_PER_FRAME);
+
+  VkDescriptorSetAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  allocInfo.descriptorPool = descriptorPools[frame];
+  allocInfo.descriptorSetCount = MAX_DESCRIPTORS_PER_FRAME;
+  allocInfo.pSetLayouts = layouts.data();
+
+  VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo,
+                                    frameDescriptorSets[frame].data()));
+  descriptorSetCursor[frame] = 0;
+}
+VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
   VkApplicationInfo appInfo{};
   appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
   appInfo.apiVersion = VK_API_VERSION_1_2;
@@ -156,13 +176,26 @@ VulkanBackend::VulkanBackend() {
 
   uint32_t deviceCount = 0;
   vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+  if (deviceCount == 0) {
+    throw std::runtime_error("No Vulkan physical devices found.");
+  }
+
   std::vector<VkPhysicalDevice> devices(deviceCount);
   vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
-  physicalDevice = devices[0];
+
+  if (device_index_ < 0 || device_index_ >= static_cast<int>(deviceCount)) {
+    throw std::runtime_error("Requested Vulkan device index out of range: " +
+                             std::to_string(device_index_) +
+                             " (available: " + std::to_string(deviceCount) + ")");
+  }
+
+  physicalDevice = devices[static_cast<size_t>(device_index_)];
 
   VkPhysicalDeviceProperties props;
   vkGetPhysicalDeviceProperties(physicalDevice, &props);
   timestampPeriod = props.limits.timestampPeriod;
+  MUNET_LOG << "Vulkan backend using device index " << device_index_ << " ("
+            << props.deviceName << ")" << std::endl;
 
   uint32_t queueFamilyCount = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
@@ -261,6 +294,7 @@ VulkanBackend::VulkanBackend() {
     descPoolInfo.maxSets = MAX_DESCRIPTORS_PER_FRAME;
     VK_CHECK(vkCreateDescriptorPool(device, &descPoolInfo, nullptr,
                                     &descriptorPools[i]));
+    allocate_frame_descriptor_sets(i);
   }
 
   // Load Kernels
@@ -887,44 +921,48 @@ VulkanBackend::VulkanBackend() {
 						int tB;
 				} p;
 
+				shared float As[16][16];
+				shared float Bs[16][16];
+
 				void main() {
+						int col = int(gl_GlobalInvocationID.x);
+						int row = int(gl_GlobalInvocationID.y);
+						int lx = int(gl_LocalInvocationID.x);
+						int ly = int(gl_LocalInvocationID.y);
 
-						int n = int(gl_GlobalInvocationID.x);
-						int m = int(gl_GlobalInvocationID.y);
-
-						if (m >= p.M || n >= p.N) return;
+						if (row >= p.M || col >= p.N) return;
 
 						float sum = 0.0;
 
+						// Fast path for common case (no transposes): tiled shared-memory GEMM.
 						if (p.tA == 0 && p.tB == 0) {
+								int tiles = (p.K + 15) / 16;
+								for (int t = 0; t < tiles; ++t) {
+										int kA = t * 16 + lx;
+										int kB = t * 16 + ly;
 
-								int a_row = m * p.K;
-								int b_col = n;
+										As[ly][lx] = (kA < p.K) ? a[row * p.K + kA] : 0.0;
+										Bs[ly][lx] = (kB < p.K) ? b[kB * p.N + col] : 0.0;
 
-								for (int k = 0; k < p.K; ++k)
-										sum += a[a_row + k] * b[k * p.N + b_col];
+										barrier();
 
+										for (int k = 0; k < 16; ++k)
+												sum += As[ly][k] * Bs[k][lx];
+
+										barrier();
+								}
 						} else if (p.tA == 1 && p.tB == 0) {
-
-								int b_col = n;
-
 								for (int k = 0; k < p.K; ++k)
-										sum += a[k * p.M + m] * b[k * p.N + b_col];
-
+										sum += a[k * p.M + row] * b[k * p.N + col];
 						} else if (p.tA == 0 && p.tB == 1) {
-
-								int a_row = m * p.K;
-
 								for (int k = 0; k < p.K; ++k)
-										sum += a[a_row + k] * b[n * p.K + k];
-
+										sum += a[row * p.K + k] * b[col * p.K + k];
 						} else {
-
 								for (int k = 0; k < p.K; ++k)
-										sum += a[k * p.M + m] * b[n * p.K + k];
+										sum += a[k * p.M + row] * b[col * p.K + k];
 						}
 
-						c[m * p.N + n] = sum;
+						c[row * p.N + col] = sum;
 				}
     )");
 
@@ -1799,6 +1837,7 @@ void ensure_recording() {
 
   // Reset Descriptor Pool logic: wipe the slate clean for this frame
   VK_CHECK(vkResetDescriptorPool(device, descriptorPools[currentFrame], 0));
+  allocate_frame_descriptor_sets(currentFrame);
 
   VK_CHECK(vkResetFences(device, 1, &inFlightFences[currentFrame]));
 
@@ -1808,6 +1847,7 @@ void ensure_recording() {
 
   VkCommandBufferBeginInfo beginInfo{};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
   isRecording = true;
 }
@@ -1998,22 +2038,23 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   ensure_recording();
   VkCommandBuffer cmd = commandBuffers[currentFrame];
 
-  VkDescriptorSetAllocateInfo allocSetInfo{};
-  allocSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-  allocSetInfo.descriptorPool = descriptorPools[currentFrame];
-  allocSetInfo.descriptorSetCount = 1;
-  allocSetInfo.pSetLayouts = &descriptorSetLayout;
-  VkDescriptorSet ds;
-  VK_CHECK(vkAllocateDescriptorSets(device, &allocSetInfo, &ds));
+  if (descriptorSetCursor[currentFrame] >=
+      frameDescriptorSets[currentFrame].size()) {
+    flush_batch();
+    ensure_recording();
+  }
 
-  // Always update 8 bindings to match layout, padding with first buffer if
-  // needed
-  std::vector<VkDescriptorBufferInfo> bInfos(8);
-  std::vector<VkWriteDescriptorSet> writes(8);
+  VkDescriptorSet ds = frameDescriptorSets[currentFrame][descriptorSetCursor[currentFrame]++];
 
-  for (size_t i = 0; i < 8; ++i) {
-    void *ptr =
-        (i < buffers.size() && buffers[i] != nullptr) ? buffers[i] : buffers[0];
+  // Update only the bindings used by this kernel to lower CPU overhead.
+  const uint32_t write_count =
+      static_cast<uint32_t>(std::max<size_t>(1, std::min<size_t>(buffers.size(), 8)));
+
+  VkDescriptorBufferInfo bInfos[8]{};
+  VkWriteDescriptorSet writes[8]{};
+
+  for (uint32_t i = 0; i < write_count; ++i) {
+    void *ptr = (buffers[i] != nullptr) ? buffers[i] : buffers[0];
     bInfos[i].buffer = (VkBuffer)(uint64_t)ptr;
     bInfos[i].offset = 0;
     bInfos[i].range = VK_WHOLE_SIZE;
@@ -2025,19 +2066,14 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
     writes[i].descriptorCount = 1;
     writes[i].pBufferInfo = &bInfos[i];
   }
-  vkUpdateDescriptorSets(device, 8, writes.data(), 0, nullptr);
+  vkUpdateDescriptorSets(device, write_count, writes, 0, nullptr);
 
   VkMemoryBarrier memoryBarrier{};
   memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-  memoryBarrier.srcAccessMask =
-      VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
-      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+  memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
   memoryBarrier.dstAccessMask =
-      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
-  vkCmdPipelineBarrier(cmd,
-                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                           VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
                        &memoryBarrier, 0, nullptr, 0, nullptr);
 
@@ -2046,11 +2082,16 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                           0, 1, &ds, 0, nullptr);
   vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                      pcSize, pc);
-  vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                      queryPools[currentFrame], 0);
+
+  if (is_profile_enabled()) {
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        queryPools[currentFrame], 0);
+  }
   vkCmdDispatch(cmd, x, y, z);
-  vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                      queryPools[currentFrame], 1);
+  if (is_profile_enabled()) {
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                        queryPools[currentFrame], 1);
+  }
 
   currentBatchSize++;
   if (currentBatchSize >= BATCH_SIZE_LIMIT) {
