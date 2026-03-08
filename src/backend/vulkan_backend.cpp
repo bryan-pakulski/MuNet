@@ -1,6 +1,7 @@
 #include "vulkan_backend.hpp"
 #include "storage.hpp"
 #include "util.hpp"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -40,6 +41,8 @@ static VkDescriptorSetLayout descriptorSetLayout;
 
 // Per-Frame Resources
 static VkDescriptorPool descriptorPools[MAX_FRAMES_IN_FLIGHT];
+static std::vector<VkDescriptorSet> frameDescriptorSets[MAX_FRAMES_IN_FLIGHT];
+static uint32_t descriptorSetCursor[MAX_FRAMES_IN_FLIGHT] = {0};
 static VkCommandBuffer commandBuffers[MAX_FRAMES_IN_FLIGHT];
 static VkFence inFlightFences[MAX_FRAMES_IN_FLIGHT];
 static VkQueryPool queryPools[MAX_FRAMES_IN_FLIGHT];
@@ -145,6 +148,23 @@ static std::vector<uint32_t> compileShader(const std::string &name,
   return buffer;
 }
 
+
+
+static void allocate_frame_descriptor_sets(int frame) {
+  std::vector<VkDescriptorSetLayout> layouts(MAX_DESCRIPTORS_PER_FRAME,
+                                             descriptorSetLayout);
+  frameDescriptorSets[frame].resize(MAX_DESCRIPTORS_PER_FRAME);
+
+  VkDescriptorSetAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  allocInfo.descriptorPool = descriptorPools[frame];
+  allocInfo.descriptorSetCount = MAX_DESCRIPTORS_PER_FRAME;
+  allocInfo.pSetLayouts = layouts.data();
+
+  VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo,
+                                    frameDescriptorSets[frame].data()));
+  descriptorSetCursor[frame] = 0;
+}
 VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
   VkApplicationInfo appInfo{};
   appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -274,6 +294,7 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
     descPoolInfo.maxSets = MAX_DESCRIPTORS_PER_FRAME;
     VK_CHECK(vkCreateDescriptorPool(device, &descPoolInfo, nullptr,
                                     &descriptorPools[i]));
+    allocate_frame_descriptor_sets(i);
   }
 
   // Load Kernels
@@ -1812,6 +1833,7 @@ void ensure_recording() {
 
   // Reset Descriptor Pool logic: wipe the slate clean for this frame
   VK_CHECK(vkResetDescriptorPool(device, descriptorPools[currentFrame], 0));
+  allocate_frame_descriptor_sets(currentFrame);
 
   VK_CHECK(vkResetFences(device, 1, &inFlightFences[currentFrame]));
 
@@ -2012,22 +2034,23 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   ensure_recording();
   VkCommandBuffer cmd = commandBuffers[currentFrame];
 
-  VkDescriptorSetAllocateInfo allocSetInfo{};
-  allocSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-  allocSetInfo.descriptorPool = descriptorPools[currentFrame];
-  allocSetInfo.descriptorSetCount = 1;
-  allocSetInfo.pSetLayouts = &descriptorSetLayout;
-  VkDescriptorSet ds;
-  VK_CHECK(vkAllocateDescriptorSets(device, &allocSetInfo, &ds));
+  if (descriptorSetCursor[currentFrame] >=
+      frameDescriptorSets[currentFrame].size()) {
+    flush_batch();
+    ensure_recording();
+  }
 
-  // Always update 8 bindings to match layout, padding with first buffer if
-  // needed. Use stack arrays to avoid per-dispatch heap allocations.
+  VkDescriptorSet ds = frameDescriptorSets[currentFrame][descriptorSetCursor[currentFrame]++];
+
+  // Update only the bindings used by this kernel to lower CPU overhead.
+  const uint32_t write_count =
+      static_cast<uint32_t>(std::max<size_t>(1, std::min<size_t>(buffers.size(), 8)));
+
   VkDescriptorBufferInfo bInfos[8]{};
   VkWriteDescriptorSet writes[8]{};
 
-  for (size_t i = 0; i < 8; ++i) {
-    void *ptr =
-        (i < buffers.size() && buffers[i] != nullptr) ? buffers[i] : buffers[0];
+  for (uint32_t i = 0; i < write_count; ++i) {
+    void *ptr = (buffers[i] != nullptr) ? buffers[i] : buffers[0];
     bInfos[i].buffer = (VkBuffer)(uint64_t)ptr;
     bInfos[i].offset = 0;
     bInfos[i].range = VK_WHOLE_SIZE;
@@ -2039,7 +2062,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
     writes[i].descriptorCount = 1;
     writes[i].pBufferInfo = &bInfos[i];
   }
-  vkUpdateDescriptorSets(device, 8, writes, 0, nullptr);
+  vkUpdateDescriptorSets(device, write_count, writes, 0, nullptr);
 
   VkMemoryBarrier memoryBarrier{};
   memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;

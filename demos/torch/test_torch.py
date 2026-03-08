@@ -81,6 +81,13 @@ batch_size = 4
 x_np = np.random.randn(batch_size, 1, 32, 32).astype(np.float32)
 y_np = np.random.randn(batch_size, 1).astype(np.float32)
 
+# Keep device tensors persistent to benchmark kernel/optimizer speed rather than
+# host->device transfer overhead each iteration.
+m_tx = munet.from_numpy(x_np).to(m_dev)
+m_ty = munet.from_numpy(y_np).to(m_dev)
+t_tx = torch.from_numpy(x_np).to(t_dev)
+t_ty = torch.from_numpy(y_np).to(t_dev)
+
 print(f"{'Iter':<6} | {'MuNet Loss':<12} | {'Torch Loss':<12} | {'Diff':<12}")
 print("-" * 50)
 
@@ -97,10 +104,8 @@ for i in range(iters):
     # MuNet Step
     def munet_step():
         m_opt.zero_grad()
-        tx = munet.from_numpy(x_np).to(m_dev)
-        ty = munet.from_numpy(y_np).to(m_dev)
-        pred = m_model.forward(tx)
-        loss = pred.mse_loss(ty)
+        pred = m_model.forward(m_tx)
+        loss = pred.mse_loss(m_ty)
         loss.backward()
         m_opt.step()
         return loss.item()
@@ -108,10 +113,8 @@ for i in range(iters):
     # Torch Step
     def torch_step():
         t_opt.zero_grad()
-        tx = torch.from_numpy(x_np).to(t_dev)
-        ty = torch.from_numpy(y_np).to(t_dev)
-        pred = t_model(tx)
-        loss = nn.functional.mse_loss(pred, ty)
+        pred = t_model(t_tx)
+        loss = nn.functional.mse_loss(pred, t_ty)
         loss.backward()
         t_opt.step()
         return loss.item()
