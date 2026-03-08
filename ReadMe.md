@@ -60,6 +60,7 @@ The project has a working core runtime + training stack with CPU/CUDA/Vulkan bac
 - Modular targets: `munet_core`, `munet_training`, `munet_inference`.
 - Backend factory and cache (`BackendManager`) plus optional debug/profiler wrapper.
 - Core tensor ops needed for attention prototypes (`softmax`, `log_softmax`, `masked_fill`, `permute`).
+- Initial inference runtime scaffold: `inference::Engine` with `load`, `prepare` (warmup), `run`, `run_batch`, and basic latency stats.
 
 # Future Plans
 - Transformer stack (LayerNorm + MultiHeadAttention + MLP) and a tiny decoder-only LLM demo.
