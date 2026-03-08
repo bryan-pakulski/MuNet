@@ -431,6 +431,16 @@ PYBIND11_MODULE(munet, m) {
       .def(py::init<float>(), py::arg("p") = 0.5f)
       .def_readonly("p", &nn::Dropout::p_);
 
+  py::class_<nn::Embedding, nn::Module, std::shared_ptr<nn::Embedding>>(
+      nn, "Embedding",
+      "Projects one-hot/probability token vectors [B,T,V] into embeddings "
+      "[B,T,D].")
+      .def(py::init<int, int>(), py::arg("num_embeddings"),
+           py::arg("embedding_dim"))
+      .def_readonly("num_embeddings", &nn::Embedding::num_embeddings_)
+      .def_readonly("embedding_dim", &nn::Embedding::embedding_dim_)
+      .def_readonly("weight", &nn::Embedding::weight);
+
   py::class_<nn::GlobalAvgPool2d, nn::Module, std::shared_ptr<nn::GlobalAvgPool2d>>(
       nn, "GlobalAvgPool2d", "Applies global average pooling over spatial dimensions.")
       .def(py::init<>());
@@ -566,6 +576,8 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name, 'negative_slope': m.negative_slope}
          elif name == 'Dropout':
              return {'type': name, 'p': m.p}
+         elif name == 'Embedding':
+             return {'type': name, 'num_embeddings': m.num_embeddings, 'embedding_dim': m.embedding_dim}
          else:
              raise ValueError(f"Unknown module type {name}")
 
@@ -603,6 +615,7 @@ PYBIND11_MODULE(munet, m) {
              elif t == 'Tanh': return munet.nn.Tanh()
              elif t == 'LeakyReLU': return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
              elif t == 'Dropout': return munet.nn.Dropout(cfg.get('p', 0.5))
+             elif t == 'Embedding': return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'])
              elif t == 'Flatten': return munet.nn.Flatten()
 
          module = build_module(config)

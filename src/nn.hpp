@@ -157,6 +157,45 @@ public:
   float p_;
 };
 
+
+class Embedding : public Module {
+public:
+  Embedding(int num_embeddings, int embedding_dim)
+      : num_embeddings_(num_embeddings), embedding_dim_(embedding_dim) {
+    if (num_embeddings_ <= 0 || embedding_dim_ <= 0)
+      throw std::runtime_error(
+          "Embedding expects positive num_embeddings and embedding_dim");
+
+    Tensor w({num_embeddings_, embedding_dim_}, Device{DeviceType::CPU, 0},
+             DataType::Float32, true);
+    float limit = 1.0f / std::sqrt((float)embedding_dim_);
+    w.uniform_(-limit, limit);
+    weight = w;
+    register_parameter("weight", weight);
+  }
+
+  Tensor forward(Tensor x) override {
+    // x is expected to be one-hot/probability tensor of shape [B, T, V],
+    // where V == num_embeddings_.
+    auto s = x.shape();
+    if (s.size() != 3)
+      throw std::runtime_error(
+          "Embedding expects input shape [batch, sequence, vocab]");
+    if (s[2] != num_embeddings_)
+      throw std::runtime_error("Embedding input vocab dimension must match "
+                               "num_embeddings");
+
+    int B = s[0], T = s[1], V = s[2];
+    Tensor flat = x.reshape({B * T, V});
+    Tensor out = flat.matmul(weight);
+    return out.reshape({B, T, embedding_dim_});
+  }
+
+  Tensor weight;
+  int num_embeddings_;
+  int embedding_dim_;
+};
+
 class GlobalAvgPool2d : public Module {
 public:
   Tensor forward(Tensor x) override {

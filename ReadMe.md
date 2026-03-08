@@ -107,7 +107,7 @@ Additional Layers & Operators:
 
 3. Advanced Modules
 
-     - Embedding: nn::Embedding. (Mapping integer IDs to vectors; the foundation of all NLP models).
+     - Embedding: nn::Embedding. (Mapping integer IDs to vectors; the foundation of all NLP models). ✅ Implemented in `munet.nn` (one-hot/probability input variant).
      - RNN/LSTM: nn::LSTM or nn::GRU. (To handle sequential or time-series data).
      - Padding Layers: nn::ZeroPad2d. (When you need padding outside of the convolution operation).
 
@@ -242,3 +242,13 @@ Run the Python integration tests:
 ```
 make py-test
 ```
+
+## LLM Demo (New)
+
+A minimal character-level training + inference example is available at:
+
+```
+demos/llm/tiny_llm.py
+```
+
+It trains a tiny next-token model with `nn.Embedding` + MLP head using cross-entropy, then runs autoregressive text generation.

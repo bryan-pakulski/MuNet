@@ -141,3 +141,43 @@ TEST(NNTest, DropoutTrainEvalBehavior) {
     EXPECT_NEAR(eval_data[i], 1.0f, 1e-6f);
   }
 }
+
+
+TEST(NNTest, EmbeddingForwardOneHot) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::Embedding emb(4, 3);
+
+  // Make weights deterministic: rows are basis-like vectors.
+  float *w = static_cast<float *>(emb.weight.data());
+  // row 0
+  w[0] = 1.0f; w[1] = 0.0f; w[2] = 0.0f;
+  // row 1
+  w[3] = 0.0f; w[4] = 1.0f; w[5] = 0.0f;
+  // row 2
+  w[6] = 0.0f; w[7] = 0.0f; w[8] = 1.0f;
+  // row 3
+  w[9] = 1.0f; w[10] = 1.0f; w[11] = 1.0f;
+
+  // x: [B=1, T=2, V=4], tokens [2, 3]
+  Tensor x({1, 2, 4}, cpu);
+  float *xd = static_cast<float *>(x.data());
+  for (int i = 0; i < 8; ++i)
+    xd[i] = 0.0f;
+  xd[2] = 1.0f; // token 2 at t=0
+  xd[7] = 1.0f; // token 3 at t=1
+
+  Tensor y = emb.forward(x).to(cpu);
+  EXPECT_EQ(y.shape()[0], 1);
+  EXPECT_EQ(y.shape()[1], 2);
+  EXPECT_EQ(y.shape()[2], 3);
+
+  const float *yd = static_cast<const float *>(y.data());
+  // token 2 -> [0,0,1]
+  EXPECT_NEAR(yd[0], 0.0f, 1e-6f);
+  EXPECT_NEAR(yd[1], 0.0f, 1e-6f);
+  EXPECT_NEAR(yd[2], 1.0f, 1e-6f);
+  // token 3 -> [1,1,1]
+  EXPECT_NEAR(yd[3], 1.0f, 1e-6f);
+  EXPECT_NEAR(yd[4], 1.0f, 1e-6f);
+  EXPECT_NEAR(yd[5], 1.0f, 1e-6f);
+}
