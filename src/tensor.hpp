@@ -78,6 +78,7 @@ public:
   void set_requires_grad(bool r) { impl_->requires_grad = r; }
 
   Tensor transpose(int dim0, int dim1) const;
+  Tensor permute(const std::vector<int> &dims) const;
   Tensor contiguous() const;
 
   Tensor grad() const {
@@ -114,6 +115,7 @@ public:
   Tensor relu() const;
   Tensor sigmoid() const;
   Tensor softmax(int dim = -1) const;
+  Tensor log_softmax(int dim = -1) const;
   Tensor sum() const;
   Tensor reshape(Shape new_shape) const;
   Tensor masked_fill(const Tensor &mask, float value) const;

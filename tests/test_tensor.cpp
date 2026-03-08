@@ -1,6 +1,7 @@
 #include "tensor.hpp"
 #include "test_utils.hpp"
 #include <algorithm>
+#include <cmath>
 #include <gtest/gtest.h>
 
 using namespace munet;
@@ -89,4 +90,28 @@ TEST_P(TensorTest, SoftmaxDimValidation) {
   Tensor x({2, 3}, dev());
   EXPECT_NO_THROW(x.softmax(-1));
   EXPECT_THROW(x.softmax(0), std::runtime_error);
+}
+
+
+TEST_P(TensorTest, PermuteViewMetadata) {
+  Tensor x({2, 3, 4}, dev());
+  Tensor y = x.permute({1, 0, 2});
+  EXPECT_EQ(y.shape()[0], 3);
+  EXPECT_EQ(y.shape()[1], 2);
+  EXPECT_EQ(y.shape()[2], 4);
+}
+
+TEST_P(TensorTest, LogSoftmaxDim) {
+  Tensor x({1, 3}, dev());
+  Tensor x_cpu({1, 3}, {DeviceType::CPU, 0});
+  float *d = (float *)x_cpu.data();
+  d[0] = 0.0f; d[1] = 1.0f; d[2] = 2.0f;
+  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(), dev());
+
+  Tensor ls = x.log_softmax(-1).to({DeviceType::CPU, 0});
+  const float *o = (const float *)ls.data();
+  float p0 = std::exp(o[0]);
+  float p1 = std::exp(o[1]);
+  float p2 = std::exp(o[2]);
+  EXPECT_NEAR(p0 + p1 + p2, 1.0f, 1e-4f);
 }

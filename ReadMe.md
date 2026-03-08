@@ -93,7 +93,7 @@ Additional Layers & Operators:
 1. Essential Tensor Operators
 
      - Division & Power: operator/, pow(), sqrt(), exp(), log(). (Crucial for custom loss functions and variance calculations).
-     - Transposition/Permutation: transpose(dim1, dim2) and permute(dims). (Required for handling different data layouts and attention mechanisms). ⚠️ `transpose(dim1, dim2)` implemented; general `permute(dims)` pending.
+     - Transposition/Permutation: transpose(dim1, dim2) and permute(dims). (Required for handling different data layouts and attention mechanisms). ✅ `transpose(dim1, dim2)` and `permute(dims)` implemented.
      - Mean & Variance: mean(dim), var(dim). (Currently you only have sum()).
      - Slice/Narrow: slice(dim, start, end). (Necessary for splitting tensors or taking sub-sections).
 
@@ -129,10 +129,10 @@ Additional Layers & Operators:
      - Core layers to add first:
        - LayerNorm: `nn::LayerNorm` (per-token normalization used everywhere in Transformers).
        - Embedding: `nn::Embedding` (token + positional tables).
-       - MultiHeadAttention: `nn::MultiHeadAttention` (QKV projections + scaled dot-product attention).
+       - MultiHeadAttention: `nn::MultiHeadAttention` (QKV projections + scaled dot-product attention). ✅ Implemented (causal self-attention, CPU fallback path).
        - FeedForward block: `Linear -> GELU/SwiGLU -> Linear`.
      - Tensor operators to unlock attention workloads:
-       - `softmax(dim)` and `log_softmax(dim)` (attention weights and stable losses). ⚠️ `softmax` currently supports only last dimension; `log_softmax` pending.
+       - `softmax(dim)` and `log_softmax(dim)` (attention weights and stable losses). ✅ Implemented in Tensor API.
        - `transpose(dim1, dim2)` / `permute(dims)` (head and sequence layout transforms).
        - `masked_fill(mask, value)` (causal masking and padding masks). ✅ Implemented in Tensor API.
        - `sqrt`, `rsqrt`, `exp`, `log`, `pow` (attention scaling and normalization math).
@@ -254,10 +254,16 @@ demos/llm/tiny_llm.py
 
 It trains a tiny next-token model with token + positional `nn.Embedding`, `nn.LayerNorm`, `nn.GELU`, and an MLP head using cross-entropy, then runs autoregressive text generation.
 
+A decoder-block style demo (residual + causal MHA + MLP) is also available at:
+
+```
+demos/llm/decoder_block_demo.py
+```
+
 
 ### Transformer Work Remaining
-- Multi-head self-attention module (`nn::MultiHeadAttention`) with causal mask support.
+- Optimize `nn::MultiHeadAttention` with backend-native CUDA/Vulkan kernels (current implementation is CPU fallback).
 - Integer-index embedding gather path (avoid one-hot expansion for memory/perf).
-- Tensor ops for attention ergonomics: `permute`, `masked_fill`, and dim-aware `softmax`.
+- Add attention-adjacent ops still missing for scale/perf: `logsumexp`, fused causal mask-softmax, and efficient batched matmul layouts.
 - Fused attention and layernorm backend kernels for CUDA/Vulkan performance.
 - End-to-end decoder block demo using causal self-attention + MLP + residuals.

@@ -58,6 +58,7 @@ Tensor Tensor::matmul(const Tensor &other) const {
 Tensor Tensor::relu() const { return ops::relu(*this); }
 Tensor Tensor::sigmoid() const { return ops::sigmoid(*this); }
 Tensor Tensor::softmax(int dim) const { return ops::softmax(*this, dim); }
+Tensor Tensor::log_softmax(int dim) const { return ops::log_softmax(*this, dim); }
 
 Tensor Tensor::conv2d(const Tensor &weight, const Tensor &bias, int stride,
                       int padding) const {
@@ -223,6 +224,32 @@ Tensor Tensor::transpose(int dim0, int dim1) const {
   out.impl_ = std::make_shared<TensorImpl>(*impl_);
   std::swap(out.impl_->shape[dim0], out.impl_->shape[dim1]);
   std::swap(out.impl_->strides[dim0], out.impl_->strides[dim1]);
+  return out;
+}
+
+Tensor Tensor::permute(const std::vector<int> &dims) const {
+  if (dims.size() != impl_->shape.size())
+    throw std::runtime_error("permute: dims size must match rank");
+
+  std::vector<int> seen(dims.size(), 0);
+  Tensor out = *this;
+  out.impl_ = std::make_shared<TensorImpl>(*impl_);
+
+  Shape new_shape(dims.size());
+  Strides new_strides(dims.size());
+  for (size_t i = 0; i < dims.size(); ++i) {
+    int d = dims[i];
+    if (d < 0 || d >= (int)dims.size())
+      throw std::runtime_error("permute: dim out of range");
+    if (seen[d])
+      throw std::runtime_error("permute: dims must be unique");
+    seen[d] = 1;
+    new_shape[i] = impl_->shape[d];
+    new_strides[i] = impl_->strides[d];
+  }
+
+  out.impl_->shape = new_shape;
+  out.impl_->strides = new_strides;
   return out;
 }
 

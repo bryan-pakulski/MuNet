@@ -240,3 +240,42 @@ TEST(NNTest, LayerNormForwardAndBackward) {
   EXPECT_TRUE(ln.weight.has_grad());
   EXPECT_TRUE(ln.bias.has_grad());
 }
+
+
+TEST(NNTest, EmbeddingForwardIndexPath) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::Embedding emb(4, 2);
+  emb.weight.set_requires_grad(false); // trigger fast gather path
+
+  float *w = static_cast<float *>(emb.weight.data());
+  w[0] = 1.0f; w[1] = 1.1f;
+  w[2] = 2.0f; w[3] = 2.1f;
+  w[4] = 3.0f; w[5] = 3.1f;
+  w[6] = 4.0f; w[7] = 4.1f;
+
+  Tensor idx({1, 3}, cpu);
+  float *id = static_cast<float *>(idx.data());
+  id[0] = 2.0f; id[1] = 0.0f; id[2] = 3.0f;
+
+  Tensor y = emb.forward(idx).to(cpu);
+  const float *o = static_cast<const float *>(y.data());
+  EXPECT_NEAR(o[0], 3.0f, 1e-6f);
+  EXPECT_NEAR(o[1], 3.1f, 1e-6f);
+  EXPECT_NEAR(o[2], 1.0f, 1e-6f);
+  EXPECT_NEAR(o[3], 1.1f, 1e-6f);
+  EXPECT_NEAR(o[4], 4.0f, 1e-6f);
+  EXPECT_NEAR(o[5], 4.1f, 1e-6f);
+}
+
+TEST(NNTest, MultiHeadAttentionForwardShape) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::MultiHeadAttention mha(8, 2, true);
+
+  Tensor x({2, 4, 8}, cpu);
+  x.uniform_(-1.0f, 1.0f);
+
+  Tensor y = mha.forward(x).to(cpu);
+  EXPECT_EQ(y.shape()[0], 2);
+  EXPECT_EQ(y.shape()[1], 4);
+  EXPECT_EQ(y.shape()[2], 8);
+}

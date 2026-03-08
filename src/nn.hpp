@@ -1,6 +1,7 @@
 #pragma once
 #include "core/module.hpp"
 #include <cmath>
+#include <limits>
 #include <random>
 #include <stdexcept>
 
@@ -219,12 +220,41 @@ public:
   }
 
   Tensor forward(Tensor x) override {
-    // x is expected to be one-hot/probability tensor of shape [B, T, V],
-    // where V == num_embeddings_.
     auto s = x.shape();
+
+    // Efficient index-based gather path for [B, T] token ids.
+    if (s.size() == 2 && !weight.requires_grad() && !x.requires_grad()) {
+      Device cpu{DeviceType::CPU, 0};
+      Tensor x_cpu = x.to(cpu);
+      Tensor w_cpu = weight.to(cpu);
+      int B = s[0], T = s[1];
+
+      Tensor out_cpu({B, T, embedding_dim_}, cpu, x.dtype(), false);
+      const float *idx = static_cast<const float *>(x_cpu.data());
+      const float *wv = static_cast<const float *>(w_cpu.data());
+      float *ov = static_cast<float *>(out_cpu.data());
+
+      for (int b = 0; b < B; ++b) {
+        for (int t = 0; t < T; ++t) {
+          int token = static_cast<int>(idx[b * T + t]);
+          if (token < 0 || token >= num_embeddings_)
+            throw std::runtime_error("Embedding index out of range");
+
+          const float *src = wv + token * embedding_dim_;
+          float *dst = ov + (b * T + t) * embedding_dim_;
+          for (int d = 0; d < embedding_dim_; ++d)
+            dst[d] = src[d];
+        }
+      }
+
+      return (x.device().type == DeviceType::CPU) ? out_cpu
+                                                   : out_cpu.to(x.device());
+    }
+
+    // One-hot/probability path [B, T, V] (keeps autograd support).
     if (s.size() != 3)
       throw std::runtime_error(
-          "Embedding expects input shape [batch, sequence, vocab]");
+          "Embedding expects [B,T] indices or [B,T,V] one-hot/probabilities");
     if (s[2] != num_embeddings_)
       throw std::runtime_error("Embedding input vocab dimension must match "
                                "num_embeddings");
@@ -238,6 +268,117 @@ public:
   Tensor weight;
   int num_embeddings_;
   int embedding_dim_;
+};
+
+
+class MultiHeadAttention : public Module {
+public:
+  MultiHeadAttention(int embed_dim, int num_heads, bool causal = true)
+      : embed_dim_(embed_dim), num_heads_(num_heads), causal_(causal) {
+    if (embed_dim_ <= 0 || num_heads_ <= 0 || (embed_dim_ % num_heads_) != 0)
+      throw std::runtime_error(
+          "MultiHeadAttention expects embed_dim > 0, num_heads > 0 and "
+          "embed_dim % num_heads == 0");
+
+    head_dim_ = embed_dim_ / num_heads_;
+    q_proj = register_module("q_proj", std::make_shared<Linear>(embed_dim_, embed_dim_));
+    k_proj = register_module("k_proj", std::make_shared<Linear>(embed_dim_, embed_dim_));
+    v_proj = register_module("v_proj", std::make_shared<Linear>(embed_dim_, embed_dim_));
+    out_proj = register_module("out_proj", std::make_shared<Linear>(embed_dim_, embed_dim_));
+  }
+
+  Tensor forward(Tensor x) override {
+    auto s = x.shape();
+    if (s.size() != 3)
+      throw std::runtime_error("MultiHeadAttention expects input shape [B,T,E]");
+    if (s[2] != embed_dim_)
+      throw std::runtime_error("MultiHeadAttention expects last dim == embed_dim");
+
+    // NOTE: current implementation is inference-focused CPU fallback.
+    // For training workloads, a dedicated backend kernel path should be added.
+
+    int B = s[0], T = s[1], E = s[2];
+
+    Tensor x2d = x.reshape({B * T, E});
+    Tensor q2d = std::dynamic_pointer_cast<Linear>(q_proj)->forward(x2d);
+    Tensor k2d = std::dynamic_pointer_cast<Linear>(k_proj)->forward(x2d);
+    Tensor v2d = std::dynamic_pointer_cast<Linear>(v_proj)->forward(x2d);
+
+    Device cpu{DeviceType::CPU, 0};
+    Tensor q_cpu = q2d.to(cpu);
+    Tensor k_cpu = k2d.to(cpu);
+    Tensor v_cpu = v2d.to(cpu);
+
+    const float *qv = static_cast<const float *>(q_cpu.data());
+    const float *kv = static_cast<const float *>(k_cpu.data());
+    const float *vv = static_cast<const float *>(v_cpu.data());
+
+    Tensor out_cpu({B, T, E}, cpu, x.dtype(), false);
+    float *ov = static_cast<float *>(out_cpu.data());
+
+    const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
+
+    for (int b = 0; b < B; ++b) {
+      for (int h = 0; h < num_heads_; ++h) {
+        const int h_off = h * head_dim_;
+
+        for (int t = 0; t < T; ++t) {
+          std::vector<float> scores(T, -std::numeric_limits<float>::infinity());
+          float max_score = -std::numeric_limits<float>::infinity();
+
+          for (int j = 0; j < T; ++j) {
+            if (causal_ && j > t)
+              continue;
+
+            float dot = 0.0f;
+            for (int d = 0; d < head_dim_; ++d) {
+              int q_idx = ((b * T + t) * E) + h_off + d;
+              int k_idx = ((b * T + j) * E) + h_off + d;
+              dot += qv[q_idx] * kv[k_idx];
+            }
+            scores[j] = dot * scale;
+            if (scores[j] > max_score)
+              max_score = scores[j];
+          }
+
+          float denom = 0.0f;
+          for (int j = 0; j < T; ++j) {
+            if (causal_ && j > t)
+              continue;
+            scores[j] = std::exp(scores[j] - max_score);
+            denom += scores[j];
+          }
+          if (denom <= 0.0f)
+            denom = 1.0f;
+
+          for (int d = 0; d < head_dim_; ++d) {
+            float acc = 0.0f;
+            for (int j = 0; j < T; ++j) {
+              if (causal_ && j > t)
+                continue;
+              float p = scores[j] / denom;
+              int v_idx = ((b * T + j) * E) + h_off + d;
+              acc += p * vv[v_idx];
+            }
+            int o_idx = ((b * T + t) * E) + h_off + d;
+            ov[o_idx] = acc;
+          }
+        }
+      }
+    }
+
+    Tensor attn = (x.device().type == DeviceType::CPU) ? out_cpu
+                                                        : out_cpu.to(x.device());
+    Tensor out2d = attn.reshape({B * T, E});
+    Tensor proj = std::dynamic_pointer_cast<Linear>(out_proj)->forward(out2d);
+    return proj.reshape({B, T, E});
+  }
+
+  int embed_dim_;
+  int num_heads_;
+  int head_dim_;
+  bool causal_;
+  std::shared_ptr<Module> q_proj, k_proj, v_proj, out_proj;
 };
 
 class GlobalAvgPool2d : public Module {

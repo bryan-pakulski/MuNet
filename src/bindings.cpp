@@ -140,6 +140,8 @@ PYBIND11_MODULE(munet, m) {
           "In-place replacement of underlying tensor implementation.")
       .def("transpose", &ops::transpose, py::arg("dim0"), py::arg("dim1"),
            "Returns a tensor that is a transposed version of this tensor.")
+      .def("permute", &Tensor::permute, py::arg("dims"),
+           "Returns a tensor view with dimensions permuted.")
       .def("contiguous", &Tensor::contiguous,
            "Returns a contiguous tensor containing the same data as this "
            "tensor.")
@@ -204,7 +206,9 @@ PYBIND11_MODULE(munet, m) {
            "Applies the Rectified Linear Unit function element-wise.")
       .def("sigmoid", &Tensor::sigmoid,
            "Applies the Sigmoid function element-wise.")
-      .def("softmax", &Tensor::softmax, py::arg("dim") = -1, "Applies softmax (currently supports last dimension).")
+      .def("softmax", &Tensor::softmax, py::arg("dim") = -1, "Applies softmax along a dimension.")
+      .def("log_softmax", &Tensor::log_softmax, py::arg("dim") = -1,
+           "Applies log-softmax along a dimension.")
       .def("conv2d", &Tensor::conv2d, py::arg("weight"),
            py::arg_v("bias", Tensor(), "munet.Tensor()"), py::arg("stride") = 1,
            py::arg("padding") = 0,
@@ -440,8 +444,7 @@ PYBIND11_MODULE(munet, m) {
 
   py::class_<nn::Embedding, nn::Module, std::shared_ptr<nn::Embedding>>(
       nn, "Embedding",
-      "Projects one-hot/probability token vectors [B,T,V] into embeddings "
-      "[B,T,D].")
+      "Embedding lookup for [B,T] token ids and projection for [B,T,V] one-hot/probability inputs.")
       .def(py::init<int, int>(), py::arg("num_embeddings"),
            py::arg("embedding_dim"))
       .def_readonly("num_embeddings", &nn::Embedding::num_embeddings_)
@@ -457,6 +460,15 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("eps", &nn::LayerNorm::eps_)
       .def_readonly("weight", &nn::LayerNorm::weight)
       .def_readonly("bias", &nn::LayerNorm::bias);
+
+  py::class_<nn::MultiHeadAttention, nn::Module, std::shared_ptr<nn::MultiHeadAttention>>(
+      nn, "MultiHeadAttention",
+      "Applies causal/non-causal multi-head self-attention over [B,T,E].")
+      .def(py::init<int, int, bool>(), py::arg("embed_dim"), py::arg("num_heads"),
+           py::arg("causal") = true)
+      .def_readonly("embed_dim", &nn::MultiHeadAttention::embed_dim_)
+      .def_readonly("num_heads", &nn::MultiHeadAttention::num_heads_)
+      .def_readonly("causal", &nn::MultiHeadAttention::causal_);
 
   py::class_<nn::GlobalAvgPool2d, nn::Module, std::shared_ptr<nn::GlobalAvgPool2d>>(
       nn, "GlobalAvgPool2d", "Applies global average pooling over spatial dimensions.")
@@ -597,6 +609,8 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name, 'num_embeddings': m.num_embeddings, 'embedding_dim': m.embedding_dim}
          elif name == 'LayerNorm':
              return {'type': name, 'normalized_shape': m.normalized_shape, 'eps': m.eps}
+         elif name == 'MultiHeadAttention':
+             return {'type': name, 'embed_dim': m.embed_dim, 'num_heads': m.num_heads, 'causal': bool(m.causal)}
          else:
              raise ValueError(f"Unknown module type {name}")
 
@@ -637,6 +651,7 @@ PYBIND11_MODULE(munet, m) {
              elif t == 'Dropout': return munet.nn.Dropout(cfg.get('p', 0.5))
              elif t == 'Embedding': return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'])
              elif t == 'LayerNorm': return munet.nn.LayerNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5))
+             elif t == 'MultiHeadAttention': return munet.nn.MultiHeadAttention(cfg['embed_dim'], cfg['num_heads'], cfg.get('causal', True))
              elif t == 'Flatten': return munet.nn.Flatten()
 
          module = build_module(config)
