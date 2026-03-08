@@ -602,5 +602,62 @@ class TestBindings(unittest.TestCase):
             self.assertTrue(np.allclose(y_src, y_dst, atol=1e-6))
 
 
+    def test_inference_engine_compile_and_shape_guard(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.ReLU(),
+            munet.nn.Linear(8, 2),
+        ])
+
+        eng = munet.inference.Engine()
+        eng.load(model)
+
+        x = munet.Tensor([2, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array([[1, 2, 3, 4], [5, 6, 7, 8]], dtype=np.float32)
+
+        eng.compile(x)
+        self.assertTrue(eng.is_compiled())
+        self.assertEqual(eng.compiled_input_shape(), [2, 4])
+        self.assertGreaterEqual(eng.stats().compile_ms, 0.0)
+
+        y = eng.run(x)
+        self.assertEqual(y.shape, [2, 2])
+
+        bad = munet.Tensor([2, 5], requires_grad=False)
+        np.array(bad, copy=False)[:] = np.ones((2, 5), dtype=np.float32)
+        with self.assertRaises(RuntimeError):
+            eng.run(bad)
+
+        eng.set_strict_shape_check(False)
+        y2 = eng.run(bad)
+        self.assertEqual(y2.shape, [2, 2])
+
+    def test_inference_engine_from_serialized_model(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(3, 3),
+            munet.nn.Tanh(),
+            munet.nn.Linear(3, 1),
+        ])
+
+        x = munet.Tensor([4, 3], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array(
+            [[0.1, 0.2, 0.3], [0.4, -0.1, 0.0], [1.0, -1.0, 0.5], [0.0, 0.0, 0.0]],
+            dtype=np.float32,
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "e2e_model.npz")
+            munet.save(model, path)
+            restored = munet.load(path)
+
+            eng = munet.inference.Engine()
+            eng.load(restored)
+            eng.compile(x)
+
+            y_ref = np.array(restored.forward(x).detach(), copy=False)
+            y_eng = np.array(eng.run(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y_ref, y_eng, atol=1e-6))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

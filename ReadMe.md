@@ -46,6 +46,7 @@ The project has a working core runtime + training stack with CPU/CUDA/Vulkan bac
 ## Priority Order
 1. **Inference Engine (P0)**
    - Add a deploy-first `munet_inference` runtime API for model loading, pre-allocation, warmup, and fast forward execution.
+   - Current scaffold includes `compile(example_input)` shape capture + warmup and strict shape guard on `run(...)`.
    - Keep inference surface minimal and stable (no training/autograd dependencies in public API).
    - Add latency + memory benchmarks and regression checks for CPU/CUDA/Vulkan.
 2. **Transformer Inference Readiness (P1)**
@@ -287,6 +288,7 @@ Feature demos (new):
 - `demos/features/transformer_ops_showcase.py` — quick forward-only showcase of `MultiHeadAttention`, `LayerNorm`, `GELU`, and `Dropout`.
 - `demos/inference/batch_forward_demo.py` — lean batch forward loop demo for deploy-style execution.
 - `demos/inference/serialization_roundtrip_demo.py` — demonstrates full model save/load reconstruction and weights-only restore.
+- `demos/inference/e2e_train_save_load_infer.py` — end-to-end flow: train -> save -> load -> compile -> inference.
 
 > Note: when converting tensors to NumPy in demos, use `.detach()` (or `munet.no_grad()` + detach) to avoid buffer-access errors on tensors that require grad.
 

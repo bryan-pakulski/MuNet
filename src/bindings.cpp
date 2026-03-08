@@ -1,4 +1,5 @@
 #include "autograd/autograd.hpp"
+#include "inference.hpp"
 #include "nn.hpp"
 #include "ops.hpp"
 #include "optim.hpp"
@@ -508,6 +509,50 @@ PYBIND11_MODULE(munet, m) {
                                      s.ordered_modules_.end());
           },
           py::keep_alive<0, 1>());
+
+  // ============================================================================
+  // Inference (munet.inference)
+  // ============================================================================
+  auto inf = m.def_submodule("inference", "Inference runtime APIs");
+
+  py::class_<inference::EngineConfig>(inf, "EngineConfig")
+      .def(py::init<>())
+      .def_readwrite("device", &inference::EngineConfig::device)
+      .def_readwrite("warmup_runs", &inference::EngineConfig::warmup_runs)
+      .def_readwrite("strict_shape_check",
+                     &inference::EngineConfig::strict_shape_check);
+
+  py::class_<inference::EngineStats>(inf, "EngineStats")
+      .def(py::init<>())
+      .def_readonly("runs", &inference::EngineStats::runs)
+      .def_readonly("last_run_ms", &inference::EngineStats::last_run_ms)
+      .def_readonly("compile_ms", &inference::EngineStats::compile_ms)
+      .def_readonly("compiled_input_shape",
+                    &inference::EngineStats::compiled_input_shape);
+
+  py::class_<inference::Engine>(inf, "Engine")
+      .def(py::init<inference::EngineConfig>(), py::arg("config") = inference::EngineConfig{})
+      .def("set_device", &inference::Engine::set_device, py::arg("device"))
+      .def("device", &inference::Engine::device)
+      .def("set_warmup_runs", &inference::Engine::set_warmup_runs,
+           py::arg("warmup_runs"))
+      .def("set_strict_shape_check", &inference::Engine::set_strict_shape_check,
+           py::arg("enabled"))
+      .def(
+          "load",
+          [](inference::Engine &self, const std::shared_ptr<nn::Module> &module) {
+            self.load(std::static_pointer_cast<core::Module>(module));
+          },
+          py::arg("module"))
+      .def("compile", &inference::Engine::compile, py::arg("example_input"))
+      .def("prepare", &inference::Engine::prepare, py::arg("example_input"))
+      .def("run", &inference::Engine::run, py::arg("input"))
+      .def("run_batch", &inference::Engine::run_batch, py::arg("inputs"))
+      .def("is_loaded", &inference::Engine::is_loaded)
+      .def("is_prepared", &inference::Engine::is_prepared)
+      .def("is_compiled", &inference::Engine::is_compiled)
+      .def("compiled_input_shape", &inference::Engine::compiled_input_shape)
+      .def("stats", &inference::Engine::stats);
 
   // ============================================================================
   // Optimizers (munet.optim)

@@ -3,6 +3,7 @@
 #include "core/module.hpp"
 #include <chrono>
 #include <stdexcept>
+#include <string>
 
 namespace munet {
 namespace inference {
@@ -24,18 +25,25 @@ public:
 struct EngineConfig {
   Device device{DeviceType::CPU, 0};
   int warmup_runs = 0;
+  bool strict_shape_check = true;
 };
 
 struct EngineStats {
   size_t runs = 0;
   double last_run_ms = 0.0;
+  double compile_ms = 0.0;
+  std::vector<int> compiled_input_shape{};
 };
 
 class Engine {
 public:
   explicit Engine(EngineConfig cfg = {}) : config_(cfg) {}
 
-  void set_device(Device device) { config_.device = device; }
+  void set_device(Device device) {
+    config_.device = device;
+    compiled_ = false;
+    prepared_ = false;
+  }
   Device device() const { return config_.device; }
 
   void set_warmup_runs(int warmup_runs) {
@@ -43,6 +51,8 @@ public:
       throw std::runtime_error("Engine warmup_runs must be >= 0");
     config_.warmup_runs = warmup_runs;
   }
+
+  void set_strict_shape_check(bool enabled) { config_.strict_shape_check = enabled; }
 
   void load(const std::shared_ptr<core::Module> &module) {
     if (!module)
@@ -54,27 +64,40 @@ public:
 
     loaded_ = true;
     prepared_ = false;
+    compiled_ = false;
     stats_ = {};
   }
 
-  void prepare(const Tensor &example_input) {
+  void compile(const Tensor &example_input) {
     ensure_loaded();
 
-    Tensor input = (example_input.device() == config_.device)
-                       ? example_input
-                       : example_input.to(config_.device);
+    auto start = std::chrono::high_resolution_clock::now();
+    Tensor input = to_engine_device(example_input);
+    compiled_input_shape_ = input.shape();
 
+    // graph warmup / backend pre-initialization
     for (int i = 0; i < config_.warmup_runs; ++i) {
       (void)module_->forward(input);
     }
 
+    auto end = std::chrono::high_resolution_clock::now();
+    stats_.compile_ms =
+        std::chrono::duration<double, std::milli>(end - start).count();
+    stats_.compiled_input_shape = compiled_input_shape_;
+
+    compiled_ = true;
     prepared_ = true;
   }
+
+  void prepare(const Tensor &example_input) { compile(example_input); }
 
   Tensor run(const Tensor &input) {
     ensure_loaded();
 
-    Tensor in = (input.device() == config_.device) ? input : input.to(config_.device);
+    Tensor in = to_engine_device(input);
+    if (config_.strict_shape_check && compiled_ && in.shape() != compiled_input_shape_) {
+      throw std::runtime_error("Engine: input shape mismatch with compiled shape");
+    }
 
     auto start = std::chrono::high_resolution_clock::now();
     Tensor out = module_->forward(in);
@@ -100,9 +123,15 @@ public:
 
   bool is_loaded() const { return loaded_; }
   bool is_prepared() const { return prepared_; }
+  bool is_compiled() const { return compiled_; }
+  const std::vector<int> &compiled_input_shape() const { return compiled_input_shape_; }
   EngineStats stats() const { return stats_; }
 
 private:
+  Tensor to_engine_device(const Tensor &input) const {
+    return (input.device() == config_.device) ? input : input.to(config_.device);
+  }
+
   void ensure_loaded() const {
     if (!loaded_ || !module_)
       throw std::runtime_error("Engine: no module loaded");
@@ -113,6 +142,8 @@ private:
   std::shared_ptr<core::Module> module_ = nullptr;
   bool loaded_ = false;
   bool prepared_ = false;
+  bool compiled_ = false;
+  std::vector<int> compiled_input_shape_{};
 };
 
 class Sequential : public Module {

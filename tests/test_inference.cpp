@@ -76,3 +76,39 @@ TEST(InferenceTest, EngineRunBatch) {
   EXPECT_EQ(outs[1].shape(), b.shape());
   EXPECT_EQ(engine.stats().runs, 2u);
 }
+
+
+TEST(InferenceTest, EngineCompileCapturesShapeAndStats) {
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  engine.set_warmup_runs(1);
+  engine.load(m);
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor x({2, 3}, cpu);
+  x.uniform_(0.2f, 0.2f);
+
+  engine.compile(x);
+  EXPECT_TRUE(engine.is_compiled());
+  EXPECT_TRUE(engine.is_prepared());
+  EXPECT_EQ(engine.compiled_input_shape(), x.shape());
+  EXPECT_GE(engine.stats().compile_ms, 0.0);
+}
+
+TEST(InferenceTest, EngineStrictShapeCheckAfterCompile) {
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  engine.load(m);
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor x({2, 3}, cpu);
+  Tensor bad({2, 4}, cpu);
+  x.uniform_(0.1f, 0.1f);
+  bad.uniform_(0.1f, 0.1f);
+
+  engine.compile(x);
+  EXPECT_THROW(engine.run(bad), std::runtime_error);
+
+  engine.set_strict_shape_check(false);
+  EXPECT_NO_THROW((void)engine.run(bad));
+}
