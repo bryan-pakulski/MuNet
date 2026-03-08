@@ -184,6 +184,8 @@ PYBIND11_MODULE(munet, m) {
       .def("reshape", &Tensor::reshape, py::arg("shape"),
            "Returns a tensor with the same data and number of elements, but "
            "with the specified shape.")
+      .def("masked_fill", &Tensor::masked_fill, py::arg("mask"), py::arg("value"),
+           "Fills entries where mask is 1 with the given value.")
       .def(
           "numpy", [](py::object self) { return py::cast<py::array>(self); },
           "Returns the tensor as a NumPy ndarray. The returned array and the "
@@ -202,7 +204,7 @@ PYBIND11_MODULE(munet, m) {
            "Applies the Rectified Linear Unit function element-wise.")
       .def("sigmoid", &Tensor::sigmoid,
            "Applies the Sigmoid function element-wise.")
-      .def("softmax", &Tensor::softmax, "Applies the Softmax function.")
+      .def("softmax", &Tensor::softmax, py::arg("dim") = -1, "Applies softmax (currently supports last dimension).")
       .def("conv2d", &Tensor::conv2d, py::arg("weight"),
            py::arg_v("bias", Tensor(), "munet.Tensor()"), py::arg("stride") = 1,
            py::arg("padding") = 0,

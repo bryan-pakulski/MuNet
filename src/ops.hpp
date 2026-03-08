@@ -16,6 +16,7 @@ inline Tensor sub(const Tensor &a, const Tensor &b);
 inline Tensor mul(const Tensor &a, const Tensor &b);
 inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
                          const Tensor &bias, float eps = 1e-5f);
+inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value);
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
   for (size_t i = 0; i < inputs.size(); ++i) {
@@ -511,10 +512,22 @@ struct SoftmaxBackward : public Node {
   }
 };
 
-inline Tensor softmax(const Tensor &a) {
+inline Tensor softmax(const Tensor &a, int dim = -1) {
+  if (a.shape().size() < 2)
+    throw std::runtime_error("Softmax expects at least 2D tensor");
+
+  int rank = static_cast<int>(a.shape().size());
+  int resolved = (dim < 0) ? (rank + dim) : dim;
+  if (resolved < 0 || resolved >= rank)
+    throw std::runtime_error("Softmax: dim out of range");
+  if (resolved != rank - 1)
+    throw std::runtime_error(
+        "Softmax currently supports only the last dimension");
+
+  int num_classes = a.shape().back();
+  int batch_size = a.size() / num_classes;
+
   Tensor out(a.shape(), a.device(), a.dtype());
-  int batch_size = a.shape().size() > 1 ? a.shape()[0] : 1;
-  int num_classes = a.size() / batch_size;
   a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage, batch_size,
                              num_classes);
 
@@ -524,7 +537,25 @@ inline Tensor softmax(const Tensor &a) {
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
-  record_trace(out, "Softmax", {a});
+  record_trace(out, "Softmax", {a}, {{"dim", {resolved}}});
+  return out;
+}
+
+inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value) {
+  if (a.device() != mask.device())
+    throw std::runtime_error("masked_fill: device mismatch");
+  if (a.shape() != mask.shape())
+    throw std::runtime_error("masked_fill: shape mismatch");
+
+  Tensor one({1}, a.device(), a.dtype(), false);
+  one.uniform_(1.0f, 1.0f);
+  Tensor fill({1}, a.device(), a.dtype(), false);
+  fill.uniform_(value, value);
+
+  Tensor kept = a * (one - mask);
+  Tensor filled = fill * mask;
+  Tensor out = kept + filled;
+  record_trace(out, "MaskedFill", {a, mask}, {}, {{"value", value}});
   return out;
 }
 

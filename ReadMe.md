@@ -93,7 +93,7 @@ Additional Layers & Operators:
 1. Essential Tensor Operators
 
      - Division & Power: operator/, pow(), sqrt(), exp(), log(). (Crucial for custom loss functions and variance calculations).
-     - Transposition/Permutation: transpose(dim1, dim2) and permute(dims). (Required for handling different data layouts and attention mechanisms).
+     - Transposition/Permutation: transpose(dim1, dim2) and permute(dims). (Required for handling different data layouts and attention mechanisms). ⚠️ `transpose(dim1, dim2)` implemented; general `permute(dims)` pending.
      - Mean & Variance: mean(dim), var(dim). (Currently you only have sum()).
      - Slice/Narrow: slice(dim, start, end). (Necessary for splitting tensors or taking sub-sections).
 
@@ -132,9 +132,9 @@ Additional Layers & Operators:
        - MultiHeadAttention: `nn::MultiHeadAttention` (QKV projections + scaled dot-product attention).
        - FeedForward block: `Linear -> GELU/SwiGLU -> Linear`.
      - Tensor operators to unlock attention workloads:
-       - `softmax(dim)` and `log_softmax(dim)` (attention weights and stable losses).
+       - `softmax(dim)` and `log_softmax(dim)` (attention weights and stable losses). ⚠️ `softmax` currently supports only last dimension; `log_softmax` pending.
        - `transpose(dim1, dim2)` / `permute(dims)` (head and sequence layout transforms).
-       - `masked_fill(mask, value)` (causal masking and padding masks).
+       - `masked_fill(mask, value)` (causal masking and padding masks). ✅ Implemented in Tensor API.
        - `sqrt`, `rsqrt`, `exp`, `log`, `pow` (attention scaling and normalization math).
      - Training-quality features for small LLMs:
        - `CrossEntropyLoss` (or `NLLLoss + LogSoftmax`) for token prediction.

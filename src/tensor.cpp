@@ -57,7 +57,7 @@ Tensor Tensor::matmul(const Tensor &other) const {
 
 Tensor Tensor::relu() const { return ops::relu(*this); }
 Tensor Tensor::sigmoid() const { return ops::sigmoid(*this); }
-Tensor Tensor::softmax() const { return ops::softmax(*this); }
+Tensor Tensor::softmax(int dim) const { return ops::softmax(*this, dim); }
 
 Tensor Tensor::conv2d(const Tensor &weight, const Tensor &bias, int stride,
                       int padding) const {
@@ -162,6 +162,10 @@ Tensor Tensor::sum() const { return ops::sum(*this); }
 
 Tensor Tensor::reshape(Shape new_shape) const {
   return ops::reshape(*this, new_shape);
+}
+
+Tensor Tensor::masked_fill(const Tensor &mask, float value) const {
+  return ops::masked_fill(*this, mask, value);
 }
 
 float Tensor::item() const {

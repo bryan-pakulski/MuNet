@@ -113,9 +113,10 @@ public:
   Tensor matmul(const Tensor &other) const;
   Tensor relu() const;
   Tensor sigmoid() const;
-  Tensor softmax() const;
+  Tensor softmax(int dim = -1) const;
   Tensor sum() const;
   Tensor reshape(Shape new_shape) const;
+  Tensor masked_fill(const Tensor &mask, float value) const;
   float item() const;
 
   Tensor conv2d(const Tensor &weight, const Tensor &bias, int stride = 1,
