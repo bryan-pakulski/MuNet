@@ -84,16 +84,16 @@ Tensor Tensor::to(Device dev) const {
   if (device() == dev)
     return *this;
 
-  // 1. Setup Profiling only if enabled
+  // 1. Setup Profiling only if enabled (enqueue-time, non-blocking)
   bool profiling = is_profile_enabled();
   std::unique_ptr<Timer> timer;
-  if (profiling) {
-    impl_->backend().synchronize(); // Ensure source data is ready
-    timer = std::make_unique<Timer>();
-  }
 
   Tensor out(shape(), dev, dtype(), requires_grad());
   size_t byte_count = bytes();
+
+  if (profiling) {
+    timer = std::make_unique<Timer>();
+  }
 
   // 2. Perform the actual transfer
   if (device().type == DeviceType::CUDA || dev.type == DeviceType::CUDA) {
@@ -117,12 +117,11 @@ Tensor Tensor::to(Device dev) const {
     impl_->backend().copy(data(), out.data(), byte_count, device(), dev);
   }
 
-  // 3. Finalize Profiling
+  // 3. Finalize Profiling (avoid forced sync in profile-only mode)
   if (profiling) {
-    out.impl_->backend().synchronize(); // Wait for transfer to complete
-    double ms = timer->elapsed_us();
+    double us = timer->elapsed_us();
     std::string name = "to(" + dev.to_string() + ")";
-    Profiler::get().record(name, ms, ms, byte_count, to_string(shape()));
+    Profiler::get().record(name, us, 0.0, byte_count, to_string(shape()));
   }
 
   // 4. Autograd and Tracing

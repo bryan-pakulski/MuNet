@@ -181,6 +181,8 @@ You can enable different levels of debug / profiling via the following environme
 
 Profiler summaries are now printed automatically on shutdown when `MUNET_PROFILE=1`, even if `print_profiler_stats()` is not called explicitly from Python.
 
+Profiling mode now avoids forced per-op synchronization unless debug mode is also enabled, so `MUNET_PROFILE=1` gives lower-overhead traces closer to real runtime behavior.
+
 # Building
 
 ## Requirements

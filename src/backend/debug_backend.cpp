@@ -22,24 +22,30 @@ class DebugBackend : public Backend {
   void check(const char *name, double cpu_us,
              const Storage *out_storage = nullptr) {
     try {
-      base_->synchronize();
       double gpu_us = base_->get_last_kernel_time_us();
+
+      // Full synchronization and NaN checks are expensive and should only run
+      // in explicit debug mode, not in profile-only mode.
+      if (is_debug_enabled()) {
+        base_->synchronize();
+        gpu_us = base_->get_last_kernel_time_us();
+
+        if (out_storage && out_storage->device().type == DeviceType::CPU) {
+          float *data = (float *)out_storage->data();
+          for (size_t i = 0; i < out_storage->size_bytes() / 4; ++i) {
+            if (!std::isfinite(data[i])) {
+              MUNET_ERROR << "Non-finite value detected in output of " << name
+                          << " at index " << i << std::endl;
+            }
+          }
+        }
+      }
 
       if (is_profile_enabled()) {
         size_t bytes = out_storage ? out_storage->size_bytes() : 0;
         Profiler::get().record(name, cpu_us, gpu_us, bytes,
                                out_storage ? to_string(out_storage->shape())
                                            : "");
-      }
-
-      if (out_storage && out_storage->device().type == DeviceType::CPU) {
-        float *data = (float *)out_storage->data();
-        for (size_t i = 0; i < out_storage->size_bytes() / 4; ++i) {
-          if (!std::isfinite(data[i])) {
-            MUNET_ERROR << "Non-finite value detected in output of " << name
-                        << " at index " << i << std::endl;
-          }
-        }
       }
     } catch (const std::exception &e) {
       MUNET_ERROR << "CRASH in/after " << name << ": " << e.what() << std::endl;
