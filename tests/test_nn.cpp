@@ -181,3 +181,23 @@ TEST(NNTest, EmbeddingForwardOneHot) {
   EXPECT_NEAR(yd[4], 1.0f, 1e-6f);
   EXPECT_NEAR(yd[5], 1.0f, 1e-6f);
 }
+
+
+TEST(NNTest, GELUForwardBehavior) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::GELU gelu;
+
+  Tensor x({3}, cpu);
+  float *d = static_cast<float *>(x.data());
+  d[0] = -2.0f;
+  d[1] = 0.0f;
+  d[2] = 2.0f;
+
+  Tensor y = gelu.forward(x).to(cpu);
+  const float *yo = static_cast<const float *>(y.data());
+
+  // Approximate expected values for x*sigmoid(1.702*x)
+  EXPECT_NEAR(yo[0], -0.0643f, 5e-3f);
+  EXPECT_NEAR(yo[1], 0.0f, 1e-6f);
+  EXPECT_NEAR(yo[2], 1.9357f, 5e-3f);
+}

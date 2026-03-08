@@ -21,14 +21,18 @@ class TinyLLM(munet.nn.Module):
         self.vocab_size = vocab_size
         self.context_len = context_len
         self.embed = munet.nn.Embedding(vocab_size, d_model)
+        self.pos_embed = munet.nn.Embedding(context_len, d_model)
+        self.gelu = munet.nn.GELU()
         self.fc1 = munet.nn.Linear(context_len * d_model, hidden)
         self.fc2 = munet.nn.Linear(hidden, vocab_size)
 
-    def forward(self, x_onehot):
-        # x_onehot: [B, T, V]
-        x = self.embed(x_onehot)
+    def forward(self, x_onehot, pos_onehot):
+        # x_onehot: [B, T, V], pos_onehot: [B, T, T]
+        tok = self.embed(x_onehot)
+        pos = self.pos_embed(pos_onehot)
+        x = tok + pos
         x = x.reshape([x.shape[0], self.context_len * x.shape[2]])
-        x = self.fc1(x).relu()
+        x = self.gelu(self.fc1(x))
         return self.fc2(x)
 
 
@@ -59,7 +63,13 @@ def sample_next(model: TinyLLM, context_tokens: np.ndarray, vocab_size: int):
     for t, idx in enumerate(context_tokens):
         x_oh[0, t, idx] = 1.0
 
-    logits = model(munet.from_numpy(x_oh)).to(munet.Device(munet.DeviceType.CPU, 0))
+    pos_oh = np.zeros((1, context_tokens.shape[0], context_tokens.shape[0]), dtype=np.float32)
+    for t in range(context_tokens.shape[0]):
+        pos_oh[0, t, t] = 1.0
+
+    logits = model(munet.from_numpy(x_oh), munet.from_numpy(pos_oh)).to(
+        munet.Device(munet.DeviceType.CPU, 0)
+    )
     probs = np.array(logits.softmax(), copy=False)[0]
     return int(np.argmax(probs))
 
@@ -82,16 +92,21 @@ def main():
         for t in range(context_len):
             X_oh[i, t, X[i, t]] = 1.0
     y_oh = one_hot(y, vocab)
+    pos_oh = np.zeros((X.shape[0], context_len, context_len), dtype=np.float32)
+    for i in range(X.shape[0]):
+        for t in range(context_len):
+            pos_oh[i, t, t] = 1.0
 
     bs = 16
     steps = 200
     for step in range(steps):
         idx = np.random.randint(0, X_oh.shape[0], size=bs)
         xb = munet.from_numpy(X_oh[idx])
+        pb = munet.from_numpy(pos_oh[idx])
         yb = munet.from_numpy(y_oh[idx])
 
         opt.zero_grad()
-        logits = model(xb)
+        logits = model(xb, pb)
         loss = logits.cross_entropy(yb)
         loss.backward()
         opt.step()

@@ -419,6 +419,11 @@ PYBIND11_MODULE(munet, m) {
       nn, "Tanh", "Applies the element-wise Tanh function.")
       .def(py::init<>());
 
+  py::class_<nn::GELU, nn::Module, std::shared_ptr<nn::GELU>>(
+      nn, "GELU",
+      "Applies a fast GELU approximation: x * sigmoid(1.702*x).")
+      .def(py::init<>());
+
   py::class_<nn::LeakyReLU, nn::Module, std::shared_ptr<nn::LeakyReLU>>(
       nn, "LeakyReLU", "Applies the element-wise LeakyReLU function.")
       .def(py::init<float>(), py::arg("negative_slope") = 0.01f)
@@ -570,7 +575,7 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name, 'scale_factor': m.scale_factor}
          elif name == 'GlobalAvgPool2d':
              return {'type': name}
-         elif name in ('ReLU', 'Sigmoid', 'Tanh', 'Flatten'):
+         elif name in ('ReLU', 'Sigmoid', 'Tanh', 'GELU', 'Flatten'):
              return {'type': name}
          elif name == 'LeakyReLU':
              return {'type': name, 'negative_slope': m.negative_slope}
@@ -613,6 +618,7 @@ PYBIND11_MODULE(munet, m) {
              elif t == 'ReLU': return munet.nn.ReLU()
              elif t == 'Sigmoid': return munet.nn.Sigmoid()
              elif t == 'Tanh': return munet.nn.Tanh()
+             elif t == 'GELU': return munet.nn.GELU()
              elif t == 'LeakyReLU': return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
              elif t == 'Dropout': return munet.nn.Dropout(cfg.get('p', 0.5))
              elif t == 'Embedding': return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'])

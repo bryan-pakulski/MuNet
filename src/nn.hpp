@@ -126,6 +126,17 @@ public:
   }
 };
 
+
+class GELU : public Module {
+public:
+  Tensor forward(Tensor x) override {
+    // Fast GELU approximation: x * sigmoid(1.702 * x)
+    Tensor c({1}, x.device(), x.dtype(), false);
+    c.uniform_(1.702f, 1.702f);
+    return x * (x * c).sigmoid();
+  }
+};
+
 class Dropout : public Module {
 public:
   explicit Dropout(float p = 0.5f) : p_(p) {
