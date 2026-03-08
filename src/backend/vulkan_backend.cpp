@@ -921,44 +921,48 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 						int tB;
 				} p;
 
+				shared float As[16][16];
+				shared float Bs[16][16];
+
 				void main() {
+						int col = int(gl_GlobalInvocationID.x);
+						int row = int(gl_GlobalInvocationID.y);
+						int lx = int(gl_LocalInvocationID.x);
+						int ly = int(gl_LocalInvocationID.y);
 
-						int n = int(gl_GlobalInvocationID.x);
-						int m = int(gl_GlobalInvocationID.y);
-
-						if (m >= p.M || n >= p.N) return;
+						if (row >= p.M || col >= p.N) return;
 
 						float sum = 0.0;
 
+						// Fast path for common case (no transposes): tiled shared-memory GEMM.
 						if (p.tA == 0 && p.tB == 0) {
+								int tiles = (p.K + 15) / 16;
+								for (int t = 0; t < tiles; ++t) {
+										int kA = t * 16 + lx;
+										int kB = t * 16 + ly;
 
-								int a_row = m * p.K;
-								int b_col = n;
+										As[ly][lx] = (kA < p.K) ? a[row * p.K + kA] : 0.0;
+										Bs[ly][lx] = (kB < p.K) ? b[kB * p.N + col] : 0.0;
 
-								for (int k = 0; k < p.K; ++k)
-										sum += a[a_row + k] * b[k * p.N + b_col];
+										barrier();
 
+										for (int k = 0; k < 16; ++k)
+												sum += As[ly][k] * Bs[k][lx];
+
+										barrier();
+								}
 						} else if (p.tA == 1 && p.tB == 0) {
-
-								int b_col = n;
-
 								for (int k = 0; k < p.K; ++k)
-										sum += a[k * p.M + m] * b[k * p.N + b_col];
-
+										sum += a[k * p.M + row] * b[k * p.N + col];
 						} else if (p.tA == 0 && p.tB == 1) {
-
-								int a_row = m * p.K;
-
 								for (int k = 0; k < p.K; ++k)
-										sum += a[a_row + k] * b[n * p.K + k];
-
+										sum += a[row * p.K + k] * b[col * p.K + k];
 						} else {
-
 								for (int k = 0; k < p.K; ++k)
-										sum += a[k * p.M + m] * b[n * p.K + k];
+										sum += a[k * p.M + row] * b[col * p.K + k];
 						}
 
-						c[m * p.N + n] = sum;
+						c[row * p.N + col] = sum;
 				}
     )");
 
