@@ -92,7 +92,7 @@ def main():
         yb = munet.from_numpy(Y_oh[idx]).reshape([16 * ctx, vocab])
 
         opt.zero_grad()
-        logits = model(xb, pb).reshape([16 * ctx, vocab])
+        logits = model.forward(xb, pb).reshape([16 * ctx, vocab])
         loss = logits.cross_entropy(yb)
         loss.backward()
         opt.step()
@@ -107,7 +107,7 @@ def main():
     for _ in range(60):
         tok = make_one_hot(ctx_ids.reshape(1, -1), vocab)
         pos = make_pos(1, ctx)
-        logits = model(munet.from_numpy(tok), munet.from_numpy(pos))
+        logits = model.forward(munet.from_numpy(tok), munet.from_numpy(pos))
         probs = np.array(logits.softmax(-1), copy=False)[0, -1]
         nxt = int(np.argmax(probs))
         out.append(itos[nxt])

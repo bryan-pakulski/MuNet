@@ -36,6 +36,31 @@ make doc
 
 You can then open the generated `docs/index.html` in your browser.
 
+
+# Project Status (Current)
+
+The project has a working core runtime + training stack with CPU/CUDA/Vulkan backends, autograd, and Python bindings.
+
+**Current highest priority: build a lean inference engine/library.**
+
+## Priority Order
+1. **Inference Engine (P0)**
+   - Add a deploy-first `munet_inference` runtime API for model loading, pre-allocation, warmup, and fast forward execution.
+   - Keep inference surface minimal and stable (no training/autograd dependencies in public API).
+   - Add latency + memory benchmarks and regression checks for CPU/CUDA/Vulkan.
+2. **Transformer Inference Readiness (P1)**
+   - Optimize decoder inference path (causal attention, KV cache, efficient shape/layout handling).
+   - Keep tiny LLM demos as smoke tests for inference APIs.
+3. **RT-DETR Inference Path (P1)**
+   - Add deploy-focused post-processing path and efficient multi-scale execution for detector heads.
+4. **Training/Research Extras (P2)**
+   - Continue optimizer/loss/kernel improvements once inference baseline is stable.
+
+## What is already in place
+- Modular targets: `munet_core`, `munet_training`, `munet_inference`.
+- Backend factory and cache (`BackendManager`) plus optional debug/profiler wrapper.
+- Core tensor ops needed for attention prototypes (`softmax`, `log_softmax`, `masked_fill`, `permute`).
+
 # Future Plans
 - Transformer stack (LayerNorm + MultiHeadAttention + MLP) and a tiny decoder-only LLM demo.
 - Attention-ready tensor ops: softmax, log_softmax, transpose/permute, and masked_fill.
@@ -78,8 +103,8 @@ Core Autograd Features
 
 Optimization & Layers                                                                                                                                                                  
 
- - Advanced Optimizers: You only have SGD. You need Adam, AdamW, and RMSProp.                                                                                                             
- - Attention/Transformers: You lack optimized MultiHeadAttention or even a LayerNorm.                                                                                                     
+ - Advanced Optimizers: SGD and Adam are available; AdamW and RMSProp are still pending.                                                                                                             
+ - Attention/Transformers: baseline `MultiHeadAttention` and `LayerNorm` exist; optimized fused attention kernels are still needed for production inference.                                                                                                     
  - Dropout: Essential for preventing overfitting in production models. ✅ Implemented in `munet.nn`.                                                                                     
 
 Engineering Infrastructure                                                                                                                                                             

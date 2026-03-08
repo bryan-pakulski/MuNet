@@ -4,6 +4,7 @@
 #include "util.hpp"
 
 #include <cstdlib>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
@@ -256,9 +257,38 @@ Tensor Tensor::permute(const std::vector<int> &dims) const {
 Tensor Tensor::contiguous() const {
   if (is_contiguous())
     return *this;
-  // Implementation would involve a specific "copy_strided" kernel
-  // For now, clone() effectively creates a contiguous copy
-  return clone();
+
+  if (device().type != DeviceType::CPU) {
+    Tensor cpu_copy = this->to(Device{DeviceType::CPU, 0});
+    Tensor cpu_contig = cpu_copy.contiguous();
+    return cpu_contig.to(device());
+  }
+
+  Tensor out(shape(), device(), dtype(), requires_grad());
+
+  const char *src = static_cast<const char *>(data());
+  char *dst = static_cast<char *>(out.data());
+  size_t elem_size = dtype_size(dtype());
+
+  Shape idx(shape().size(), 0);
+  for (size_t linear = 0; linear < size(); ++linear) {
+    size_t rem = linear;
+    for (int d = static_cast<int>(shape().size()) - 1; d >= 0; --d) {
+      idx[d] = static_cast<int>(rem % static_cast<size_t>(shape()[d]));
+      rem /= static_cast<size_t>(shape()[d]);
+    }
+
+    size_t src_offset_elems = storage_offset();
+    for (size_t d = 0; d < idx.size(); ++d) {
+      src_offset_elems += static_cast<size_t>(idx[d]) *
+                          static_cast<size_t>(strides()[d]);
+    }
+
+    std::memcpy(dst + linear * elem_size, src + src_offset_elems * elem_size,
+                elem_size);
+  }
+
+  return out;
 }
 
 } // namespace munet

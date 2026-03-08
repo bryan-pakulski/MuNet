@@ -613,54 +613,14 @@ inline Tensor softmax(const Tensor &a, int dim = -1) {
   int resolved = (dim < 0) ? (rank + dim) : dim;
   if (resolved < 0 || resolved >= rank)
     throw std::runtime_error("Softmax: dim out of range");
+  if (resolved != rank - 1)
+    throw std::runtime_error("Softmax currently supports only the last dimension");
 
-  Tensor out;
-  if (resolved == rank - 1 && rank >= 2) {
-    int num_classes = a.shape().back();
-    int batch_size = a.size() / num_classes;
-    out = Tensor(a.shape(), a.device(), a.dtype());
-    a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage,
-                               batch_size, num_classes);
-  } else {
-    Device cpu{DeviceType::CPU, 0};
-    Tensor a_cpu = a.to(cpu);
-    Tensor out_cpu(a.shape(), cpu, a.dtype());
-
-    int outer = 1, inner = 1, dim_size = a.shape()[resolved];
-    for (int i = 0; i < resolved; ++i)
-      outer *= a.shape()[i];
-    for (int i = resolved + 1; i < rank; ++i)
-      inner *= a.shape()[i];
-
-    const float *in = static_cast<const float *>(a_cpu.data());
-    float *o = static_cast<float *>(out_cpu.data());
-
-    for (int out_i = 0; out_i < outer; ++out_i) {
-      for (int in_i = 0; in_i < inner; ++in_i) {
-        float max_v = -1e30f;
-        for (int d = 0; d < dim_size; ++d) {
-          int idx = (out_i * dim_size + d) * inner + in_i;
-          if (in[idx] > max_v)
-            max_v = in[idx];
-        }
-
-        float sum_e = 0.0f;
-        for (int d = 0; d < dim_size; ++d) {
-          int idx = (out_i * dim_size + d) * inner + in_i;
-          float e = std::exp(in[idx] - max_v);
-          o[idx] = e;
-          sum_e += e;
-        }
-
-        for (int d = 0; d < dim_size; ++d) {
-          int idx = (out_i * dim_size + d) * inner + in_i;
-          o[idx] /= sum_e;
-        }
-      }
-    }
-
-    out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
-  }
+  int num_classes = a.shape().back();
+  int batch_size = a.size() / num_classes;
+  Tensor out(a.shape(), a.device(), a.dtype());
+  a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage,
+                             batch_size, num_classes);
 
   if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<SoftmaxBackward>(out, resolved);

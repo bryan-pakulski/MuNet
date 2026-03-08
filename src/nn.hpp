@@ -305,10 +305,13 @@ public:
 
     // [B,T,E] -> [B,H,T,D] -> [BH*T,D]
     Tensor q = q2d.reshape({B, T, num_heads_, head_dim_}).permute({0, 2, 1, 3})
+                   .contiguous()
                    .reshape({BH * T, head_dim_});
     Tensor k = k2d.reshape({B, T, num_heads_, head_dim_}).permute({0, 2, 1, 3})
+                   .contiguous()
                    .reshape({BH * T, head_dim_});
     Tensor v = v2d.reshape({B, T, num_heads_, head_dim_}).permute({0, 2, 1, 3})
+                   .contiguous()
                    .reshape({BH * T, head_dim_});
 
     Tensor scores = q.matmul(k.transpose(0, 1)); // [BH*T, BH*T]
@@ -342,6 +345,7 @@ public:
     // [BH*T,D] -> [B,H,T,D] -> [B,T,E]
     Tensor merged = ctx.reshape({B, num_heads_, T, head_dim_})
                       .permute({0, 2, 1, 3})
+                      .contiguous()
                       .reshape({B * T, E});
 
     Tensor out2d = std::dynamic_pointer_cast<Linear>(out_proj)->forward(merged);

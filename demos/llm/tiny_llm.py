@@ -69,7 +69,7 @@ def sample_next(model: TinyLLM, context_tokens: np.ndarray, vocab_size: int):
     for t in range(context_tokens.shape[0]):
         pos_oh[0, t, t] = 1.0
 
-    logits = model(munet.from_numpy(x_oh), munet.from_numpy(pos_oh)).to(
+    logits = model.forward(munet.from_numpy(x_oh), munet.from_numpy(pos_oh)).to(
         munet.Device(munet.DeviceType.CPU, 0)
     )
     probs = np.array(logits.softmax(), copy=False)[0]
@@ -108,7 +108,7 @@ def main():
         yb = munet.from_numpy(y_oh[idx])
 
         opt.zero_grad()
-        logits = model(xb, pb)
+        logits = model.forward(xb, pb)
         loss = logits.cross_entropy(yb)
         loss.backward()
         opt.step()
