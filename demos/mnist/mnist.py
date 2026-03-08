@@ -52,12 +52,8 @@ def create_model():
 
 
 if __name__ == "__main__":
-    try:
-        device = munet.Device(munet.DeviceType.CPU, 0)
-        print("Using CUDA")
-    except:
-        device = munet.Device(munet.DeviceType.CPU, 0)
-        print("Using CPU")
+    device = munet.Device(munet.DeviceType.CPU, 0)
+    print("Using CPU")
 
     x_train, y_train = generate_shapes(200)
 
@@ -95,9 +91,7 @@ if __name__ == "__main__":
             loss.backward()
             optimizer.step()
 
-            loss_val = np.array(
-                loss.to(munet.Device(munet.DeviceType.CPU, 0)), copy=False
-            )[0]
+            loss_val = loss.item()
             epoch_loss += loss_val
             batches += 1
 

@@ -91,7 +91,7 @@ def visualize_results(model, x_test, y_test, epoch, device, output_dir="vis_resu
     with munet.no_grad():                                                                  
         tx = munet.from_numpy(x_test).to(device)                                           
         logits = model(tx)                                                                 
-        preds = logits.to(munet.Device(munet.DeviceType.CPU, 0)).numpy()                   
+        preds = np.array(logits.to(munet.Device(munet.DeviceType.CPU, 0)).detach(), copy=False)                   
                                                                                            
     pred_mask = np.argmax(preds, axis=1)                                                   
     true_mask = np.argmax(y_test, axis=1)                                                  

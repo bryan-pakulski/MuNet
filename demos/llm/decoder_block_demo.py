@@ -107,8 +107,9 @@ def main():
     for _ in range(60):
         tok = make_one_hot(ctx_ids.reshape(1, -1), vocab)
         pos = make_pos(1, ctx)
-        logits = model.forward(munet.from_numpy(tok), munet.from_numpy(pos))
-        probs = np.array(logits.softmax(-1), copy=False)[0, -1]
+        with munet.no_grad():
+            logits = model.forward(munet.from_numpy(tok), munet.from_numpy(pos))
+            probs = np.array(logits.softmax(-1).detach(), copy=False)[0, -1]
         nxt = int(np.argmax(probs))
         out.append(itos[nxt])
         ctx_ids = np.concatenate([ctx_ids[1:], np.array([nxt], dtype=np.int32)])

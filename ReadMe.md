@@ -270,22 +270,24 @@ Run the Python integration tests:
 make py-test
 ```
 
-## LLM Demo (New)
+## Demos
 
-A minimal character-level training + inference example is available at:
+LLM demos:
 
-```
-demos/llm/tiny_llm.py
-```
+- `demos/llm/tiny_llm.py` — tiny character-level LM with token+position embedding, layer norm and MLP head.
+- `demos/llm/decoder_block_demo.py` — decoder-block style LM with causal `nn.MultiHeadAttention` and residual MLP.
 
-It trains a tiny next-token model with token + positional `nn.Embedding`, `nn.LayerNorm`, `nn.GELU`, and an MLP head using cross-entropy, then runs autoregressive text generation.
+Computer vision demos:
 
-A decoder-block style demo (residual + causal MHA + MLP) is also available at:
+- `demos/mnist/mnist.py` — simple segmentation-style toy training loop.
+- `demos/unet/unet.py` — larger UNet-like segmentation workflow with visualization outputs.
 
-```
-demos/llm/decoder_block_demo.py
-```
+Feature demos (new):
 
+- `demos/features/transformer_ops_showcase.py` — quick forward-only showcase of `MultiHeadAttention`, `LayerNorm`, `GELU`, and `Dropout`.
+- `demos/inference/batch_forward_demo.py` — lean batch forward loop demo for deploy-style execution.
+
+> Note: when converting tensors to NumPy in demos, use `.detach()` (or `munet.no_grad()` + detach) to avoid buffer-access errors on tensors that require grad.
 
 ### Transformer Work Remaining
 - Optimize `nn::MultiHeadAttention` with dedicated CUDA/Vulkan attention kernels (current implementation is tensor-op composition).

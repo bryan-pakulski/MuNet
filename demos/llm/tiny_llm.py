@@ -69,10 +69,11 @@ def sample_next(model: TinyLLM, context_tokens: np.ndarray, vocab_size: int):
     for t in range(context_tokens.shape[0]):
         pos_oh[0, t, t] = 1.0
 
-    logits = model.forward(munet.from_numpy(x_oh), munet.from_numpy(pos_oh)).to(
-        munet.Device(munet.DeviceType.CPU, 0)
-    )
-    probs = np.array(logits.softmax(), copy=False)[0]
+    with munet.no_grad():
+        logits = model.forward(munet.from_numpy(x_oh), munet.from_numpy(pos_oh)).to(
+            munet.Device(munet.DeviceType.CPU, 0)
+        )
+        probs = np.array(logits.softmax().detach(), copy=False)[0]
     return int(np.argmax(probs))
 
 
