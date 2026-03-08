@@ -2,6 +2,7 @@
 #include "core/module.hpp"
 #include <cmath>
 #include <random>
+#include <stdexcept>
 
 namespace munet {
 namespace nn {

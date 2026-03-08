@@ -37,6 +37,8 @@ make doc
 You can then open the generated `docs/index.html` in your browser.
 
 # Future Plans
+- Transformer stack (LayerNorm + MultiHeadAttention + MLP) and a tiny decoder-only LLM demo.
+- Attention-ready tensor ops: softmax, log_softmax, transpose/permute, and masked_fill.
 - Fused Kernels (i.e. conv2d calls 3 kernels -> conv, add (bias) and relu, can merge together)
 - Adaptive Pooling
 
@@ -119,6 +121,29 @@ Additional Layers & Operators:
 
      - Vectorized CPU Ops: Using AVX/SIMD for the CPUBackend to compete with the GPU backends on small batches.
      - Im2Col Convolution: Moving your Conv2d from the current "naive" nested loops to an im2col + GEMM approach for significantly higher performance on all backends.
+
+
+6. Transformer / LLM Build-Out (Recommended Next Milestones)
+
+     - Core layers to add first:
+       - LayerNorm: `nn::LayerNorm` (per-token normalization used everywhere in Transformers).
+       - Embedding: `nn::Embedding` (token + positional tables).
+       - MultiHeadAttention: `nn::MultiHeadAttention` (QKV projections + scaled dot-product attention).
+       - FeedForward block: `Linear -> GELU/SwiGLU -> Linear`.
+     - Tensor operators to unlock attention workloads:
+       - `softmax(dim)` and `log_softmax(dim)` (attention weights and stable losses).
+       - `transpose(dim1, dim2)` / `permute(dims)` (head and sequence layout transforms).
+       - `masked_fill(mask, value)` (causal masking and padding masks).
+       - `sqrt`, `rsqrt`, `exp`, `log`, `pow` (attention scaling and normalization math).
+     - Training-quality features for small LLMs:
+       - `CrossEntropyLoss` (or `NLLLoss + LogSoftmax`) for token prediction.
+       - Gradient clipping + weight decay options in optimizers.
+       - Mixed precision support (`float16`/`bfloat16`) for memory and throughput.
+     - Demo targets (incremental path):
+       - Demo 1: Character-level language model (tiny corpus, CPU-safe).
+       - Demo 2: Decoder-only Transformer block stack with causal mask.
+       - Demo 3: Minimal text generation script (top-k / temperature sampling).
+       - Demo 4: Optional tiny instruction-tuned chat example after baseline LM is stable.
 
 # Development
 
