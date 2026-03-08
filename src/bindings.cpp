@@ -424,6 +424,13 @@ PYBIND11_MODULE(munet, m) {
       .def(py::init<float>(), py::arg("negative_slope") = 0.01f)
       .def_readonly("negative_slope", &nn::LeakyReLU::negative_slope_);
 
+  py::class_<nn::Dropout, nn::Module, std::shared_ptr<nn::Dropout>>(
+      nn, "Dropout",
+      "Randomly zeroes some of the elements of the input tensor with "
+      "probability p during training.")
+      .def(py::init<float>(), py::arg("p") = 0.5f)
+      .def_readonly("p", &nn::Dropout::p_);
+
   py::class_<nn::GlobalAvgPool2d, nn::Module, std::shared_ptr<nn::GlobalAvgPool2d>>(
       nn, "GlobalAvgPool2d", "Applies global average pooling over spatial dimensions.")
       .def(py::init<>());
@@ -557,6 +564,8 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name}
          elif name == 'LeakyReLU':
              return {'type': name, 'negative_slope': m.negative_slope}
+         elif name == 'Dropout':
+             return {'type': name, 'p': m.p}
          else:
              raise ValueError(f"Unknown module type {name}")
 
@@ -593,6 +602,7 @@ PYBIND11_MODULE(munet, m) {
              elif t == 'Sigmoid': return munet.nn.Sigmoid()
              elif t == 'Tanh': return munet.nn.Tanh()
              elif t == 'LeakyReLU': return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
+             elif t == 'Dropout': return munet.nn.Dropout(cfg.get('p', 0.5))
              elif t == 'Flatten': return munet.nn.Flatten()
 
          module = build_module(config)

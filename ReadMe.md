@@ -78,7 +78,7 @@ Optimization & Layers
 
  - Advanced Optimizers: You only have SGD. You need Adam, AdamW, and RMSProp.                                                                                                             
  - Attention/Transformers: You lack optimized MultiHeadAttention or even a LayerNorm.                                                                                                     
- - Dropout: Essential for preventing overfitting in production models.                                                                                                                    
+ - Dropout: Essential for preventing overfitting in production models. ✅ Implemented in `munet.nn`.                                                                                     
 
 Engineering Infrastructure                                                                                                                                                             
 
@@ -97,7 +97,7 @@ Additional Layers & Operators:
 
 2. Core Neural Network Layers
 
-     - Dropout: nn::Dropout. (Essential for preventing overfitting; requires a training flag to disable during inference).
+     - Dropout: nn::Dropout. (Essential for preventing overfitting; requires a training flag to disable during inference). ✅ Implemented in `munet.nn`.
      - Global Average Pooling: nn::GlobalAvgPool2d. (Used in almost all modern CNNs before the final classifier). ✅ Implemented in `munet.nn`.
      - LeakyReLU: nn::LeakyReLU. (Standard improvement over basic ReLU to prevent "dying neurons"). ✅ Implemented in `munet.nn`.
      - Tanh: nn::Tanh. (Standard activation for Recurrent Neural Networks). ✅ Implemented in `munet.nn`.

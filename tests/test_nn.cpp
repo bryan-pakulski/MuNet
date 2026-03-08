@@ -1,5 +1,6 @@
 #include "nn.hpp"
 #include "test_utils.hpp"
+#include <cmath>
 #include <gtest/gtest.h>
 #include <type_traits>
 
@@ -105,4 +106,38 @@ TEST(NNTest, GlobalAvgPool2dForward) {
 
   const float *yo = static_cast<const float *>(y.data());
   EXPECT_NEAR(yo[0], 2.5f, 1e-4f);
+}
+
+TEST(NNTest, DropoutTrainEvalBehavior) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::Dropout dropout(0.5f);
+
+  Tensor x({2000}, cpu);
+  x.uniform_(1.0f, 1.0f);
+
+  dropout.train(true);
+  Tensor y_train = dropout.forward(x).to(cpu);
+  const float *train_data = static_cast<const float *>(y_train.data());
+
+  int zeros = 0;
+  int twos = 0;
+  float sum = 0.0f;
+  for (int i = 0; i < 2000; ++i) {
+    sum += train_data[i];
+    if (std::abs(train_data[i]) < 1e-6f)
+      ++zeros;
+    if (std::abs(train_data[i] - 2.0f) < 1e-6f)
+      ++twos;
+  }
+
+  EXPECT_GT(zeros, 0);
+  EXPECT_GT(twos, 0);
+  EXPECT_NEAR(sum / 2000.0f, 1.0f, 0.15f);
+
+  dropout.eval();
+  Tensor y_eval = dropout.forward(x).to(cpu);
+  const float *eval_data = static_cast<const float *>(y_eval.data());
+  for (int i = 0; i < 2000; ++i) {
+    EXPECT_NEAR(eval_data[i], 1.0f, 1e-6f);
+  }
 }
