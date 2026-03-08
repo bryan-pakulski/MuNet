@@ -30,8 +30,8 @@
 - Add doc linting in CI (links + markdown style) once docs baseline exists.
 
 ## Deliverables (Near-term)
-- [ ] `docs/index.md`
-- [ ] `docs/architecture/runtime.md`
-- [ ] `docs/architecture/backends.md`
-- [ ] `docs/performance/profiling.md`
-- [ ] `docs/contributing/add_new_op.md`
+- [x] `documentation/index.md`
+- [x] `documentation/architecture/runtime.md`
+- [x] `documentation/architecture/backends.md`
+- [x] `documentation/performance/profiling.md`
+- [x] `documentation/contributing/add_new_op.md`

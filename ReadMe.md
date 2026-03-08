@@ -25,6 +25,7 @@ It features a PyTorch-like API, making it familiar to use while handling low-lev
 
 # Documentation
 Documentation roadmap: see `DOCUMENTATION_PLAN.md`.
+Documentation index: `documentation/index.md`.
 
 Documentation can be generated using pydoc:
 
