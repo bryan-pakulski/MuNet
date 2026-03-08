@@ -52,6 +52,69 @@ inline void record_trace(
   out.impl_->trace_node = fn;
 }
 
+struct MaskedFillBackward : public Node {
+  Tensor mask;
+  Shape input_shape;
+
+  explicit MaskedFillBackward(Tensor m)
+      : mask(std::move(m)), input_shape(mask.shape()) {}
+
+  std::string name() const override { return "MaskedFillBackward"; }
+
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    const Tensor &grad_out = grads[0];
+    Device cpu{DeviceType::CPU, 0};
+    Tensor go_cpu = grad_out.to(cpu);
+    Tensor mask_cpu = mask.to(cpu);
+    Tensor gi_cpu(input_shape, cpu, grad_out.dtype());
+
+    const float *go = static_cast<const float *>(go_cpu.data());
+    const float *m = static_cast<const float *>(mask_cpu.data());
+    float *gi = static_cast<float *>(gi_cpu.data());
+
+    for (size_t i = 0; i < gi_cpu.size(); ++i) {
+      gi[i] = (m[i] != 0.0f) ? 0.0f : go[i];
+    }
+
+    Tensor gi_dev = (grad_out.device().type == DeviceType::CPU)
+                        ? gi_cpu
+                        : gi_cpu.to(grad_out.device());
+    return {gi_dev, Tensor()};
+  }
+};
+
+inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value) {
+  if (a.shape() != mask.shape())
+    throw std::runtime_error("masked_fill: input/mask shape mismatch");
+  if (a.device() != mask.device())
+    throw std::runtime_error("masked_fill: input/mask device mismatch");
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a_cpu = a.to(cpu);
+  Tensor m_cpu = mask.to(cpu);
+  Tensor out_cpu(a.shape(), cpu, a.dtype());
+
+  const float *av = static_cast<const float *>(a_cpu.data());
+  const float *mv = static_cast<const float *>(m_cpu.data());
+  float *ov = static_cast<float *>(out_cpu.data());
+
+  for (size_t i = 0; i < out_cpu.size(); ++i) {
+    ov[i] = (mv[i] != 0.0f) ? value : av[i];
+  }
+
+  Tensor out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<MaskedFillBackward>(mask);
+    link_backward_edges(fn.get(), {a, mask});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+
+  record_trace(out, "MaskedFill", {a, mask}, {}, {{"value", value}});
+  return out;
+}
+
 inline Tensor sum_to_shape(const Tensor &t, const Shape &target_shape) {
   if (t.shape() == target_shape)
     return t;
