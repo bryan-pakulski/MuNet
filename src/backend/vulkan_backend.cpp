@@ -26,7 +26,7 @@ namespace munet {
 
 // --- Configuration ---
 static const int MAX_FRAMES_IN_FLIGHT = 2;
-static const int BATCH_SIZE_LIMIT = 1000; // Flush after this many ops
+static const int BATCH_SIZE_LIMIT = 2048; // Flush after this many ops
 static const int MAX_DESCRIPTORS_PER_FRAME = 2048;
 
 // --- Global Vulkan State ---
@@ -1821,6 +1821,7 @@ void ensure_recording() {
 
   VkCommandBufferBeginInfo beginInfo{};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
   isRecording = true;
 }
@@ -2020,9 +2021,9 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   VK_CHECK(vkAllocateDescriptorSets(device, &allocSetInfo, &ds));
 
   // Always update 8 bindings to match layout, padding with first buffer if
-  // needed
-  std::vector<VkDescriptorBufferInfo> bInfos(8);
-  std::vector<VkWriteDescriptorSet> writes(8);
+  // needed. Use stack arrays to avoid per-dispatch heap allocations.
+  VkDescriptorBufferInfo bInfos[8]{};
+  VkWriteDescriptorSet writes[8]{};
 
   for (size_t i = 0; i < 8; ++i) {
     void *ptr =
@@ -2038,19 +2039,14 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
     writes[i].descriptorCount = 1;
     writes[i].pBufferInfo = &bInfos[i];
   }
-  vkUpdateDescriptorSets(device, 8, writes.data(), 0, nullptr);
+  vkUpdateDescriptorSets(device, 8, writes, 0, nullptr);
 
   VkMemoryBarrier memoryBarrier{};
   memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-  memoryBarrier.srcAccessMask =
-      VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
-      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+  memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
   memoryBarrier.dstAccessMask =
-      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
-  vkCmdPipelineBarrier(cmd,
-                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                           VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
                        &memoryBarrier, 0, nullptr, 0, nullptr);
 
@@ -2059,11 +2055,16 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                           0, 1, &ds, 0, nullptr);
   vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                      pcSize, pc);
-  vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                      queryPools[currentFrame], 0);
+
+  if (is_profile_enabled()) {
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        queryPools[currentFrame], 0);
+  }
   vkCmdDispatch(cmd, x, y, z);
-  vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                      queryPools[currentFrame], 1);
+  if (is_profile_enabled()) {
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                        queryPools[currentFrame], 1);
+  }
 
   currentBatchSize++;
   if (currentBatchSize >= BATCH_SIZE_LIMIT) {
