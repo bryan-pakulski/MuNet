@@ -22,6 +22,7 @@ class TinyLLM(munet.nn.Module):
         self.context_len = context_len
         self.embed = munet.nn.Embedding(vocab_size, d_model)
         self.pos_embed = munet.nn.Embedding(context_len, d_model)
+        self.ln = munet.nn.LayerNorm(d_model)
         self.gelu = munet.nn.GELU()
         self.fc1 = munet.nn.Linear(context_len * d_model, hidden)
         self.fc2 = munet.nn.Linear(hidden, vocab_size)
@@ -31,6 +32,7 @@ class TinyLLM(munet.nn.Module):
         tok = self.embed(x_onehot)
         pos = self.pos_embed(pos_onehot)
         x = tok + pos
+        x = self.ln(x)
         x = x.reshape([x.shape[0], self.context_len * x.shape[2]])
         x = self.gelu(self.fc1(x))
         return self.fc2(x)

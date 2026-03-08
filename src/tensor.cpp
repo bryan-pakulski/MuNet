@@ -194,6 +194,11 @@ Tensor Tensor::batch_norm(Tensor &running_mean, Tensor &running_var,
                          training, momentum, eps);
 }
 
+Tensor Tensor::layer_norm(const Tensor &weight, const Tensor &bias,
+                          float eps) const {
+  return ops::layer_norm(*this, weight, bias, eps);
+}
+
 Tensor Tensor::mse_loss(const Tensor &target) const {
   return ops::mse_loss(*this, target);
 }

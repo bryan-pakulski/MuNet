@@ -446,6 +446,16 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("embedding_dim", &nn::Embedding::embedding_dim_)
       .def_readonly("weight", &nn::Embedding::weight);
 
+  py::class_<nn::LayerNorm, nn::Module, std::shared_ptr<nn::LayerNorm>>(
+      nn, "LayerNorm",
+      "Applies Layer Normalization over the last tensor dimension.")
+      .def(py::init<int, float>(), py::arg("normalized_shape"),
+           py::arg("eps") = 1e-5f)
+      .def_readonly("normalized_shape", &nn::LayerNorm::normalized_shape_)
+      .def_readonly("eps", &nn::LayerNorm::eps_)
+      .def_readonly("weight", &nn::LayerNorm::weight)
+      .def_readonly("bias", &nn::LayerNorm::bias);
+
   py::class_<nn::GlobalAvgPool2d, nn::Module, std::shared_ptr<nn::GlobalAvgPool2d>>(
       nn, "GlobalAvgPool2d", "Applies global average pooling over spatial dimensions.")
       .def(py::init<>());
@@ -583,6 +593,8 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name, 'p': m.p}
          elif name == 'Embedding':
              return {'type': name, 'num_embeddings': m.num_embeddings, 'embedding_dim': m.embedding_dim}
+         elif name == 'LayerNorm':
+             return {'type': name, 'normalized_shape': m.normalized_shape, 'eps': m.eps}
          else:
              raise ValueError(f"Unknown module type {name}")
 
@@ -622,6 +634,7 @@ PYBIND11_MODULE(munet, m) {
              elif t == 'LeakyReLU': return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
              elif t == 'Dropout': return munet.nn.Dropout(cfg.get('p', 0.5))
              elif t == 'Embedding': return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'])
+             elif t == 'LayerNorm': return munet.nn.LayerNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5))
              elif t == 'Flatten': return munet.nn.Flatten()
 
          module = build_module(config)

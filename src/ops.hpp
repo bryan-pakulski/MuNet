@@ -2,6 +2,7 @@
 #include "autograd/autograd.hpp"
 #include "types.hpp"
 #include "util.hpp"
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -13,6 +14,8 @@ namespace ops {
 inline Tensor add(const Tensor &a, const Tensor &b);
 inline Tensor sub(const Tensor &a, const Tensor &b);
 inline Tensor mul(const Tensor &a, const Tensor &b);
+inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
+                         const Tensor &bias, float eps = 1e-5f);
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
   for (size_t i = 0; i < inputs.size(); ++i) {
@@ -290,6 +293,144 @@ inline Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
     out.impl_->grad_fn = fn;
   }
   record_trace(out, "CrossEntropy", {logits, targets});
+  return out;
+}
+
+
+
+// --- LAYER NORM (CPU fallback with autograd) ---
+struct LayerNormBackward : public Node {
+  Tensor x, weight, bias;
+  Tensor mean_cpu, inv_std_cpu;
+  int rows, cols;
+  LayerNormBackward(Tensor x_, Tensor w_, Tensor b_, Tensor m_, Tensor is_,
+                    int r, int c)
+      : x(x_), weight(w_), bias(b_), mean_cpu(m_), inv_std_cpu(is_), rows(r),
+        cols(c) {}
+
+  std::string name() const override { return "LayerNormBackward"; }
+
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Device cpu{DeviceType::CPU, 0};
+    Tensor go_cpu = grads[0].to(cpu);
+    Tensor x_cpu = x.to(cpu);
+    Tensor w_cpu = weight.to(cpu);
+
+    Tensor dx_cpu(x.shape(), cpu, x.dtype());
+    Tensor dw_cpu(weight.shape(), cpu, weight.dtype());
+    Tensor db_cpu(bias.shape(), cpu, bias.dtype());
+    dw_cpu.uniform_(0.0f, 0.0f);
+    db_cpu.uniform_(0.0f, 0.0f);
+
+    const float *go = static_cast<const float *>(go_cpu.data());
+    const float *xv = static_cast<const float *>(x_cpu.data());
+    const float *wv = static_cast<const float *>(w_cpu.data());
+    const float *mv = static_cast<const float *>(mean_cpu.data());
+    const float *iv = static_cast<const float *>(inv_std_cpu.data());
+
+    float *dx = static_cast<float *>(dx_cpu.data());
+    float *dw = static_cast<float *>(dw_cpu.data());
+    float *db = static_cast<float *>(db_cpu.data());
+
+    for (int r = 0; r < rows; ++r) {
+      const float mean = mv[r];
+      const float inv = iv[r];
+      float sum_gy = 0.0f;
+      float sum_gy_xhat = 0.0f;
+
+      for (int c = 0; c < cols; ++c) {
+        int idx = r * cols + c;
+        float xhat = (xv[idx] - mean) * inv;
+        float gy = go[idx] * wv[c];
+        sum_gy += gy;
+        sum_gy_xhat += gy * xhat;
+        dw[c] += go[idx] * xhat;
+        db[c] += go[idx];
+      }
+
+      for (int c = 0; c < cols; ++c) {
+        int idx = r * cols + c;
+        float xhat = (xv[idx] - mean) * inv;
+        float gy = go[idx] * wv[c];
+        dx[idx] = (inv / cols) *
+                  (cols * gy - sum_gy - xhat * sum_gy_xhat);
+      }
+    }
+
+    Tensor dx_dev = (x.device().type == DeviceType::CPU) ? dx_cpu
+                                                          : dx_cpu.to(x.device());
+    Tensor dw_dev = (weight.device().type == DeviceType::CPU)
+                        ? dw_cpu
+                        : dw_cpu.to(weight.device());
+    Tensor db_dev = (bias.device().type == DeviceType::CPU) ? db_cpu
+                                                             : db_cpu.to(bias.device());
+    return {dx_dev, dw_dev, db_dev};
+  }
+};
+
+inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
+                         const Tensor &bias, float eps) {
+  if (x.shape().empty())
+    throw std::runtime_error("LayerNorm: input must have at least 1 dim");
+
+  int cols = x.shape().back();
+  if ((int)weight.size() != cols || (int)bias.size() != cols)
+    throw std::runtime_error("LayerNorm: weight/bias size must equal last dim");
+
+  int rows = (int)(x.size() / cols);
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor x_cpu = x.to(cpu);
+  Tensor w_cpu = weight.to(cpu);
+  Tensor b_cpu = bias.to(cpu);
+
+  Tensor out_cpu(x.shape(), cpu, x.dtype());
+  Tensor mean_cpu({rows}, cpu, x.dtype(), false);
+  Tensor inv_std_cpu({rows}, cpu, x.dtype(), false);
+
+  const float *xv = static_cast<const float *>(x_cpu.data());
+  const float *wv = static_cast<const float *>(w_cpu.data());
+  const float *bv = static_cast<const float *>(b_cpu.data());
+  float *ov = static_cast<float *>(out_cpu.data());
+  float *mv = static_cast<float *>(mean_cpu.data());
+  float *iv = static_cast<float *>(inv_std_cpu.data());
+
+  for (int r = 0; r < rows; ++r) {
+    float mean = 0.0f;
+    for (int c = 0; c < cols; ++c)
+      mean += xv[r * cols + c];
+    mean /= cols;
+
+    float var = 0.0f;
+    for (int c = 0; c < cols; ++c) {
+      float d = xv[r * cols + c] - mean;
+      var += d * d;
+    }
+    var /= cols;
+
+    float inv = 1.0f / std::sqrt(var + eps);
+    mv[r] = mean;
+    iv[r] = inv;
+
+    for (int c = 0; c < cols; ++c) {
+      float xhat = (xv[r * cols + c] - mean) * inv;
+      ov[r * cols + c] = xhat * wv[c] + bv[c];
+    }
+  }
+
+  Tensor out = (x.device().type == DeviceType::CPU) ? out_cpu
+                                                     : out_cpu.to(x.device());
+
+  if (GradMode::is_enabled() &&
+      (x.requires_grad() || weight.requires_grad() || bias.requires_grad())) {
+    auto fn = std::make_shared<LayerNormBackward>(x, weight, bias, mean_cpu,
+                                                  inv_std_cpu, rows, cols);
+    link_backward_edges(fn.get(), {x, weight, bias});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+
+  record_trace(out, "LayerNorm", {x, weight, bias}, {}, {{"eps", eps}});
   return out;
 }
 

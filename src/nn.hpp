@@ -169,6 +169,39 @@ public:
 };
 
 
+
+class LayerNorm : public Module {
+public:
+  explicit LayerNorm(int normalized_shape, float eps = 1e-5f)
+      : normalized_shape_(normalized_shape), eps_(eps) {
+    if (normalized_shape_ <= 0)
+      throw std::runtime_error("LayerNorm expects normalized_shape > 0");
+
+    Tensor w({normalized_shape_}, Device{DeviceType::CPU, 0},
+             DataType::Float32, true);
+    w.uniform_(1.0f, 1.0f);
+    weight = w;
+    register_parameter("weight", weight);
+
+    Tensor b({normalized_shape_}, Device{DeviceType::CPU, 0},
+             DataType::Float32, true);
+    b.uniform_(0.0f, 0.0f);
+    bias = b;
+    register_parameter("bias", bias);
+  }
+
+  Tensor forward(Tensor x) override {
+    if (x.shape().empty() || x.shape().back() != normalized_shape_)
+      throw std::runtime_error("LayerNorm expects last dim to match "
+                               "normalized_shape");
+    return x.layer_norm(weight, bias, eps_);
+  }
+
+  Tensor weight, bias;
+  int normalized_shape_;
+  float eps_;
+};
+
 class Embedding : public Module {
 public:
   Embedding(int num_embeddings, int embedding_dim)

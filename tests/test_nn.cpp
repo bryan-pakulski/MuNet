@@ -201,3 +201,42 @@ TEST(NNTest, GELUForwardBehavior) {
   EXPECT_NEAR(yo[1], 0.0f, 1e-6f);
   EXPECT_NEAR(yo[2], 1.9357f, 5e-3f);
 }
+
+
+TEST(NNTest, LayerNormForwardAndBackward) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::LayerNorm ln(4);
+
+  Tensor x({2, 4}, cpu, DataType::Float32, true);
+  float *xd = static_cast<float *>(x.data());
+  // row 0
+  xd[0] = 1.0f; xd[1] = 2.0f; xd[2] = 3.0f; xd[3] = 4.0f;
+  // row 1
+  xd[4] = -1.0f; xd[5] = 0.0f; xd[6] = 1.0f; xd[7] = 2.0f;
+
+  Tensor y = ln.forward(x).to(cpu);
+  const float *yd = static_cast<const float *>(y.data());
+
+  for (int r = 0; r < 2; ++r) {
+    float m = 0.0f;
+    for (int c = 0; c < 4; ++c)
+      m += yd[r * 4 + c];
+    m /= 4.0f;
+
+    float v = 0.0f;
+    for (int c = 0; c < 4; ++c) {
+      float d = yd[r * 4 + c] - m;
+      v += d * d;
+    }
+    v /= 4.0f;
+
+    EXPECT_NEAR(m, 0.0f, 1e-4f);
+    EXPECT_NEAR(v, 1.0f, 2e-3f);
+  }
+
+  Tensor loss = y.sum();
+  loss.backward();
+  EXPECT_TRUE(x.has_grad());
+  EXPECT_TRUE(ln.weight.has_grad());
+  EXPECT_TRUE(ln.bias.has_grad());
+}

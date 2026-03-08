@@ -126,6 +126,8 @@ public:
   Tensor batch_norm(Tensor &running_mean, Tensor &running_var,
                     const Tensor &weight, const Tensor &bias, bool training,
                     float momentum, float eps) const;
+  Tensor layer_norm(const Tensor &weight, const Tensor &bias,
+                    float eps = 1e-5f) const;
 
   // Losses
   Tensor mse_loss(const Tensor &target) const;

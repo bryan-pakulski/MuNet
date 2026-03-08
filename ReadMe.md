@@ -104,7 +104,7 @@ Additional Layers & Operators:
      - LeakyReLU: nn::LeakyReLU. (Standard improvement over basic ReLU to prevent "dying neurons"). ✅ Implemented in `munet.nn`.
      - Tanh: nn::Tanh. (Standard activation for Recurrent Neural Networks). ✅ Implemented in `munet.nn`.
      - GELU: nn::GELU. (Common Transformer MLP activation; fast approximation). ✅ Implemented in `munet.nn`.
-     - LayerNorm: nn::LayerNorm. (The standard normalization layer for Transformers/NLP, which is easier to implement than BatchNorm for variable sequences).
+     - LayerNorm: nn::LayerNorm. (The standard normalization layer for Transformers/NLP, which is easier to implement than BatchNorm for variable sequences). ✅ Implemented in `munet.nn` (CPU-fallback kernel with autograd support).
 
 3. Advanced Modules
 
@@ -252,4 +252,12 @@ A minimal character-level training + inference example is available at:
 demos/llm/tiny_llm.py
 ```
 
-It trains a tiny next-token model with token + positional `nn.Embedding`, `nn.GELU`, and an MLP head using cross-entropy, then runs autoregressive text generation.
+It trains a tiny next-token model with token + positional `nn.Embedding`, `nn.LayerNorm`, `nn.GELU`, and an MLP head using cross-entropy, then runs autoregressive text generation.
+
+
+### Transformer Work Remaining
+- Multi-head self-attention module (`nn::MultiHeadAttention`) with causal mask support.
+- Integer-index embedding gather path (avoid one-hot expansion for memory/perf).
+- Tensor ops for attention ergonomics: `permute`, `masked_fill`, and dim-aware `softmax`.
+- Fused attention and layernorm backend kernels for CUDA/Vulkan performance.
+- End-to-end decoder block demo using causal self-attention + MLP + residuals.
