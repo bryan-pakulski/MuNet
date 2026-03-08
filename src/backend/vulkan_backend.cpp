@@ -194,7 +194,7 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
   VkPhysicalDeviceProperties props;
   vkGetPhysicalDeviceProperties(physicalDevice, &props);
   timestampPeriod = props.limits.timestampPeriod;
-  MUNET_LOG << "Vulkan backend using device index " << device_index_ << " ("
+  MUNET_INFO << "Vulkan backend using device index " << device_index_ << " ("
             << props.deviceName << ")" << std::endl;
 
   uint32_t queueFamilyCount = 0;

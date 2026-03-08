@@ -24,6 +24,8 @@ It features a PyTorch-like API, making it familiar to use while handling low-lev
   - Backends are now factory-registered via `BackendManager::register_backend(...)`, making new backend integrations and swapping implementations simpler.
 
 # Documentation
+Documentation roadmap: see `DOCUMENTATION_PLAN.md`.
+
 Documentation can be generated using pydoc:
 
 ```
@@ -96,7 +98,7 @@ Additional Layers & Operators:
 
      - Dropout: nn::Dropout. (Essential for preventing overfitting; requires a training flag to disable during inference).
      - Global Average Pooling: nn::GlobalAvgPool2d. (Used in almost all modern CNNs before the final classifier).
-     - LeakyReLU: nn::LeakyReLU. (Standard improvement over basic ReLU to prevent "dying neurons").
+     - LeakyReLU: nn::LeakyReLU. (Standard improvement over basic ReLU to prevent "dying neurons"). ✅ Implemented in `munet.nn`.
      - Tanh: nn::Tanh. (Standard activation for Recurrent Neural Networks). ✅ Implemented in `munet.nn`.
      - LayerNorm: nn::LayerNorm. (The standard normalization layer for Transformers/NLP, which is easier to implement than BatchNorm for variable sequences).
 

@@ -124,6 +124,20 @@ public:
   }
 };
 
+class LeakyReLU : public Module {
+public:
+  explicit LeakyReLU(float negative_slope = 0.01f)
+      : negative_slope_(negative_slope) {}
+
+  Tensor forward(Tensor x) override {
+    Tensor slope({1}, x.device(), x.dtype(), false);
+    slope.uniform_(negative_slope_, negative_slope_);
+    return x.relu() + (x - x.relu()) * slope;
+  }
+
+  float negative_slope_;
+};
+
 class MaxPool2d : public Module {
 public:
   MaxPool2d(int kernel_size, int stride = 2, int padding = 0)

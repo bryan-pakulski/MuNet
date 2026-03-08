@@ -419,6 +419,11 @@ PYBIND11_MODULE(munet, m) {
       nn, "Tanh", "Applies the element-wise Tanh function.")
       .def(py::init<>());
 
+  py::class_<nn::LeakyReLU, nn::Module, std::shared_ptr<nn::LeakyReLU>>(
+      nn, "LeakyReLU", "Applies the element-wise LeakyReLU function.")
+      .def(py::init<float>(), py::arg("negative_slope") = 0.01f)
+      .def_readonly("negative_slope", &nn::LeakyReLU::negative_slope_);
+
   py::class_<nn::MaxPool2d, nn::Module, std::shared_ptr<nn::MaxPool2d>>(
       nn, "MaxPool2d", "Applies a 2D max pooling over an input signal.")
       .def(py::init<int, int, int>(), py::arg("kernel_size"),
@@ -544,6 +549,8 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name, 'scale_factor': m.scale_factor}
          elif name in ('ReLU', 'Sigmoid', 'Tanh', 'Flatten'):
              return {'type': name}
+         elif name == 'LeakyReLU':
+             return {'type': name, 'negative_slope': m.negative_slope}
          else:
              raise ValueError(f"Unknown module type {name}")
 
@@ -578,6 +585,7 @@ PYBIND11_MODULE(munet, m) {
              elif t == 'ReLU': return munet.nn.ReLU()
              elif t == 'Sigmoid': return munet.nn.Sigmoid()
              elif t == 'Tanh': return munet.nn.Tanh()
+             elif t == 'LeakyReLU': return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
              elif t == 'Flatten': return munet.nn.Flatten()
 
          module = build_module(config)

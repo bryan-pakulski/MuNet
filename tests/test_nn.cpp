@@ -71,3 +71,19 @@ TEST(NNTest, TanhForwardRange) {
     EXPECT_GE(data[i], -1.0f);
   }
 }
+
+
+TEST(NNTest, LeakyReLUForwardBehavior) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::LeakyReLU lrelu(0.1f);
+
+  Tensor x({2}, cpu);
+  float *x_data = static_cast<float *>(x.data());
+  x_data[0] = -2.0f;
+  x_data[1] = 3.0f;
+
+  Tensor y = lrelu.forward(x).to(cpu);
+  const float *d = static_cast<const float *>(y.data());
+  EXPECT_NEAR(d[0], -0.2f, 1e-5f);
+  EXPECT_NEAR(d[1], 3.0f, 1e-5f);
+}
