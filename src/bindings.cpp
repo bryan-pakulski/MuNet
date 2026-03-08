@@ -642,10 +642,17 @@ PYBIND11_MODULE(munet, m) {
                  "Use `load(existing_model, filename)` for weights-only restore."
              )
 
+     def tensor_to_numpy(t):
+         cpu = munet.Device(munet.DeviceType.CPU, 0)
+         td = t.detach()
+         if td.device.type != munet.DeviceType.CPU:
+             td = td.to(cpu)
+         return np.array(td, copy=False).copy()
+
      config = get_config(module)
      state = {}
      for name, p in module.named_parameters().items():
-         state[name] = _tensor_to_numpy(p)
+         state[name] = tensor_to_numpy(p)
 
      state['__config__'] = np.array(json.dumps(config))
      state['__format_version__'] = np.array('munet_model_v1')
@@ -685,10 +692,19 @@ PYBIND11_MODULE(munet, m) {
          else:
              raise ValueError(f"Unsupported saved module type: {t}")
 
+     def copy_numpy_into_tensor(t, arr):
+         req = bool(t.requires_grad)
+         target = t.device
+         src = munet.from_numpy(np.asarray(arr, dtype=np.float32))
+         if target.type != munet.DeviceType.CPU:
+             src = src.to(target)
+         t.replace_(src)
+         t.requires_grad = req
+
      def apply_state(module, state):
          for name, p in module.named_parameters().items():
              if name in state:
-                 _copy_numpy_into_tensor(p, state[name])
+                 copy_numpy_into_tensor(p, state[name])
          return module
 
      if filename is None:
