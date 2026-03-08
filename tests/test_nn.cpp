@@ -1,8 +1,13 @@
 #include "nn.hpp"
 #include "test_utils.hpp"
 #include <gtest/gtest.h>
+#include <type_traits>
 
 using namespace munet;
+
+TEST(NNTest, ModuleInheritsCoreModule) {
+  EXPECT_TRUE((std::is_base_of_v<core::Module, nn::Module>));
+}
 
 TEST(NNTest, ModuleParameters) {
   auto model = std::make_shared<nn::Sequential>();

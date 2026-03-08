@@ -14,6 +14,14 @@ It features a PyTorch-like API, making it familiar to use while handling low-lev
 - **Dynamic Autograd**: define-by-run automatic differentiation engine (DAG).
 - **Cross Platform**: Built for Linux/Unix systems.
 - **Model Parallelism**: tensors can exist on different devices within the same graph (e.g., Layer 1 on CPU, Layer 2 on Vulkan).
+- **Shared Module Core**: `munet::core::Module` now owns parameter/buffer/module registration so training (`munet::nn`) and future inference libraries can share the same model graph foundation.
+- **Library Split for Extensibility**:
+  - `munet_core`: backend + tensor runtime shared by all products.
+  - `munet_training`: training APIs (`nn`, optimizers) on top of core.
+  - `munet_inference`: deploy/edge-focused inference APIs on top of core.
+- **Backend Modularity**:
+  - Debug/profiling interception now lives in a dedicated backend module (`munet_backend_debug`) instead of being embedded in tensor runtime code.
+  - Backends are now factory-registered via `BackendManager::register_backend(...)`, making new backend integrations and swapping implementations simpler.
 
 # Documentation
 Documentation can be generated using pydoc:
@@ -112,6 +120,15 @@ Additional Layers & Operators:
 # Development
 
 μNet is designed to be modular. Adding new functionality involves touching the backend interface, the specific implementations, and the autograd engine.
+
+### Backend Registration (New)
+Use `BackendManager::register_backend(DeviceType, factory)` to plug in a backend implementation without editing tensor dispatch logic.
+
+```cpp
+BackendManager::register_backend(DeviceType::CPU, [](Device d) {
+    return std::make_shared<MyCPUBackend>(d.index);
+});
+```
 
 ### 1. Define the Interface
 Modify `src/backend.hpp` to add the virtual function definitions for your new operation (both forward and backward if applicable).

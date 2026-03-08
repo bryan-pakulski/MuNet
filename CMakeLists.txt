@@ -28,7 +28,10 @@ FetchContent_MakeAvailable(googletest)
 include(CheckLanguage)
 check_language(CUDA)
 
-set(MUNET_SOURCES src/tensor.cpp)
+set(MUNET_SOURCES
+    src/tensor.cpp
+    src/backend/backend_manager.cpp
+)
 
 if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
@@ -52,21 +55,39 @@ else()
     message(WARNING "Vulkan not found.")
 endif()
 
-# --- Core Library ---
+# --- Backend Modules ---
+add_library(munet_backend_debug OBJECT src/backend/debug_backend.cpp)
+target_include_directories(munet_backend_debug PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# --- Library Layout ---
+# 1) Core runtime (tensor/backends/autograd graph primitives)
 add_library(munet_core ${MUNET_SOURCES})
 target_include_directories(munet_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_sources(munet_core PRIVATE $<TARGET_OBJECTS:munet_backend_debug>)
 
 if(Vulkan_FOUND)
     target_link_libraries(munet_core PUBLIC Vulkan::Vulkan)
 endif()
 
 if(CMAKE_CUDA_COMPILER)
-		target_link_libraries(munet_core PUBLIC CUDA::cudart CUDA::cublas)
+    target_link_libraries(munet_core PUBLIC CUDA::cudart CUDA::cublas)
 endif()
+
+# 2) Training API (nn/optim) layered on top of core
+add_library(munet_training INTERFACE)
+target_include_directories(munet_training INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(munet_training INTERFACE munet_core)
+target_compile_definitions(munet_training INTERFACE MUNET_ENABLE_TRAINING=1)
+
+# 3) Inference API (edge/deploy-focused surface) layered on top of core
+add_library(munet_inference INTERFACE)
+target_include_directories(munet_inference INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(munet_inference INTERFACE munet_core)
+target_compile_definitions(munet_inference INTERFACE MUNET_ENABLE_INFERENCE=1 MUNET_EDGE_DEPLOY=1)
 
 # --- Python Bindings ---
 pybind11_add_module(munet src/bindings.cpp)
-target_link_libraries(munet PRIVATE munet_core)
+target_link_libraries(munet PRIVATE munet_training)
 
 # --- Unit Tests ---
 enable_testing()
@@ -80,9 +101,11 @@ add_executable(munet_tests
 				tests/test_ops.cpp
         tests/test_optim.cpp
         tests/test_nn.cpp
+        tests/test_inference.cpp
+        tests/test_backend_manager.cpp
 )
 
-target_link_libraries(munet_tests PRIVATE munet_core gtest_main)
+target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_main)
 
 include(GoogleTest)
 gtest_discover_tests(munet_tests)

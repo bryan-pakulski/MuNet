@@ -1,113 +1,33 @@
 #pragma once
-#include "tensor.hpp"
+#include "core/module.hpp"
 #include <cmath>
-#include <map>
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace munet {
 namespace nn {
 
-class Module {
+class Module : public core::Module {
 public:
   virtual ~Module() = default;
 
-  // Generic forward for single-tensor layers
-  virtual Tensor forward(Tensor x) = 0;
-
-  virtual std::vector<Tensor> parameters() {
-    std::vector<Tensor> params;
-    for (auto &[name, p] : parameters_) {
-      params.push_back(*p);
-    }
-    for (auto &[name, m] : modules_) {
-      auto sub_params = m->parameters();
-      params.insert(params.end(), sub_params.begin(), sub_params.end());
-    }
-    return params;
-  }
-
-  virtual std::map<std::string, Tensor>
-  named_parameters(std::string prefix = "") {
-    std::map<std::string, Tensor> params;
-    for (auto &[name, p] : parameters_)
-      params[prefix + name] = *p;
-    for (auto &[name, b] : buffers_)
-      params[prefix + name] = *b;
-    for (auto &[name, m] : modules_) {
-      auto sub_params = m->named_parameters(prefix + name + ".");
-      params.insert(sub_params.begin(), sub_params.end());
-    }
-    return params;
-  }
-
-  virtual std::map<std::string, std::shared_ptr<Module>>
-  named_modules(std::string prefix = "") {
-    std::map<std::string, std::shared_ptr<Module>> mods;
-    for (auto &[name, m] : modules_) {
-      mods[prefix + name] = m;
-      auto sub = m->named_modules(prefix + name + ".");
-      mods.insert(sub.begin(), sub.end());
-    }
-    return mods;
-  }
-
-  virtual void train(bool mode = true) {
-    training_ = mode;
-    for (auto &[name, m] : modules_) {
-      m->train(mode);
-    }
-  }
-
-  void eval() { train(false); }
-
-  virtual void to(Device device) {
-    for (auto &[name, p] : parameters_) {
-      *p = p->to(device);
-      if (p->requires_grad()) {
-        p->set_requires_grad(true);
-      }
-    }
-    for (auto &[name, b] : buffers_) {
-      *b = b->to(device);
-    }
-    for (auto &[name, m] : modules_) {
-      m->to(device);
-    }
-  }
-
-  void zero_grad() {
-    for (auto &p : parameters()) {
-      p.zero_grad();
-    }
-  }
-
-  Tensor &register_parameter(std::string name, Tensor &t) {
-    if (t.name().empty())
-      t.set_name(name);
-    parameters_[name] = &t;
-    return t;
-  }
-
-  Tensor &register_buffer(std::string name, Tensor &t) {
-    if (t.name().empty())
-      t.set_name(name);
-    buffers_[name] = &t;
-    return t;
-  }
-
   std::shared_ptr<Module> register_module(std::string name,
                                           std::shared_ptr<Module> m) {
-    modules_[name] = m;
+    core::Module::register_module(name, m);
     return m;
   }
 
-protected:
-  bool training_ = true;
-  std::map<std::string, Tensor *> parameters_;
-  std::map<std::string, Tensor *> buffers_;
-  std::map<std::string, std::shared_ptr<Module>> modules_;
+  std::map<std::string, std::shared_ptr<Module>>
+  named_modules(std::string prefix = "") {
+    std::map<std::string, std::shared_ptr<Module>> mods;
+    for (auto &[name, m] : modules_) {
+      auto casted = std::dynamic_pointer_cast<Module>(m);
+      if (casted) {
+        mods[prefix + name] = casted;
+        auto sub = casted->named_modules(prefix + name + ".");
+        mods.insert(sub.begin(), sub.end());
+      }
+    }
+    return mods;
+  }
 };
 
 // --- Layers ---
