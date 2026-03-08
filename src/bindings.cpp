@@ -424,6 +424,10 @@ PYBIND11_MODULE(munet, m) {
       .def(py::init<float>(), py::arg("negative_slope") = 0.01f)
       .def_readonly("negative_slope", &nn::LeakyReLU::negative_slope_);
 
+  py::class_<nn::GlobalAvgPool2d, nn::Module, std::shared_ptr<nn::GlobalAvgPool2d>>(
+      nn, "GlobalAvgPool2d", "Applies global average pooling over spatial dimensions.")
+      .def(py::init<>());
+
   py::class_<nn::MaxPool2d, nn::Module, std::shared_ptr<nn::MaxPool2d>>(
       nn, "MaxPool2d", "Applies a 2D max pooling over an input signal.")
       .def(py::init<int, int, int>(), py::arg("kernel_size"),
@@ -547,6 +551,8 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name, 'num_features': m.weight.shape[0], 'eps': m.eps, 'momentum': m.momentum}
          elif name == 'Upsample':
              return {'type': name, 'scale_factor': m.scale_factor}
+         elif name == 'GlobalAvgPool2d':
+             return {'type': name}
          elif name in ('ReLU', 'Sigmoid', 'Tanh', 'Flatten'):
              return {'type': name}
          elif name == 'LeakyReLU':
@@ -582,6 +588,7 @@ PYBIND11_MODULE(munet, m) {
              elif t == 'MaxPool2d': return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
              elif t == 'BatchNorm2d': return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'])
              elif t == 'Upsample': return munet.nn.Upsample(cfg['scale_factor'])
+             elif t == 'GlobalAvgPool2d': return munet.nn.GlobalAvgPool2d()
              elif t == 'ReLU': return munet.nn.ReLU()
              elif t == 'Sigmoid': return munet.nn.Sigmoid()
              elif t == 'Tanh': return munet.nn.Tanh()

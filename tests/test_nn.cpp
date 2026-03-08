@@ -87,3 +87,22 @@ TEST(NNTest, LeakyReLUForwardBehavior) {
   EXPECT_NEAR(d[0], -0.2f, 1e-5f);
   EXPECT_NEAR(d[1], 3.0f, 1e-5f);
 }
+
+
+TEST(NNTest, GlobalAvgPool2dForward) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::GlobalAvgPool2d gap;
+
+  Tensor x({1, 1, 2, 2}, cpu);
+  float *d = static_cast<float *>(x.data());
+  d[0] = 1.0f; d[1] = 2.0f; d[2] = 3.0f; d[3] = 4.0f;
+
+  Tensor y = gap.forward(x).to(cpu);
+  EXPECT_EQ(y.shape()[0], 1);
+  EXPECT_EQ(y.shape()[1], 1);
+  EXPECT_EQ(y.shape()[2], 1);
+  EXPECT_EQ(y.shape()[3], 1);
+
+  const float *yo = static_cast<const float *>(y.data());
+  EXPECT_NEAR(yo[0], 2.5f, 1e-4f);
+}

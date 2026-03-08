@@ -929,7 +929,9 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 						int row = int(gl_GlobalInvocationID.y);
 						int lx = int(gl_LocalInvocationID.x);
 						int ly = int(gl_LocalInvocationID.y);
-						bool in_bounds = (row < p.M && col < p.N);
+						bool row_valid = (row < p.M);
+						bool col_valid = (col < p.N);
+						bool out_valid = row_valid && col_valid;
 
 						float sum = 0.0;
 
@@ -940,30 +942,30 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 										int kA = t * 16 + lx;
 										int kB = t * 16 + ly;
 
-										As[ly][lx] = (in_bounds && kA < p.K) ? a[row * p.K + kA] : 0.0;
-										Bs[ly][lx] = (in_bounds && kB < p.K) ? b[kB * p.N + col] : 0.0;
+										As[ly][lx] = (row_valid && kA < p.K) ? a[row * p.K + kA] : 0.0;
+										Bs[ly][lx] = (col_valid && kB < p.K) ? b[kB * p.N + col] : 0.0;
 
 										barrier();
 
-										if (in_bounds) {
+										if (out_valid) {
 												for (int k = 0; k < 16; ++k)
 														sum += As[ly][k] * Bs[k][lx];
 										}
 
 										barrier();
 								}
-						} else if (in_bounds && p.tA == 1 && p.tB == 0) {
+						} else if (out_valid && p.tA == 1 && p.tB == 0) {
 								for (int k = 0; k < p.K; ++k)
 										sum += a[k * p.M + row] * b[k * p.N + col];
-						} else if (in_bounds && p.tA == 0 && p.tB == 1) {
+						} else if (out_valid && p.tA == 0 && p.tB == 1) {
 								for (int k = 0; k < p.K; ++k)
 										sum += a[row * p.K + k] * b[col * p.K + k];
-						} else if (in_bounds) {
+						} else if (out_valid) {
 								for (int k = 0; k < p.K; ++k)
 										sum += a[k * p.M + row] * b[col * p.K + k];
 						}
 
-						if (in_bounds)
+						if (out_valid)
 								c[row * p.N + col] = sum;
 				}
     )");

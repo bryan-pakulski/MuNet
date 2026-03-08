@@ -124,6 +124,26 @@ public:
   }
 };
 
+class GlobalAvgPool2d : public Module {
+public:
+  Tensor forward(Tensor x) override {
+    auto s = x.shape();
+    if (s.size() != 4)
+      throw std::runtime_error("GlobalAvgPool2d expects NCHW input");
+
+    int B = s[0], C = s[1], H = s[2], W = s[3];
+    int HW = H * W;
+
+    Tensor flat = x.reshape({B * C, HW});
+    Tensor weights({HW, 1}, x.device(), x.dtype(), false);
+    float scale = 1.0f / static_cast<float>(HW);
+    weights.uniform_(scale, scale);
+
+    Tensor out = flat.matmul(weights);
+    return out.reshape({B, C, 1, 1});
+  }
+};
+
 class LeakyReLU : public Module {
 public:
   explicit LeakyReLU(float negative_slope = 0.01f)

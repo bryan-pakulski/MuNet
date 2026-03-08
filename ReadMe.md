@@ -98,7 +98,7 @@ Additional Layers & Operators:
 2. Core Neural Network Layers
 
      - Dropout: nn::Dropout. (Essential for preventing overfitting; requires a training flag to disable during inference).
-     - Global Average Pooling: nn::GlobalAvgPool2d. (Used in almost all modern CNNs before the final classifier).
+     - Global Average Pooling: nn::GlobalAvgPool2d. (Used in almost all modern CNNs before the final classifier). ✅ Implemented in `munet.nn`.
      - LeakyReLU: nn::LeakyReLU. (Standard improvement over basic ReLU to prevent "dying neurons"). ✅ Implemented in `munet.nn`.
      - Tanh: nn::Tanh. (Standard activation for Recurrent Neural Networks). ✅ Implemented in `munet.nn`.
      - LayerNorm: nn::LayerNorm. (The standard normalization layer for Transformers/NLP, which is easier to implement than BatchNorm for variable sequences).
