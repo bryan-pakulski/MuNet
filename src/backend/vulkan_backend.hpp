@@ -7,10 +7,11 @@ namespace munet {
 
 class VulkanBackend : public Backend {
 private:
+  int device_index_ = 0;
   double last_kernel_us_ = 0.0;
 
 public:
-  VulkanBackend();
+  VulkanBackend(int device_index = 0);
   ~VulkanBackend() override;
 
   void *allocate(size_t bytes) override;

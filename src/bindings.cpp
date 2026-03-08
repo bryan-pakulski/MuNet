@@ -340,8 +340,12 @@ PYBIND11_MODULE(munet, m) {
            py::arg("prefix") = "",
            "Returns an iterator over module parameters, yielding both the name "
            "of the parameter as well as the parameter itself.")
-      .def("named_modules", &nn::Module::named_modules, py::arg("prefix") = "",
-           "Returns an iterator over all modules in the network.")
+      .def("named_modules",
+           [](nn::Module &self, const std::string &prefix) {
+             return self.named_modules_typed(prefix);
+           },
+           py::arg("prefix") = "",
+           "Returns an iterator over all nn modules in the network.")
       .def("train", &nn::Module::train, py::arg("mode") = true,
            "Sets the module in training mode.")
       .def("eval", &nn::Module::eval, "Sets the module in evaluation mode.")
