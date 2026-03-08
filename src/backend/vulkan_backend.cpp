@@ -2,6 +2,7 @@
 #include "storage.hpp"
 #include "util.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -79,6 +80,22 @@ static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
 static VkPipeline crossEntropyPipeline, crossEntropyBackwardPipeline;
 
 // --- Helpers ---
+static inline std::chrono::high_resolution_clock::time_point profile_now() {
+  return std::chrono::high_resolution_clock::now();
+}
+
+static inline void profile_cpu_event(
+    const char *name,
+    const std::chrono::high_resolution_clock::time_point &start,
+    size_t bytes = 0) {
+  if (!is_profile_enabled())
+    return;
+  const auto end = std::chrono::high_resolution_clock::now();
+  const double us =
+      std::chrono::duration<double, std::micro>(end - start).count();
+  Profiler::get().record(name, us, 0.0, bytes);
+}
+
 static size_t round_up_alloc_size(size_t bytes) {
   if (bytes == 0)
     bytes = 4; // Minimal valid size
@@ -1806,6 +1823,7 @@ void flush_batch() {
   if (!isRecording)
     return;
 
+  auto flush_start = profile_now();
   VkCommandBuffer cmd = commandBuffers[currentFrame];
 
   VK_CHECK(vkEndCommandBuffer(cmd));
@@ -1817,6 +1835,8 @@ void flush_batch() {
   VK_CHECK(vkQueueSubmit(computeQueue, 1, &submitInfo,
                          inFlightFences[currentFrame]));
 
+  profile_cpu_event("vulkan.flush_batch", flush_start);
+
   // Advance Frame
   currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
   isRecording = false;
@@ -1827,9 +1847,13 @@ void ensure_recording() {
   if (isRecording)
     return;
 
+  auto ensure_start = profile_now();
+
   // Wait for the NEXT frame slot to be free (Fence Wait)
+  auto wait_start = profile_now();
   VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE,
                            UINT64_MAX));
+  profile_cpu_event("vulkan.wait_for_fence", wait_start);
 
   // Process deferred frees safely now that the GPU is done with this frame
   for (uint64_t handle : deferred_frees[currentFrame]) {
@@ -1840,8 +1864,10 @@ void ensure_recording() {
   deferred_frees[currentFrame].clear();
 
   // Reset Descriptor Pool logic: wipe the slate clean for this frame
+  auto descriptor_reset_start = profile_now();
   VK_CHECK(vkResetDescriptorPool(device, descriptorPools[currentFrame], 0));
   allocate_frame_descriptor_sets(currentFrame);
+  profile_cpu_event("vulkan.descriptor_pool_reset", descriptor_reset_start);
 
   VK_CHECK(vkResetFences(device, 1, &inFlightFences[currentFrame]));
 
@@ -1854,12 +1880,18 @@ void ensure_recording() {
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
   isRecording = true;
+
+  profile_cpu_event("vulkan.ensure_recording", ensure_start);
 }
 
 static void runImmediateCommand(std::function<void(VkCommandBuffer)> func) {
+  auto total_start = profile_now();
   if (isRecording)
     flush_batch(); // Flush pending work first
+
+  auto pre_idle_start = profile_now();
   VK_CHECK(vkQueueWaitIdle(computeQueue));
+  profile_cpu_event("vulkan.immediate_wait_idle.pre", pre_idle_start);
 
   VK_CHECK(vkResetCommandBuffer(immediateCmdBuffer, 0));
   VkCommandBufferBeginInfo beginInfo{};
@@ -1873,7 +1905,11 @@ static void runImmediateCommand(std::function<void(VkCommandBuffer)> func) {
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &immediateCmdBuffer;
   VK_CHECK(vkQueueSubmit(computeQueue, 1, &submitInfo, VK_NULL_HANDLE));
+
+  auto post_idle_start = profile_now();
   VK_CHECK(vkQueueWaitIdle(computeQueue));
+  profile_cpu_event("vulkan.immediate_wait_idle.post", post_idle_start);
+  profile_cpu_event("vulkan.immediate_total", total_start);
 }
 
 void VulkanBackend::memset(void *ptr, int value, size_t bytes) {
@@ -1930,7 +1966,9 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     if (!stagingBuffer || stagingOffset + aligned > stagingSize) {
       if (isRecording)
         flush_batch();
+      auto staging_wait_start = profile_now();
       VK_CHECK(vkQueueWaitIdle(computeQueue));
+      profile_cpu_event("vulkan.staging_wait_idle", staging_wait_start);
       stagingOffset = 0; // Safe because queue is idle
       if (stagingSize < aligned) {
         if (stagingBuffer) {
@@ -2001,7 +2039,9 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
                     stagingBuffer, 1, &copyRegion);
     currentBatchSize++;
     flush_batch();
+    auto d2h_wait_start = profile_now();
     VK_CHECK(vkQueueWaitIdle(computeQueue));
+    profile_cpu_event("vulkan.copy_d2h_wait_idle", d2h_wait_start, bytes);
     std::memcpy(dst, (char *)stagingMapped + offset, bytes);
     stagingOffset =
         0; // Free entire staging buffer since we just forced a full wait
@@ -2011,7 +2051,10 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
 void VulkanBackend::synchronize() {
   if (isRecording)
     flush_batch();
+
+  auto sync_wait_start = profile_now();
   VK_CHECK(vkQueueWaitIdle(computeQueue));
+  profile_cpu_event("vulkan.synchronize_wait_idle", sync_wait_start);
 
   // Only attempt to fetch results if profiling is actually active and work was
   // done
@@ -2021,9 +2064,11 @@ void VulkanBackend::synchronize() {
     int frameToQuery =
         (currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
 
+    auto query_start = profile_now();
     VkResult res = vkGetQueryPoolResults(
         device, queryPools[frameToQuery], 0, 2, sizeof(uint64_t) * 2, results,
         sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+    profile_cpu_event("vulkan.query_results", query_start);
 
     if (res == VK_SUCCESS) {
       double nanoseconds = (double)(results[1] - results[0]) * timestampPeriod;
@@ -2039,6 +2084,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                                     const std::vector<void *> &buffers,
                                     void *pc, size_t pcSize, int x, int y,
                                     int z) {
+  auto encode_start = profile_now();
   ensure_recording();
   VkCommandBuffer cmd = commandBuffers[currentFrame];
 
@@ -2070,7 +2116,9 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
     writes[i].descriptorCount = 1;
     writes[i].pBufferInfo = &bInfos[i];
   }
+  auto descriptor_update_start = profile_now();
   vkUpdateDescriptorSets(device, write_count, writes, 0, nullptr);
+  profile_cpu_event("vulkan.update_descriptors", descriptor_update_start);
 
   VkMemoryBarrier memoryBarrier{};
   memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -2101,6 +2149,8 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   if (currentBatchSize >= BATCH_SIZE_LIMIT) {
     flush_batch();
   }
+
+  profile_cpu_event("vulkan.dispatch_encode", encode_start);
 }
 
 // --- Kernel Wrappers ---
