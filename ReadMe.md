@@ -129,7 +129,7 @@ Additional Layers & Operators:
      - Core layers to add first:
        - LayerNorm: `nn::LayerNorm` (per-token normalization used everywhere in Transformers).
        - Embedding: `nn::Embedding` (token + positional tables).
-       - MultiHeadAttention: `nn::MultiHeadAttention` (QKV projections + scaled dot-product attention). ✅ Implemented (causal self-attention, CPU fallback path).
+       - MultiHeadAttention: `nn::MultiHeadAttention` (QKV projections + scaled dot-product attention). ✅ Implemented (causal self-attention via tensor-op composition; backend-accelerated matmuls).
        - FeedForward block: `Linear -> GELU/SwiGLU -> Linear`.
      - Tensor operators to unlock attention workloads:
        - `softmax(dim)` and `log_softmax(dim)` (attention weights and stable losses). ✅ Implemented in Tensor API.
@@ -262,8 +262,8 @@ demos/llm/decoder_block_demo.py
 
 
 ### Transformer Work Remaining
-- Optimize `nn::MultiHeadAttention` with backend-native CUDA/Vulkan kernels (current implementation is CPU fallback).
+- Optimize `nn::MultiHeadAttention` with dedicated CUDA/Vulkan attention kernels (current implementation is tensor-op composition).
 - Integer-index embedding gather path (avoid one-hot expansion for memory/perf).
 - Add attention-adjacent ops still missing for scale/perf: `logsumexp`, fused causal mask-softmax, and efficient batched matmul layouts.
 - Fused attention and layernorm backend kernels for CUDA/Vulkan performance.
-- End-to-end decoder block demo using causal self-attention + MLP + residuals.
+- Add deeper multi-block decoder demo with KV-cache style autoregressive inference loop.

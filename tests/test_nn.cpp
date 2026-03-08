@@ -279,3 +279,32 @@ TEST(NNTest, MultiHeadAttentionForwardShape) {
   EXPECT_EQ(y.shape()[1], 4);
   EXPECT_EQ(y.shape()[2], 8);
 }
+
+
+TEST(NNTest, MultiHeadAttentionCausalMaskBehavior) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::MultiHeadAttention mha(4, 2, true);
+
+  Tensor x1({1, 2, 4}, cpu);
+  float *d1 = static_cast<float *>(x1.data());
+  // token 0
+  d1[0] = 0.1f; d1[1] = 0.2f; d1[2] = 0.3f; d1[3] = 0.4f;
+  // token 1
+  d1[4] = 0.5f; d1[5] = 0.6f; d1[6] = 0.7f; d1[7] = 0.8f;
+
+  Tensor x2 = x1.clone();
+  float *d2 = static_cast<float *>(x2.data());
+  // Change only future token heavily
+  d2[4] = 10.0f; d2[5] = -10.0f; d2[6] = 20.0f; d2[7] = -20.0f;
+
+  Tensor y1 = mha.forward(x1).to(cpu);
+  Tensor y2 = mha.forward(x2).to(cpu);
+
+  const float *o1 = static_cast<const float *>(y1.data());
+  const float *o2 = static_cast<const float *>(y2.data());
+
+  // First token output should be unaffected by future token under causal mask.
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_NEAR(o1[i], o2[i], 1e-4f);
+  }
+}

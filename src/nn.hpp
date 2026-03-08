@@ -294,84 +294,58 @@ public:
     if (s[2] != embed_dim_)
       throw std::runtime_error("MultiHeadAttention expects last dim == embed_dim");
 
-    // NOTE: current implementation is inference-focused CPU fallback.
-    // For training workloads, a dedicated backend kernel path should be added.
-
     int B = s[0], T = s[1], E = s[2];
+    int BH = B * num_heads_;
 
+    // Project Q/K/V
     Tensor x2d = x.reshape({B * T, E});
     Tensor q2d = std::dynamic_pointer_cast<Linear>(q_proj)->forward(x2d);
     Tensor k2d = std::dynamic_pointer_cast<Linear>(k_proj)->forward(x2d);
     Tensor v2d = std::dynamic_pointer_cast<Linear>(v_proj)->forward(x2d);
 
+    // [B,T,E] -> [B,H,T,D] -> [BH*T,D]
+    Tensor q = q2d.reshape({B, T, num_heads_, head_dim_}).permute({0, 2, 1, 3})
+                   .reshape({BH * T, head_dim_});
+    Tensor k = k2d.reshape({B, T, num_heads_, head_dim_}).permute({0, 2, 1, 3})
+                   .reshape({BH * T, head_dim_});
+    Tensor v = v2d.reshape({B, T, num_heads_, head_dim_}).permute({0, 2, 1, 3})
+                   .reshape({BH * T, head_dim_});
+
+    Tensor scores = q.matmul(k.transpose(0, 1)); // [BH*T, BH*T]
+    Tensor scale({1}, scores.device(), scores.dtype(), false);
+    scale.uniform_(1.0f / std::sqrt(static_cast<float>(head_dim_)),
+                   1.0f / std::sqrt(static_cast<float>(head_dim_)));
+    scores = scores * scale;
+
+    // Block + causal mask on CPU, then move to target device.
     Device cpu{DeviceType::CPU, 0};
-    Tensor q_cpu = q2d.to(cpu);
-    Tensor k_cpu = k2d.to(cpu);
-    Tensor v_cpu = v2d.to(cpu);
-
-    const float *qv = static_cast<const float *>(q_cpu.data());
-    const float *kv = static_cast<const float *>(k_cpu.data());
-    const float *vv = static_cast<const float *>(v_cpu.data());
-
-    Tensor out_cpu({B, T, E}, cpu, x.dtype(), false);
-    float *ov = static_cast<float *>(out_cpu.data());
-
-    const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
-
-    for (int b = 0; b < B; ++b) {
-      for (int h = 0; h < num_heads_; ++h) {
-        const int h_off = h * head_dim_;
-
-        for (int t = 0; t < T; ++t) {
-          std::vector<float> scores(T, -std::numeric_limits<float>::infinity());
-          float max_score = -std::numeric_limits<float>::infinity();
-
-          for (int j = 0; j < T; ++j) {
-            if (causal_ && j > t)
-              continue;
-
-            float dot = 0.0f;
-            for (int d = 0; d < head_dim_; ++d) {
-              int q_idx = ((b * T + t) * E) + h_off + d;
-              int k_idx = ((b * T + j) * E) + h_off + d;
-              dot += qv[q_idx] * kv[k_idx];
-            }
-            scores[j] = dot * scale;
-            if (scores[j] > max_score)
-              max_score = scores[j];
-          }
-
-          float denom = 0.0f;
-          for (int j = 0; j < T; ++j) {
-            if (causal_ && j > t)
-              continue;
-            scores[j] = std::exp(scores[j] - max_score);
-            denom += scores[j];
-          }
-          if (denom <= 0.0f)
-            denom = 1.0f;
-
-          for (int d = 0; d < head_dim_; ++d) {
-            float acc = 0.0f;
-            for (int j = 0; j < T; ++j) {
-              if (causal_ && j > t)
-                continue;
-              float p = scores[j] / denom;
-              int v_idx = ((b * T + j) * E) + h_off + d;
-              acc += p * vv[v_idx];
-            }
-            int o_idx = ((b * T + t) * E) + h_off + d;
-            ov[o_idx] = acc;
-          }
-        }
+    Tensor mask_cpu({BH * T, BH * T}, cpu, scores.dtype(), false);
+    float *m = static_cast<float *>(mask_cpu.data());
+    for (int i = 0; i < BH * T; ++i) {
+      int bh_i = i / T;
+      int t_i = i % T;
+      for (int j = 0; j < BH * T; ++j) {
+        int bh_j = j / T;
+        int t_j = j % T;
+        bool masked = (bh_i != bh_j) || (causal_ && t_j > t_i);
+        m[i * (BH * T) + j] = masked ? 1.0f : 0.0f;
       }
     }
+    Tensor mask = (scores.device().type == DeviceType::CPU)
+                      ? mask_cpu
+                      : mask_cpu.to(scores.device());
+    scores = scores.masked_fill(mask, -1e9f);
 
-    Tensor attn = (x.device().type == DeviceType::CPU) ? out_cpu
-                                                        : out_cpu.to(x.device());
-    Tensor out2d = attn.reshape({B * T, E});
-    Tensor proj = std::dynamic_pointer_cast<Linear>(out_proj)->forward(out2d);
-    return proj.reshape({B, T, E});
+    Tensor probs = scores.softmax(-1);
+    Tensor ctx = probs.matmul(v); // [BH*T, D]
+
+    // [BH*T,D] -> [B,H,T,D] -> [B,T,E]
+    Tensor merged = ctx.reshape({B, num_heads_, T, head_dim_})
+                      .permute({0, 2, 1, 3})
+                      .reshape({B * T, E});
+
+    Tensor out2d = std::dynamic_pointer_cast<Linear>(out_proj)->forward(merged);
+    return out2d.reshape({B, T, E});
   }
 
   int embed_dim_;
