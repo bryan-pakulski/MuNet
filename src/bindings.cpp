@@ -575,9 +575,34 @@ PYBIND11_MODULE(munet, m) {
          import munet
          munet.GradMode.set_enabled(self.prev)
 
+ def _tensor_to_numpy(t):
+     import numpy as np
+     import munet
+
+     cpu = munet.Device(munet.DeviceType.CPU, 0)
+     td = t.detach()
+     if td.device.type != munet.DeviceType.CPU:
+         td = td.to(cpu)
+     return np.array(td, copy=False).copy()
+
+ def _copy_numpy_into_tensor(t, arr):
+     import numpy as np
+     import munet
+
+     req = bool(t.requires_grad)
+     target = t.device
+     src = munet.from_numpy(np.asarray(arr, dtype=np.float32))
+     if target.type != munet.DeviceType.CPU:
+         src = src.to(target)
+     t.replace_(src)
+     t.requires_grad = req
+
  def save(module, filename):
      """
-     Saves a module's architecture and weights to a compressed .npz file.
+     Saves a module architecture + parameters/buffers to a compressed .npz file.
+     The saved file can be loaded with `load(filename)` (full reconstruction)
+     for supported built-in module types, or with `load(module, filename)` for
+     weights-only restore into an existing model definition.
      """
      import numpy as np
      import json
@@ -612,58 +637,76 @@ PYBIND11_MODULE(munet, m) {
          elif name == 'MultiHeadAttention':
              return {'type': name, 'embed_dim': m.embed_dim, 'num_heads': m.num_heads, 'causal': bool(m.causal)}
          else:
-             raise ValueError(f"Unknown module type {name}")
+             raise ValueError(
+                 f"Unsupported module type for full reconstruction: {name}. "
+                 "Use `load(existing_model, filename)` for weights-only restore."
+             )
 
      config = get_config(module)
-     state = {name: np.array(p, copy=False) for name, p in module.named_parameters().items()}
+     state = {}
+     for name, p in module.named_parameters().items():
+         state[name] = _tensor_to_numpy(p)
+
      state['__config__'] = np.array(json.dumps(config))
+     state['__format_version__'] = np.array('munet_model_v1')
      np.savez(filename, **state)
 
  def load(arg, filename=None):
      """
-    Loads a previously saved module state.
+     Loads a previously saved module state.
+
+     Usage:
+       - load("model.npz") -> reconstruct full supported model from file.
+       - load(module, "model.npz") -> load weights/buffers into existing model.
      """
      import numpy as np
      import json
      import munet
 
+     def build_module(cfg):
+         t = cfg['type']
+         if t == 'Sequential': return munet.nn.Sequential([build_module(c) for c in cfg['layers']])
+         elif t == 'Linear': return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'])
+         elif t == 'Conv2d': return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'])
+         elif t == 'MaxPool2d': return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
+         elif t == 'BatchNorm2d': return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'])
+         elif t == 'Upsample': return munet.nn.Upsample(cfg['scale_factor'])
+         elif t == 'GlobalAvgPool2d': return munet.nn.GlobalAvgPool2d()
+         elif t == 'ReLU': return munet.nn.ReLU()
+         elif t == 'Sigmoid': return munet.nn.Sigmoid()
+         elif t == 'Tanh': return munet.nn.Tanh()
+         elif t == 'GELU': return munet.nn.GELU()
+         elif t == 'LeakyReLU': return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
+         elif t == 'Dropout': return munet.nn.Dropout(cfg.get('p', 0.5))
+         elif t == 'Embedding': return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'])
+         elif t == 'LayerNorm': return munet.nn.LayerNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5))
+         elif t == 'MultiHeadAttention': return munet.nn.MultiHeadAttention(cfg['embed_dim'], cfg['num_heads'], cfg.get('causal', True))
+         elif t == 'Flatten': return munet.nn.Flatten()
+         else:
+             raise ValueError(f"Unsupported saved module type: {t}")
+
+     def apply_state(module, state):
+         for name, p in module.named_parameters().items():
+             if name in state:
+                 _copy_numpy_into_tensor(p, state[name])
+         return module
+
      if filename is None:
          state = np.load(arg, allow_pickle=True)
          if '__config__' not in state:
-             raise ValueError("File does not contain architecture config. Load into a module using `load(module, filename)` instead.")
+             raise ValueError("File does not contain architecture config. Use `load(module, filename)` for weights-only restore.")
 
          config = json.loads(str(state['__config__']))
-
-         def build_module(cfg):
-             t = cfg['type']
-             if t == 'Sequential': return munet.nn.Sequential([build_module(c) for c in cfg['layers']])
-             elif t == 'Linear': return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'])
-             elif t == 'Conv2d': return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'])
-             elif t == 'MaxPool2d': return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
-             elif t == 'BatchNorm2d': return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'])
-             elif t == 'Upsample': return munet.nn.Upsample(cfg['scale_factor'])
-             elif t == 'GlobalAvgPool2d': return munet.nn.GlobalAvgPool2d()
-             elif t == 'ReLU': return munet.nn.ReLU()
-             elif t == 'Sigmoid': return munet.nn.Sigmoid()
-             elif t == 'Tanh': return munet.nn.Tanh()
-             elif t == 'GELU': return munet.nn.GELU()
-             elif t == 'LeakyReLU': return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
-             elif t == 'Dropout': return munet.nn.Dropout(cfg.get('p', 0.5))
-             elif t == 'Embedding': return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'])
-             elif t == 'LayerNorm': return munet.nn.LayerNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5))
-             elif t == 'MultiHeadAttention': return munet.nn.MultiHeadAttention(cfg['embed_dim'], cfg['num_heads'], cfg.get('causal', True))
-             elif t == 'Flatten': return munet.nn.Flatten()
-
          module = build_module(config)
-         for name, p in module.named_parameters().items():
-             if name in state: p.copy_from_numpy(state[name])
-         return module
+         return apply_state(module, state)
      else:
          module = arg
          state = np.load(filename, allow_pickle=True)
-         for name, p in module.named_parameters().items():
-             if name in state: p.copy_from_numpy(state[name])
-         return module
+         return apply_state(module, state)
+
+ def load_weights(module, filename):
+     """Alias for `load(module, filename)` to explicitly do weights-only restore."""
+     return load(module, filename)
  )",
       py::globals(), m.attr("__dict__"));
 }

@@ -2,6 +2,7 @@ import sys
 import os
 import unittest
 import numpy as np
+import tempfile
 
 # Dynamically add the 'build' directory to sys.path so Python can find 'munet.so'
 build_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "build"))
@@ -549,6 +550,56 @@ class TestBindings(unittest.TestCase):
         optimizer.step()
 
         self.assertAlmostEqual(params[0].item(), 0.8, places=6)
+
+    def test_model_serialization_full_roundtrip(self):
+        """Save full model and reconstruct it from file without original definition."""
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.GELU(),
+            munet.nn.Linear(8, 2),
+        ])
+
+        x = munet.Tensor([3, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array(
+            [[0.1, -0.2, 0.3, 0.4], [0.5, 0.6, -0.7, 0.8], [-0.9, 1.0, 0.2, -0.1]],
+            dtype=np.float32,
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "full_model.npz")
+            munet.save(model, path)
+
+            loaded = munet.load(path)
+            y_ref = np.array(model.forward(x).detach(), copy=False)
+            y_loaded = np.array(loaded.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y_ref, y_loaded, atol=1e-6))
+
+    def test_model_serialization_weights_only(self):
+        """Load weights into an existing model definition."""
+        src = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.ReLU(),
+            munet.nn.Linear(8, 2),
+        ])
+        dst = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.ReLU(),
+            munet.nn.Linear(8, 2),
+        ])
+
+        x = munet.Tensor([2, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array(
+            [[1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, 0.5, 0.25]], dtype=np.float32
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "weights_only.npz")
+            munet.save(src, path)
+            munet.load(dst, path)
+
+            y_src = np.array(src.forward(x).detach(), copy=False)
+            y_dst = np.array(dst.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y_src, y_dst, atol=1e-6))
 
 
 if __name__ == "__main__":

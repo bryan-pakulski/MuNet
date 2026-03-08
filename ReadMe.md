@@ -286,8 +286,21 @@ Feature demos (new):
 
 - `demos/features/transformer_ops_showcase.py` — quick forward-only showcase of `MultiHeadAttention`, `LayerNorm`, `GELU`, and `Dropout`.
 - `demos/inference/batch_forward_demo.py` — lean batch forward loop demo for deploy-style execution.
+- `demos/inference/serialization_roundtrip_demo.py` — demonstrates full model save/load reconstruction and weights-only restore.
 
 > Note: when converting tensors to NumPy in demos, use `.detach()` (or `munet.no_grad()` + detach) to avoid buffer-access errors on tensors that require grad.
+
+
+## Serialization
+
+MuNet supports two serialization paths:
+
+- **Full model file**: `munet.save(model, "model.npz")` then `restored = munet.load("model.npz")`
+  - Reconstructs supported built-in model graphs without requiring the original Python class definition.
+- **Weights-only restore**: `munet.load(existing_model, "model.npz")` (or `munet.load_weights(...)`)
+  - Loads parameters/buffers into an already-defined model instance.
+
+For a runnable example, see `demos/inference/serialization_roundtrip_demo.py`.
 
 ### Transformer Work Remaining
 - Optimize `nn::MultiHeadAttention` with dedicated CUDA/Vulkan attention kernels (current implementation is tensor-op composition).
