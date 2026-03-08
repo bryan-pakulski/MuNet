@@ -16,14 +16,13 @@ public:
   }
 
   std::map<std::string, std::shared_ptr<Module>>
-  named_modules(std::string prefix = "") {
+  named_modules_typed(std::string prefix = "") {
     std::map<std::string, std::shared_ptr<Module>> mods;
-    for (auto &[name, m] : modules_) {
+    auto base_mods = core::Module::named_modules(prefix);
+    for (auto &[name, m] : base_mods) {
       auto casted = std::dynamic_pointer_cast<Module>(m);
       if (casted) {
-        mods[prefix + name] = casted;
-        auto sub = casted->named_modules(prefix + name + ".");
-        mods.insert(sub.begin(), sub.end());
+        mods[name] = casted;
       }
     }
     return mods;

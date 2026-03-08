@@ -24,6 +24,11 @@ TEST(NNTest, ModuleParameters) {
   EXPECT_TRUE(named.count("0.bias"));
   EXPECT_TRUE(named.count("2.weight"));
   EXPECT_TRUE(named.count("2.bias"));
+
+  auto named_modules = model->named_modules_typed();
+  EXPECT_TRUE(named_modules.count("0"));
+  EXPECT_TRUE(named_modules.count("1"));
+  EXPECT_TRUE(named_modules.count("2"));
 }
 
 TEST(NNTest, BatchNormTrainEval) {
