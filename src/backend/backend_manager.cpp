@@ -52,7 +52,9 @@ void register_default_backends() {
 
 #ifdef MUNET_USE_VULKAN
   factories.try_emplace(DeviceType::VULKAN,
-                        [](Device) { return std::make_shared<VulkanBackend>(); });
+                        [](Device device) {
+                          return std::make_shared<VulkanBackend>(device.index);
+                        });
 #endif
 
   initialized = true;

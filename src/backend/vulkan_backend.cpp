@@ -145,7 +145,7 @@ static std::vector<uint32_t> compileShader(const std::string &name,
   return buffer;
 }
 
-VulkanBackend::VulkanBackend() {
+VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
   VkApplicationInfo appInfo{};
   appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
   appInfo.apiVersion = VK_API_VERSION_1_2;
@@ -156,13 +156,26 @@ VulkanBackend::VulkanBackend() {
 
   uint32_t deviceCount = 0;
   vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+  if (deviceCount == 0) {
+    throw std::runtime_error("No Vulkan physical devices found.");
+  }
+
   std::vector<VkPhysicalDevice> devices(deviceCount);
   vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
-  physicalDevice = devices[0];
+
+  if (device_index_ < 0 || device_index_ >= static_cast<int>(deviceCount)) {
+    throw std::runtime_error("Requested Vulkan device index out of range: " +
+                             std::to_string(device_index_) +
+                             " (available: " + std::to_string(deviceCount) + ")");
+  }
+
+  physicalDevice = devices[static_cast<size_t>(device_index_)];
 
   VkPhysicalDeviceProperties props;
   vkGetPhysicalDeviceProperties(physicalDevice, &props);
   timestampPeriod = props.limits.timestampPeriod;
+  MUNET_LOG << "Vulkan backend using device index " << device_index_ << " ("
+            << props.deviceName << ")" << std::endl;
 
   uint32_t queueFamilyCount = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
