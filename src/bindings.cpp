@@ -415,6 +415,10 @@ PYBIND11_MODULE(munet, m) {
       nn, "Sigmoid", "Applies the element-wise Sigmoid function.")
       .def(py::init<>());
 
+  py::class_<nn::Tanh, nn::Module, std::shared_ptr<nn::Tanh>>(
+      nn, "Tanh", "Applies the element-wise Tanh function.")
+      .def(py::init<>());
+
   py::class_<nn::MaxPool2d, nn::Module, std::shared_ptr<nn::MaxPool2d>>(
       nn, "MaxPool2d", "Applies a 2D max pooling over an input signal.")
       .def(py::init<int, int, int>(), py::arg("kernel_size"),
@@ -538,7 +542,7 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name, 'num_features': m.weight.shape[0], 'eps': m.eps, 'momentum': m.momentum}
          elif name == 'Upsample':
              return {'type': name, 'scale_factor': m.scale_factor}
-         elif name in ('ReLU', 'Sigmoid', 'Flatten'):
+         elif name in ('ReLU', 'Sigmoid', 'Tanh', 'Flatten'):
              return {'type': name}
          else:
              raise ValueError(f"Unknown module type {name}")
@@ -573,6 +577,7 @@ PYBIND11_MODULE(munet, m) {
              elif t == 'Upsample': return munet.nn.Upsample(cfg['scale_factor'])
              elif t == 'ReLU': return munet.nn.ReLU()
              elif t == 'Sigmoid': return munet.nn.Sigmoid()
+             elif t == 'Tanh': return munet.nn.Tanh()
              elif t == 'Flatten': return munet.nn.Flatten()
 
          module = build_module(config)

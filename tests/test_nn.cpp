@@ -53,3 +53,21 @@ TEST(NNTest, BatchNormTrainEval) {
   auto out2 = bn->forward(x);
   EXPECT_FLOAT_EQ(((float *)bn->running_mean.data())[0], prev_rm);
 }
+
+
+TEST(NNTest, TanhForwardRange) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::Tanh tanh;
+
+  Tensor x({4}, cpu);
+  x.uniform_(-2.0f, 2.0f);
+
+  Tensor y = tanh.forward(x);
+  Tensor y_cpu = y.to(cpu);
+  const float *data = static_cast<const float *>(y_cpu.data());
+
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_LE(data[i], 1.0f);
+    EXPECT_GE(data[i], -1.0f);
+  }
+}

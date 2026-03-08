@@ -112,6 +112,18 @@ public:
   Tensor forward(Tensor x) override { return x.sigmoid(); }
 };
 
+class Tanh : public Module {
+public:
+  Tensor forward(Tensor x) override {
+    // tanh(x) = 2 * sigmoid(2x) - 1
+    Tensor two({1}, x.device(), x.dtype(), false);
+    two.uniform_(2.0f, 2.0f);
+    Tensor one({1}, x.device(), x.dtype(), false);
+    one.uniform_(1.0f, 1.0f);
+    return (x * two).sigmoid() * two - one;
+  }
+};
+
 class MaxPool2d : public Module {
 public:
   MaxPool2d(int kernel_size, int stride = 2, int padding = 0)
