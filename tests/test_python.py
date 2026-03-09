@@ -659,5 +659,33 @@ class TestBindings(unittest.TestCase):
             self.assertTrue(np.allclose(y_ref, y_eng, atol=1e-6))
 
 
+    def test_inference_engine_dynamic_dims_with_wildcards(self):
+        model = munet.nn.Sequential([
+            munet.nn.Conv2d(3, 4, 3, padding=1),
+            munet.nn.ReLU(),
+            munet.nn.Conv2d(4, 2, 1),
+        ])
+
+        eng = munet.inference.Engine()
+        eng.load(model)
+
+        x_compile = munet.Tensor([1, 3, 64, 64], requires_grad=False)
+        np.array(x_compile, copy=False)[:] = np.random.randn(1, 3, 64, 64).astype(np.float32)
+
+        eng.compile(x_compile, expected_input_shape=[-1, 3, -1, -1], expected_output_shape=[-1, 2, -1, -1])
+        self.assertEqual(eng.compiled_input_shape(), [1, 3, 64, 64])
+        self.assertEqual(eng.compiled_output_shape(), [1, 2, 64, 64])
+
+        x_ok = munet.Tensor([2, 3, 128, 80], requires_grad=False)
+        np.array(x_ok, copy=False)[:] = np.random.randn(2, 3, 128, 80).astype(np.float32)
+        y_ok = eng.run(x_ok)
+        self.assertEqual(y_ok.shape, [2, 2, 128, 80])
+
+        x_bad = munet.Tensor([2, 1, 128, 80], requires_grad=False)
+        np.array(x_bad, copy=False)[:] = np.random.randn(2, 1, 128, 80).astype(np.float32)
+        with self.assertRaises(RuntimeError):
+            eng.run(x_bad)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

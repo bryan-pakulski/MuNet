@@ -33,6 +33,7 @@ struct EngineStats {
   double last_run_ms = 0.0;
   double compile_ms = 0.0;
   std::vector<int> compiled_input_shape{};
+  std::vector<int> compiled_output_shape{};
 };
 
 class Engine {
@@ -68,15 +69,39 @@ public:
     stats_ = {};
   }
 
-  void compile(const Tensor &example_input) {
+  void compile(const Tensor &example_input,
+               const std::vector<int> &expected_input_shape = {},
+               const std::vector<int> &expected_output_shape = {}) {
     ensure_loaded();
 
     auto start = std::chrono::high_resolution_clock::now();
     Tensor input = to_engine_device(example_input);
     compiled_input_shape_ = input.shape();
 
-    // graph warmup / backend pre-initialization
-    for (int i = 0; i < config_.warmup_runs; ++i) {
+    if (!expected_input_shape.empty()) {
+      validate_shape(expected_input_shape, compiled_input_shape_,
+                     "Engine: compile expected_input_shape mismatch");
+      expected_input_shape_ = expected_input_shape;
+      use_expected_input_shape_ = true;
+    } else {
+      expected_input_shape_.clear();
+      use_expected_input_shape_ = false;
+    }
+
+    Tensor out = module_->forward(input);
+    compiled_output_shape_ = out.shape();
+
+    if (!expected_output_shape.empty()) {
+      validate_shape(expected_output_shape, compiled_output_shape_,
+                     "Engine: compile expected_output_shape mismatch");
+      expected_output_shape_ = expected_output_shape;
+      use_expected_output_shape_ = true;
+    } else {
+      expected_output_shape_.clear();
+      use_expected_output_shape_ = false;
+    }
+
+    for (int i = 1; i < config_.warmup_runs; ++i) {
       (void)module_->forward(input);
     }
 
@@ -84,6 +109,7 @@ public:
     stats_.compile_ms =
         std::chrono::duration<double, std::milli>(end - start).count();
     stats_.compiled_input_shape = compiled_input_shape_;
+    stats_.compiled_output_shape = compiled_output_shape_;
 
     compiled_ = true;
     prepared_ = true;
@@ -95,12 +121,22 @@ public:
     ensure_loaded();
 
     Tensor in = to_engine_device(input);
-    if (config_.strict_shape_check && compiled_ && in.shape() != compiled_input_shape_) {
-      throw std::runtime_error("Engine: input shape mismatch with compiled shape");
+    if (config_.strict_shape_check && compiled_) {
+      if (use_expected_input_shape_) {
+        validate_shape(expected_input_shape_, in.shape(),
+                       "Engine: input shape mismatch with expected compiled shape");
+      } else if (in.shape() != compiled_input_shape_) {
+        throw std::runtime_error("Engine: input shape mismatch with compiled shape");
+      }
     }
 
     auto start = std::chrono::high_resolution_clock::now();
     Tensor out = module_->forward(in);
+
+    if (config_.strict_shape_check && compiled_ && use_expected_output_shape_) {
+      validate_shape(expected_output_shape_, out.shape(),
+                     "Engine: output shape mismatch with expected compiled shape");
+    }
     auto end = std::chrono::high_resolution_clock::now();
 
     stats_.runs += 1;
@@ -125,11 +161,27 @@ public:
   bool is_prepared() const { return prepared_; }
   bool is_compiled() const { return compiled_; }
   const std::vector<int> &compiled_input_shape() const { return compiled_input_shape_; }
+  const std::vector<int> &compiled_output_shape() const { return compiled_output_shape_; }
   EngineStats stats() const { return stats_; }
 
 private:
   Tensor to_engine_device(const Tensor &input) const {
     return (input.device() == config_.device) ? input : input.to(config_.device);
+  }
+
+  static void validate_shape(const std::vector<int> &expected,
+                             const std::vector<int> &actual,
+                             const std::string &err_prefix) {
+    if (expected.size() != actual.size()) {
+      throw std::runtime_error(err_prefix + ": rank mismatch");
+    }
+
+    for (size_t i = 0; i < expected.size(); ++i) {
+      if (expected[i] != -1 && expected[i] != actual[i]) {
+        throw std::runtime_error(err_prefix + ": dim mismatch at index " +
+                                 std::to_string(i));
+      }
+    }
   }
 
   void ensure_loaded() const {
@@ -144,6 +196,11 @@ private:
   bool prepared_ = false;
   bool compiled_ = false;
   std::vector<int> compiled_input_shape_{};
+  std::vector<int> compiled_output_shape_{};
+  std::vector<int> expected_input_shape_{};
+  std::vector<int> expected_output_shape_{};
+  bool use_expected_input_shape_ = false;
+  bool use_expected_output_shape_ = false;
 };
 
 class Sequential : public Module {

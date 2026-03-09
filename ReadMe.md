@@ -46,7 +46,7 @@ The project has a working core runtime + training stack with CPU/CUDA/Vulkan bac
 ## Priority Order
 1. **Inference Engine (P0)**
    - Add a deploy-first `munet_inference` runtime API for model loading, pre-allocation, warmup, and fast forward execution.
-   - Current scaffold includes `compile(example_input)` shape capture + warmup and strict shape guard on `run(...)`.
+   - Current scaffold includes `compile(example_input, expected_input_shape, expected_output_shape)` with `-1` wildcard support for dynamic dims (e.g. dynamic batch/resolution) plus strict shape guards on `run(...)`.
    - Keep inference surface minimal and stable (no training/autograd dependencies in public API).
    - Add latency + memory benchmarks and regression checks for CPU/CUDA/Vulkan.
 2. **Transformer Inference Readiness (P1)**

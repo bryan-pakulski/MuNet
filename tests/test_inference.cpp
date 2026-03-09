@@ -112,3 +112,36 @@ TEST(InferenceTest, EngineStrictShapeCheckAfterCompile) {
   engine.set_strict_shape_check(false);
   EXPECT_NO_THROW((void)engine.run(bad));
 }
+
+
+TEST(InferenceTest, EngineCompileWithDynamicInputShape) {
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  engine.load(m);
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor x_compile({1, 3, 64, 64}, cpu);
+  x_compile.uniform_(0.1f, 0.1f);
+
+  engine.compile(x_compile, {-1, 3, -1, -1}, {-1, 3, -1, -1});
+
+  Tensor x_ok({4, 3, 128, 256}, cpu);
+  x_ok.uniform_(0.2f, 0.2f);
+  EXPECT_NO_THROW((void)engine.run(x_ok));
+
+  Tensor x_bad({4, 1, 128, 256}, cpu);
+  x_bad.uniform_(0.2f, 0.2f);
+  EXPECT_THROW((void)engine.run(x_bad), std::runtime_error);
+}
+
+TEST(InferenceTest, EngineCompileWithInvalidExpectedOutputShapeThrows) {
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  engine.load(m);
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor x({2, 3}, cpu);
+  x.uniform_(0.3f, 0.3f);
+
+  EXPECT_THROW(engine.compile(x, {-1, 3}, {-1, 4}), std::runtime_error);
+}

@@ -528,7 +528,9 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("last_run_ms", &inference::EngineStats::last_run_ms)
       .def_readonly("compile_ms", &inference::EngineStats::compile_ms)
       .def_readonly("compiled_input_shape",
-                    &inference::EngineStats::compiled_input_shape);
+                    &inference::EngineStats::compiled_input_shape)
+      .def_readonly("compiled_output_shape",
+                    &inference::EngineStats::compiled_output_shape);
 
   py::class_<inference::Engine>(inf, "Engine")
       .def(py::init<inference::EngineConfig>(), py::arg("config") = inference::EngineConfig{})
@@ -544,7 +546,16 @@ PYBIND11_MODULE(munet, m) {
             self.load(std::static_pointer_cast<core::Module>(module));
           },
           py::arg("module"))
-      .def("compile", &inference::Engine::compile, py::arg("example_input"))
+      .def("compile",
+           [](inference::Engine &self, const Tensor &example_input,
+              const std::optional<std::vector<int>> &expected_input_shape,
+              const std::optional<std::vector<int>> &expected_output_shape) {
+             self.compile(example_input, expected_input_shape.value_or(std::vector<int>{}),
+                          expected_output_shape.value_or(std::vector<int>{}));
+           },
+           py::arg("example_input"),
+           py::arg("expected_input_shape") = py::none(),
+           py::arg("expected_output_shape") = py::none())
       .def("prepare", &inference::Engine::prepare, py::arg("example_input"))
       .def("run", &inference::Engine::run, py::arg("input"))
       .def("run_batch", &inference::Engine::run_batch, py::arg("inputs"))
@@ -552,6 +563,7 @@ PYBIND11_MODULE(munet, m) {
       .def("is_prepared", &inference::Engine::is_prepared)
       .def("is_compiled", &inference::Engine::is_compiled)
       .def("compiled_input_shape", &inference::Engine::compiled_input_shape)
+      .def("compiled_output_shape", &inference::Engine::compiled_output_shape)
       .def("stats", &inference::Engine::stats);
 
   // ============================================================================
