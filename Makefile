@@ -22,4 +22,8 @@ doc:
 	 mkdir -p docs                                                                          
 	 cd build && pdoc ./munet -o ../docs                                   
 
-PHONY: all build unit-test py-test format docs
+PHONY: all build build-release unit-test py-test perf-test format docs
+
+perf-test: build-release
+	 MUNET_RUN_PERF_TESTS=1 ./build/munet_tests --gtest_filter=PerformanceTest.*
+
