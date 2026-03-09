@@ -1979,8 +1979,9 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
       if (isRecording)
         flush_batch();
       auto staging_wait_start = profile_now();
-      VK_CHECK(vkQueueWaitIdle(computeQueue));
-      profile_cpu_event("vulkan.staging_wait_idle", staging_wait_start);
+      VK_CHECK(vkWaitForFences(device, MAX_FRAMES_IN_FLIGHT, inFlightFences,
+                               VK_TRUE, UINT64_MAX));
+      profile_cpu_event("vulkan.staging_wait_fences", staging_wait_start);
       stagingOffset = 0; // Safe because queue is idle
       if (stagingSize < aligned) {
         if (stagingBuffer) {
@@ -2052,8 +2053,11 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     currentBatchSize++;
     flush_batch();
     auto d2h_wait_start = profile_now();
-    VK_CHECK(vkQueueWaitIdle(computeQueue));
-    profile_cpu_event("vulkan.copy_d2h_wait_idle", d2h_wait_start, bytes);
+    int submitted_frame =
+        (currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
+    VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[submitted_frame],
+                             VK_TRUE, UINT64_MAX));
+    profile_cpu_event("vulkan.copy_d2h_wait_fence", d2h_wait_start, bytes);
     std::memcpy(dst, (char *)stagingMapped + offset, bytes);
     stagingOffset =
         0; // Free entire staging buffer since we just forced a full wait
@@ -2065,8 +2069,9 @@ void VulkanBackend::synchronize() {
     flush_batch();
 
   auto sync_wait_start = profile_now();
-  VK_CHECK(vkQueueWaitIdle(computeQueue));
-  profile_cpu_event("vulkan.synchronize_wait_idle", sync_wait_start);
+  VK_CHECK(vkWaitForFences(device, MAX_FRAMES_IN_FLIGHT, inFlightFences,
+                           VK_TRUE, UINT64_MAX));
+  profile_cpu_event("vulkan.synchronize_wait_fences", sync_wait_start);
 
   // Only attempt to fetch results if profiling is actually active and work was
   // done
