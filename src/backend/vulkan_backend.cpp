@@ -1864,10 +1864,12 @@ void ensure_recording() {
   deferred_frees[currentFrame].clear();
 
   // Reset Descriptor Pool logic: wipe the slate clean for this frame
-  auto descriptor_reset_start = profile_now();
-  VK_CHECK(vkResetDescriptorPool(device, descriptorPools[currentFrame], 0));
-  allocate_frame_descriptor_sets(currentFrame);
-  profile_cpu_event("vulkan.descriptor_pool_reset", descriptor_reset_start);
+  // Descriptor sets are pre-allocated once and then recycled per frame slot.
+  // Since we wait on the frame fence above, the GPU is done with this frame's
+  // descriptors and it is safe to reuse them by just rewinding the cursor.
+  auto descriptor_reuse_start = profile_now();
+  descriptorSetCursor[currentFrame] = 0;
+  profile_cpu_event("vulkan.descriptor_set_reuse", descriptor_reuse_start);
 
   VK_CHECK(vkResetFences(device, 1, &inFlightFences[currentFrame]));
 
