@@ -784,6 +784,98 @@ PYBIND11_MODULE(munet, m) {
      """Alias for `load(module, filename)` to explicitly do weights-only restore."""
      m = __import__("munet")
      return m.load(module, filename)
+
+ class ONNXEngine:
+     """ONNX Runtime-backed inference helper exposed as munet.inference.ONNXEngine.
+
+     It accepts MuNet Tensor or NumPy input and returns MuNet Tensor outputs
+     on the configured MuNet device.
+     """
+     def __init__(self, model_path, device=None, providers=None):
+         import numpy as np
+         import munet
+         try:
+             import onnxruntime as ort
+         except Exception as e:
+             raise RuntimeError(
+                 "ONNX support requires `onnxruntime` to be installed. "
+                 "Please install it (e.g. `pip install onnxruntime` or "
+                 "`onnxruntime-gpu`)."
+             ) from e
+
+         self._np = np
+         self._m = munet
+         self._ort = ort
+         self._model_path = model_path
+         self._device = device if device is not None else munet.Device(munet.DeviceType.CPU, 0)
+
+         if providers is None:
+             available = set(ort.get_available_providers())
+             chosen = []
+             if self._device.type == munet.DeviceType.CUDA and "CUDAExecutionProvider" in available:
+                 chosen.append("CUDAExecutionProvider")
+             if "CPUExecutionProvider" in available:
+                 chosen.append("CPUExecutionProvider")
+             providers = chosen if chosen else ["CPUExecutionProvider"]
+
+         self._providers = list(providers)
+         self._session = ort.InferenceSession(model_path, providers=self._providers)
+         self._inputs = self._session.get_inputs()
+         self._outputs = self._session.get_outputs()
+
+     @property
+     def providers(self):
+         return list(self._providers)
+
+     @property
+     def input_names(self):
+         return [i.name for i in self._inputs]
+
+     @property
+     def output_names(self):
+         return [o.name for o in self._outputs]
+
+     def _to_numpy(self, x):
+         if isinstance(x, self._m.Tensor):
+             return x.detach().to(self._m.Device(self._m.DeviceType.CPU, 0)).numpy().astype(self._np.float32, copy=False)
+         return self._np.asarray(x, dtype=self._np.float32)
+
+     def run(self, input_data, output_device=None):
+         out_dev = output_device if output_device is not None else self._device
+
+         if isinstance(input_data, dict):
+             feed = {k: self._to_numpy(v) for k, v in input_data.items()}
+         else:
+             if len(self._inputs) != 1:
+                 raise ValueError(
+                     f"ONNX model expects {len(self._inputs)} inputs ({self.input_names}); "
+                     "pass a dict{name: tensor_or_array}."
+                 )
+             feed = {self._inputs[0].name: self._to_numpy(input_data)}
+
+         outs = self._session.run(None, feed)
+         tensors = []
+         for arr in outs:
+             t = self._m.from_numpy(self._np.asarray(arr, dtype=self._np.float32))
+             if out_dev.type != self._m.DeviceType.CPU:
+                 t = t.to(out_dev)
+             tensors.append(t)
+
+         return tensors[0] if len(tensors) == 1 else tensors
+
+ def load_onnx(model_path, device=None, providers=None):
+     """Create an ONNXRuntime-backed inference engine.
+
+     Args:
+         model_path: Path to ONNX file.
+         device: Optional MuNet device for output tensors.
+         providers: Optional explicit ORT provider list.
+     """
+     return ONNXEngine(model_path, device=device, providers=providers)
+
+ m = __import__("munet")
+ m.inference.ONNXEngine = ONNXEngine
+ m.inference.load_onnx = load_onnx
  )",
       py::globals(), m.attr("__dict__"));
 }

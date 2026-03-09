@@ -659,6 +659,39 @@ class TestBindings(unittest.TestCase):
             self.assertTrue(np.allclose(y_ref, y_eng, atol=1e-6))
 
 
+
+    def test_onnx_inference_wrapper(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+            import onnxruntime  # noqa: F401
+        except Exception:
+            print("\nSkipping ONNX wrapper test (onnx/onnxruntime not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "add_bias.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
+            b_init = helper.make_tensor(
+                "b", TensorProto.FLOAT, [1, 3], np.array([[1.0, 2.0, 3.0]], dtype=np.float32).flatten().tolist()
+            )
+            add_node = helper.make_node("Add", ["x", "b"], ["y"])
+
+            graph = helper.make_graph([add_node], "add_graph", [x_info], [y_info], [b_init])
+            model = helper.make_model(graph, producer_name="munet_test")
+            onnx.save(model, path)
+
+            engine = munet.inference.load_onnx(path)
+            self.assertTrue(hasattr(engine, "run"))
+
+            x = np.array([[10.0, 20.0, 30.0], [0.5, -1.0, 2.0]], dtype=np.float32)
+            y = engine.run(x)
+            y_np = np.array(y.detach(), copy=False)
+
+            expected = x + np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+            self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
     def test_inference_engine_dynamic_dims_with_wildcards(self):
         model = munet.nn.Sequential([
             munet.nn.Conv2d(3, 4, 3, padding=1),
