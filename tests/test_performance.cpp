@@ -563,3 +563,124 @@ TEST(PerformanceTest, SoftmaxLargeClassCountCudaVsVulkan) {
       },
       4, 20, "MUNET_PERF_MAX_RATIO_SOFTMAX_LARGE_C", 5.0);
 }
+
+
+TEST(PerformanceTest, TinyAddDispatchOverheadCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int N = 256;
+  Tensor a_cpu({N}, {DeviceType::CPU, 0});
+  Tensor b_cpu({N}, {DeviceType::CPU, 0});
+  a_cpu.uniform_(0.0f, 1.0f);
+  b_cpu.uniform_(0.0f, 1.0f);
+
+  Tensor a_cuda = a_cpu.to({DeviceType::CUDA, 0});
+  Tensor b_cuda = b_cpu.to({DeviceType::CUDA, 0});
+  Tensor a_vk = a_cpu.to({DeviceType::VULKAN, 0});
+  Tensor b_vk = b_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "TinyAddDispatchOverhead",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda)
+                                                     : (a_vk + b_vk);
+        out.impl_->backend().synchronize();
+      },
+      20, 300, "MUNET_PERF_MAX_RATIO_TINY_ADD", 6.0);
+}
+
+TEST(PerformanceTest, ForwardGraphBuildChainCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int N = 4096;
+  Tensor a_cpu({N}, {DeviceType::CPU, 0});
+  Tensor b_cpu({N}, {DeviceType::CPU, 0});
+  a_cpu.uniform_(-1.0f, 1.0f);
+  b_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor a_cuda = a_cpu.to({DeviceType::CUDA, 0});
+  Tensor b_cuda = b_cpu.to({DeviceType::CUDA, 0});
+  Tensor a_vk = a_cpu.to({DeviceType::VULKAN, 0});
+  Tensor b_vk = b_cpu.to({DeviceType::VULKAN, 0});
+  a_cuda.set_requires_grad(true);
+  b_cuda.set_requires_grad(true);
+  a_vk.set_requires_grad(true);
+  b_vk.set_requires_grad(true);
+
+  run_perf_ratio_test(
+      "ForwardGraphBuildChain",
+      [&](Device dev) {
+        Tensor x = (dev.type == DeviceType::CUDA) ? a_cuda : a_vk;
+        Tensor y = (dev.type == DeviceType::CUDA) ? b_cuda : b_vk;
+        Tensor out = ((x + y).relu() * y).sigmoid().sum();
+        out.impl_->backend().synchronize();
+      },
+      8, 80, "MUNET_PERF_MAX_RATIO_FORWARD_GRAPH_CHAIN", 5.0);
+}
+
+TEST(PerformanceTest, BackwardStepOverheadCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int N = 4096;
+  Tensor a_cpu({N}, {DeviceType::CPU, 0});
+  Tensor b_cpu({N}, {DeviceType::CPU, 0});
+  a_cpu.uniform_(-1.0f, 1.0f);
+  b_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor a_cuda = a_cpu.to({DeviceType::CUDA, 0});
+  Tensor b_cuda = b_cpu.to({DeviceType::CUDA, 0});
+  Tensor a_vk = a_cpu.to({DeviceType::VULKAN, 0});
+  Tensor b_vk = b_cpu.to({DeviceType::VULKAN, 0});
+  a_cuda.set_requires_grad(true);
+  b_cuda.set_requires_grad(true);
+  a_vk.set_requires_grad(true);
+  b_vk.set_requires_grad(true);
+
+  run_perf_ratio_test(
+      "BackwardStepOverhead",
+      [&](Device dev) {
+        Tensor x = (dev.type == DeviceType::CUDA) ? a_cuda : a_vk;
+        Tensor y = (dev.type == DeviceType::CUDA) ? b_cuda : b_vk;
+        Tensor loss = ((x + y).relu() * y).sum();
+        loss.backward();
+        x.zero_grad();
+        y.zero_grad();
+        loss.impl_->backend().synchronize();
+      },
+      4, 40, "MUNET_PERF_MAX_RATIO_BACKWARD_STEP", 6.0);
+}
+
+TEST(PerformanceTest, CopyOnlyCpuToGpuCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int N = 1 << 22;
+  Tensor x_cpu({N}, {DeviceType::CPU, 0});
+  x_cpu.uniform_(-1.0f, 1.0f);
+
+  run_perf_ratio_test(
+      "CopyOnlyCpuToGpu",
+      [&](Device dev) {
+        Tensor x_dev = x_cpu.to(dev);
+        x_dev.impl_->backend().synchronize();
+      },
+      4, 25, "MUNET_PERF_MAX_RATIO_COPY_H2D", 4.0);
+}
+
+TEST(PerformanceTest, CopyOnlyGpuToCpuCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int N = 1 << 22;
+  Tensor x_cpu({N}, {DeviceType::CPU, 0});
+  x_cpu.uniform_(-1.0f, 1.0f);
+  Tensor x_cuda = x_cpu.to({DeviceType::CUDA, 0});
+  Tensor x_vk = x_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "CopyOnlyGpuToCpu",
+      [&](Device dev) {
+        Tensor x_dev = (dev.type == DeviceType::CUDA) ? x_cuda : x_vk;
+        Tensor x_back = x_dev.to({DeviceType::CPU, 0});
+        (void)x_back;
+      },
+      4, 25, "MUNET_PERF_MAX_RATIO_COPY_D2H", 4.0);
+}
