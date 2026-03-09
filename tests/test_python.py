@@ -686,7 +686,8 @@ class TestBindings(unittest.TestCase):
             relu = helper.make_node("Relu", ["z"], ["y"])
 
             graph = helper.make_graph([gemm, relu], "linear_relu_graph", [x_info], [y_info], [w_init, b_init])
-            model = helper.make_model(graph, producer_name="munet_compile_test")
+            model = helper.make_model(graph, producer_name="munet_compile_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
             onnx.save(model, onnx_path)
 
             module = munet.inference.compile_onnx(onnx_path, out_npz)
@@ -713,7 +714,8 @@ class TestBindings(unittest.TestCase):
             y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
             node = helper.make_node("Erf", ["x"], ["y"])
             graph = helper.make_graph([node], "unsupported_graph", [x_info], [y_info])
-            model = helper.make_model(graph, producer_name="munet_compile_report_test")
+            model = helper.make_model(graph, producer_name="munet_compile_report_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
             onnx.save(model, onnx_path)
 
             missing = munet.inference.compile_onnx(onnx_path, report_only=True)
@@ -722,6 +724,9 @@ class TestBindings(unittest.TestCase):
             # ignore_unsupported should continue scan but fail if nothing compiles
             with self.assertRaises(ValueError):
                 munet.inference.compile_onnx(onnx_path, ignore_unsupported=True)
+
+            with self.assertRaises(ValueError):
+                munet.inference.compile_onnx(onnx_path, output_path=os.path.join(d, "bad.npz"), report_only=True)
     def test_onnx_inference_wrapper(self):
         try:
             import onnx
@@ -742,7 +747,8 @@ class TestBindings(unittest.TestCase):
             add_node = helper.make_node("Add", ["x", "b"], ["y"])
 
             graph = helper.make_graph([add_node], "add_graph", [x_info], [y_info], [b_init])
-            model = helper.make_model(graph, producer_name="munet_test")
+            model = helper.make_model(graph, producer_name="munet_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
             onnx.save(model, path)
 
             engine = munet.inference.load_onnx(path)

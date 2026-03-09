@@ -819,7 +819,18 @@ PYBIND11_MODULE(munet, m) {
              providers = chosen if chosen else ["CPUExecutionProvider"]
 
          self._providers = list(providers)
-         self._session = ort.InferenceSession(model_path, providers=self._providers)
+         try:
+             self._session = ort.InferenceSession(model_path, providers=self._providers)
+         except Exception as e:
+             msg = str(e)
+             if "Unsupported model IR version" in msg:
+                 raise RuntimeError(
+                     "ONNXRuntime failed to load model due unsupported IR version. "
+                     "Re-export ONNX with lower IR/opset (e.g. opset<=11 for older ORT) "
+                     "or upgrade onnxruntime. Original error: " + msg
+                 ) from e
+             raise
+
          self._inputs = self._session.get_inputs()
          self._outputs = self._session.get_outputs()
 
@@ -900,6 +911,9 @@ PYBIND11_MODULE(munet, m) {
          raise RuntimeError(
              "compile_onnx requires `onnx` package installed (pip install onnx)."
          ) from e
+
+     if report_only and output_path is not None:
+         raise ValueError("compile_onnx: report_only=True does not compile/save. Remove output_path to get unsupported-op report.")
 
      model = onnx.load(model_path)
      graph = model.graph
@@ -1011,9 +1025,14 @@ PYBIND11_MODULE(munet, m) {
          munet.save(module, output_path)
      return module
 
+ def report_onnx_unsupported_ops(model_path):
+     """Return sorted unique unsupported op names for compile_onnx lowering."""
+     return compile_onnx(model_path, report_only=True)
+
  inference.ONNXEngine = ONNXEngine
  inference.load_onnx = load_onnx
  inference.compile_onnx = compile_onnx
+ inference.report_onnx_unsupported_ops = report_onnx_unsupported_ops
  )",
       m.attr("__dict__"), m.attr("__dict__"));
 }
