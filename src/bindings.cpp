@@ -782,7 +782,8 @@ PYBIND11_MODULE(munet, m) {
 
  def load_weights(module, filename):
      """Alias for `load(module, filename)` to explicitly do weights-only restore."""
-     return load(module, filename)
+     m = __import__("munet")
+     return m.load(module, filename)
  )",
       py::globals(), m.attr("__dict__"));
 }
