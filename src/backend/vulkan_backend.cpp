@@ -819,56 +819,52 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 						int Spatial;
 				} u;
 
-#define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) \
-				do { \
-						uint expected = BUFFER[IDX]; \
-						uint current; \
-						while(true) { \
-								uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); \
-								current = atomicCompSwap(BUFFER[IDX], expected, next); \
-								if (current == expected) break; \
-								expected = current; \
-						} \
-				} while(false)
+				shared float wg_loss[256];
+
+#define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) 				do { 						uint expected = BUFFER[IDX]; 						uint current; 						while(true) { 								uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); 								current = atomicCompSwap(BUFFER[IDX], expected, next); 								if (current == expected) break; 								expected = current; 						} 				} while(false)
 
 				void main() {
+						const int idx = int(gl_GlobalInvocationID.x);
+						const int lid = int(gl_LocalInvocationID.x);
+						const int total_pixels = u.B * u.Spatial;
 
-						int idx = int(gl_GlobalInvocationID.x);
-						int total_pixels = u.B * u.Spatial;
-						if (idx >= total_pixels) return;
+						float local_loss = 0.0;
+						if (idx < total_pixels) {
+								const int b = idx / u.Spatial;
+								const int s = idx % u.Spatial;
+								const int stride = u.Spatial;
+								const int base = b * (u.C * u.Spatial) + s;
 
-						int b = idx / u.Spatial;
-						int s = idx % u.Spatial;
+								float max_val = -3.402823e38;
+								for (int c = 0; c < u.C; ++c)
+										max_val = max(max_val, logits[base + c * stride]);
 
-						int stride = u.Spatial;
-						int base = b * (u.C * u.Spatial) + s;
+								float sum_exp = 0.0;
+								float target_weighted = 0.0;
+								float target_sum = 0.0;
+								for (int c = 0; c < u.C; ++c) {
+										const float shifted = logits[base + c * stride] - max_val;
+										const float t = targets[base + c * stride];
+										sum_exp += exp(shifted);
+										target_weighted += t * shifted;
+										target_sum += t;
+								}
 
-						float max_val = -3.402823e38;
-
-						for (int c = 0; c < u.C; ++c)
-								max_val = max(max_val, logits[base + c * stride]);
-
-						float sum_exp = 0.0;
-
-						for (int c = 0; c < u.C; ++c) {
-								float e = exp(logits[base + c * stride] - max_val);
-								sum_exp += e;
+								const float log_sum = log(sum_exp + 1e-9);
+								local_loss = (-target_weighted + target_sum * log_sum) / float(u.B);
 						}
 
-						float inv_sum = 1.0 / sum_exp;
+						wg_loss[lid] = local_loss;
+						barrier();
 
-						float loss = 0.0;
-
-						for (int c = 0; c < u.C; ++c) {
-
-								float prob = exp(logits[base + c * stride] - max_val) * inv_sum;
-								float target = targets[base + c * stride];
-
-								if (target > 0.0)
-										loss -= target * log(prob + 1e-9);
+						for (int offset = 128; offset > 0; offset >>= 1) {
+								if (lid < offset)
+										wg_loss[lid] += wg_loss[lid + offset];
+								barrier();
 						}
 
-						ATOMIC_ADD_FLOAT(out_u, 0, loss / u.B);
+						if (lid == 0)
+								ATOMIC_ADD_FLOAT(out_u, 0, wg_loss[0]);
 				}
       )");
 
@@ -939,51 +935,65 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 				} p;
 
 				shared float As[16][16];
-				shared float Bs[16][16];
+				shared float Bs0[16][16];
+				shared float Bs1[16][16];
 
 				void main() {
-						int col = int(gl_GlobalInvocationID.x);
-						int row = int(gl_GlobalInvocationID.y);
 						int lx = int(gl_LocalInvocationID.x);
 						int ly = int(gl_LocalInvocationID.y);
+
+						int row = int(gl_WorkGroupID.y) * 16 + ly;
+						int col0 = int(gl_WorkGroupID.x) * 32 + lx;
+						int col1 = col0 + 16;
+
 						bool row_valid = (row < p.M);
-						bool col_valid = (col < p.N);
-						bool out_valid = row_valid && col_valid;
+						bool out_valid0 = row_valid && (col0 < p.N);
+						bool out_valid1 = row_valid && (col1 < p.N);
 
-						float sum = 0.0;
+						float sum0 = 0.0;
+						float sum1 = 0.0;
 
-						// Fast path for common case (no transposes): tiled shared-memory GEMM.
 						if (p.tA == 0 && p.tB == 0) {
 								int tiles = (p.K + 15) / 16;
 								for (int t = 0; t < tiles; ++t) {
-										int kA = t * 16 + lx;
-										int kB = t * 16 + ly;
+										int k = t * 16 + lx;
+										As[ly][lx] = (row_valid && k < p.K) ? a[row * p.K + k] : 0.0;
 
-										As[ly][lx] = (row_valid && kA < p.K) ? a[row * p.K + kA] : 0.0;
-										Bs[ly][lx] = (col_valid && kB < p.K) ? b[kB * p.N + col] : 0.0;
+										int k_row = t * 16 + ly;
+										Bs0[ly][lx] = (k_row < p.K && col0 < p.N) ? b[k_row * p.N + col0] : 0.0;
+										Bs1[ly][lx] = (k_row < p.K && col1 < p.N) ? b[k_row * p.N + col1] : 0.0;
 
 										barrier();
 
-										if (out_valid) {
-												for (int k = 0; k < 16; ++k)
-														sum += As[ly][k] * Bs[k][lx];
+										for (int kk = 0; kk < 16; ++kk) {
+												float av = As[ly][kk];
+												sum0 += av * Bs0[kk][lx];
+												sum1 += av * Bs1[kk][lx];
 										}
 
 										barrier();
 								}
-						} else if (out_valid && p.tA == 1 && p.tB == 0) {
-								for (int k = 0; k < p.K; ++k)
-										sum += a[k * p.M + row] * b[k * p.N + col];
-						} else if (out_valid && p.tA == 0 && p.tB == 1) {
-								for (int k = 0; k < p.K; ++k)
-										sum += a[row * p.K + k] * b[col * p.K + k];
-						} else if (out_valid) {
-								for (int k = 0; k < p.K; ++k)
-										sum += a[k * p.M + row] * b[col * p.K + k];
+						} else {
+								if (out_valid0) {
+										for (int k = 0; k < p.K; ++k) {
+												float av = (p.tA == 0) ? a[row * p.K + k] : a[k * p.M + row];
+												float bv = (p.tB == 0) ? b[k * p.N + col0] : b[col0 * p.K + k];
+												sum0 += av * bv;
+										}
+								}
+								if (out_valid1) {
+										for (int k = 0; k < p.K; ++k) {
+												float av = (p.tA == 0) ? a[row * p.K + k] : a[k * p.M + row];
+												float bv = (p.tB == 0) ? b[k * p.N + col1] : b[col1 * p.K + k];
+												sum1 += av * bv;
+										}
+								}
 						}
 
-						if (out_valid)
-								c[row * p.N + col] = sum;
+						if (out_valid0)
+								c[row * p.N + col0] = sum0;
+						if (out_valid1)
+								c[row * p.N + col1] = sum1;
 				}
     )");
 
@@ -2314,7 +2324,7 @@ void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
   } pc = {M, K, N, transA, transB};
   // Dispatch x maps to N (cols), y maps to M (rows)
   dispatch_kernel(matmulPipeline, {a.data(), b.data(), out.data()}, &pc,
-                  sizeof(pc), (N + 15) / 16, (M + 15) / 16, 1);
+                  sizeof(pc), (N + 31) / 32, (M + 15) / 16, 1);
 }
 
 // --- Spatial Stubs ---
