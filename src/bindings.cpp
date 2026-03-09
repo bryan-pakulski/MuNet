@@ -663,6 +663,7 @@ PYBIND11_MODULE(munet, m) {
      """
      import numpy as np
      import json
+     import munet
 
      def get_config(m):
          name = type(m).__name__
