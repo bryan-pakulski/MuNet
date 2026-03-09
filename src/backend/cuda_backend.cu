@@ -15,6 +15,15 @@
     }                                                                          \
   } while (0)
 
+#define CUBLAS_CHECK(call)                                                     \
+  do {                                                                         \
+    cublasStatus_t status = call;                                              \
+    if (status != CUBLAS_STATUS_SUCCESS) {                                     \
+      throw std::runtime_error(std::string("cuBLAS Error: ") +                \
+                               std::to_string(status));                        \
+    }                                                                          \
+  } while (0)
+
 namespace munet {
 
 static std::unordered_map<size_t, std::vector<void *>> free_blocks;
@@ -22,11 +31,19 @@ static std::unordered_map<void *, size_t> alloc_sizes;
 static cublasHandle_t cublas_handle_ = nullptr;
 
 CUDABackend::CUDABackend(int device_index) : device_index_(device_index) {
-  cudaSetDevice(device_index_);
+  int device_count = 0;
+  CUDA_CHECK(cudaGetDeviceCount(&device_count));
+  if (device_index_ < 0 || device_index_ >= device_count) {
+    throw std::runtime_error("Requested CUDA device index out of range: " +
+                             std::to_string(device_index_) +
+                             " (available: " + std::to_string(device_count) + ")");
+  }
+
+  CUDA_CHECK(cudaSetDevice(device_index_));
   if (!cublas_handle_)
-    cublasCreate(&cublas_handle_);
-  cudaEventCreate((cudaEvent_t *)&start_event_);
-  cudaEventCreate((cudaEvent_t *)&stop_event_);
+    CUBLAS_CHECK(cublasCreate(&cublas_handle_));
+  CUDA_CHECK(cudaEventCreate((cudaEvent_t *)&start_event_));
+  CUDA_CHECK(cudaEventCreate((cudaEvent_t *)&stop_event_));
 }
 
 CUDABackend::~CUDABackend() {

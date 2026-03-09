@@ -1,0 +1,46 @@
+import os
+import sys
+import tempfile
+import numpy as np
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../build"))
+import munet
+
+
+def make_model():
+    return munet.nn.Sequential([
+        munet.nn.Linear(6, 12),
+        munet.nn.GELU(),
+        munet.nn.Linear(12, 3),
+    ])
+
+
+def main():
+    x_np = np.random.randn(4, 6).astype(np.float32)
+    x = munet.from_numpy(x_np)
+
+    model = make_model()
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "model_full.npz")
+        munet.save(model, path)
+
+        # Full reconstruction from file (no original class definition required for supported built-ins).
+        restored = munet.load(path)
+
+        # Weights-only restore into an existing definition.
+        target = make_model()
+        munet.load_weights(target, path)
+
+        with munet.no_grad():
+            y0 = np.array(model.forward(x).detach(), copy=False)
+            y1 = np.array(restored.forward(x).detach(), copy=False)
+            y2 = np.array(target.forward(x).detach(), copy=False)
+
+        print("serialization roundtrip demo")
+        print("full restore max abs diff:", float(np.max(np.abs(y0 - y1))))
+        print("weights-only max abs diff:", float(np.max(np.abs(y0 - y2))))
+
+
+if __name__ == "__main__":
+    main()

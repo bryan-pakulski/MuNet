@@ -1,5 +1,6 @@
 #pragma once
 #include "types.hpp"
+#include <functional>
 #include <memory>
 
 namespace munet {
@@ -128,6 +129,9 @@ public:
 
 class BackendManager {
 public:
+  using BackendFactory = std::function<std::shared_ptr<Backend>(Device)>;
+
+  static void register_backend(DeviceType type, BackendFactory factory);
   static std::shared_ptr<Backend> get(Device device);
 };
 

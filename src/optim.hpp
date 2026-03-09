@@ -1,6 +1,7 @@
 #pragma once
 #include "ops.hpp"
 #include "tensor.hpp"
+#include "util.hpp"
 #include <vector>
 
 namespace munet {
@@ -18,8 +19,10 @@ public:
       p.zero_grad();
     }
 
-    // Ensure all zeroing is complete across devices
-    if (!params_.empty()) {
+    // Avoid unconditional GPU queue stalls in normal/profile mode.
+    // In-order execution on a single backend queue is sufficient.
+    // Keep explicit synchronization only in debug mode.
+    if (!params_.empty() && is_debug_enabled()) {
       params_[0].impl_->backend().synchronize();
     }
   }
@@ -70,8 +73,9 @@ public:
       // p.step() uses the backend update kernel (w = w - lr * g)
       p.step(lr_);
     }
-    // Ensure weight updates are visible before next forward pass
-    if (!params_.empty()) {
+    // Avoid unconditional GPU queue stalls in normal/profile mode.
+    // Keep explicit synchronization only in debug mode.
+    if (!params_.empty() && is_debug_enabled()) {
       params_[0].impl_->backend().synchronize();
     }
   }

@@ -1,6 +1,8 @@
 #include "vulkan_backend.hpp"
 #include "storage.hpp"
 #include "util.hpp"
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -26,7 +28,7 @@ namespace munet {
 
 // --- Configuration ---
 static const int MAX_FRAMES_IN_FLIGHT = 2;
-static const int BATCH_SIZE_LIMIT = 1000; // Flush after this many ops
+static const int BATCH_SIZE_LIMIT = 2048; // Flush after this many ops
 static const int MAX_DESCRIPTORS_PER_FRAME = 2048;
 
 // --- Global Vulkan State ---
@@ -40,6 +42,8 @@ static VkDescriptorSetLayout descriptorSetLayout;
 
 // Per-Frame Resources
 static VkDescriptorPool descriptorPools[MAX_FRAMES_IN_FLIGHT];
+static std::vector<VkDescriptorSet> frameDescriptorSets[MAX_FRAMES_IN_FLIGHT];
+static uint32_t descriptorSetCursor[MAX_FRAMES_IN_FLIGHT] = {0};
 static VkCommandBuffer commandBuffers[MAX_FRAMES_IN_FLIGHT];
 static VkFence inFlightFences[MAX_FRAMES_IN_FLIGHT];
 static VkQueryPool queryPools[MAX_FRAMES_IN_FLIGHT];
@@ -76,6 +80,22 @@ static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
 static VkPipeline crossEntropyPipeline, crossEntropyBackwardPipeline;
 
 // --- Helpers ---
+static inline std::chrono::high_resolution_clock::time_point profile_now() {
+  return std::chrono::high_resolution_clock::now();
+}
+
+static inline void profile_cpu_event(
+    const char *name,
+    const std::chrono::high_resolution_clock::time_point &start,
+    size_t bytes = 0) {
+  if (!is_profile_enabled())
+    return;
+  const auto end = std::chrono::high_resolution_clock::now();
+  const double us =
+      std::chrono::duration<double, std::micro>(end - start).count();
+  Profiler::get().record(name, us, 0.0, bytes);
+}
+
 static size_t round_up_alloc_size(size_t bytes) {
   if (bytes == 0)
     bytes = 4; // Minimal valid size
@@ -145,7 +165,24 @@ static std::vector<uint32_t> compileShader(const std::string &name,
   return buffer;
 }
 
-VulkanBackend::VulkanBackend() {
+
+
+static void allocate_frame_descriptor_sets(int frame) {
+  std::vector<VkDescriptorSetLayout> layouts(MAX_DESCRIPTORS_PER_FRAME,
+                                             descriptorSetLayout);
+  frameDescriptorSets[frame].resize(MAX_DESCRIPTORS_PER_FRAME);
+
+  VkDescriptorSetAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  allocInfo.descriptorPool = descriptorPools[frame];
+  allocInfo.descriptorSetCount = MAX_DESCRIPTORS_PER_FRAME;
+  allocInfo.pSetLayouts = layouts.data();
+
+  VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo,
+                                    frameDescriptorSets[frame].data()));
+  descriptorSetCursor[frame] = 0;
+}
+VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
   VkApplicationInfo appInfo{};
   appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
   appInfo.apiVersion = VK_API_VERSION_1_2;
@@ -156,13 +193,26 @@ VulkanBackend::VulkanBackend() {
 
   uint32_t deviceCount = 0;
   vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+  if (deviceCount == 0) {
+    throw std::runtime_error("No Vulkan physical devices found.");
+  }
+
   std::vector<VkPhysicalDevice> devices(deviceCount);
   vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
-  physicalDevice = devices[0];
+
+  if (device_index_ < 0 || device_index_ >= static_cast<int>(deviceCount)) {
+    throw std::runtime_error("Requested Vulkan device index out of range: " +
+                             std::to_string(device_index_) +
+                             " (available: " + std::to_string(deviceCount) + ")");
+  }
+
+  physicalDevice = devices[static_cast<size_t>(device_index_)];
 
   VkPhysicalDeviceProperties props;
   vkGetPhysicalDeviceProperties(physicalDevice, &props);
   timestampPeriod = props.limits.timestampPeriod;
+  MUNET_INFO << "Vulkan backend using device index " << device_index_ << " ("
+            << props.deviceName << ")" << std::endl;
 
   uint32_t queueFamilyCount = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
@@ -261,6 +311,7 @@ VulkanBackend::VulkanBackend() {
     descPoolInfo.maxSets = MAX_DESCRIPTORS_PER_FRAME;
     VK_CHECK(vkCreateDescriptorPool(device, &descPoolInfo, nullptr,
                                     &descriptorPools[i]));
+    allocate_frame_descriptor_sets(i);
   }
 
   // Load Kernels
@@ -887,44 +938,52 @@ VulkanBackend::VulkanBackend() {
 						int tB;
 				} p;
 
+				shared float As[16][16];
+				shared float Bs[16][16];
+
 				void main() {
-
-						int n = int(gl_GlobalInvocationID.x);
-						int m = int(gl_GlobalInvocationID.y);
-
-						if (m >= p.M || n >= p.N) return;
+						int col = int(gl_GlobalInvocationID.x);
+						int row = int(gl_GlobalInvocationID.y);
+						int lx = int(gl_LocalInvocationID.x);
+						int ly = int(gl_LocalInvocationID.y);
+						bool row_valid = (row < p.M);
+						bool col_valid = (col < p.N);
+						bool out_valid = row_valid && col_valid;
 
 						float sum = 0.0;
 
+						// Fast path for common case (no transposes): tiled shared-memory GEMM.
 						if (p.tA == 0 && p.tB == 0) {
+								int tiles = (p.K + 15) / 16;
+								for (int t = 0; t < tiles; ++t) {
+										int kA = t * 16 + lx;
+										int kB = t * 16 + ly;
 
-								int a_row = m * p.K;
-								int b_col = n;
+										As[ly][lx] = (row_valid && kA < p.K) ? a[row * p.K + kA] : 0.0;
+										Bs[ly][lx] = (col_valid && kB < p.K) ? b[kB * p.N + col] : 0.0;
 
+										barrier();
+
+										if (out_valid) {
+												for (int k = 0; k < 16; ++k)
+														sum += As[ly][k] * Bs[k][lx];
+										}
+
+										barrier();
+								}
+						} else if (out_valid && p.tA == 1 && p.tB == 0) {
 								for (int k = 0; k < p.K; ++k)
-										sum += a[a_row + k] * b[k * p.N + b_col];
-
-						} else if (p.tA == 1 && p.tB == 0) {
-
-								int b_col = n;
-
+										sum += a[k * p.M + row] * b[k * p.N + col];
+						} else if (out_valid && p.tA == 0 && p.tB == 1) {
 								for (int k = 0; k < p.K; ++k)
-										sum += a[k * p.M + m] * b[k * p.N + b_col];
-
-						} else if (p.tA == 0 && p.tB == 1) {
-
-								int a_row = m * p.K;
-
+										sum += a[row * p.K + k] * b[col * p.K + k];
+						} else if (out_valid) {
 								for (int k = 0; k < p.K; ++k)
-										sum += a[a_row + k] * b[n * p.K + k];
-
-						} else {
-
-								for (int k = 0; k < p.K; ++k)
-										sum += a[k * p.M + m] * b[n * p.K + k];
+										sum += a[k * p.M + row] * b[col * p.K + k];
 						}
 
-						c[m * p.N + n] = sum;
+						if (out_valid)
+								c[row * p.N + col] = sum;
 				}
     )");
 
@@ -1764,6 +1823,7 @@ void flush_batch() {
   if (!isRecording)
     return;
 
+  auto flush_start = profile_now();
   VkCommandBuffer cmd = commandBuffers[currentFrame];
 
   VK_CHECK(vkEndCommandBuffer(cmd));
@@ -1775,6 +1835,8 @@ void flush_batch() {
   VK_CHECK(vkQueueSubmit(computeQueue, 1, &submitInfo,
                          inFlightFences[currentFrame]));
 
+  profile_cpu_event("vulkan.flush_batch", flush_start);
+
   // Advance Frame
   currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
   isRecording = false;
@@ -1785,9 +1847,13 @@ void ensure_recording() {
   if (isRecording)
     return;
 
+  auto ensure_start = profile_now();
+
   // Wait for the NEXT frame slot to be free (Fence Wait)
+  auto wait_start = profile_now();
   VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE,
                            UINT64_MAX));
+  profile_cpu_event("vulkan.wait_for_fence", wait_start);
 
   // Process deferred frees safely now that the GPU is done with this frame
   for (uint64_t handle : deferred_frees[currentFrame]) {
@@ -1798,7 +1864,10 @@ void ensure_recording() {
   deferred_frees[currentFrame].clear();
 
   // Reset Descriptor Pool logic: wipe the slate clean for this frame
+  auto descriptor_reset_start = profile_now();
   VK_CHECK(vkResetDescriptorPool(device, descriptorPools[currentFrame], 0));
+  allocate_frame_descriptor_sets(currentFrame);
+  profile_cpu_event("vulkan.descriptor_pool_reset", descriptor_reset_start);
 
   VK_CHECK(vkResetFences(device, 1, &inFlightFences[currentFrame]));
 
@@ -1808,14 +1877,21 @@ void ensure_recording() {
 
   VkCommandBufferBeginInfo beginInfo{};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
   isRecording = true;
+
+  profile_cpu_event("vulkan.ensure_recording", ensure_start);
 }
 
 static void runImmediateCommand(std::function<void(VkCommandBuffer)> func) {
+  auto total_start = profile_now();
   if (isRecording)
     flush_batch(); // Flush pending work first
+
+  auto pre_idle_start = profile_now();
   VK_CHECK(vkQueueWaitIdle(computeQueue));
+  profile_cpu_event("vulkan.immediate_wait_idle.pre", pre_idle_start);
 
   VK_CHECK(vkResetCommandBuffer(immediateCmdBuffer, 0));
   VkCommandBufferBeginInfo beginInfo{};
@@ -1829,7 +1905,11 @@ static void runImmediateCommand(std::function<void(VkCommandBuffer)> func) {
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &immediateCmdBuffer;
   VK_CHECK(vkQueueSubmit(computeQueue, 1, &submitInfo, VK_NULL_HANDLE));
+
+  auto post_idle_start = profile_now();
   VK_CHECK(vkQueueWaitIdle(computeQueue));
+  profile_cpu_event("vulkan.immediate_wait_idle.post", post_idle_start);
+  profile_cpu_event("vulkan.immediate_total", total_start);
 }
 
 void VulkanBackend::memset(void *ptr, int value, size_t bytes) {
@@ -1886,7 +1966,9 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     if (!stagingBuffer || stagingOffset + aligned > stagingSize) {
       if (isRecording)
         flush_batch();
+      auto staging_wait_start = profile_now();
       VK_CHECK(vkQueueWaitIdle(computeQueue));
+      profile_cpu_event("vulkan.staging_wait_idle", staging_wait_start);
       stagingOffset = 0; // Safe because queue is idle
       if (stagingSize < aligned) {
         if (stagingBuffer) {
@@ -1957,7 +2039,9 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
                     stagingBuffer, 1, &copyRegion);
     currentBatchSize++;
     flush_batch();
+    auto d2h_wait_start = profile_now();
     VK_CHECK(vkQueueWaitIdle(computeQueue));
+    profile_cpu_event("vulkan.copy_d2h_wait_idle", d2h_wait_start, bytes);
     std::memcpy(dst, (char *)stagingMapped + offset, bytes);
     stagingOffset =
         0; // Free entire staging buffer since we just forced a full wait
@@ -1967,7 +2051,10 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
 void VulkanBackend::synchronize() {
   if (isRecording)
     flush_batch();
+
+  auto sync_wait_start = profile_now();
   VK_CHECK(vkQueueWaitIdle(computeQueue));
+  profile_cpu_event("vulkan.synchronize_wait_idle", sync_wait_start);
 
   // Only attempt to fetch results if profiling is actually active and work was
   // done
@@ -1977,9 +2064,11 @@ void VulkanBackend::synchronize() {
     int frameToQuery =
         (currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
 
+    auto query_start = profile_now();
     VkResult res = vkGetQueryPoolResults(
         device, queryPools[frameToQuery], 0, 2, sizeof(uint64_t) * 2, results,
         sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+    profile_cpu_event("vulkan.query_results", query_start);
 
     if (res == VK_SUCCESS) {
       double nanoseconds = (double)(results[1] - results[0]) * timestampPeriod;
@@ -1995,25 +2084,27 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                                     const std::vector<void *> &buffers,
                                     void *pc, size_t pcSize, int x, int y,
                                     int z) {
+  auto encode_start = profile_now();
   ensure_recording();
   VkCommandBuffer cmd = commandBuffers[currentFrame];
 
-  VkDescriptorSetAllocateInfo allocSetInfo{};
-  allocSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-  allocSetInfo.descriptorPool = descriptorPools[currentFrame];
-  allocSetInfo.descriptorSetCount = 1;
-  allocSetInfo.pSetLayouts = &descriptorSetLayout;
-  VkDescriptorSet ds;
-  VK_CHECK(vkAllocateDescriptorSets(device, &allocSetInfo, &ds));
+  if (descriptorSetCursor[currentFrame] >=
+      frameDescriptorSets[currentFrame].size()) {
+    flush_batch();
+    ensure_recording();
+  }
 
-  // Always update 8 bindings to match layout, padding with first buffer if
-  // needed
-  std::vector<VkDescriptorBufferInfo> bInfos(8);
-  std::vector<VkWriteDescriptorSet> writes(8);
+  VkDescriptorSet ds = frameDescriptorSets[currentFrame][descriptorSetCursor[currentFrame]++];
 
-  for (size_t i = 0; i < 8; ++i) {
-    void *ptr =
-        (i < buffers.size() && buffers[i] != nullptr) ? buffers[i] : buffers[0];
+  // Update only the bindings used by this kernel to lower CPU overhead.
+  const uint32_t write_count =
+      static_cast<uint32_t>(std::max<size_t>(1, std::min<size_t>(buffers.size(), 8)));
+
+  VkDescriptorBufferInfo bInfos[8]{};
+  VkWriteDescriptorSet writes[8]{};
+
+  for (uint32_t i = 0; i < write_count; ++i) {
+    void *ptr = (buffers[i] != nullptr) ? buffers[i] : buffers[0];
     bInfos[i].buffer = (VkBuffer)(uint64_t)ptr;
     bInfos[i].offset = 0;
     bInfos[i].range = VK_WHOLE_SIZE;
@@ -2025,19 +2116,16 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
     writes[i].descriptorCount = 1;
     writes[i].pBufferInfo = &bInfos[i];
   }
-  vkUpdateDescriptorSets(device, 8, writes.data(), 0, nullptr);
+  auto descriptor_update_start = profile_now();
+  vkUpdateDescriptorSets(device, write_count, writes, 0, nullptr);
+  profile_cpu_event("vulkan.update_descriptors", descriptor_update_start);
 
   VkMemoryBarrier memoryBarrier{};
   memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-  memoryBarrier.srcAccessMask =
-      VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
-      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+  memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
   memoryBarrier.dstAccessMask =
-      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
-  vkCmdPipelineBarrier(cmd,
-                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                           VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
                        &memoryBarrier, 0, nullptr, 0, nullptr);
 
@@ -2046,16 +2134,23 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                           0, 1, &ds, 0, nullptr);
   vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                      pcSize, pc);
-  vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                      queryPools[currentFrame], 0);
+
+  if (is_profile_enabled()) {
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        queryPools[currentFrame], 0);
+  }
   vkCmdDispatch(cmd, x, y, z);
-  vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                      queryPools[currentFrame], 1);
+  if (is_profile_enabled()) {
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                        queryPools[currentFrame], 1);
+  }
 
   currentBatchSize++;
   if (currentBatchSize >= BATCH_SIZE_LIMIT) {
     flush_batch();
   }
+
+  profile_cpu_event("vulkan.dispatch_encode", encode_start);
 }
 
 // --- Kernel Wrappers ---

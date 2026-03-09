@@ -1,4 +1,5 @@
 #include "autograd/autograd.hpp"
+#include "inference.hpp"
 #include "nn.hpp"
 #include "ops.hpp"
 #include "optim.hpp"
@@ -140,6 +141,8 @@ PYBIND11_MODULE(munet, m) {
           "In-place replacement of underlying tensor implementation.")
       .def("transpose", &ops::transpose, py::arg("dim0"), py::arg("dim1"),
            "Returns a tensor that is a transposed version of this tensor.")
+      .def("permute", &Tensor::permute, py::arg("dims"),
+           "Returns a tensor view with dimensions permuted.")
       .def("contiguous", &Tensor::contiguous,
            "Returns a contiguous tensor containing the same data as this "
            "tensor.")
@@ -184,6 +187,8 @@ PYBIND11_MODULE(munet, m) {
       .def("reshape", &Tensor::reshape, py::arg("shape"),
            "Returns a tensor with the same data and number of elements, but "
            "with the specified shape.")
+      .def("masked_fill", &Tensor::masked_fill, py::arg("mask"), py::arg("value"),
+           "Fills entries where mask is 1 with the given value.")
       .def(
           "numpy", [](py::object self) { return py::cast<py::array>(self); },
           "Returns the tensor as a NumPy ndarray. The returned array and the "
@@ -202,7 +207,9 @@ PYBIND11_MODULE(munet, m) {
            "Applies the Rectified Linear Unit function element-wise.")
       .def("sigmoid", &Tensor::sigmoid,
            "Applies the Sigmoid function element-wise.")
-      .def("softmax", &Tensor::softmax, "Applies the Softmax function.")
+      .def("softmax", &Tensor::softmax, py::arg("dim") = -1, "Applies softmax along a dimension.")
+      .def("log_softmax", &Tensor::log_softmax, py::arg("dim") = -1,
+           "Applies log-softmax along a dimension.")
       .def("conv2d", &Tensor::conv2d, py::arg("weight"),
            py::arg_v("bias", Tensor(), "munet.Tensor()"), py::arg("stride") = 1,
            py::arg("padding") = 0,
@@ -340,8 +347,12 @@ PYBIND11_MODULE(munet, m) {
            py::arg("prefix") = "",
            "Returns an iterator over module parameters, yielding both the name "
            "of the parameter as well as the parameter itself.")
-      .def("named_modules", &nn::Module::named_modules, py::arg("prefix") = "",
-           "Returns an iterator over all modules in the network.")
+      .def("named_modules",
+           [](nn::Module &self, const std::string &prefix) {
+             return self.named_modules_typed(prefix);
+           },
+           py::arg("prefix") = "",
+           "Returns an iterator over all nn modules in the network.")
       .def("train", &nn::Module::train, py::arg("mode") = true,
            "Sets the module in training mode.")
       .def("eval", &nn::Module::eval, "Sets the module in evaluation mode.")
@@ -411,6 +422,59 @@ PYBIND11_MODULE(munet, m) {
       nn, "Sigmoid", "Applies the element-wise Sigmoid function.")
       .def(py::init<>());
 
+  py::class_<nn::Tanh, nn::Module, std::shared_ptr<nn::Tanh>>(
+      nn, "Tanh", "Applies the element-wise Tanh function.")
+      .def(py::init<>());
+
+  py::class_<nn::GELU, nn::Module, std::shared_ptr<nn::GELU>>(
+      nn, "GELU",
+      "Applies a fast GELU approximation: x * sigmoid(1.702*x).")
+      .def(py::init<>());
+
+  py::class_<nn::LeakyReLU, nn::Module, std::shared_ptr<nn::LeakyReLU>>(
+      nn, "LeakyReLU", "Applies the element-wise LeakyReLU function.")
+      .def(py::init<float>(), py::arg("negative_slope") = 0.01f)
+      .def_readonly("negative_slope", &nn::LeakyReLU::negative_slope_);
+
+  py::class_<nn::Dropout, nn::Module, std::shared_ptr<nn::Dropout>>(
+      nn, "Dropout",
+      "Randomly zeroes some of the elements of the input tensor with "
+      "probability p during training.")
+      .def(py::init<float>(), py::arg("p") = 0.5f)
+      .def_readonly("p", &nn::Dropout::p_);
+
+  py::class_<nn::Embedding, nn::Module, std::shared_ptr<nn::Embedding>>(
+      nn, "Embedding",
+      "Embedding lookup for [B,T] token ids and projection for [B,T,V] one-hot/probability inputs.")
+      .def(py::init<int, int>(), py::arg("num_embeddings"),
+           py::arg("embedding_dim"))
+      .def_readonly("num_embeddings", &nn::Embedding::num_embeddings_)
+      .def_readonly("embedding_dim", &nn::Embedding::embedding_dim_)
+      .def_readonly("weight", &nn::Embedding::weight);
+
+  py::class_<nn::LayerNorm, nn::Module, std::shared_ptr<nn::LayerNorm>>(
+      nn, "LayerNorm",
+      "Applies Layer Normalization over the last tensor dimension.")
+      .def(py::init<int, float>(), py::arg("normalized_shape"),
+           py::arg("eps") = 1e-5f)
+      .def_readonly("normalized_shape", &nn::LayerNorm::normalized_shape_)
+      .def_readonly("eps", &nn::LayerNorm::eps_)
+      .def_readonly("weight", &nn::LayerNorm::weight)
+      .def_readonly("bias", &nn::LayerNorm::bias);
+
+  py::class_<nn::MultiHeadAttention, nn::Module, std::shared_ptr<nn::MultiHeadAttention>>(
+      nn, "MultiHeadAttention",
+      "Applies causal/non-causal multi-head self-attention over [B,T,E].")
+      .def(py::init<int, int, bool>(), py::arg("embed_dim"), py::arg("num_heads"),
+           py::arg("causal") = true)
+      .def_readonly("embed_dim", &nn::MultiHeadAttention::embed_dim_)
+      .def_readonly("num_heads", &nn::MultiHeadAttention::num_heads_)
+      .def_readonly("causal", &nn::MultiHeadAttention::causal_);
+
+  py::class_<nn::GlobalAvgPool2d, nn::Module, std::shared_ptr<nn::GlobalAvgPool2d>>(
+      nn, "GlobalAvgPool2d", "Applies global average pooling over spatial dimensions.")
+      .def(py::init<>());
+
   py::class_<nn::MaxPool2d, nn::Module, std::shared_ptr<nn::MaxPool2d>>(
       nn, "MaxPool2d", "Applies a 2D max pooling over an input signal.")
       .def(py::init<int, int, int>(), py::arg("kernel_size"),
@@ -447,6 +511,62 @@ PYBIND11_MODULE(munet, m) {
           py::keep_alive<0, 1>());
 
   // ============================================================================
+  // Inference (munet.inference)
+  // ============================================================================
+  auto inf = m.def_submodule("inference", "Inference runtime APIs");
+
+  py::class_<inference::EngineConfig>(inf, "EngineConfig")
+      .def(py::init<>())
+      .def_readwrite("device", &inference::EngineConfig::device)
+      .def_readwrite("warmup_runs", &inference::EngineConfig::warmup_runs)
+      .def_readwrite("strict_shape_check",
+                     &inference::EngineConfig::strict_shape_check);
+
+  py::class_<inference::EngineStats>(inf, "EngineStats")
+      .def(py::init<>())
+      .def_readonly("runs", &inference::EngineStats::runs)
+      .def_readonly("last_run_ms", &inference::EngineStats::last_run_ms)
+      .def_readonly("compile_ms", &inference::EngineStats::compile_ms)
+      .def_readonly("compiled_input_shape",
+                    &inference::EngineStats::compiled_input_shape)
+      .def_readonly("compiled_output_shape",
+                    &inference::EngineStats::compiled_output_shape);
+
+  py::class_<inference::Engine>(inf, "Engine")
+      .def(py::init<inference::EngineConfig>(), py::arg("config") = inference::EngineConfig{})
+      .def("set_device", &inference::Engine::set_device, py::arg("device"))
+      .def("device", &inference::Engine::device)
+      .def("set_warmup_runs", &inference::Engine::set_warmup_runs,
+           py::arg("warmup_runs"))
+      .def("set_strict_shape_check", &inference::Engine::set_strict_shape_check,
+           py::arg("enabled"))
+      .def(
+          "load",
+          [](inference::Engine &self, const std::shared_ptr<nn::Module> &module) {
+            self.load(std::static_pointer_cast<core::Module>(module));
+          },
+          py::arg("module"))
+      .def("compile",
+           [](inference::Engine &self, const Tensor &example_input,
+              const std::optional<std::vector<int>> &expected_input_shape,
+              const std::optional<std::vector<int>> &expected_output_shape) {
+             self.compile(example_input, expected_input_shape.value_or(std::vector<int>{}),
+                          expected_output_shape.value_or(std::vector<int>{}));
+           },
+           py::arg("example_input"),
+           py::arg("expected_input_shape") = py::none(),
+           py::arg("expected_output_shape") = py::none())
+      .def("prepare", &inference::Engine::prepare, py::arg("example_input"))
+      .def("run", &inference::Engine::run, py::arg("input"))
+      .def("run_batch", &inference::Engine::run_batch, py::arg("inputs"))
+      .def("is_loaded", &inference::Engine::is_loaded)
+      .def("is_prepared", &inference::Engine::is_prepared)
+      .def("is_compiled", &inference::Engine::is_compiled)
+      .def("compiled_input_shape", &inference::Engine::compiled_input_shape)
+      .def("compiled_output_shape", &inference::Engine::compiled_output_shape)
+      .def("stats", &inference::Engine::stats);
+
+  // ============================================================================
   // Optimizers (munet.optim)
   // ============================================================================
   auto optim = m.def_submodule("optim", "Optimization Algorithms");
@@ -481,7 +601,7 @@ PYBIND11_MODULE(munet, m) {
 
   m.def(
       "print_profiler_stats", []() { Profiler::get().print_summary(); },
-      "Prints current memory and compute profiler stats to stdout.");
+      "Prints current memory and compute profiler stats (stderr).");
   m.def(
       "reset_profiler", []() { Profiler::get().reset(); },
       "Clears all collected performance statistics and resets peak memory "
@@ -512,12 +632,38 @@ PYBIND11_MODULE(munet, m) {
          import munet
          munet.GradMode.set_enabled(self.prev)
 
+ def _tensor_to_numpy(t):
+     import numpy as np
+     import munet
+
+     cpu = munet.Device(munet.DeviceType.CPU, 0)
+     td = t.detach()
+     if td.device.type != munet.DeviceType.CPU:
+         td = td.to(cpu)
+     return np.array(td, copy=False).copy()
+
+ def _copy_numpy_into_tensor(t, arr):
+     import numpy as np
+     import munet
+
+     req = bool(t.requires_grad)
+     target = t.device
+     src = munet.from_numpy(np.asarray(arr, dtype=np.float32))
+     if target.type != munet.DeviceType.CPU:
+         src = src.to(target)
+     t.replace_(src)
+     t.requires_grad = req
+
  def save(module, filename):
      """
-     Saves a module's architecture and weights to a compressed .npz file.
+     Saves a module architecture + parameters/buffers to a compressed .npz file.
+     The saved file can be loaded with `load(filename)` (full reconstruction)
+     for supported built-in module types, or with `load(module, filename)` for
+     weights-only restore into an existing model definition.
      """
      import numpy as np
      import json
+     import munet
 
      def get_config(m):
          name = type(m).__name__
@@ -534,53 +680,110 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name, 'num_features': m.weight.shape[0], 'eps': m.eps, 'momentum': m.momentum}
          elif name == 'Upsample':
              return {'type': name, 'scale_factor': m.scale_factor}
-         elif name in ('ReLU', 'Sigmoid', 'Flatten'):
+         elif name == 'GlobalAvgPool2d':
              return {'type': name}
+         elif name in ('ReLU', 'Sigmoid', 'Tanh', 'GELU', 'Flatten'):
+             return {'type': name}
+         elif name == 'LeakyReLU':
+             return {'type': name, 'negative_slope': m.negative_slope}
+         elif name == 'Dropout':
+             return {'type': name, 'p': m.p}
+         elif name == 'Embedding':
+             return {'type': name, 'num_embeddings': m.num_embeddings, 'embedding_dim': m.embedding_dim}
+         elif name == 'LayerNorm':
+             return {'type': name, 'normalized_shape': m.normalized_shape, 'eps': m.eps}
+         elif name == 'MultiHeadAttention':
+             return {'type': name, 'embed_dim': m.embed_dim, 'num_heads': m.num_heads, 'causal': bool(m.causal)}
          else:
-             raise ValueError(f"Unknown module type {name}")
+             raise ValueError(
+                 f"Unsupported module type for full reconstruction: {name}. "
+                 "Use `load(existing_model, filename)` for weights-only restore."
+             )
+
+     def tensor_to_numpy(t):
+         m = __import__("munet")
+         cpu = m.Device(m.DeviceType.CPU, 0)
+         td = t.detach()
+         if td.device.type != m.DeviceType.CPU:
+             td = td.to(cpu)
+         return np.array(td, copy=False).copy()
 
      config = get_config(module)
-     state = {name: np.array(p, copy=False) for name, p in module.named_parameters().items()}
+     state = {}
+     for name, p in module.named_parameters().items():
+         state[name] = tensor_to_numpy(p)
+
      state['__config__'] = np.array(json.dumps(config))
+     state['__format_version__'] = np.array('munet_model_v1')
      np.savez(filename, **state)
 
  def load(arg, filename=None):
      """
-    Loads a previously saved module state.
+     Loads a previously saved module state.
+
+     Usage:
+       - load("model.npz") -> reconstruct full supported model from file.
+       - load(module, "model.npz") -> load weights/buffers into existing model.
      """
      import numpy as np
      import json
      import munet
 
+     def build_module(cfg):
+         t = cfg['type']
+         if t == 'Sequential': return munet.nn.Sequential([build_module(c) for c in cfg['layers']])
+         elif t == 'Linear': return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'])
+         elif t == 'Conv2d': return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'])
+         elif t == 'MaxPool2d': return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
+         elif t == 'BatchNorm2d': return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'])
+         elif t == 'Upsample': return munet.nn.Upsample(cfg['scale_factor'])
+         elif t == 'GlobalAvgPool2d': return munet.nn.GlobalAvgPool2d()
+         elif t == 'ReLU': return munet.nn.ReLU()
+         elif t == 'Sigmoid': return munet.nn.Sigmoid()
+         elif t == 'Tanh': return munet.nn.Tanh()
+         elif t == 'GELU': return munet.nn.GELU()
+         elif t == 'LeakyReLU': return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
+         elif t == 'Dropout': return munet.nn.Dropout(cfg.get('p', 0.5))
+         elif t == 'Embedding': return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'])
+         elif t == 'LayerNorm': return munet.nn.LayerNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5))
+         elif t == 'MultiHeadAttention': return munet.nn.MultiHeadAttention(cfg['embed_dim'], cfg['num_heads'], cfg.get('causal', True))
+         elif t == 'Flatten': return munet.nn.Flatten()
+         else:
+             raise ValueError(f"Unsupported saved module type: {t}")
+
+     def copy_numpy_into_tensor(t, arr):
+         m = __import__("munet")
+         req = bool(t.requires_grad)
+         target = t.device
+         src = m.from_numpy(np.asarray(arr, dtype=np.float32))
+         if target.type != m.DeviceType.CPU:
+             src = src.to(target)
+         t.replace_(src)
+         t.requires_grad = req
+
+     def apply_state(module, state):
+         for name, p in module.named_parameters().items():
+             if name in state:
+                 copy_numpy_into_tensor(p, state[name])
+         return module
+
      if filename is None:
          state = np.load(arg, allow_pickle=True)
          if '__config__' not in state:
-             raise ValueError("File does not contain architecture config. Load into a module using `load(module, filename)` instead.")
+             raise ValueError("File does not contain architecture config. Use `load(module, filename)` for weights-only restore.")
 
          config = json.loads(str(state['__config__']))
-
-         def build_module(cfg):
-             t = cfg['type']
-             if t == 'Sequential': return munet.nn.Sequential([build_module(c) for c in cfg['layers']])
-             elif t == 'Linear': return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'])
-             elif t == 'Conv2d': return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'])
-             elif t == 'MaxPool2d': return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
-             elif t == 'BatchNorm2d': return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'])
-             elif t == 'Upsample': return munet.nn.Upsample(cfg['scale_factor'])
-             elif t == 'ReLU': return munet.nn.ReLU()
-             elif t == 'Sigmoid': return munet.nn.Sigmoid()
-             elif t == 'Flatten': return munet.nn.Flatten()
-
          module = build_module(config)
-         for name, p in module.named_parameters().items():
-             if name in state: p.copy_from_numpy(state[name])
-         return module
+         return apply_state(module, state)
      else:
          module = arg
          state = np.load(filename, allow_pickle=True)
-         for name, p in module.named_parameters().items():
-             if name in state: p.copy_from_numpy(state[name])
-         return module
+         return apply_state(module, state)
+
+ def load_weights(module, filename):
+     """Alias for `load(module, filename)` to explicitly do weights-only restore."""
+     m = __import__("munet")
+     return m.load(module, filename)
  )",
       py::globals(), m.attr("__dict__"));
 }

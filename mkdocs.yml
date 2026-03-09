@@ -1,0 +1,37 @@
+site_name: MuNet Documentation
+site_description: MuNet C++/Python runtime, training, and inference docs
+repo_url: https://github.com/your-org/MuNet
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+nav:
+  - Home: documentation/index.md
+  - Getting Started:
+      - Overview: documentation/getting-started/overview.md
+      - Build & Install: documentation/getting-started/build_install.md
+  - Architecture:
+      - Runtime: documentation/architecture/runtime.md
+      - Backends: documentation/architecture/backends.md
+  - API Reference:
+      - Python API: documentation/api/python.md
+      - C++ API: documentation/api/cpp.md
+  - Guides:
+      - Inference Engine: documentation/guides/inference_engine.md
+      - Serialization & Model Loading: documentation/guides/serialization.md
+      - Common Design Patterns: documentation/guides/design_patterns.md
+  - Tutorials:
+      - End-to-end Training to Inference: documentation/tutorials/e2e_workflow.md
+  - Performance:
+      - Profiling: documentation/performance/profiling.md
+  - Contributing:
+      - Add a New Op: documentation/contributing/add_new_op.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true

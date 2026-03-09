@@ -2,6 +2,7 @@
 #include "autograd/autograd.hpp"
 #include "types.hpp"
 #include "util.hpp"
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -13,6 +14,10 @@ namespace ops {
 inline Tensor add(const Tensor &a, const Tensor &b);
 inline Tensor sub(const Tensor &a, const Tensor &b);
 inline Tensor mul(const Tensor &a, const Tensor &b);
+inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
+                         const Tensor &bias, float eps = 1e-5f);
+inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value);
+inline Tensor log_softmax(const Tensor &a, int dim = -1);
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
   for (size_t i = 0; i < inputs.size(); ++i) {
@@ -45,6 +50,69 @@ inline void record_trace(
   fn->int_attributes = int_attrs;
   fn->attributes = float_attrs;
   out.impl_->trace_node = fn;
+}
+
+struct MaskedFillBackward : public Node {
+  Tensor mask;
+  Shape input_shape;
+
+  explicit MaskedFillBackward(Tensor m)
+      : mask(std::move(m)), input_shape(mask.shape()) {}
+
+  std::string name() const override { return "MaskedFillBackward"; }
+
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    const Tensor &grad_out = grads[0];
+    Device cpu{DeviceType::CPU, 0};
+    Tensor go_cpu = grad_out.to(cpu);
+    Tensor mask_cpu = mask.to(cpu);
+    Tensor gi_cpu(input_shape, cpu, grad_out.dtype());
+
+    const float *go = static_cast<const float *>(go_cpu.data());
+    const float *m = static_cast<const float *>(mask_cpu.data());
+    float *gi = static_cast<float *>(gi_cpu.data());
+
+    for (size_t i = 0; i < gi_cpu.size(); ++i) {
+      gi[i] = (m[i] != 0.0f) ? 0.0f : go[i];
+    }
+
+    Tensor gi_dev = (grad_out.device().type == DeviceType::CPU)
+                        ? gi_cpu
+                        : gi_cpu.to(grad_out.device());
+    return {gi_dev, Tensor()};
+  }
+};
+
+inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value) {
+  if (a.shape() != mask.shape())
+    throw std::runtime_error("masked_fill: input/mask shape mismatch");
+  if (a.device() != mask.device())
+    throw std::runtime_error("masked_fill: input/mask device mismatch");
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a_cpu = a.to(cpu);
+  Tensor m_cpu = mask.to(cpu);
+  Tensor out_cpu(a.shape(), cpu, a.dtype());
+
+  const float *av = static_cast<const float *>(a_cpu.data());
+  const float *mv = static_cast<const float *>(m_cpu.data());
+  float *ov = static_cast<float *>(out_cpu.data());
+
+  for (size_t i = 0; i < out_cpu.size(); ++i) {
+    ov[i] = (mv[i] != 0.0f) ? value : av[i];
+  }
+
+  Tensor out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<MaskedFillBackward>(mask);
+    link_backward_edges(fn.get(), {a, mask});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+
+  record_trace(out, "MaskedFill", {a, mask}, {}, {{"value", value}});
+  return out;
 }
 
 inline Tensor sum_to_shape(const Tensor &t, const Shape &target_shape) {
@@ -293,6 +361,144 @@ inline Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
   return out;
 }
 
+
+
+// --- LAYER NORM (CPU fallback with autograd) ---
+struct LayerNormBackward : public Node {
+  Tensor x, weight, bias;
+  Tensor mean_cpu, inv_std_cpu;
+  int rows, cols;
+  LayerNormBackward(Tensor x_, Tensor w_, Tensor b_, Tensor m_, Tensor is_,
+                    int r, int c)
+      : x(x_), weight(w_), bias(b_), mean_cpu(m_), inv_std_cpu(is_), rows(r),
+        cols(c) {}
+
+  std::string name() const override { return "LayerNormBackward"; }
+
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Device cpu{DeviceType::CPU, 0};
+    Tensor go_cpu = grads[0].to(cpu);
+    Tensor x_cpu = x.to(cpu);
+    Tensor w_cpu = weight.to(cpu);
+
+    Tensor dx_cpu(x.shape(), cpu, x.dtype());
+    Tensor dw_cpu(weight.shape(), cpu, weight.dtype());
+    Tensor db_cpu(bias.shape(), cpu, bias.dtype());
+    dw_cpu.uniform_(0.0f, 0.0f);
+    db_cpu.uniform_(0.0f, 0.0f);
+
+    const float *go = static_cast<const float *>(go_cpu.data());
+    const float *xv = static_cast<const float *>(x_cpu.data());
+    const float *wv = static_cast<const float *>(w_cpu.data());
+    const float *mv = static_cast<const float *>(mean_cpu.data());
+    const float *iv = static_cast<const float *>(inv_std_cpu.data());
+
+    float *dx = static_cast<float *>(dx_cpu.data());
+    float *dw = static_cast<float *>(dw_cpu.data());
+    float *db = static_cast<float *>(db_cpu.data());
+
+    for (int r = 0; r < rows; ++r) {
+      const float mean = mv[r];
+      const float inv = iv[r];
+      float sum_gy = 0.0f;
+      float sum_gy_xhat = 0.0f;
+
+      for (int c = 0; c < cols; ++c) {
+        int idx = r * cols + c;
+        float xhat = (xv[idx] - mean) * inv;
+        float gy = go[idx] * wv[c];
+        sum_gy += gy;
+        sum_gy_xhat += gy * xhat;
+        dw[c] += go[idx] * xhat;
+        db[c] += go[idx];
+      }
+
+      for (int c = 0; c < cols; ++c) {
+        int idx = r * cols + c;
+        float xhat = (xv[idx] - mean) * inv;
+        float gy = go[idx] * wv[c];
+        dx[idx] = (inv / cols) *
+                  (cols * gy - sum_gy - xhat * sum_gy_xhat);
+      }
+    }
+
+    Tensor dx_dev = (x.device().type == DeviceType::CPU) ? dx_cpu
+                                                          : dx_cpu.to(x.device());
+    Tensor dw_dev = (weight.device().type == DeviceType::CPU)
+                        ? dw_cpu
+                        : dw_cpu.to(weight.device());
+    Tensor db_dev = (bias.device().type == DeviceType::CPU) ? db_cpu
+                                                             : db_cpu.to(bias.device());
+    return {dx_dev, dw_dev, db_dev};
+  }
+};
+
+inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
+                         const Tensor &bias, float eps) {
+  if (x.shape().empty())
+    throw std::runtime_error("LayerNorm: input must have at least 1 dim");
+
+  int cols = x.shape().back();
+  if ((int)weight.size() != cols || (int)bias.size() != cols)
+    throw std::runtime_error("LayerNorm: weight/bias size must equal last dim");
+
+  int rows = (int)(x.size() / cols);
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor x_cpu = x.to(cpu);
+  Tensor w_cpu = weight.to(cpu);
+  Tensor b_cpu = bias.to(cpu);
+
+  Tensor out_cpu(x.shape(), cpu, x.dtype());
+  Tensor mean_cpu({rows}, cpu, x.dtype(), false);
+  Tensor inv_std_cpu({rows}, cpu, x.dtype(), false);
+
+  const float *xv = static_cast<const float *>(x_cpu.data());
+  const float *wv = static_cast<const float *>(w_cpu.data());
+  const float *bv = static_cast<const float *>(b_cpu.data());
+  float *ov = static_cast<float *>(out_cpu.data());
+  float *mv = static_cast<float *>(mean_cpu.data());
+  float *iv = static_cast<float *>(inv_std_cpu.data());
+
+  for (int r = 0; r < rows; ++r) {
+    float mean = 0.0f;
+    for (int c = 0; c < cols; ++c)
+      mean += xv[r * cols + c];
+    mean /= cols;
+
+    float var = 0.0f;
+    for (int c = 0; c < cols; ++c) {
+      float d = xv[r * cols + c] - mean;
+      var += d * d;
+    }
+    var /= cols;
+
+    float inv = 1.0f / std::sqrt(var + eps);
+    mv[r] = mean;
+    iv[r] = inv;
+
+    for (int c = 0; c < cols; ++c) {
+      float xhat = (xv[r * cols + c] - mean) * inv;
+      ov[r * cols + c] = xhat * wv[c] + bv[c];
+    }
+  }
+
+  Tensor out = (x.device().type == DeviceType::CPU) ? out_cpu
+                                                     : out_cpu.to(x.device());
+
+  if (GradMode::is_enabled() &&
+      (x.requires_grad() || weight.requires_grad() || bias.requires_grad())) {
+    auto fn = std::make_shared<LayerNormBackward>(x, weight, bias, mean_cpu,
+                                                  inv_std_cpu, rows, cols);
+    link_backward_edges(fn.get(), {x, weight, bias});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+
+  record_trace(out, "LayerNorm", {x, weight, bias}, {}, {{"eps", eps}});
+  return out;
+}
+
 // --- RELU ---
 struct ReluBackward : public Node {
   Tensor saved_input;
@@ -356,34 +562,148 @@ inline Tensor sigmoid(const Tensor &a) {
 // --- SOFTMAX ---
 struct SoftmaxBackward : public Node {
   Tensor saved_out;
-  int batch_size, num_classes;
-  SoftmaxBackward(Tensor o, int b, int c)
-      : saved_out(o), batch_size(b), num_classes(c) {}
+  int dim;
+  Shape shape;
+  SoftmaxBackward(Tensor o, int d) : saved_out(o), dim(d), shape(o.shape()) {}
   std::string name() const override { return "SoftmaxBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
-    Tensor grad_out = grads[0];
-    Tensor grad_in(saved_out.shape(), saved_out.device(), saved_out.dtype());
-    saved_out.impl_->backend().softmax_backward(
-        *grad_out.impl_->storage, *saved_out.impl_->storage,
-        *grad_in.impl_->storage, batch_size, num_classes);
-    return {grad_in};
+    Device cpu{DeviceType::CPU, 0};
+    Tensor go_cpu = grads[0].to(cpu);
+    Tensor out_cpu = saved_out.to(cpu);
+    Tensor gi_cpu(shape, cpu, saved_out.dtype());
+
+    int rank = static_cast<int>(shape.size());
+    int resolved = (dim < 0) ? (rank + dim) : dim;
+    int outer = 1, inner = 1, dim_size = shape[resolved];
+    for (int i = 0; i < resolved; ++i)
+      outer *= shape[i];
+    for (int i = resolved + 1; i < rank; ++i)
+      inner *= shape[i];
+
+    const float *go = static_cast<const float *>(go_cpu.data());
+    const float *out = static_cast<const float *>(out_cpu.data());
+    float *gi = static_cast<float *>(gi_cpu.data());
+
+    for (int o = 0; o < outer; ++o) {
+      for (int in = 0; in < inner; ++in) {
+        float dot = 0.0f;
+        for (int d = 0; d < dim_size; ++d) {
+          int idx = (o * dim_size + d) * inner + in;
+          dot += go[idx] * out[idx];
+        }
+        for (int d = 0; d < dim_size; ++d) {
+          int idx = (o * dim_size + d) * inner + in;
+          gi[idx] = out[idx] * (go[idx] - dot);
+        }
+      }
+    }
+
+    Tensor gi_dev = (saved_out.device().type == DeviceType::CPU)
+                        ? gi_cpu
+                        : gi_cpu.to(saved_out.device());
+    return {gi_dev};
   }
 };
 
-inline Tensor softmax(const Tensor &a) {
+inline Tensor softmax(const Tensor &a, int dim = -1) {
+  if (a.shape().empty())
+    throw std::runtime_error("Softmax expects non-empty shape");
+
+  int rank = static_cast<int>(a.shape().size());
+  int resolved = (dim < 0) ? (rank + dim) : dim;
+  if (resolved < 0 || resolved >= rank)
+    throw std::runtime_error("Softmax: dim out of range");
+  if (resolved != rank - 1)
+    throw std::runtime_error("Softmax currently supports only the last dimension");
+
+  int num_classes = a.shape().back();
+  int batch_size = a.size() / num_classes;
   Tensor out(a.shape(), a.device(), a.dtype());
-  int batch_size = a.shape().size() > 1 ? a.shape()[0] : 1;
-  int num_classes = a.size() / batch_size;
-  a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage, batch_size,
-                             num_classes);
+  a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage,
+                             batch_size, num_classes);
 
   if (GradMode::is_enabled() && a.requires_grad()) {
-    auto fn = std::make_shared<SoftmaxBackward>(out, batch_size, num_classes);
+    auto fn = std::make_shared<SoftmaxBackward>(out, resolved);
     link_backward_edges(fn.get(), {a});
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
-  record_trace(out, "Softmax", {a});
+  record_trace(out, "Softmax", {a}, {{"dim", {resolved}}});
+  return out;
+}
+
+struct LogSoftmaxBackward : public Node {
+  Tensor saved_log_probs;
+  int dim;
+  Shape shape;
+  LogSoftmaxBackward(Tensor lp, int d)
+      : saved_log_probs(lp), dim(d), shape(lp.shape()) {}
+
+  std::string name() const override { return "LogSoftmaxBackward"; }
+
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Device cpu{DeviceType::CPU, 0};
+    Tensor go_cpu = grads[0].to(cpu);
+    Tensor lp_cpu = saved_log_probs.to(cpu);
+    Tensor gi_cpu(shape, cpu, saved_log_probs.dtype());
+
+    int rank = static_cast<int>(shape.size());
+    int resolved = (dim < 0) ? (rank + dim) : dim;
+    int outer = 1, inner = 1, dim_size = shape[resolved];
+    for (int i = 0; i < resolved; ++i)
+      outer *= shape[i];
+    for (int i = resolved + 1; i < rank; ++i)
+      inner *= shape[i];
+
+    const float *go = static_cast<const float *>(go_cpu.data());
+    const float *lp = static_cast<const float *>(lp_cpu.data());
+    float *gi = static_cast<float *>(gi_cpu.data());
+
+    for (int o = 0; o < outer; ++o) {
+      for (int in = 0; in < inner; ++in) {
+        float sum_go = 0.0f;
+        for (int d = 0; d < dim_size; ++d) {
+          int idx = (o * dim_size + d) * inner + in;
+          sum_go += go[idx];
+        }
+
+        for (int d = 0; d < dim_size; ++d) {
+          int idx = (o * dim_size + d) * inner + in;
+          float p = std::exp(lp[idx]);
+          gi[idx] = go[idx] - p * sum_go;
+        }
+      }
+    }
+
+    Tensor gi_dev = (saved_log_probs.device().type == DeviceType::CPU)
+                        ? gi_cpu
+                        : gi_cpu.to(saved_log_probs.device());
+    return {gi_dev};
+  }
+};
+
+inline Tensor log_softmax(const Tensor &a, int dim) {
+  Tensor p = softmax(a, dim);
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor p_cpu = p.to(cpu);
+  Tensor out_cpu(a.shape(), cpu, a.dtype());
+  const float *pv = static_cast<const float *>(p_cpu.data());
+  float *ov = static_cast<float *>(out_cpu.data());
+  for (size_t i = 0; i < p_cpu.size(); ++i)
+    ov[i] = std::log(std::max(pv[i], 1e-20f));
+
+  Tensor out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+
+  int rank = static_cast<int>(a.shape().size());
+  int resolved = (dim < 0) ? (rank + dim) : dim;
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<LogSoftmaxBackward>(out, resolved);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_trace(out, "LogSoftmax", {a}, {{"dim", {resolved}}});
   return out;
 }
 

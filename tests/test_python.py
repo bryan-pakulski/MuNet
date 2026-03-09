@@ -2,6 +2,7 @@ import sys
 import os
 import unittest
 import numpy as np
+import tempfile
 
 # Dynamically add the 'build' directory to sys.path so Python can find 'munet.so'
 build_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "build"))
@@ -549,6 +550,141 @@ class TestBindings(unittest.TestCase):
         optimizer.step()
 
         self.assertAlmostEqual(params[0].item(), 0.8, places=6)
+
+    def test_model_serialization_full_roundtrip(self):
+        """Save full model and reconstruct it from file without original definition."""
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.GELU(),
+            munet.nn.Linear(8, 2),
+        ])
+
+        x = munet.Tensor([3, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array(
+            [[0.1, -0.2, 0.3, 0.4], [0.5, 0.6, -0.7, 0.8], [-0.9, 1.0, 0.2, -0.1]],
+            dtype=np.float32,
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "full_model.npz")
+            munet.save(model, path)
+
+            loaded = munet.load(path)
+            y_ref = np.array(model.forward(x).detach(), copy=False)
+            y_loaded = np.array(loaded.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y_ref, y_loaded, atol=1e-6))
+
+    def test_model_serialization_weights_only(self):
+        """Load weights into an existing model definition."""
+        src = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.ReLU(),
+            munet.nn.Linear(8, 2),
+        ])
+        dst = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.ReLU(),
+            munet.nn.Linear(8, 2),
+        ])
+
+        x = munet.Tensor([2, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array(
+            [[1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, 0.5, 0.25]], dtype=np.float32
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "weights_only.npz")
+            munet.save(src, path)
+            munet.load(dst, path)
+
+            y_src = np.array(src.forward(x).detach(), copy=False)
+            y_dst = np.array(dst.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y_src, y_dst, atol=1e-6))
+
+
+    def test_inference_engine_compile_and_shape_guard(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.ReLU(),
+            munet.nn.Linear(8, 2),
+        ])
+
+        eng = munet.inference.Engine()
+        eng.load(model)
+
+        x = munet.Tensor([2, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array([[1, 2, 3, 4], [5, 6, 7, 8]], dtype=np.float32)
+
+        eng.compile(x)
+        self.assertTrue(eng.is_compiled())
+        self.assertEqual(eng.compiled_input_shape(), [2, 4])
+        self.assertGreaterEqual(eng.stats().compile_ms, 0.0)
+
+        y = eng.run(x)
+        self.assertEqual(y.shape, [2, 2])
+
+        bad = munet.Tensor([2, 5], requires_grad=False)
+        np.array(bad, copy=False)[:] = np.ones((2, 5), dtype=np.float32)
+        with self.assertRaises(RuntimeError):
+            eng.run(bad)
+
+        eng.set_strict_shape_check(False)
+        y2 = eng.run(bad)
+        self.assertEqual(y2.shape, [2, 2])
+
+    def test_inference_engine_from_serialized_model(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(3, 3),
+            munet.nn.Tanh(),
+            munet.nn.Linear(3, 1),
+        ])
+
+        x = munet.Tensor([4, 3], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array(
+            [[0.1, 0.2, 0.3], [0.4, -0.1, 0.0], [1.0, -1.0, 0.5], [0.0, 0.0, 0.0]],
+            dtype=np.float32,
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "e2e_model.npz")
+            munet.save(model, path)
+            restored = munet.load(path)
+
+            eng = munet.inference.Engine()
+            eng.load(restored)
+            eng.compile(x)
+
+            y_ref = np.array(restored.forward(x).detach(), copy=False)
+            y_eng = np.array(eng.run(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y_ref, y_eng, atol=1e-6))
+
+
+    def test_inference_engine_dynamic_dims_with_wildcards(self):
+        model = munet.nn.Sequential([
+            munet.nn.Conv2d(3, 4, 3, padding=1),
+            munet.nn.ReLU(),
+            munet.nn.Conv2d(4, 2, 1),
+        ])
+
+        eng = munet.inference.Engine()
+        eng.load(model)
+
+        x_compile = munet.Tensor([1, 3, 64, 64], requires_grad=False)
+        np.array(x_compile, copy=False)[:] = np.random.randn(1, 3, 64, 64).astype(np.float32)
+
+        eng.compile(x_compile, expected_input_shape=[-1, 3, -1, -1], expected_output_shape=[-1, 2, -1, -1])
+        self.assertEqual(eng.compiled_input_shape(), [1, 3, 64, 64])
+        self.assertEqual(eng.compiled_output_shape(), [1, 2, 64, 64])
+
+        x_ok = munet.Tensor([2, 3, 128, 80], requires_grad=False)
+        np.array(x_ok, copy=False)[:] = np.random.randn(2, 3, 128, 80).astype(np.float32)
+        y_ok = eng.run(x_ok)
+        self.assertEqual(y_ok.shape, [2, 2, 128, 80])
+
+        x_bad = munet.Tensor([2, 1, 128, 80], requires_grad=False)
+        np.array(x_bad, copy=False)[:] = np.random.randn(2, 1, 128, 80).astype(np.float32)
+        with self.assertRaises(RuntimeError):
+            eng.run(x_bad)
 
 
 if __name__ == "__main__":
