@@ -2008,7 +2008,9 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
   if (src_dev.type == DeviceType::CPU && dst_dev.type == DeviceType::VULKAN) {
     size_t offset = 0;
     get_staging(bytes, offset);
+    auto h2d_memcpy_start = profile_now();
     std::memcpy((char *)stagingMapped + offset, src, bytes);
+    profile_cpu_event("vulkan.copy_h2d_memcpy", h2d_memcpy_start, bytes);
 
     ensure_recording();
     VkBufferCopy copyRegion{};
@@ -2058,7 +2060,9 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[submitted_frame],
                              VK_TRUE, UINT64_MAX));
     profile_cpu_event("vulkan.copy_d2h_wait_fence", d2h_wait_start, bytes);
+    auto d2h_memcpy_start = profile_now();
     std::memcpy(dst, (char *)stagingMapped + offset, bytes);
+    profile_cpu_event("vulkan.copy_d2h_memcpy", d2h_memcpy_start, bytes);
     stagingOffset =
         0; // Free entire staging buffer since we just forced a full wait
   }

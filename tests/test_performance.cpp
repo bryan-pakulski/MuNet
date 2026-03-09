@@ -684,3 +684,124 @@ TEST(PerformanceTest, CopyOnlyGpuToCpuCudaVsVulkan) {
       },
       4, 25, "MUNET_PERF_MAX_RATIO_COPY_D2H", 4.0);
 }
+
+
+TEST(PerformanceTest, Conv2DForwardCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 16, IC = 32, OC = 64, H = 32, W = 32, K = 3;
+  Tensor in_cpu({B, IC, H, W}, {DeviceType::CPU, 0});
+  Tensor w_cpu({OC, IC, K, K}, {DeviceType::CPU, 0});
+  in_cpu.uniform_(-1.0f, 1.0f);
+  w_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor in_cuda = in_cpu.to({DeviceType::CUDA, 0});
+  Tensor w_cuda = w_cpu.to({DeviceType::CUDA, 0});
+  Tensor in_vk = in_cpu.to({DeviceType::VULKAN, 0});
+  Tensor w_vk = w_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "Conv2DForward",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA)
+                         ? in_cuda.conv2d(w_cuda, Tensor(), 1, 1)
+                         : in_vk.conv2d(w_vk, Tensor(), 1, 1);
+        out.impl_->backend().synchronize();
+      },
+      3, 12, "MUNET_PERF_MAX_RATIO_CONV2D", 5.0);
+}
+
+TEST(PerformanceTest, MaxPool2DCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 32, C = 64, H = 56, W = 56;
+  Tensor in_cpu({B, C, H, W}, {DeviceType::CPU, 0});
+  in_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor in_cuda = in_cpu.to({DeviceType::CUDA, 0});
+  Tensor in_vk = in_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "MaxPool2D",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA) ? in_cuda.max_pool2d(2, 2)
+                                                     : in_vk.max_pool2d(2, 2);
+        out.impl_->backend().synchronize();
+      },
+      4, 16, "MUNET_PERF_MAX_RATIO_MAXPOOL2D", 5.0);
+}
+
+TEST(PerformanceTest, Upsample2DCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 16, C = 64, H = 64, W = 64;
+  Tensor in_cpu({B, C, H, W}, {DeviceType::CPU, 0});
+  in_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor in_cuda = in_cpu.to({DeviceType::CUDA, 0});
+  Tensor in_vk = in_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "Upsample2D",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA) ? in_cuda.upsample2d(2)
+                                                     : in_vk.upsample2d(2);
+        out.impl_->backend().synchronize();
+      },
+      3, 12, "MUNET_PERF_MAX_RATIO_UPSAMPLE2D", 5.0);
+}
+
+TEST(PerformanceTest, ConcatCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 64, C1 = 32, C2 = 32, H = 28, W = 28;
+  Tensor a_cpu({B, C1, H, W}, {DeviceType::CPU, 0});
+  Tensor b_cpu({B, C2, H, W}, {DeviceType::CPU, 0});
+  a_cpu.uniform_(-1.0f, 1.0f);
+  b_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor a_cuda = a_cpu.to({DeviceType::CUDA, 0});
+  Tensor b_cuda = b_cpu.to({DeviceType::CUDA, 0});
+  Tensor a_vk = a_cpu.to({DeviceType::VULKAN, 0});
+  Tensor b_vk = b_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "Concat",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA)
+                         ? Tensor::cat({a_cuda, b_cuda}, 1)
+                         : Tensor::cat({a_vk, b_vk}, 1);
+        out.impl_->backend().synchronize();
+      },
+      4, 16, "MUNET_PERF_MAX_RATIO_CONCAT", 5.0);
+}
+
+TEST(PerformanceTest, OptimizerStepCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int N = 1 << 20;
+  Tensor p_cpu({N}, {DeviceType::CPU, 0});
+  Tensor x_cpu({N}, {DeviceType::CPU, 0});
+  p_cpu.uniform_(-1.0f, 1.0f);
+  x_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor p_cuda = p_cpu.to({DeviceType::CUDA, 0});
+  Tensor x_cuda = x_cpu.to({DeviceType::CUDA, 0});
+  Tensor p_vk = p_cpu.to({DeviceType::VULKAN, 0});
+  Tensor x_vk = x_cpu.to({DeviceType::VULKAN, 0});
+  p_cuda.set_requires_grad(true);
+  p_vk.set_requires_grad(true);
+
+  run_perf_ratio_test(
+      "OptimizerStep",
+      [&](Device dev) {
+        Tensor &p = (dev.type == DeviceType::CUDA) ? p_cuda : p_vk;
+        Tensor &x = (dev.type == DeviceType::CUDA) ? x_cuda : x_vk;
+        Tensor loss = (p * x).sum();
+        loss.backward();
+        p.step(1e-3f);
+        p.zero_grad();
+        loss.impl_->backend().synchronize();
+      },
+      3, 14, "MUNET_PERF_MAX_RATIO_OPTIMIZER_STEP", 5.0);
+}
