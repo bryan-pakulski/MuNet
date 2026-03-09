@@ -701,9 +701,9 @@ PYBIND11_MODULE(munet, m) {
              )
 
      def tensor_to_numpy(t):
-         cpu = munet.Device(munet.DeviceType.CPU, 0)
+         cpu = Device(DeviceType.CPU, 0)
          td = t.detach()
-         if td.device.type != munet.DeviceType.CPU:
+         if td.device.type != DeviceType.CPU:
              td = td.to(cpu)
          return np.array(td, copy=False).copy()
 
@@ -753,8 +753,8 @@ PYBIND11_MODULE(munet, m) {
      def copy_numpy_into_tensor(t, arr):
          req = bool(t.requires_grad)
          target = t.device
-         src = munet.from_numpy(np.asarray(arr, dtype=np.float32))
-         if target.type != munet.DeviceType.CPU:
+         src = from_numpy(np.asarray(arr, dtype=np.float32))
+         if target.type != DeviceType.CPU:
              src = src.to(target)
          t.replace_(src)
          t.requires_grad = req
