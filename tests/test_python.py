@@ -660,6 +660,44 @@ class TestBindings(unittest.TestCase):
 
 
 
+
+    def test_compile_onnx_to_munet_module(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX compile test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            onnx_path = os.path.join(d, "linear_relu.onnx")
+            out_npz = os.path.join(d, "compiled_model.npz")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
+
+            W = np.array([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=np.float32)
+            B = np.array([0.5, -1.0], dtype=np.float32)
+
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
+            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
+
+            gemm = helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0)
+            relu = helper.make_node("Relu", ["z"], ["y"])
+
+            graph = helper.make_graph([gemm, relu], "linear_relu_graph", [x_info], [y_info], [w_init, b_init])
+            model = helper.make_model(graph, producer_name="munet_compile_test")
+            onnx.save(model, onnx_path)
+
+            module = munet.inference.compile_onnx(onnx_path, out_npz)
+            self.assertTrue(os.path.exists(out_npz))
+
+            x = munet.from_numpy(np.array([[1.0, 2.0, 3.0], [-1.0, 0.5, 2.0]], dtype=np.float32))
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+
+            expected = np.maximum(x.numpy() @ W + B, 0.0)
+            self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
     def test_onnx_inference_wrapper(self):
         try:
             import onnx
