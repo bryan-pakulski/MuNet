@@ -70,6 +70,17 @@ void require_gpu_backends() {
   }
 }
 
+
+
+Tensor make_one_hot_targets(int batch, int classes) {
+  Tensor targets_cpu({batch, classes}, {DeviceType::CPU, 0});
+  auto *ptr = static_cast<float *>(targets_cpu.data());
+  for (int i = 0; i < batch * classes; ++i)
+    ptr[i] = 0.0f;
+  for (int b = 0; b < batch; ++b)
+    ptr[b * classes + (b % classes)] = 1.0f;
+  return targets_cpu;
+}
 void run_perf_ratio_test(const std::string &name,
                          const std::function<void(Device)> &runner,
                          int warmup, int iters, const char *ratio_env,
@@ -306,12 +317,7 @@ TEST(PerformanceTest, CrossEntropyCudaVsVulkan) {
   Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
   logits_cpu.uniform_(-2.0f, 2.0f);
 
-  Tensor targets_cpu({B, C}, {DeviceType::CPU, 0});
-  auto *targets_ptr = static_cast<float *>(targets_cpu.data());
-  for (int i = 0; i < B * C; ++i)
-    targets_ptr[i] = 0.0f;
-  for (int b = 0; b < B; ++b)
-    targets_ptr[b * C + (b % C)] = 1.0f;
+  Tensor targets_cpu = make_one_hot_targets(B, C);
 
   Tensor logits_cuda = logits_cpu.to({DeviceType::CUDA, 0});
   Tensor targets_cuda = targets_cpu.to({DeviceType::CUDA, 0});
@@ -327,4 +333,110 @@ TEST(PerformanceTest, CrossEntropyCudaVsVulkan) {
         out.impl_->backend().synchronize();
       },
       6, 30, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY", 4.0);
+}
+
+
+TEST(PerformanceTest, CrossEntropySmallClassCountCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 4096;
+  constexpr int C = 16;
+  Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
+  logits_cpu.uniform_(-2.0f, 2.0f);
+  Tensor targets_cpu = make_one_hot_targets(B, C);
+
+  Tensor logits_cuda = logits_cpu.to({DeviceType::CUDA, 0});
+  Tensor targets_cuda = targets_cpu.to({DeviceType::CUDA, 0});
+  Tensor logits_vk = logits_cpu.to({DeviceType::VULKAN, 0});
+  Tensor targets_vk = targets_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "CrossEntropySmallClassCount",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA)
+                         ? logits_cuda.cross_entropy(targets_cuda)
+                         : logits_vk.cross_entropy(targets_vk);
+        out.impl_->backend().synchronize();
+      },
+      6, 30, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY_SMALL_C", 4.5);
+}
+
+TEST(PerformanceTest, CrossEntropyLargeClassCountCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 256;
+  constexpr int C = 1024;
+  Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
+  logits_cpu.uniform_(-2.0f, 2.0f);
+  Tensor targets_cpu = make_one_hot_targets(B, C);
+
+  Tensor logits_cuda = logits_cpu.to({DeviceType::CUDA, 0});
+  Tensor targets_cuda = targets_cpu.to({DeviceType::CUDA, 0});
+  Tensor logits_vk = logits_cpu.to({DeviceType::VULKAN, 0});
+  Tensor targets_vk = targets_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "CrossEntropyLargeClassCount",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA)
+                         ? logits_cuda.cross_entropy(targets_cuda)
+                         : logits_vk.cross_entropy(targets_vk);
+        out.impl_->backend().synchronize();
+      },
+      4, 20, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY_LARGE_C", 5.0);
+}
+
+TEST(PerformanceTest, CrossEntropyBackwardCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 1024;
+  constexpr int C = 128;
+
+  Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
+  logits_cpu.uniform_(-2.0f, 2.0f);
+  Tensor targets_cpu = make_one_hot_targets(B, C);
+
+  Tensor logits_cuda = logits_cpu.to({DeviceType::CUDA, 0});
+  Tensor targets_cuda = targets_cpu.to({DeviceType::CUDA, 0});
+  Tensor logits_vk = logits_cpu.to({DeviceType::VULKAN, 0});
+  Tensor targets_vk = targets_cpu.to({DeviceType::VULKAN, 0});
+  logits_cuda.set_requires_grad(true);
+  logits_vk.set_requires_grad(true);
+
+  run_perf_ratio_test(
+      "CrossEntropyBackward",
+      [&](Device dev) {
+        Tensor loss = (dev.type == DeviceType::CUDA)
+                          ? logits_cuda.cross_entropy(targets_cuda)
+                          : logits_vk.cross_entropy(targets_vk);
+        loss.backward();
+        if (dev.type == DeviceType::CUDA)
+          logits_cuda.zero_grad();
+        else
+          logits_vk.zero_grad();
+        loss.impl_->backend().synchronize();
+      },
+      4, 16, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY_BACKWARD", 5.5);
+}
+
+TEST(PerformanceTest, EndToEndTransferAndCrossEntropyCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 1024;
+  constexpr int C = 128;
+  Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
+  logits_cpu.uniform_(-2.0f, 2.0f);
+  Tensor targets_cpu = make_one_hot_targets(B, C);
+
+  run_perf_ratio_test(
+      "EndToEndTransferAndCrossEntropy",
+      [&](Device dev) {
+        Tensor logits_dev = logits_cpu.to(dev);
+        Tensor targets_dev = targets_cpu.to(dev);
+        Tensor loss = logits_dev.cross_entropy(targets_dev);
+        Tensor loss_cpu = loss.to({DeviceType::CPU, 0});
+        (void)loss_cpu;
+        loss.impl_->backend().synchronize();
+      },
+      2, 10, "MUNET_PERF_MAX_RATIO_E2E_CE", 6.0);
 }
