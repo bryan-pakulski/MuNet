@@ -920,7 +920,7 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
   matmulPipeline = createComputePipeline("matmul",
                                          R"(
         #version 450
-				layout(local_size_x = 16, local_size_y = 16) in;
+				layout(local_size_x = 32, local_size_y = 8) in;
 
 				layout(binding = 0) readonly buffer A { float a[]; };
 				layout(binding = 1) readonly buffer B { float b[]; };
@@ -934,66 +934,53 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 						int tB;
 				} p;
 
-				shared float As[16][16];
-				shared float Bs0[16][16];
-				shared float Bs1[16][16];
+				shared float As[8][32];
+				shared float Bs[32][32];
 
 				void main() {
-						int lx = int(gl_LocalInvocationID.x);
-						int ly = int(gl_LocalInvocationID.y);
+						const int lx = int(gl_LocalInvocationID.x); // 0..31
+						const int ly = int(gl_LocalInvocationID.y); // 0..7
 
-						int row = int(gl_WorkGroupID.y) * 16 + ly;
-						int col0 = int(gl_WorkGroupID.x) * 32 + lx;
-						int col1 = col0 + 16;
+						const int row = int(gl_WorkGroupID.y) * 8 + ly;
+						const int col = int(gl_WorkGroupID.x) * 32 + lx;
 
-						bool row_valid = (row < p.M);
-						bool out_valid0 = row_valid && (col0 < p.N);
-						bool out_valid1 = row_valid && (col1 < p.N);
-
-						float sum0 = 0.0;
-						float sum1 = 0.0;
+						const bool out_valid = (row < p.M) && (col < p.N);
+						float sum = 0.0;
 
 						if (p.tA == 0 && p.tB == 0) {
-								int tiles = (p.K + 15) / 16;
+								const int tiles = (p.K + 31) / 32;
 								for (int t = 0; t < tiles; ++t) {
-										int k = t * 16 + lx;
-										As[ly][lx] = (row_valid && k < p.K) ? a[row * p.K + k] : 0.0;
+										const int kA = t * 32 + lx;
+										As[ly][lx] = (row < p.M && kA < p.K) ? a[row * p.K + kA] : 0.0;
 
-										int k_row = t * 16 + ly;
-										Bs0[ly][lx] = (k_row < p.K && col0 < p.N) ? b[k_row * p.N + col0] : 0.0;
-										Bs1[ly][lx] = (k_row < p.K && col1 < p.N) ? b[k_row * p.N + col1] : 0.0;
-
-										barrier();
-
-										for (int kk = 0; kk < 16; ++kk) {
-												float av = As[ly][kk];
-												sum0 += av * Bs0[kk][lx];
-												sum1 += av * Bs1[kk][lx];
-										}
+										const int brow = t * 32 + ly;
+										Bs[ly][lx] = (brow < p.K && col < p.N) ? b[brow * p.N + col] : 0.0;
+										Bs[ly + 8][lx] = (brow + 8 < p.K && col < p.N) ? b[(brow + 8) * p.N + col] : 0.0;
+										Bs[ly + 16][lx] = (brow + 16 < p.K && col < p.N) ? b[(brow + 16) * p.N + col] : 0.0;
+										Bs[ly + 24][lx] = (brow + 24 < p.K && col < p.N) ? b[(brow + 24) * p.N + col] : 0.0;
 
 										barrier();
-								}
-						} else {
-								if (out_valid0) {
-										for (int k = 0; k < p.K; ++k) {
-												float av = (p.tA == 0) ? a[row * p.K + k] : a[k * p.M + row];
-												float bv = (p.tB == 0) ? b[k * p.N + col0] : b[col0 * p.K + k];
-												sum0 += av * bv;
+
+										if (out_valid) {
+												for (int kk = 0; kk < 32; ++kk)
+														sum += As[ly][kk] * Bs[kk][lx];
 										}
+
+										barrier();
 								}
-								if (out_valid1) {
-										for (int k = 0; k < p.K; ++k) {
-												float av = (p.tA == 0) ? a[row * p.K + k] : a[k * p.M + row];
-												float bv = (p.tB == 0) ? b[k * p.N + col1] : b[col1 * p.K + k];
-												sum1 += av * bv;
-										}
-								}
+						} else if (out_valid && p.tA == 1 && p.tB == 0) {
+								for (int k = 0; k < p.K; ++k)
+										sum += a[k * p.M + row] * b[k * p.N + col];
+						} else if (out_valid && p.tA == 0 && p.tB == 1) {
+								for (int k = 0; k < p.K; ++k)
+										sum += a[row * p.K + k] * b[col * p.K + k];
+						} else if (out_valid) {
+								for (int k = 0; k < p.K; ++k)
+										sum += a[k * p.M + row] * b[col * p.K + k];
 						}
 
-						if (out_valid0)
-								c[row * p.N + col0] = sum0;
-						if (out_valid1)
-								c[row * p.N + col1] = sum1;
+						if (out_valid)
+								c[row * p.N + col] = sum;
 				}
     )");
 
@@ -2333,7 +2320,7 @@ void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
   } pc = {M, K, N, transA, transB};
   // Dispatch x maps to N (cols), y maps to M (rows)
   dispatch_kernel(matmulPipeline, {a.data(), b.data(), out.data()}, &pc,
-                  sizeof(pc), (N + 31) / 32, (M + 15) / 16, 1);
+                  sizeof(pc), (N + 31) / 32, (M + 7) / 8, 1);
 }
 
 // --- Spatial Stubs ---
