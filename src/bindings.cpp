@@ -610,6 +610,10 @@ PYBIND11_MODULE(munet, m) {
   // ============================================================================
   // Python Injected Helpers
   // ============================================================================
+  if (py::hasattr(m, "__file__")) {
+    m.attr("__munet_file__") = m.attr("__file__");
+  }
+
   py::exec(
       R"(
  class no_grad:
@@ -791,14 +795,16 @@ PYBIND11_MODULE(munet, m) {
 
      # Avoid importing `munet` while module init is still running, which can
      # recursively execute bindings init and trigger pybind duplicate type registration.
-     mod = sys.modules.get(__name__)
-     mod_file = getattr(mod, "__file__", None) if mod is not None else None
+     mod_file = globals().get("__munet_file__", None)
+     if mod_file is None:
+         mod = sys.modules.get(__name__)
+         mod_file = getattr(mod, "__file__", None) if mod is not None else None
      if mod_file is None:
          spec = globals().get("__spec__", None)
          mod_file = getattr(spec, "origin", None)
      if mod_file is None:
          raise RuntimeError(
-             "Cannot resolve MuNet module path for helper loading (missing module origin)."
+             "Cannot resolve MuNet module path for helper loading (missing module origin/file)."
          )
 
      helper_path = pathlib.Path(mod_file).resolve().parent / "python_src" / filename
