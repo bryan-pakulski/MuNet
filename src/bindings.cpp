@@ -701,9 +701,10 @@ PYBIND11_MODULE(munet, m) {
              )
 
      def tensor_to_numpy(t):
-         cpu = Device(DeviceType.CPU, 0)
+         m = __import__("munet")
+         cpu = m.Device(m.DeviceType.CPU, 0)
          td = t.detach()
-         if td.device.type != DeviceType.CPU:
+         if td.device.type != m.DeviceType.CPU:
              td = td.to(cpu)
          return np.array(td, copy=False).copy()
 
@@ -751,10 +752,11 @@ PYBIND11_MODULE(munet, m) {
              raise ValueError(f"Unsupported saved module type: {t}")
 
      def copy_numpy_into_tensor(t, arr):
+         m = __import__("munet")
          req = bool(t.requires_grad)
          target = t.device
-         src = from_numpy(np.asarray(arr, dtype=np.float32))
-         if target.type != DeviceType.CPU:
+         src = m.from_numpy(np.asarray(arr, dtype=np.float32))
+         if target.type != m.DeviceType.CPU:
              src = src.to(target)
          t.replace_(src)
          t.requires_grad = req
