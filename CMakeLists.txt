@@ -89,6 +89,13 @@ target_compile_definitions(munet_inference INTERFACE MUNET_ENABLE_INFERENCE=1 MU
 pybind11_add_module(munet src/bindings.cpp)
 target_link_libraries(munet PRIVATE munet_training)
 
+add_custom_command(TARGET munet POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:munet>/python_src
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
+            $<TARGET_FILE_DIR:munet>/python_src/onnx_integration.py
+)
+
 # --- Unit Tests ---
 enable_testing()
 add_executable(munet_tests
