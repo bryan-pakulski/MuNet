@@ -440,3 +440,126 @@ TEST(PerformanceTest, EndToEndTransferAndCrossEntropyCudaVsVulkan) {
       },
       2, 10, "MUNET_PERF_MAX_RATIO_E2E_CE", 6.0);
 }
+
+
+TEST(PerformanceTest, ElementwiseSubCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int N = 1 << 20;
+  Tensor a_cpu({N}, {DeviceType::CPU, 0});
+  Tensor b_cpu({N}, {DeviceType::CPU, 0});
+  a_cpu.uniform_(0.0f, 1.0f);
+  b_cpu.uniform_(0.0f, 1.0f);
+
+  Tensor a_cuda = a_cpu.to({DeviceType::CUDA, 0});
+  Tensor b_cuda = b_cpu.to({DeviceType::CUDA, 0});
+  Tensor a_vk = a_cpu.to({DeviceType::VULKAN, 0});
+  Tensor b_vk = b_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "ElementwiseSub",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA) ? (a_cuda - b_cuda)
+                                                     : (a_vk - b_vk);
+        out.impl_->backend().synchronize();
+      },
+      10, 80, "MUNET_PERF_MAX_RATIO_SUB", 3.0);
+}
+
+TEST(PerformanceTest, LogSoftmaxCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 512;
+  constexpr int C = 512;
+  Tensor x_cpu({B, C}, {DeviceType::CPU, 0});
+  x_cpu.uniform_(-2.0f, 2.0f);
+
+  Tensor x_cuda = x_cpu.to({DeviceType::CUDA, 0});
+  Tensor x_vk = x_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "LogSoftmax",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA) ? x_cuda.log_softmax(-1)
+                                                     : x_vk.log_softmax(-1);
+        out.impl_->backend().synchronize();
+      },
+      6, 30, "MUNET_PERF_MAX_RATIO_LOG_SOFTMAX", 4.5);
+}
+
+TEST(PerformanceTest, MatmulSmallCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int M = 64;
+  constexpr int K = 64;
+  constexpr int N = 64;
+
+  Tensor a_cpu({M, K}, {DeviceType::CPU, 0});
+  Tensor b_cpu({K, N}, {DeviceType::CPU, 0});
+  a_cpu.uniform_(-1.0f, 1.0f);
+  b_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor a_cuda = a_cpu.to({DeviceType::CUDA, 0});
+  Tensor b_cuda = b_cpu.to({DeviceType::CUDA, 0});
+  Tensor a_vk = a_cpu.to({DeviceType::VULKAN, 0});
+  Tensor b_vk = b_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "MatmulSmall",
+      [&](Device dev) {
+        Tensor out =
+            (dev.type == DeviceType::CUDA) ? a_cuda.matmul(b_cuda)
+                                           : a_vk.matmul(b_vk);
+        out.impl_->backend().synchronize();
+      },
+      8, 40, "MUNET_PERF_MAX_RATIO_MATMUL_SMALL", 4.0);
+}
+
+TEST(PerformanceTest, MatmulLargeCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int M = 1024;
+  constexpr int K = 1024;
+  constexpr int N = 1024;
+
+  Tensor a_cpu({M, K}, {DeviceType::CPU, 0});
+  Tensor b_cpu({K, N}, {DeviceType::CPU, 0});
+  a_cpu.uniform_(-1.0f, 1.0f);
+  b_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor a_cuda = a_cpu.to({DeviceType::CUDA, 0});
+  Tensor b_cuda = b_cpu.to({DeviceType::CUDA, 0});
+  Tensor a_vk = a_cpu.to({DeviceType::VULKAN, 0});
+  Tensor b_vk = b_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "MatmulLarge",
+      [&](Device dev) {
+        Tensor out =
+            (dev.type == DeviceType::CUDA) ? a_cuda.matmul(b_cuda)
+                                           : a_vk.matmul(b_vk);
+        out.impl_->backend().synchronize();
+      },
+      2, 8, "MUNET_PERF_MAX_RATIO_MATMUL_LARGE", 4.0);
+}
+
+TEST(PerformanceTest, SoftmaxLargeClassCountCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 256;
+  constexpr int C = 2048;
+  Tensor x_cpu({B, C}, {DeviceType::CPU, 0});
+  x_cpu.uniform_(-2.0f, 2.0f);
+
+  Tensor x_cuda = x_cpu.to({DeviceType::CUDA, 0});
+  Tensor x_vk = x_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "SoftmaxLargeClassCount",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA) ? x_cuda.softmax(-1)
+                                                     : x_vk.softmax(-1);
+        out.impl_->backend().synchronize();
+      },
+      4, 20, "MUNET_PERF_MAX_RATIO_SOFTMAX_LARGE_C", 5.0);
+}
