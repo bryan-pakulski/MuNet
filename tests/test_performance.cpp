@@ -233,3 +233,98 @@ TEST(PerformanceTest, BroadcastAddCudaVsVulkan) {
       },
       8, 40, "MUNET_PERF_MAX_RATIO_BROADCAST_ADD", 4.0);
 }
+
+TEST(PerformanceTest, SigmoidCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int N = 1 << 22;
+  Tensor x_cpu({N}, {DeviceType::CPU, 0});
+  x_cpu.uniform_(-6.0f, 6.0f);
+
+  Tensor x_cuda = x_cpu.to({DeviceType::CUDA, 0});
+  Tensor x_vk = x_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "Sigmoid",
+      [&](Device dev) {
+        Tensor out =
+            (dev.type == DeviceType::CUDA) ? x_cuda.sigmoid() : x_vk.sigmoid();
+        out.impl_->backend().synchronize();
+      },
+      10, 60, "MUNET_PERF_MAX_RATIO_SIGMOID", 3.5);
+}
+
+TEST(PerformanceTest, ReduceSumCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int N = 1 << 22;
+  Tensor x_cpu({N}, {DeviceType::CPU, 0});
+  x_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor x_cuda = x_cpu.to({DeviceType::CUDA, 0});
+  Tensor x_vk = x_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "ReduceSum",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA) ? x_cuda.sum() : x_vk.sum();
+        out.impl_->backend().synchronize();
+      },
+      8, 50, "MUNET_PERF_MAX_RATIO_SUM", 4.0);
+}
+
+TEST(PerformanceTest, MSELossCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int N = 1 << 20;
+  Tensor pred_cpu({N}, {DeviceType::CPU, 0});
+  Tensor target_cpu({N}, {DeviceType::CPU, 0});
+  pred_cpu.uniform_(-1.0f, 1.0f);
+  target_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor pred_cuda = pred_cpu.to({DeviceType::CUDA, 0});
+  Tensor target_cuda = target_cpu.to({DeviceType::CUDA, 0});
+  Tensor pred_vk = pred_cpu.to({DeviceType::VULKAN, 0});
+  Tensor target_vk = target_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "MSELoss",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA)
+                         ? pred_cuda.mse_loss(target_cuda)
+                         : pred_vk.mse_loss(target_vk);
+        out.impl_->backend().synchronize();
+      },
+      8, 40, "MUNET_PERF_MAX_RATIO_MSE", 4.0);
+}
+
+TEST(PerformanceTest, CrossEntropyCudaVsVulkan) {
+  require_gpu_backends();
+
+  constexpr int B = 1024;
+  constexpr int C = 128;
+  Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
+  logits_cpu.uniform_(-2.0f, 2.0f);
+
+  Tensor targets_cpu({B, C}, {DeviceType::CPU, 0});
+  auto *targets_ptr = static_cast<float *>(targets_cpu.data());
+  for (int i = 0; i < B * C; ++i)
+    targets_ptr[i] = 0.0f;
+  for (int b = 0; b < B; ++b)
+    targets_ptr[b * C + (b % C)] = 1.0f;
+
+  Tensor logits_cuda = logits_cpu.to({DeviceType::CUDA, 0});
+  Tensor targets_cuda = targets_cpu.to({DeviceType::CUDA, 0});
+  Tensor logits_vk = logits_cpu.to({DeviceType::VULKAN, 0});
+  Tensor targets_vk = targets_cpu.to({DeviceType::VULKAN, 0});
+
+  run_perf_ratio_test(
+      "CrossEntropy",
+      [&](Device dev) {
+        Tensor out = (dev.type == DeviceType::CUDA)
+                         ? logits_cuda.cross_entropy(targets_cuda)
+                         : logits_vk.cross_entropy(targets_vk);
+        out.impl_->backend().synchronize();
+      },
+      6, 30, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY", 4.0);
+}
