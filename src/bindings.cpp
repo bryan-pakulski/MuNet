@@ -996,11 +996,9 @@ PYBIND11_MODULE(munet, m) {
          munet.save(module, output_path)
      return module
 
- import sys
- _mod = sys.modules[__name__]
- _mod.inference.ONNXEngine = ONNXEngine
- _mod.inference.load_onnx = load_onnx
- _mod.inference.compile_onnx = compile_onnx
+ inference.ONNXEngine = ONNXEngine
+ inference.load_onnx = load_onnx
+ inference.compile_onnx = compile_onnx
  )",
       py::globals(), m.attr("__dict__"));
 }
