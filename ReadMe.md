@@ -27,14 +27,34 @@ It features a PyTorch-like API, making it familiar to use while handling low-lev
 Documentation roadmap: see `DOCUMENTATION_PLAN.md`.
 Documentation index: `documentation/index.md`.
 
-Documentation can be generated using pydoc:
+## Interactive / searchable docs site
 
+MuNet now includes a MkDocs config (`mkdocs.yml`) and a docs content tree under `documentation/` covering:
+
+- Python API guide
+- C++ API guide
+- Inference + serialization guides
+- Common design patterns and end-to-end tutorial
+
+Run locally:
+
+```bash
+pip install mkdocs mkdocs-material
+mkdocs serve
 ```
+
+Build static site:
+
+```bash
+mkdocs build
+```
+
+## Generated Python API docs (legacy helper)
+
+```bash
 pip install pydoc
 make doc
 ```
-
-You can then open the generated `docs/index.html` in your browser.
 
 
 # Project Status (Current)

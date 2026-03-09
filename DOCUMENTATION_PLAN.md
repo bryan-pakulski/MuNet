@@ -1,9 +1,10 @@
 # MuNet Documentation Plan
 
 ## Goals
+- Host an interactive, searchable docs site for both Python and C++ users.
 - Make backend behavior, performance tuning, and extension workflows discoverable.
 - Provide both API reference and architecture-level guidance.
-- Add reproducible performance/debug playbooks.
+- Add reproducible performance/debug playbooks and end-to-end deploy workflows.
 
 ## Phases
 1. **Foundation**
@@ -25,8 +26,10 @@
    - Device placement and mixed backend usage examples.
 
 ## Tooling Proposal
-- Keep pydoc for API extraction initially.
-- Add Markdown docs in `docs/` and publish static site via MkDocs (or Sphinx) in CI.
+- Use MkDocs Material for interactive site navigation + search.
+- Keep pydoc for generated Python API extraction initially.
+- Add a C++ API extraction step (Doxygen) and link it into the docs nav.
+- Add Markdown docs in `documentation/` and publish static site in CI (`mkdocs build`).
 - Add doc linting in CI (links + markdown style) once docs baseline exists.
 
 ## Deliverables (Near-term)
@@ -35,3 +38,9 @@
 - [x] `documentation/architecture/backends.md`
 - [x] `documentation/performance/profiling.md`
 - [x] `documentation/contributing/add_new_op.md`
+- [x] `documentation/getting-started/*`
+- [x] `documentation/api/python.md`
+- [x] `documentation/api/cpp.md`
+- [x] `documentation/guides/*`
+- [x] `documentation/tutorials/e2e_workflow.md`
+- [x] `mkdocs.yml`

@@ -1,17 +1,27 @@
-# MuNet Documentation Index
+# MuNet Documentation
 
-## Audience Paths
+Welcome to MuNet docs. This documentation is structured for interactive/searchable hosting.
 
-- **Users**
-  - Building and running models: see `../ReadMe.md`
-  - Python API quick reference: generated pydoc output (`make doc`)
-- **Contributors**
-  - Runtime architecture: `architecture/runtime.md`
-  - Backend architecture: `architecture/backends.md`
-  - Add a new op workflow: `contributing/add_new_op.md`
-- **Performance Engineers**
-  - Profiling and diagnostics: `performance/profiling.md`
+## Start here
 
-## Current Status
+- [Getting Started / Overview](getting-started/overview.md)
+- [Getting Started / Build & Install](getting-started/build_install.md)
 
-This is the initial documentation suite scaffold to complement pydoc.
+## API references
+
+- [Python API Guide](api/python.md)
+- [C++ API Guide](api/cpp.md)
+
+## Key workflows
+
+- [Inference Engine Guide](guides/inference_engine.md)
+- [Serialization & Model Loading](guides/serialization.md)
+- [Common Design Patterns](guides/design_patterns.md)
+- [E2E Tutorial](tutorials/e2e_workflow.md)
+
+## Existing architecture and perf docs
+
+- [Runtime Architecture](architecture/runtime.md)
+- [Backends](architecture/backends.md)
+- [Profiling](performance/profiling.md)
+- [Contributing: Add a New Op](contributing/add_new_op.md)
