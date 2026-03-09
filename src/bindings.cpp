@@ -788,7 +788,16 @@ PYBIND11_MODULE(munet, m) {
  def _load_python_helper(filename):
      import pathlib
 
-     helper_path = pathlib.Path(__file__).resolve().parent / "python_src" / filename
+     mod = __import__("munet")
+     mod_file = getattr(mod, "__file__", None)
+     if mod_file is None:
+         # In some embedded init paths __file__ is not injected into globals.
+         # Resolve relative to the extension module file instead.
+         raise RuntimeError(
+             "Cannot resolve MuNet module path for helper loading (missing munet.__file__)."
+         )
+
+     helper_path = pathlib.Path(mod_file).resolve().parent / "python_src" / filename
      if not helper_path.exists():
          raise RuntimeError(
              f"Required MuNet python helper missing: {helper_path}. "
