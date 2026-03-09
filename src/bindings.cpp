@@ -887,20 +887,16 @@ PYBIND11_MODULE(munet, m) {
  def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_only=False):
      """Compile a supported ONNX graph into a MuNet model module.
 
-     Current native lowering scope:
-     - Gemm/MatMul (+ optional Gemm bias)
-     - Relu/Sigmoid/Tanh/Flatten
-     - Identity (pass-through)
+     Native lowering currently targets single-input forward graphs where each node
+     can be expressed as either:
+       1) a unary transformation of the running tensor, or
+       2) a binary op with a constant tensor (initializer/Constant node).
 
      Args:
          model_path: Path to .onnx model
          output_path: Optional .npz destination for compiled MuNet model
          ignore_unsupported: If True, skip unsupported ops and continue scan.
-         report_only: If True, do not compile; return sorted unsupported-op list.
-
-     Returns:
-         - nn.Module for successful compile path
-         - list[str] unsupported ops when report_only=True
+         report_only: If True, return sorted unique unsupported op names.
      """
      import numpy as np
      import munet
@@ -918,15 +914,12 @@ PYBIND11_MODULE(munet, m) {
      model = onnx.load(model_path)
      graph = model.graph
 
-     inits = {init.name: numpy_helper.to_array(init).astype(np.float32) for init in graph.initializer}
-
-     seq_layers = []
+     consts = {init.name: numpy_helper.to_array(init).astype(np.float32) for init in graph.initializer}
      unsupported_ops = set()
+     seq_layers = []
 
-     def _const_tensor(name):
-         if name not in inits:
-             return None
-         return munet.from_numpy(np.asarray(inits[name], dtype=np.float32))
+     # Track simple single-stream tensor name through graph.
+     stream_name = graph.input[0].name if len(graph.input) > 0 else None
 
      def _unsupported(op):
          unsupported_ops.add(op)
@@ -936,52 +929,85 @@ PYBIND11_MODULE(munet, m) {
                  "Use munet.inference.load_onnx for full ONNXRuntime execution."
              )
 
+     def _const(name):
+         arr = consts.get(name)
+         if arr is None:
+             return None
+         return munet.from_numpy(np.asarray(arr, dtype=np.float32))
+
+     def _get_attr(node, name, default=None):
+         for a in node.attribute:
+             if a.name != name:
+                 continue
+             if a.type == onnx.AttributeProto.INT:
+                 return int(a.i)
+             if a.type == onnx.AttributeProto.FLOAT:
+                 return float(a.f)
+             if a.type == onnx.AttributeProto.INTS:
+                 return [int(v) for v in a.ints]
+             if a.type == onnx.AttributeProto.FLOATS:
+                 return [float(v) for v in a.floats]
+         return default
+
+     class _TensorOp(munet.nn.Module):
+         def __init__(self, fn):
+             super().__init__()
+             self._fn = fn
+         def forward(self, x):
+             return self._fn(x)
+
      for node in graph.node:
          op = node.op_type
 
-         if op == "Identity":
+         if op == "Constant":
+             # Capture constant outputs for downstream constant-fed ops.
+             v = None
+             for a in node.attribute:
+                 if a.name == "value" and a.type == onnx.AttributeProto.TENSOR:
+                     v = numpy_helper.to_array(a.t).astype(np.float32)
+                     break
+             if v is not None and len(node.output) > 0:
+                 consts[node.output[0]] = v
+             continue
+
+         if op in ("Identity", "Cast"):
+             if len(node.output) > 0:
+                 stream_name = node.output[0]
+             continue
+
+         if stream_name is None or len(node.input) == 0:
+             _unsupported(op)
+             continue
+
+         if node.input[0] != stream_name:
+             # non-linear dataflow/branch currently unsupported for native lowering
+             _unsupported(op)
              continue
 
          if op == "Gemm":
-             W = _const_tensor(node.input[1])
+             W = _const(node.input[1])
              if W is None:
                  _unsupported("Gemm")
                  continue
 
-             transB = 0
-             transA = 0
-             alpha = 1.0
-             beta = 1.0
-             for a in node.attribute:
-                 if a.name == "transB":
-                     transB = int(a.i)
-                 elif a.name == "transA":
-                     transA = int(a.i)
-                 elif a.name == "alpha":
-                     alpha = float(a.f)
-                 elif a.name == "beta":
-                     beta = float(a.f)
+             transB = _get_attr(node, "transB", 0)
+             transA = _get_attr(node, "transA", 0)
+             alpha = _get_attr(node, "alpha", 1.0)
+             beta = _get_attr(node, "beta", 1.0)
 
              if transA != 0 or alpha != 1.0 or beta != 1.0:
                  _unsupported("Gemm")
                  continue
 
              if transB == 0:
-                 # ONNX B is [K, N]; MuNet Linear.weight is [K, N]
-                 in_features = int(W.shape[0])
-                 out_features = int(W.shape[1])
-                 weight_native = W
+                 in_features = int(W.shape[0]); out_features = int(W.shape[1]); weight_native = W
              else:
-                 # ONNX B is [N, K]; transpose to [K, N]
-                 in_features = int(W.shape[1])
-                 out_features = int(W.shape[0])
-                 weight_native = W.transpose(0, 1).contiguous()
+                 in_features = int(W.shape[1]); out_features = int(W.shape[0]); weight_native = W.transpose(0, 1).contiguous()
 
              layer = munet.nn.Linear(in_features, out_features, len(node.input) >= 3)
              layer.weight.replace_(weight_native)
-
              if len(node.input) >= 3:
-                 B = _const_tensor(node.input[2])
+                 B = _const(node.input[2])
                  if B is None:
                      _unsupported("Gemm")
                      continue
@@ -989,27 +1015,131 @@ PYBIND11_MODULE(munet, m) {
              seq_layers.append(layer)
 
          elif op == "MatMul":
-             B = _const_tensor(node.input[1])
+             B = _const(node.input[1])
              if B is None:
                  _unsupported("MatMul")
                  continue
-             in_features = int(B.shape[0])
-             out_features = int(B.shape[1])
+             in_features = int(B.shape[0]); out_features = int(B.shape[1])
              layer = munet.nn.Linear(in_features, out_features, False)
              layer.weight.replace_(B)
              seq_layers.append(layer)
 
-         elif op in ("Relu", "Sigmoid", "Tanh", "Flatten"):
-             cls = {
-                 "Relu": munet.nn.ReLU,
-                 "Sigmoid": munet.nn.Sigmoid,
-                 "Tanh": munet.nn.Tanh,
-                 "Flatten": munet.nn.Flatten,
-             }[op]
-             seq_layers.append(cls())
+         elif op in ("Add", "Sub", "Mul", "Div"):
+             c = _const(node.input[1])
+             if c is None:
+                 _unsupported(op)
+                 continue
+             if op == "Add":
+                 seq_layers.append(_TensorOp(lambda x, c=c: x + c))
+             elif op == "Sub":
+                 seq_layers.append(_TensorOp(lambda x, c=c: x - c))
+             elif op == "Div":
+                 seq_layers.append(_TensorOp(lambda x, c=c: x / c))
+             else:
+                 seq_layers.append(_TensorOp(lambda x, c=c: x * c))
 
+         elif op == "Relu":
+             seq_layers.append(munet.nn.ReLU())
+         elif op == "Sigmoid":
+             seq_layers.append(munet.nn.Sigmoid())
+         elif op == "Tanh":
+             seq_layers.append(munet.nn.Tanh())
+         elif op == "Flatten":
+             seq_layers.append(munet.nn.Flatten())
+         elif op == "Softmax":
+             axis = _get_attr(node, "axis", -1)
+             seq_layers.append(_TensorOp(lambda x, axis=axis: x.softmax(axis)))
+         elif op == "Reshape":
+             shp = consts.get(node.input[1])
+             if shp is None:
+                 _unsupported("Reshape")
+                 continue
+             shp_list = [int(v) for v in np.asarray(shp).tolist()]
+             seq_layers.append(_TensorOp(lambda x, shp_list=shp_list: x.reshape(shp_list)))
+         elif op == "Transpose":
+             perm = _get_attr(node, "perm", None)
+             if perm is None:
+                 _unsupported("Transpose")
+                 continue
+             seq_layers.append(_TensorOp(lambda x, perm=perm: x.permute(perm)))
+         elif op == "Unsqueeze":
+             axes = _get_attr(node, "axes", None)
+             if axes is None and len(node.input) > 1 and node.input[1] in consts:
+                 axes = [int(v) for v in np.asarray(consts[node.input[1]]).tolist()]
+             if axes is None:
+                 _unsupported("Unsqueeze")
+                 continue
+             def _unsq(x, axes=axes):
+                 shape = list(x.shape)
+                 for a in sorted([(ax if ax >= 0 else ax + len(shape) + 1) for ax in axes]):
+                     shape.insert(a, 1)
+                 return x.reshape(shape)
+             seq_layers.append(_TensorOp(_unsq))
+         elif op == "Squeeze":
+             axes = _get_attr(node, "axes", None)
+             if axes is None and len(node.input) > 1 and node.input[1] in consts:
+                 axes = [int(v) for v in np.asarray(consts[node.input[1]]).tolist()]
+             if axes is None:
+                 _unsupported("Squeeze")
+                 continue
+             def _sq(x, axes=axes):
+                 shape = list(x.shape)
+                 rm = sorted([(ax if ax >= 0 else ax + len(shape)) for ax in axes], reverse=True)
+                 for a in rm:
+                     if shape[a] != 1:
+                         raise RuntimeError("Squeeze: axis dim must be 1")
+                     shape.pop(a)
+                 return x.reshape(shape)
+             seq_layers.append(_TensorOp(_sq))
+         elif op == "Concat":
+             axis = _get_attr(node, "axis", 0)
+             others = []
+             ok = True
+             for inp in node.input[1:]:
+                 t = _const(inp)
+                 if t is None:
+                     ok = False
+                     break
+                 others.append(t)
+             if not ok:
+                 _unsupported("Concat")
+                 continue
+             seq_layers.append(_TensorOp(lambda x, others=others, axis=axis: munet.Tensor.cat([x] + others, axis)))
+         elif op == "Conv":
+             W = _const(node.input[1])
+             if W is None:
+                 _unsupported("Conv")
+                 continue
+             B = _const(node.input[2]) if len(node.input) > 2 else None
+             strides = _get_attr(node, "strides", [1, 1])
+             pads = _get_attr(node, "pads", [0, 0, 0, 0])
+             dil = _get_attr(node, "dilations", [1, 1])
+             group = _get_attr(node, "group", 1)
+             if group != 1 or dil != [1, 1] or pads[0] != pads[2] or pads[1] != pads[3]:
+                 _unsupported("Conv")
+                 continue
+             oc, ic, kh, kw = [int(v) for v in W.shape]
+             if kh != kw:
+                 _unsupported("Conv")
+                 continue
+             layer = munet.nn.Conv2d(ic, oc, kh, strides[0], pads[0])
+             layer.weight.replace_(W)
+             if B is not None:
+                 layer.bias.replace_(B.reshape([oc]))
+             seq_layers.append(layer)
+         elif op == "MaxPool":
+             ks = _get_attr(node, "kernel_shape", None)
+             st = _get_attr(node, "strides", ks)
+             pd = _get_attr(node, "pads", [0, 0, 0, 0])
+             if ks is None or len(ks) != 2 or ks[0] != ks[1] or st[0] != st[1] or pd[0] != pd[2] or pd[1] != pd[3]:
+                 _unsupported("MaxPool")
+                 continue
+             seq_layers.append(munet.nn.MaxPool2d(int(ks[0]), int(st[0]), int(pd[0])))
          else:
              _unsupported(op)
+
+         if len(node.output) > 0:
+             stream_name = node.output[0]
 
      if report_only:
          return sorted(list(unsupported_ops))
@@ -1024,10 +1154,6 @@ PYBIND11_MODULE(munet, m) {
      if output_path is not None:
          munet.save(module, output_path)
      return module
-
- def report_onnx_unsupported_ops(model_path):
-     """Return sorted unique unsupported op names for compile_onnx lowering."""
-     return compile_onnx(model_path, report_only=True)
 
  inference.ONNXEngine = ONNXEngine
  inference.load_onnx = load_onnx
