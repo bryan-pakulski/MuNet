@@ -698,6 +698,30 @@ class TestBindings(unittest.TestCase):
 
             expected = np.maximum(x.numpy() @ W + B, 0.0)
             self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
+
+    def test_compile_onnx_report_unsupported_ops(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX unsupported-op report test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            onnx_path = os.path.join(d, "unsupported.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
+            node = helper.make_node("Erf", ["x"], ["y"])
+            graph = helper.make_graph([node], "unsupported_graph", [x_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_compile_report_test")
+            onnx.save(model, onnx_path)
+
+            missing = munet.inference.compile_onnx(onnx_path, report_only=True)
+            self.assertIn("Erf", missing)
+
+            # ignore_unsupported should continue scan but fail if nothing compiles
+            with self.assertRaises(ValueError):
+                munet.inference.compile_onnx(onnx_path, ignore_unsupported=True)
     def test_onnx_inference_wrapper(self):
         try:
             import onnx

@@ -873,21 +873,23 @@ PYBIND11_MODULE(munet, m) {
      """
      return ONNXEngine(model_path, device=device, providers=providers)
 
- def compile_onnx(model_path, output_path=None):
+ def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_only=False):
      """Compile a supported ONNX graph into a MuNet model module.
 
-     Current scope intentionally targets a practical subset for quick conversion:
-     - Gemm/MatMul (+ optional Add bias)
+     Current native lowering scope:
+     - Gemm/MatMul (+ optional Gemm bias)
      - Relu/Sigmoid/Tanh/Flatten
-
-     Unsupported operators currently raise a ValueError with the op name.
+     - Identity (pass-through)
 
      Args:
          model_path: Path to .onnx model
          output_path: Optional .npz destination for compiled MuNet model
+         ignore_unsupported: If True, skip unsupported ops and continue scan.
+         report_only: If True, do not compile; return sorted unsupported-op list.
 
      Returns:
-         A MuNet nn.Module (typically nn.Sequential) representing the ONNX graph.
+         - nn.Module for successful compile path
+         - list[str] unsupported ops when report_only=True
      """
      import numpy as np
      import munet
@@ -905,21 +907,32 @@ PYBIND11_MODULE(munet, m) {
      inits = {init.name: numpy_helper.to_array(init).astype(np.float32) for init in graph.initializer}
 
      seq_layers = []
- 
+     unsupported_ops = set()
+
      def _const_tensor(name):
          if name not in inits:
              return None
          return munet.from_numpy(np.asarray(inits[name], dtype=np.float32))
 
+     def _unsupported(op):
+         unsupported_ops.add(op)
+         if not ignore_unsupported and not report_only:
+             raise ValueError(
+                 f"compile_onnx: unsupported op '{op}'. "
+                 "Use munet.inference.load_onnx for full ONNXRuntime execution."
+             )
+
      for node in graph.node:
          op = node.op_type
 
+         if op == "Identity":
+             continue
+
          if op == "Gemm":
-             # ONNX Gemm: Y = alpha*A*B + beta*C
-             # We support common export case alpha=1, beta=1, transB=1 for Linear.
              W = _const_tensor(node.input[1])
              if W is None:
-                 raise ValueError(f"compile_onnx Gemm requires constant weight initializer: {node.input[1]}")
+                 _unsupported("Gemm")
+                 continue
 
              transB = 0
              transA = 0
@@ -936,35 +949,40 @@ PYBIND11_MODULE(munet, m) {
                      beta = float(a.f)
 
              if transA != 0 or alpha != 1.0 or beta != 1.0:
-                 raise ValueError("compile_onnx currently supports Gemm with transA=0, alpha=1, beta=1")
+                 _unsupported("Gemm")
+                 continue
 
-             if transB == 1:
-                 out_features = int(W.shape[0])
-                 in_features = int(W.shape[1])
-                 layer = munet.nn.Linear(in_features, out_features, len(node.input) >= 3)
-                 layer.weight.replace_(W)
-             else:
-                 out_features = int(W.shape[1])
+             if transB == 0:
+                 # ONNX B is [K, N]; MuNet Linear.weight is [K, N]
                  in_features = int(W.shape[0])
-                 layer = munet.nn.Linear(in_features, out_features, len(node.input) >= 3)
-                 layer.weight.replace_(W.transpose(0, 1).contiguous())
+                 out_features = int(W.shape[1])
+                 weight_native = W
+             else:
+                 # ONNX B is [N, K]; transpose to [K, N]
+                 in_features = int(W.shape[1])
+                 out_features = int(W.shape[0])
+                 weight_native = W.transpose(0, 1).contiguous()
+
+             layer = munet.nn.Linear(in_features, out_features, len(node.input) >= 3)
+             layer.weight.replace_(weight_native)
 
              if len(node.input) >= 3:
                  B = _const_tensor(node.input[2])
                  if B is None:
-                     raise ValueError(f"compile_onnx Gemm bias must be constant initializer: {node.input[2]}")
+                     _unsupported("Gemm")
+                     continue
                  layer.bias.replace_(B.reshape([out_features]))
              seq_layers.append(layer)
 
          elif op == "MatMul":
-             # MatMul with constant B can be lowered to bias-less Linear
              B = _const_tensor(node.input[1])
              if B is None:
-                 raise ValueError("compile_onnx MatMul currently requires constant RHS initializer")
+                 _unsupported("MatMul")
+                 continue
              in_features = int(B.shape[0])
              out_features = int(B.shape[1])
              layer = munet.nn.Linear(in_features, out_features, False)
-             layer.weight.replace_(B.transpose(0, 1).contiguous())
+             layer.weight.replace_(B)
              seq_layers.append(layer)
 
          elif op in ("Relu", "Sigmoid", "Tanh", "Flatten"):
@@ -976,17 +994,14 @@ PYBIND11_MODULE(munet, m) {
              }[op]
              seq_layers.append(cls())
 
-         elif op in ("Add", "Sub", "Mul"):
-            raise ValueError(
-                f"compile_onnx currently does not lower '{op}' into native MuNet layers. "
-                "Use munet.inference.load_onnx for this model."
-            )
-
          else:
-            raise ValueError(
-                f"compile_onnx: unsupported op '{op}'. "
-                "Use munet.inference.load_onnx for full ONNXRuntime execution."
-            )
+             _unsupported(op)
+
+     if report_only:
+         return sorted(list(unsupported_ops))
+
+     if unsupported_ops and ignore_unsupported:
+         print(f"[compile_onnx] warning: skipped unsupported ops: {sorted(list(unsupported_ops))}")
 
      if not seq_layers:
          raise ValueError("compile_onnx: no supported nodes found in graph")
@@ -1000,5 +1015,5 @@ PYBIND11_MODULE(munet, m) {
  inference.load_onnx = load_onnx
  inference.compile_onnx = compile_onnx
  )",
-      py::globals(), m.attr("__dict__"));
+      m.attr("__dict__"), m.attr("__dict__"));
 }
