@@ -33,6 +33,8 @@ public:
                    const BroadcastInfo &info) = 0;
   virtual void mul(const Storage &a, const Storage &b, Storage &out,
                    const BroadcastInfo &info) = 0;
+  virtual void div(const Storage &a, const Storage &b, Storage &out,
+                   const BroadcastInfo &info) = 0;
 
   virtual void matmul(const Storage &a, const Storage &b, Storage &out, int M,
                       int K, int N, bool transA, bool transB) = 0;

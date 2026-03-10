@@ -511,13 +511,16 @@ class _ONNXGraphModule:
                 b = self._as_tensor(ins[1], a.device)
                 out = a - b
             elif op == "Div":
-                a = self._as_numpy(ins[0]).astype(self._np.float32)
-                b = self._as_numpy(ins[1]).astype(self._np.float32)
-                out = self._from_numpy_like((a / b).astype(self._np.float32), ins[0])
+                a = self._as_tensor(ins[0])
+                b = self._as_tensor(ins[1], a.device)
+                out = a / b
             elif op == "Concat":
                 axis = int(self._get_attr(node, "axis", 0))
-                np_ins = [self._as_numpy(v).astype(self._np.float32) for v in ins]
-                out = self._from_numpy_like(self._np.concatenate(np_ins, axis=axis), ins[0])
+                base = self._as_tensor(ins[0])
+                ts = [base]
+                for v in ins[1:]:
+                    ts.append(self._as_tensor(v, base.device))
+                out = self._m.Tensor.cat(ts, axis)
             elif op == "Reshape":
                 data = self._as_tensor(ins[0])
                 new_shape = [int(v) for v in self._as_numpy(ins[1]).reshape(-1).tolist()]

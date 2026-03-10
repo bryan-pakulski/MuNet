@@ -156,6 +156,10 @@ Tensor Tensor::operator*(const Tensor &other) const {
   return ops::mul(*this, other);
 }
 
+Tensor Tensor::operator/(const Tensor &other) const {
+  return ops::div(*this, other);
+}
+
 Tensor Tensor::cat(const std::vector<Tensor> &inputs, int dim) {
   return ops::cat(inputs, dim);
 }

@@ -2211,6 +2211,35 @@ void VulkanBackend::sub(const Storage &a, const Storage &b, Storage &out,
   }
 }
 
+void VulkanBackend::div(const Storage &a, const Storage &b, Storage &out,
+                        const BroadcastInfo &info) {
+  // Temporary CPU fallback path for Vulkan backend division.
+  size_t total = numel(info.out_shape);
+  std::vector<float> ha(a.bytes() / sizeof(float));
+  std::vector<float> hb(b.bytes() / sizeof(float));
+  std::vector<float> ho(total);
+
+  copy(a.data(), ha.data(), a.bytes(), Device{DeviceType::VULKAN, 0},
+       Device{DeviceType::CPU, 0});
+  copy(b.data(), hb.data(), b.bytes(), Device{DeviceType::VULKAN, 0},
+       Device{DeviceType::CPU, 0});
+
+  int ndim = (int)info.out_shape.size();
+  for (size_t i = 0; i < total; ++i) {
+    size_t off_a = 0, off_b = 0, curr = i;
+    for (int d = ndim - 1; d >= 0; --d) {
+      size_t coord = curr % info.out_shape[d];
+      off_a += coord * info.strides_a[d];
+      off_b += coord * info.strides_b[d];
+      curr /= info.out_shape[d];
+    }
+    ho[i] = ha[off_a] / hb[off_b];
+  }
+
+  copy(ho.data(), out.data(), out.bytes(), Device{DeviceType::CPU, 0},
+       Device{DeviceType::VULKAN, 0});
+}
+
 void VulkanBackend::relu(const Storage &in, Storage &out, size_t num_elements) {
   uint32_t N = num_elements;
   dispatch_kernel(reluPipeline, {in.data(), out.data()}, &N, sizeof(N),

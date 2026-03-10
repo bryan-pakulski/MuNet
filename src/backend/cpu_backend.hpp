@@ -233,6 +233,27 @@ public:
     });
   }
 
+  void div(const Storage &a, const Storage &b, Storage &out,
+           const BroadcastInfo &info) override {
+    const float *ap = (const float *)a.data(), *bp = (const float *)b.data();
+    float *op = (float *)out.data();
+    size_t total = numel(info.out_shape);
+    int ndim = (int)info.out_shape.size();
+
+    parallel_for(0, total, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i) {
+        size_t off_a = 0, off_b = 0, curr = i;
+        for (int d = ndim - 1; d >= 0; --d) {
+          size_t coord = curr % info.out_shape[d];
+          off_a += coord * info.strides_a[d];
+          off_b += coord * info.strides_b[d];
+          curr /= info.out_shape[d];
+        }
+        op[i] = ap[off_a] / bp[off_b];
+      }
+    });
+  }
+
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override {
     const float *ap = (const float *)a.data();

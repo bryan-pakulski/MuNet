@@ -262,6 +262,13 @@ __global__ void mul_kernel(const float *a, const float *b, float *out,
     out[idx] = a[idx] * b[idx];
 }
 
+__global__ void div_kernel(const float *a, const float *b, float *out,
+                           size_t N) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < N)
+    out[idx] = a[idx] / b[idx];
+}
+
 __global__ void update_kernel(float *w, const float *g, float lr, size_t N) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < N)
@@ -696,6 +703,22 @@ __global__ void mul_broadcast_kernel(const float *a, const float *b, float *out,
   out[idx] = a[off_a] * b[off_b];
 }
 
+__global__ void div_broadcast_kernel(const float *a, const float *b, float *out,
+                                     size_t N, GPUBroadcastInfo info) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (idx >= N)
+    return;
+
+  size_t off_a =
+      get_offset(idx, info.ndim, info.shape, info.out_strides, info.strides_a);
+
+  size_t off_b =
+      get_offset(idx, info.ndim, info.shape, info.out_strides, info.strides_b);
+
+  out[idx] = a[off_a] / b[off_b];
+}
+
 __global__ void sum_to_shape_kernel(const float *in, float *out, int ndim,
                                     int out_ndim, const int *in_shape,
                                     const int *out_shape,
@@ -844,6 +867,28 @@ void CUDABackend::mul(const Storage &a, const Storage &b, Storage &out,
   } else {
     // Slow path: broadcasting
     mul_broadcast_kernel<<<blocks, threads>>>(
+        (const float *)a.data(), (const float *)b.data(), (float *)out.data(),
+        total, to_gpu_info(info));
+  }
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::div(const Storage &a, const Storage &b, Storage &out,
+                      const BroadcastInfo &info) {
+  size_t total = numel(info.out_shape);
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (total + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+
+  if (info.strides_a == default_strides(info.out_shape) &&
+      info.strides_b == default_strides(info.out_shape)) {
+    div_kernel<<<blocks, threads>>>((const float *)a.data(),
+                                    (const float *)b.data(),
+                                    (float *)out.data(), total);
+  } else {
+    div_broadcast_kernel<<<blocks, threads>>>(
         (const float *)a.data(), (const float *)b.data(), (float *)out.data(),
         total, to_gpu_info(info));
   }
