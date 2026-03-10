@@ -71,7 +71,7 @@ static VkCommandBuffer immediateCmdBuffer = VK_NULL_HANDLE;
 
 static VkPipelineLayout pipelineLayout;
 static VkPipeline addPipeline, mulPipeline, subPipeline, divPipeline,
-    matmulPipeline;
+    matmulPipeline, gatherElementsPipeline;
 static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
     sumToShapePipeline;
 static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
@@ -501,6 +501,50 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 						c[idx] = a[off_a] / b[off_b];
 				}
 				)");
+
+
+  gatherElementsPipeline = createComputePipeline("gather_elements", R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer D { float d[]; };
+        layout(binding = 1) readonly buffer I { float idx[]; };
+        layout(binding = 2) writeonly buffer O { float o[]; };
+
+        layout(push_constant) uniform Push {
+            int ndim;
+            int axis;
+            int shape[6];
+            int strides[6];
+            uint N;
+        } p;
+
+        void main() {
+            uint id = gl_GlobalInvocationID.x;
+            if (id >= p.N) return;
+
+            int coord[6];
+            uint t = id;
+            for (int k = 0; k < 6; ++k) coord[k] = 0;
+            for (int d0 = 0; d0 < p.ndim; ++d0) {
+                int st = p.strides[d0];
+                coord[d0] = int(t / uint(st));
+                t = t % uint(st);
+            }
+
+            int g = int(round(idx[id]));
+            int dim = p.shape[p.axis];
+            if (g < 0) g += dim;
+            if (g < 0 || g >= dim) {
+                o[id] = 0.0;
+                return;
+            }
+            coord[p.axis] = g;
+            int src = 0;
+            for (int d0 = 0; d0 < p.ndim; ++d0) src += coord[d0] * p.strides[d0];
+            o[id] = d[src];
+        }
+    )");
 
   sumToShapePipeline = createComputePipeline("sum_to_shape", R"(
         #version 450
@@ -1911,6 +1955,7 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyPipeline(device, crossEntropyBackwardPipeline, nullptr);
 
   vkDestroyPipeline(device, matmulPipeline, nullptr);
+  vkDestroyPipeline(device, gatherElementsPipeline, nullptr);
 
   vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
   vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
@@ -2690,6 +2735,37 @@ void VulkanBackend::sum(const Storage &in, Storage &out, size_t num_elements) {
   uint32_t N = num_elements;
   dispatch_kernel(sumPipeline, {in.data(), out.data()}, &N, sizeof(N),
                   (num_elements + 255) / 256, 1, 1);
+}
+
+
+void VulkanBackend::gather_elements(const Storage &data, const Storage &indices,
+                                    Storage &out, const Shape &shape,
+                                    int axis) {
+  struct {
+    int ndim;
+    int axis;
+    int shape[6];
+    int strides[6];
+    uint32_t N;
+  } pc{};
+
+  pc.ndim = (int)shape.size();
+  if (pc.ndim <= 0 || pc.ndim > 6)
+    throw std::runtime_error("gather_elements: ndim must be in [1,6]");
+  pc.axis = axis < 0 ? axis + pc.ndim : axis;
+  if (pc.axis < 0 || pc.axis >= pc.ndim)
+    throw std::runtime_error("gather_elements: axis out of range");
+  pc.N = (uint32_t)numel(shape);
+
+  auto st = default_strides(shape);
+  for (int i = 0; i < 6; ++i) {
+    pc.shape[i] = i < pc.ndim ? shape[i] : 1;
+    pc.strides[i] = i < pc.ndim ? st[i] : 0;
+  }
+
+  dispatch_kernel(gatherElementsPipeline,
+                  {data.data(), indices.data(), out.data()}, &pc, sizeof(pc),
+                  (pc.N + 255) / 256, 1, 1);
 }
 
 void VulkanBackend::concat(const std::vector<Storage *> &inputs, Storage &out,

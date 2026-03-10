@@ -183,6 +183,10 @@ Tensor Tensor::masked_fill(const Tensor &mask, float value) const {
   return ops::masked_fill(*this, mask, value);
 }
 
+Tensor Tensor::gather_elements(const Tensor &indices, int axis) const {
+  return ops::gather_elements(*this, indices, axis);
+}
+
 float Tensor::item() const {
   if (size() != 1) {
     throw std::runtime_error(

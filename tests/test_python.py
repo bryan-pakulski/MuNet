@@ -864,6 +864,32 @@ class TestBindings(unittest.TestCase):
             expected = np.array([[[2.0, 4.0], [2.0, 4.0]], [[2.0, 4.0], [2.0, 4.0]]], dtype=np.float32)
             self.assertTrue(np.allclose(out, expected, atol=1e-6))
 
+    def test_compile_onnx_gather_elements(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX gather_elements test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "gather_elements.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 3])
+            idx = helper.make_tensor("idx", TensorProto.INT64, [2, 3], [0, 2, 1, -1, 1, 0])
+            node = helper.make_node("GatherElements", ["x", "idx"], ["y"], axis=1)
+            graph = helper.make_graph([node], "gather_elements_graph", [x_info], [y_info], [idx])
+            model = helper.make_model(graph, producer_name="munet_gather_elements_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]], dtype=np.float32)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.array([[10.0, 30.0, 20.0], [60.0, 50.0, 40.0]], dtype=np.float32)
+            self.assertTrue(np.allclose(out, expected, atol=1e-6))
+
     def test_compile_onnx_pad_constant(self):
         try:
             import onnx

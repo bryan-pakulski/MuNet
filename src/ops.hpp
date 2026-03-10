@@ -22,6 +22,7 @@ inline Tensor log(const Tensor &a);
 inline Tensor sqrt(const Tensor &a);
 inline Tensor clip(const Tensor &a, float min_value, float max_value);
 inline Tensor erf(const Tensor &a);
+inline Tensor gather_elements(const Tensor &data, const Tensor &indices, int axis);
 inline Tensor log_softmax(const Tensor &a, int dim = -1);
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
@@ -603,6 +604,26 @@ inline Tensor erf(const Tensor &a) {
     throw std::runtime_error("Erf backward is not implemented yet");
   }
   record_trace(out, "Erf", {a});
+  return out;
+}
+
+
+inline Tensor gather_elements(const Tensor &data, const Tensor &indices,
+                              int axis) {
+  if (data.shape() != indices.shape())
+    throw std::runtime_error("gather_elements: data/indices shape mismatch");
+  if (data.device() != indices.device())
+    throw std::runtime_error("gather_elements: data/indices device mismatch");
+
+  Tensor out(data.shape(), data.device(), data.dtype());
+  data.impl_->backend().gather_elements(*data.impl_->storage,
+                                        *indices.impl_->storage,
+                                        *out.impl_->storage, data.shape(),
+                                        axis);
+  if (GradMode::is_enabled() && (data.requires_grad() || indices.requires_grad())) {
+    throw std::runtime_error("GatherElements backward is not implemented yet");
+  }
+  record_trace(out, "GatherElements", {data, indices}, {{"axis", {axis}}});
   return out;
 }
 

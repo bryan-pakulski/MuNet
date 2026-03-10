@@ -274,6 +274,49 @@ public:
     });
   }
 
+
+  void gather_elements(const Storage &data, const Storage &indices,
+                       Storage &out, const Shape &shape, int axis) override {
+    const float *dp = (const float *)data.data();
+    const float *ip = (const float *)indices.data();
+    float *op = (float *)out.data();
+
+    int ndim = (int)shape.size();
+    if (ndim <= 0)
+      return;
+    int ax = axis < 0 ? axis + ndim : axis;
+    if (ax < 0 || ax >= ndim)
+      throw std::runtime_error("gather_elements: axis out of range");
+
+    Strides strides = default_strides(shape);
+    size_t N = numel(shape);
+
+    parallel_for(0, N, [&](size_t s, size_t e) {
+      std::vector<int> coord(ndim, 0);
+      for (size_t idx = s; idx < e; ++idx) {
+        size_t t = idx;
+        for (int d = 0; d < ndim; ++d) {
+          coord[d] = (int)(t / (size_t)strides[d]);
+          t %= (size_t)strides[d];
+        }
+
+        int gather_idx = (int)std::llround((double)ip[idx]);
+        int dim_size = shape[ax];
+        if (gather_idx < 0)
+          gather_idx += dim_size;
+        if (gather_idx < 0 || gather_idx >= dim_size)
+          throw std::runtime_error("gather_elements: index out of range");
+
+        coord[ax] = gather_idx;
+        size_t src_off = 0;
+        for (int d = 0; d < ndim; ++d)
+          src_off += (size_t)coord[d] * (size_t)strides[d];
+
+        op[idx] = dp[src_off];
+      }
+    });
+  }
+
   void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
               const std::vector<Shape> &shapes) override {
     float *out_ptr = (float *)out.data();

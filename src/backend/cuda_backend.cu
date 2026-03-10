@@ -782,6 +782,37 @@ __global__ void sum_to_shape_kernel(const float *in, float *out, int ndim,
   atomicAdd(&out[out_off], in[i]);
 }
 
+
+__global__ void gather_elements_kernel(const float *data, const float *indices,
+                                       float *out, int ndim, const int *shape,
+                                       const int *strides, int axis, size_t N) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N)
+    return;
+
+  int coord[6] = {0, 0, 0, 0, 0, 0};
+  size_t t = i;
+  for (int d = 0; d < ndim; ++d) {
+    coord[d] = (int)(t / (size_t)strides[d]);
+    t %= (size_t)strides[d];
+  }
+
+  int g = (int)llrintf(indices[i]);
+  int dim = shape[axis];
+  if (g < 0)
+    g += dim;
+  if (g < 0 || g >= dim) {
+    out[i] = 0.0f;
+    return;
+  }
+
+  coord[axis] = g;
+  size_t src = 0;
+  for (int d = 0; d < ndim; ++d)
+    src += (size_t)coord[d] * (size_t)strides[d];
+  out[i] = data[src];
+}
+
 void *CUDABackend::allocate(size_t bytes) {
   cudaSetDevice(device_index_);
   cudaEventRecord((cudaEvent_t)start_event_);
@@ -1395,6 +1426,46 @@ void CUDABackend::concat(const std::vector<Storage *> &inputs, Storage &out,
 
   // Check for errors after kernel execution
   CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::gather_elements(const Storage &data, const Storage &indices,
+                                  Storage &out, const Shape &shape, int axis) {
+  cudaSetDevice(device_index_);
+  int ndim = (int)shape.size();
+  if (ndim <= 0 || ndim > 6)
+    throw std::runtime_error("gather_elements: ndim must be in [1,6]");
+  int ax = axis < 0 ? axis + ndim : axis;
+  if (ax < 0 || ax >= ndim)
+    throw std::runtime_error("gather_elements: axis out of range");
+
+  int h_shape[6] = {1, 1, 1, 1, 1, 1};
+  int h_strides[6] = {0, 0, 0, 0, 0, 0};
+  Strides st = default_strides(shape);
+  for (int i = 0; i < ndim; ++i) {
+    h_shape[i] = shape[i];
+    h_strides[i] = st[i];
+  }
+
+  int *d_shape = nullptr;
+  int *d_strides = nullptr;
+  CUDA_CHECK(cudaMalloc(&d_shape, 6 * sizeof(int)));
+  CUDA_CHECK(cudaMalloc(&d_strides, 6 * sizeof(int)));
+  CUDA_CHECK(cudaMemcpy(d_shape, h_shape, 6 * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_strides, h_strides, 6 * sizeof(int), cudaMemcpyHostToDevice));
+
+  size_t N = numel(shape);
+  int threads = 256;
+  int blocks = (N + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  gather_elements_kernel<<<blocks, threads>>>((const float *)data.data(),
+                                              (const float *)indices.data(),
+                                              (float *)out.data(), ndim,
+                                              d_shape, d_strides, ax, N);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+
+  cudaFree(d_shape);
+  cudaFree(d_strides);
 }
 
 void CUDABackend::concat_backward(const Storage &grad_out,

@@ -182,6 +182,14 @@ public:
     base_->concat_backward(grad_out, grad_inputs, dim, shapes);
     check("concat_backward", t.elapsed_us(), &grad_out);
   }
+  void gather_elements(const Storage &data, const Storage &indices,
+                       Storage &out, const Shape &shape, int axis) override {
+    MUNET_DEBUG << "gather_elements | axis=" << axis << " shape="
+                << to_string(shape) << std::endl;
+    Timer t;
+    base_->gather_elements(data, indices, out, shape, axis);
+    check("gather_elements", t.elapsed_us(), &out);
+  }
   void relu(const Storage &in, Storage &out, size_t num_elements) override {
     MUNET_DEBUG << "relu | " << num_elements << " elements" << std::endl;
     Timer t;

@@ -125,6 +125,7 @@ public:
   Tensor sum_to_shape(Shape target_shape) const;
   Tensor reshape(Shape new_shape) const;
   Tensor masked_fill(const Tensor &mask, float value) const;
+  Tensor gather_elements(const Tensor &indices, int axis) const;
   float item() const;
 
   Tensor conv2d(const Tensor &weight, const Tensor &bias, int stride = 1,

@@ -136,7 +136,7 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Clip": {"status": "lowered", "munet": "graph/clip"},
     "Erf": {"status": "lowered", "munet": "graph/erf"},
     "Pad": {"status": "lowered", "munet": "graph/pad_constant"},
-    "GatherElements": {"status": "planned", "munet": None},
+    "GatherElements": {"status": "lowered", "munet": "graph/gather_elements"},
     "TopK": {"status": "planned", "munet": None},
     "GridSample": {"status": "planned", "munet": None},
     "Squeeze": {"status": "lowered", "munet": "graph/squeeze"},
@@ -723,6 +723,11 @@ class _ONNXGraphModule:
             elif op == "Erf":
                 x = self._as_tensor(ins[0])
                 out = x.erf()
+            elif op == "GatherElements":
+                data = self._as_tensor(ins[0])
+                idx = self._as_tensor(ins[1], data.device)
+                axis = int(self._get_attr(node, "axis", 0))
+                out = data.gather_elements(idx, axis)
             elif op == "Pad":
                 data = self._as_tensor(ins[0])
                 mode = self._get_attr(node, "mode", "constant")
@@ -844,6 +849,7 @@ _GRAPH_RUNTIME_SUPPORTED_OPS = {
     "Expand",
     "Tile",
     "Gather",
+    "GatherElements",
     "Shape",
     "Slice",
     "Split",

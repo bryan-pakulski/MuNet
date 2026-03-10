@@ -198,6 +198,8 @@ PYBIND11_MODULE(munet, m) {
            "with the specified shape.")
       .def("masked_fill", &Tensor::masked_fill, py::arg("mask"), py::arg("value"),
            "Fills entries where mask is 1 with the given value.")
+      .def("gather_elements", &Tensor::gather_elements, py::arg("indices"), py::arg("axis"),
+           "Gathers values along an axis using per-element indices tensor.")
       .def_static("cat", &Tensor::cat, py::arg("inputs"), py::arg("dim") = 1,
                   "Concatenates tensors along a given dimension.")
       .def(
