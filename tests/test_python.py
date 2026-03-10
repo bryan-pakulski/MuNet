@@ -671,7 +671,6 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             onnx_path = os.path.join(d, "linear_relu.onnx")
-            out_npz = os.path.join(d, "compiled_model.npz")
 
             x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
             y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
@@ -690,8 +689,7 @@ class TestBindings(unittest.TestCase):
             model.ir_version = 7
             onnx.save(model, onnx_path)
 
-            module = munet.inference.compile_onnx(onnx_path, out_npz)
-            self.assertTrue(os.path.exists(out_npz))
+            module = munet.inference.compile_onnx(onnx_path)
 
             x = munet.from_numpy(np.array([[1.0, 2.0, 3.0], [-1.0, 0.5, 2.0]], dtype=np.float32))
             y = module.forward(x)
@@ -718,32 +716,16 @@ class TestBindings(unittest.TestCase):
             model.ir_version = 7
             onnx.save(model, onnx_path)
 
-            missing = munet.inference.compile_onnx(onnx_path, report_only=True)
+            missing = munet.inference.report_onnx_unsupported_ops(onnx_path)
             self.assertIn("Erf", missing)
 
-            # ignore_unsupported now refuses to emit partial models unless allow_partial=True
-            with self.assertRaises(ValueError):
-                munet.inference.compile_onnx(onnx_path, ignore_unsupported=True)
+            with self.assertRaises(ValueError) as ctx:
+                munet.inference.compile_onnx(onnx_path)
 
-            # A mixed graph (supported + unsupported) should also fail by default
-            mixed_path = os.path.join(d, "mixed.onnx")
-            relu = helper.make_node("Relu", ["x"], ["z"])
-            erf = helper.make_node("Erf", ["z"], ["y"])
-            mixed_graph = helper.make_graph([relu, erf], "mixed_graph", [x_info], [y_info])
-            mixed_model = helper.make_model(mixed_graph, producer_name="munet_compile_mixed_test", opset_imports=[helper.make_opsetid("", 11)])
-            mixed_model.ir_version = 7
-            onnx.save(mixed_model, mixed_path)
-
-            with self.assertRaises(ValueError):
-                munet.inference.compile_onnx(mixed_path, ignore_unsupported=True)
-
-            # Explicit allow_partial opt-in should compile the supported prefix.
-            partial = munet.inference.compile_onnx(mixed_path, ignore_unsupported=True, allow_partial=True)
-            out = partial.forward(munet.from_numpy(np.array([[-2.0, 3.0, -4.0]], dtype=np.float32))).detach().numpy()
-            self.assertTrue(np.allclose(out, np.array([[0.0, 3.0, 0.0]], dtype=np.float32), atol=1e-5))
-
-            with self.assertRaises(ValueError):
-                munet.inference.compile_onnx(onnx_path, output_path=os.path.join(d, "bad.npz"), report_only=True)
+            msg = str(ctx.exception)
+            self.assertIn("unsupported_unique", msg)
+            self.assertIn("unsupported_total", msg)
+            self.assertIn("Erf", msg)
 
     def test_onnx_native_conversion_map_api(self):
         mp = munet.inference.onnx_native_conversion_map()
@@ -764,7 +746,7 @@ class TestBindings(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "conv_lrelu_gap.onnx")
 
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2, 2, 2])
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
             y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 1, 1])
 
             W = np.array([[[[1.0]]]], dtype=np.float32)
@@ -788,42 +770,31 @@ class TestBindings(unittest.TestCase):
             expected = np.array([[[[( -0.1 + 3.0 + 2.0 - 0.4 ) / 4.0]]]], dtype=np.float32)
             self.assertTrue(np.allclose(out, expected, atol=1e-5))
 
-    def test_compare_onnx_native_to_ort(self):
+    def test_compile_onnx_strict_failure_reports_counts(self):
         try:
             import onnx
-            import onnxruntime  # noqa: F401
             from onnx import TensorProto, helper
         except Exception:
-            print("\nSkipping ONNX native-vs-ORT compare test (onnx/onnxruntime not installed).")
+            print("\nSkipping ONNX strict-failure report test (onnx not installed).")
             return
 
         with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "compare_linear_relu.onnx")
+            path = os.path.join(d, "strict_fail.onnx")
             x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
-
-            W = np.array([[1.0, 0.5], [0.0, -1.0], [2.0, 1.0]], dtype=np.float32)
-            B = np.array([0.25, -0.75], dtype=np.float32)
-
-            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
-            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
-            gemm = helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0)
-            relu = helper.make_node("Relu", ["z"], ["y"])
-
-            graph = helper.make_graph([gemm, relu], "compare_graph", [x_info], [y_info], [w_init, b_init])
-            model = helper.make_model(graph, producer_name="munet_compare_test", opset_imports=[helper.make_opsetid("", 11)])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
+            erf1 = helper.make_node("Erf", ["x"], ["z1"])
+            erf2 = helper.make_node("Erf", ["z1"], ["y"])
+            graph = helper.make_graph([erf1, erf2], "strict_fail_graph", [x_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_strict_fail_test", opset_imports=[helper.make_opsetid("", 11)])
             model.ir_version = 7
             onnx.save(model, path)
 
-            x = munet.from_numpy(np.array([[1.0, 2.0, 3.0], [-0.5, 0.0, 1.0]], dtype=np.float32))
-            metrics = munet.inference.compare_onnx_native_to_ort(path, x)
+            with self.assertRaises(ValueError) as ctx:
+                munet.inference.compile_onnx(path)
 
-            self.assertEqual(metrics["shape"], [2, 2])
-            self.assertLess(metrics["max_abs_error"], 1e-5)
-            self.assertLess(metrics["mean_abs_error"], 1e-6)
-            self.assertLess(metrics["rmse"], 1e-6)
-
-
+            msg = str(ctx.exception)
+            self.assertIn("unsupported_unique=['Erf']", msg)
+            self.assertIn("unsupported_total=2", msg)
 
     def test_onnx_conversion_coverage_report_generated_graph(self):
         try:
@@ -928,7 +899,7 @@ class TestBindings(unittest.TestCase):
             model.ir_version = 7
             onnx.save(model, path)
 
-            module = munet.inference.compile_onnx(path, prefer_graph_runtime=True)
+            module = munet.inference.compile_onnx(path)
             x = munet.from_numpy(np.array([[[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]], dtype=np.float32))
             y = module.forward(x)
             y_np = np.array(y.detach(), copy=False)
@@ -938,9 +909,8 @@ class TestBindings(unittest.TestCase):
         try:
             import onnx
             from onnx import TensorProto, helper
-            import onnxruntime  # noqa: F401
         except Exception:
-            print("\nSkipping ONNX wrapper test (onnx/onnxruntime not installed).")
+            print("\nSkipping ONNX load_onnx deprecation test (onnx not installed).")
             return
 
         with tempfile.TemporaryDirectory() as d:
@@ -958,15 +928,9 @@ class TestBindings(unittest.TestCase):
             model.ir_version = 7
             onnx.save(model, path)
 
-            engine = munet.inference.load_onnx(path)
-            self.assertTrue(hasattr(engine, "run"))
+            with self.assertRaises(RuntimeError):
+                munet.inference.load_onnx(path)
 
-            x = np.array([[10.0, 20.0, 30.0], [0.5, -1.0, 2.0]], dtype=np.float32)
-            y = engine.run(x)
-            y_np = np.array(y.detach(), copy=False)
-
-            expected = x + np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
-            self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
     def test_inference_engine_dynamic_dims_with_wildcards(self):
         model = munet.nn.Sequential([
             munet.nn.Conv2d(3, 4, 3, padding=1),

@@ -21,14 +21,14 @@ Use `-1` for dynamic dims:
 - strict mode validates compiled/expected shapes at runtime.
 - non-strict mode allows mismatches (for experimentation).
 
-## ONNX Runtime + native conversion direction
+## ONNX native conversion direction
 
-The current two-path approach is acceptable and should be kept:
+MuNet now follows a strict native-conversion flow:
 
-1. **Execution path**: `load_onnx(...)` uses ONNX Runtime as the compatibility fallback.
-2. **Native path**: `compile_onnx(...)` lowers supported ONNX operators into MuNet modules.
+1. `compile_onnx(...)` attempts to convert the full ONNX graph into a MuNet-native module.
+2. If any node cannot be converted, conversion fails with a detailed unsupported-op report.
 
-This split is practical for incremental rollout because unsupported ops still run via ONNX Runtime while native lowering coverage increases over time.
+There is no runtime fallback path in conversion.
 
 ### Foundation added for runtime conversion
 
@@ -51,12 +51,6 @@ This split is practical for incremental rollout because unsupported ops still ru
 - `Gelu` -> `nn.GELU`
 - `Flatten` -> `nn.Flatten`
 - `GlobalAveragePool` -> `nn.GlobalAvgPool2d`
-
-### Native vs ONNX Runtime drift check
-
-Use `munet.inference.compare_onnx_native_to_ort(model_path, input_data)` to run
-the same input through ONNX Runtime and native-lowered MuNet execution and
-return drift metrics (`max_abs_error`, `mean_abs_error`, `rmse`).
 
 ### Near-term recommended next mappings
 
@@ -97,9 +91,22 @@ an Ubuntu 22.04 container with Python, CMake, pybind prerequisites, and ONNX too
 ### YOLOv5n conversion status
 
 The ONNX op set observed in `yolov5n.onnx` is now covered by the native
-conversion map and graph-runtime lowering path (`compile_onnx(..., prefer_graph_runtime=True)`),
+conversion map and strict native conversion path (`compile_onnx(...)`),
 including:
 
 - `Add`, `Cast`, `Concat`, `Constant`, `Conv`, `Floor`, `MaxPool`, `Mul`,
   `Pow`, `Reshape`, `Resize`, `Shape`, `Sigmoid`, `Slice`, `Split`,
   `Transpose`, `Unsqueeze`.
+
+
+## Strict ONNX conversion policy
+
+ONNX conversion now follows strict all-or-fail behavior:
+
+1. **Success**: model is fully converted to MuNet native graph module.
+2. **Failure**: conversion aborts and reports unsupported operators with:
+   - unique unsupported op names
+   - total unsupported node count
+   - full per-op node counts
+
+There is no runtime fallback during conversion.

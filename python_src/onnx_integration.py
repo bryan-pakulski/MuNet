@@ -553,168 +553,98 @@ def _compile_onnx_graph_module(model_path):
     return _ONNXGraphModule(model, munet, np)
 
 def load_onnx(model_path, device=None, providers=None):
-    """Create an ONNXRuntime-backed inference engine.
+    """Deprecated runtime path.
 
-    Args:
-        model_path: Path to ONNX file.
-        device: Optional MuNet device for output tensors.
-        providers: Optional explicit ORT provider list.
+    MuNet now uses strict native conversion (`compile_onnx`) and does not
+    provide ONNX Runtime fallback execution from this helper.
     """
-    return ONNXEngine(model_path, device=device, providers=providers)
+    (void_device, void_providers) = (device, providers)
+    raise RuntimeError(
+        "munet.inference.load_onnx is deprecated. "
+        "Use munet.inference.compile_onnx(model_path) for strict native conversion."
+    )
 
 
-def compile_onnx(
-    model_path,
-    output_path=None,
-    ignore_unsupported=False,
-    report_only=False,
-    allow_partial=False,
-    debug=False,
-    prefer_graph_runtime=True,
-):
-    """Compile a supported ONNX graph into a MuNet model module.
+def _collect_conversion_failures(graph):
+    from collections import Counter
 
-    Native lowering currently targets single-input forward graphs where each node
-    can be expressed as either:
-      1) a unary transformation of the running tensor, or
-      2) a binary op with a constant tensor (initializer/Constant node).
+    op_counts = Counter(node.op_type for node in graph.node)
+    unsupported_unique = []
+    unsupported_total = 0
 
-    Args:
-        model_path: Path to .onnx model
-        output_path: Optional .npz destination for compiled MuNet model
-        ignore_unsupported: If True, skip unsupported ops and continue scan.
-        report_only: If True, return sorted unique unsupported op names.
-        allow_partial: If True and ignore_unsupported=True, allow emitting partial model.
-        debug: If True, print per-node lowering decisions and summary.
+    for op, count in sorted(op_counts.items()):
+        entry = ONNX_NATIVE_CONVERSION_MAP.get(op)
+        status = entry["status"] if entry is not None else "unmapped"
+        if status not in ("lowered", "pass_through"):
+            unsupported_unique.append(op)
+            unsupported_total += int(count)
+
+    return {
+        "op_counts": dict(sorted(op_counts.items())),
+        "unsupported_unique": unsupported_unique,
+        "unsupported_total": int(unsupported_total),
+    }
+
+
+def _format_conversion_failure(model_path, fail_info):
+    return (
+        "compile_onnx: conversion failed. "
+        f"model='{model_path}', "
+        f"unsupported_unique={fail_info['unsupported_unique']}, "
+        f"unsupported_total={fail_info['unsupported_total']}, "
+        f"op_counts={fail_info['op_counts']}"
+    )
+
+
+def compile_onnx(model_path, output_path=None, debug=False):
+    """Strictly convert an ONNX model to a MuNet-native module.
+
+    Behavior:
+      - Success: full conversion, optional save to output_path.
+      - Failure: raise with unsupported unique ops + total unsupported count.
+
+    No fallback execution/runtime path is used.
     """
-    import numpy as np
-    import munet
-
-    try:
-        import onnx
-        from onnx import numpy_helper
-    except Exception as e:
-        raise RuntimeError(
-            "compile_onnx requires `onnx` package installed (pip install onnx)."
-        ) from e
-
-    if report_only and output_path is not None:
-        raise ValueError(
-            "compile_onnx: report_only=True does not compile/save. Remove output_path to get unsupported-op report."
-        )
+    import onnx
 
     model = onnx.load(model_path)
-    graph = model.graph
+    fail_info = _collect_conversion_failures(model.graph)
 
-    if prefer_graph_runtime and not report_only:
-        # Graph-runtime handles branching/shape ops (needed for models like YOLOv5n).
-        # Keep legacy sequential lowering path for simple linear chains and saveable modules.
-        try:
-            gm = _compile_onnx_graph_module(model_path)
-            if output_path is not None:
-                raise ValueError("compile_onnx: output_path save is only supported for legacy sequential lowering")
-            return gm
-        except Exception:
-            if debug:
-                import traceback
-                print("[compile_onnx][debug] graph-runtime fallback failed; using legacy lowering")
-                traceback.print_exc()
+    if fail_info["unsupported_total"] > 0:
+        raise ValueError(_format_conversion_failure(model_path, fail_info))
 
-    ctx = _ConversionContext(graph, munet, np, onnx, numpy_helper, debug=debug)
+    module = _compile_onnx_graph_module(model_path)
 
-    for node in graph.node:
-        op = node.op_type
-        ctx.log(f"node op={op} inputs={list(node.input)} outputs={list(node.output)}")
-
-        if op == "Constant":
-            _capture_constant_node(node, ctx)
-            continue
-
-        if op in _PASS_THROUGH_OPS:
-            if len(node.output) > 0:
-                ctx.stream_name = node.output[0]
-            continue
-
-        if ctx.stream_name is None or len(node.input) == 0:
-            ctx.unsupported(op, ignore_unsupported=ignore_unsupported, report_only=report_only)
-            continue
-
-        if node.input[0] != ctx.stream_name:
-            # non-linear dataflow/branch currently unsupported for native lowering
-            ctx.unsupported(op, ignore_unsupported=ignore_unsupported, report_only=report_only)
-            continue
-
-        lower_fn = _NODE_LOWERING_DISPATCH.get(op)
-        lowered = False
-        if lower_fn is not None:
-            lowered = lower_fn(node, ctx)
-
-        if not lowered:
-            ctx.unsupported(op, ignore_unsupported=ignore_unsupported, report_only=report_only)
-            continue
-
-        ctx.lowered_count += 1
-        if len(node.output) > 0:
-            ctx.stream_name = node.output[0]
-
-    if report_only:
-        if debug:
-            print(
-                f"[compile_onnx] report_only unsupported_ops={sorted(list(ctx.unsupported_ops))}"
-            )
-        return sorted(list(ctx.unsupported_ops))
-
-    if ctx.unsupported_ops:
-        skipped = sorted(list(ctx.unsupported_ops))
-        if ignore_unsupported:
-            if not allow_partial:
-                raise ValueError(
-                    "compile_onnx: graph contains unsupported ops; refusing to emit partial model. "
-                    f"Unsupported ops: {skipped}. "
-                    "Use report_only=True to inspect, or set allow_partial=True to emit best-effort partial model."
-                )
-            print(
-                f"[compile_onnx] warning: emitting partial model; skipped unsupported ops: {skipped}"
-            )
-
-    if not ctx.seq_layers:
-        raise ValueError("compile_onnx: no supported nodes found in graph")
+    if output_path is not None:
+        raise ValueError(
+            "compile_onnx: output_path save is not yet supported for graph-runtime modules. "
+            "Convert first and run inference directly with returned module."
+        )
 
     if debug:
         print(
-            f"[compile_onnx] lowered_nodes={ctx.lowered_count} total_nodes={len(graph.node)} layers={len(ctx.seq_layers)}"
+            f"[compile_onnx] success model={model_path} "
+            f"nodes={len(model.graph.node)} unique_ops={len(fail_info['op_counts'])}"
         )
 
-    module = munet.nn.Sequential(ctx.seq_layers)
-    if output_path is not None:
-        munet.save(module, output_path)
     return module
 
 
 def report_onnx_unsupported_ops(model_path):
-    """Return a sorted unique list of unsupported ONNX ops for native compile."""
-    return compile_onnx(
-        model_path,
-        output_path=None,
-        ignore_unsupported=True,
-        report_only=True,
-        allow_partial=True,
-        debug=False,
-    )
+    """Return sorted unique list of ops that block strict native conversion."""
+    import onnx
 
-
+    model = onnx.load(model_path)
+    fail_info = _collect_conversion_failures(model.graph)
+    return fail_info["unsupported_unique"]
 
 
 def onnx_conversion_coverage_report(model_path):
-    """Return ONNX operator coverage against MuNet native conversion map.
-
-    This utility inspects graph operator types without compiling/running the model.
-    """
+    """Return ONNX operator coverage against MuNet native conversion map."""
     import onnx
-    from collections import Counter
 
     model = onnx.load(model_path)
-    op_counts = Counter(node.op_type for node in model.graph.node)
+    fail_info = _collect_conversion_failures(model.graph)
 
     coverage = {
         "lowered": [],
@@ -724,7 +654,7 @@ def onnx_conversion_coverage_report(model_path):
         "unmapped": [],
     }
 
-    for op in sorted(op_counts.keys()):
+    for op in sorted(fail_info["op_counts"].keys()):
         entry = ONNX_NATIVE_CONVERSION_MAP.get(op)
         if entry is None:
             coverage["unmapped"].append(op)
@@ -733,11 +663,13 @@ def onnx_conversion_coverage_report(model_path):
 
     return {
         "model_path": model_path,
-        "total_nodes": int(sum(op_counts.values())),
-        "unique_ops": sorted(op_counts.keys()),
-        "op_counts": dict(sorted(op_counts.items())),
+        "total_nodes": int(sum(fail_info["op_counts"].values())),
+        "unique_ops": sorted(fail_info["op_counts"].keys()),
+        "op_counts": fail_info["op_counts"],
         "coverage": coverage,
-        "fully_lowerable": len(coverage["unsupported"]) == 0 and len(coverage["unmapped"]) == 0,
+        "unsupported_unique": fail_info["unsupported_unique"],
+        "unsupported_total": fail_info["unsupported_total"],
+        "fully_lowerable": fail_info["unsupported_total"] == 0,
     }
 
 
@@ -752,36 +684,6 @@ def download_yolov5n_onnx(destination_path):
     urllib.request.urlretrieve(url, destination_path)
     return destination_path
 
-def compare_onnx_native_to_ort(model_path, input_data, output_device=None, providers=None):
-    """Run ONNXRuntime and native MuNet lowering and report numeric drift.
-
-    The model must be fully supported by `compile_onnx` (no partial lowering).
-    """
-    import numpy as np
-
-    ort_engine = load_onnx(model_path, device=output_device, providers=providers)
-    native_module = compile_onnx(model_path)
-
-    ort_out = ort_engine.run(input_data, output_device=output_device)
-    native_out = native_module.forward(input_data)
-
-    ort_np = np.asarray(ort_out.detach().to(ort_engine._m.Device(ort_engine._m.DeviceType.CPU, 0)).numpy(), dtype=np.float32)
-    native_np = np.asarray(native_out.detach().to(ort_engine._m.Device(ort_engine._m.DeviceType.CPU, 0)).numpy(), dtype=np.float32)
-
-    if ort_np.shape != native_np.shape:
-        raise ValueError(
-            f"compare_onnx_native_to_ort: output shape mismatch ORT={ort_np.shape} native={native_np.shape}"
-        )
-
-    diff = native_np - ort_np
-    abs_diff = np.abs(diff)
-    return {
-        "shape": list(ort_np.shape),
-        "max_abs_error": float(abs_diff.max()) if abs_diff.size > 0 else 0.0,
-        "mean_abs_error": float(abs_diff.mean()) if abs_diff.size > 0 else 0.0,
-        "rmse": float(np.sqrt(np.mean(diff * diff))) if abs_diff.size > 0 else 0.0,
-    }
-
 
 inference.ONNXEngine = ONNXEngine
 inference.load_onnx = load_onnx
@@ -790,4 +692,3 @@ inference.report_onnx_unsupported_ops = report_onnx_unsupported_ops
 inference.onnx_native_conversion_map = onnx_native_conversion_map
 inference.onnx_conversion_coverage_report = onnx_conversion_coverage_report
 inference.download_yolov5n_onnx = download_yolov5n_onnx
-inference.compare_onnx_native_to_ort = compare_onnx_native_to_ort
