@@ -1290,6 +1290,41 @@ class TestBindings(unittest.TestCase):
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
 
+    def test_compile_onnx_graph_runtime_multi_input_forward(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX graph-runtime multi-input test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "multi_input_reshape.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2, 3])
+            shape_info = helper.make_tensor_value_info("shape", TensorProto.INT64, [2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 6])
+            reshape = helper.make_node("Reshape", ["x", "shape"], ["y"])
+
+            graph = helper.make_graph([reshape], "multi_input_reshape", [x_info, shape_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_multi_input_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x = munet.from_numpy(np.arange(6, dtype=np.float32).reshape(1, 2, 3))
+            shape = np.array([1, 6], dtype=np.int64)
+
+            y_pos = module.forward(x, shape)
+            y_dict = module.forward({"x": x, "shape": shape})
+
+            y_pos_np = np.array(y_pos.detach(), copy=False)
+            y_dict_np = np.array(y_dict.detach(), copy=False)
+            expect = np.arange(6, dtype=np.float32).reshape(1, 6)
+
+            np.testing.assert_allclose(y_pos_np, expect, atol=1e-6)
+            np.testing.assert_allclose(y_dict_np, expect, atol=1e-6)
+
     def test_onnx_inference_wrapper(self):
         try:
             import onnx

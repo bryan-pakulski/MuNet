@@ -389,6 +389,10 @@ class _ONNXGraphModule:
         for init in self._graph.initializer:
             self._consts[init.name] = self._onnx_numpy_helper.to_array(init)
 
+        self._input_names = [
+            value.name for value in self._graph.input if value.name not in self._consts
+        ]
+
         for node in self._graph.node:
             if node.op_type == "Constant" and len(node.output) > 0:
                 for a in node.attribute:
@@ -456,11 +460,53 @@ class _ONNXGraphModule:
             return self._consts[name]
         raise KeyError(f"Missing ONNX value: {name}")
 
-    def forward(self, x):
-        env = {}
-        if len(self._graph.input) != 1:
-            raise ValueError("_ONNXGraphModule currently supports single-input graphs")
-        env[self._graph.input[0].name] = x
+    def _bind_inputs(self, inputs, named_inputs):
+        expected_names = list(self._input_names)
+        expected_count = len(expected_names)
+
+        if named_inputs:
+            if len(inputs) > 0:
+                raise ValueError("Use either positional inputs or keyword inputs, not both")
+            provided = dict(named_inputs)
+        elif len(inputs) == 1:
+            arg = inputs[0]
+            if isinstance(arg, dict):
+                provided = dict(arg)
+            elif isinstance(arg, (tuple, list)):
+                if len(arg) != expected_count:
+                    raise ValueError(
+                        f"ONNX graph expects {expected_count} inputs ({expected_names}), "
+                        f"but got {len(arg)} positional values"
+                    )
+                provided = {name: value for name, value in zip(expected_names, arg)}
+            else:
+                if expected_count != 1:
+                    raise ValueError(
+                        f"ONNX graph expects {expected_count} inputs ({expected_names}). "
+                        "Pass a dict{name: value}, a tuple/list of positional inputs, "
+                        "or multiple positional arguments."
+                    )
+                provided = {expected_names[0]: arg}
+        else:
+            if len(inputs) != expected_count:
+                raise ValueError(
+                    f"ONNX graph expects {expected_count} inputs ({expected_names}), "
+                    f"but got {len(inputs)} positional values"
+                )
+            provided = {name: value for name, value in zip(expected_names, inputs)}
+
+        missing = [name for name in expected_names if name not in provided]
+        if missing:
+            raise ValueError(f"Missing required ONNX inputs: {missing}")
+
+        unknown = [name for name in provided.keys() if name not in expected_names]
+        if unknown:
+            raise ValueError(f"Unknown ONNX inputs provided: {unknown}")
+
+        return {name: provided[name] for name in expected_names}
+
+    def forward(self, *inputs, **named_inputs):
+        env = self._bind_inputs(inputs, named_inputs)
 
         for node in self._graph.node:
             op = node.op_type
