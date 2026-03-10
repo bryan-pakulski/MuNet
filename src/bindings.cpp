@@ -610,6 +610,11 @@ PYBIND11_MODULE(munet, m) {
   // ============================================================================
   // Python Injected Helpers
   // ============================================================================
+  m.attr("__munet_helper_source_dir__") = py::str(MUNET_PY_HELPER_SOURCE_DIR);
+  if (py::hasattr(m, "__file__")) {
+    m.attr("__munet_file__") = m.attr("__file__");
+  }
+
   py::exec(
       R"(
  class no_grad:
@@ -784,6 +789,42 @@ PYBIND11_MODULE(munet, m) {
      """Alias for `load(module, filename)` to explicitly do weights-only restore."""
      m = __import__("munet")
      return m.load(module, filename)
+
+ def _load_python_helper(filename):
+     import pathlib
+     import sys
+
+     # Prefer compile-time source helper dir when available (dev builds).
+     helper_dir = globals().get("__munet_helper_source_dir__", None)
+     if helper_dir is not None:
+         helper_path = pathlib.Path(helper_dir) / filename
+         if helper_path.exists():
+             src = helper_path.read_text(encoding="utf-8")
+             exec(compile(src, str(helper_path), "exec"), globals(), globals())
+             return
+
+     # Avoid importing `munet` while module init is still running, which can
+     # recursively execute bindings init and trigger pybind duplicate type registration.
+     mod_file = globals().get("__munet_file__", None)
+     if mod_file is None:
+         mod = sys.modules.get(__name__)
+         mod_file = getattr(mod, "__file__", None) if mod is not None else None
+     if mod_file is None:
+         spec = globals().get("__spec__", None)
+         mod_file = getattr(spec, "origin", None)
+     if mod_file is not None:
+         helper_path = pathlib.Path(mod_file).resolve().parent / "python_src" / filename
+         if helper_path.exists():
+             src = helper_path.read_text(encoding="utf-8")
+             exec(compile(src, str(helper_path), "exec"), globals(), globals())
+             return
+
+     raise RuntimeError(
+         f"Required MuNet python helper '{filename}' could not be located. "
+         f"Searched source helper dir={helper_dir!r} and module-adjacent python_src."
+     )
+
+ _load_python_helper("onnx_integration.py")
  )",
-      py::globals(), m.attr("__dict__"));
+      m.attr("__dict__"), m.attr("__dict__"));
 }

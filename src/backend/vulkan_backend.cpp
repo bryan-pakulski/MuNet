@@ -819,56 +819,52 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 						int Spatial;
 				} u;
 
-#define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) \
-				do { \
-						uint expected = BUFFER[IDX]; \
-						uint current; \
-						while(true) { \
-								uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); \
-								current = atomicCompSwap(BUFFER[IDX], expected, next); \
-								if (current == expected) break; \
-								expected = current; \
-						} \
-				} while(false)
+				shared float wg_loss[256];
+
+#define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) 				do { 						uint expected = BUFFER[IDX]; 						uint current; 						while(true) { 								uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); 								current = atomicCompSwap(BUFFER[IDX], expected, next); 								if (current == expected) break; 								expected = current; 						} 				} while(false)
 
 				void main() {
+						const int idx = int(gl_GlobalInvocationID.x);
+						const int lid = int(gl_LocalInvocationID.x);
+						const int total_pixels = u.B * u.Spatial;
 
-						int idx = int(gl_GlobalInvocationID.x);
-						int total_pixels = u.B * u.Spatial;
-						if (idx >= total_pixels) return;
+						float local_loss = 0.0;
+						if (idx < total_pixels) {
+								const int b = idx / u.Spatial;
+								const int s = idx % u.Spatial;
+								const int stride = u.Spatial;
+								const int base = b * (u.C * u.Spatial) + s;
 
-						int b = idx / u.Spatial;
-						int s = idx % u.Spatial;
+								float max_val = -3.402823e38;
+								for (int c = 0; c < u.C; ++c)
+										max_val = max(max_val, logits[base + c * stride]);
 
-						int stride = u.Spatial;
-						int base = b * (u.C * u.Spatial) + s;
+								float sum_exp = 0.0;
+								float target_weighted = 0.0;
+								float target_sum = 0.0;
+								for (int c = 0; c < u.C; ++c) {
+										const float shifted = logits[base + c * stride] - max_val;
+										const float t = targets[base + c * stride];
+										sum_exp += exp(shifted);
+										target_weighted += t * shifted;
+										target_sum += t;
+								}
 
-						float max_val = -3.402823e38;
-
-						for (int c = 0; c < u.C; ++c)
-								max_val = max(max_val, logits[base + c * stride]);
-
-						float sum_exp = 0.0;
-
-						for (int c = 0; c < u.C; ++c) {
-								float e = exp(logits[base + c * stride] - max_val);
-								sum_exp += e;
+								const float log_sum = log(sum_exp + 1e-9);
+								local_loss = (-target_weighted + target_sum * log_sum) / float(u.B);
 						}
 
-						float inv_sum = 1.0 / sum_exp;
+						wg_loss[lid] = local_loss;
+						barrier();
 
-						float loss = 0.0;
-
-						for (int c = 0; c < u.C; ++c) {
-
-								float prob = exp(logits[base + c * stride] - max_val) * inv_sum;
-								float target = targets[base + c * stride];
-
-								if (target > 0.0)
-										loss -= target * log(prob + 1e-9);
+						for (int offset = 128; offset > 0; offset >>= 1) {
+								if (lid < offset)
+										wg_loss[lid] += wg_loss[lid + offset];
+								barrier();
 						}
 
-						ATOMIC_ADD_FLOAT(out_u, 0, loss / u.B);
+						if (lid == 0)
+								ATOMIC_ADD_FLOAT(out_u, 0, wg_loss[0]);
 				}
       )");
 
@@ -924,7 +920,7 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
   matmulPipeline = createComputePipeline("matmul",
                                          R"(
         #version 450
-				layout(local_size_x = 16, local_size_y = 16) in;
+				layout(local_size_x = 32, local_size_y = 8) in;
 
 				layout(binding = 0) readonly buffer A { float a[]; };
 				layout(binding = 1) readonly buffer B { float b[]; };
@@ -938,35 +934,36 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 						int tB;
 				} p;
 
-				shared float As[16][16];
-				shared float Bs[16][16];
+				shared float As[8][32];
+				shared float Bs[32][32];
 
 				void main() {
-						int col = int(gl_GlobalInvocationID.x);
-						int row = int(gl_GlobalInvocationID.y);
-						int lx = int(gl_LocalInvocationID.x);
-						int ly = int(gl_LocalInvocationID.y);
-						bool row_valid = (row < p.M);
-						bool col_valid = (col < p.N);
-						bool out_valid = row_valid && col_valid;
+						const int lx = int(gl_LocalInvocationID.x); // 0..31
+						const int ly = int(gl_LocalInvocationID.y); // 0..7
 
+						const int row = int(gl_WorkGroupID.y) * 8 + ly;
+						const int col = int(gl_WorkGroupID.x) * 32 + lx;
+
+						const bool out_valid = (row < p.M) && (col < p.N);
 						float sum = 0.0;
 
-						// Fast path for common case (no transposes): tiled shared-memory GEMM.
 						if (p.tA == 0 && p.tB == 0) {
-								int tiles = (p.K + 15) / 16;
+								const int tiles = (p.K + 31) / 32;
 								for (int t = 0; t < tiles; ++t) {
-										int kA = t * 16 + lx;
-										int kB = t * 16 + ly;
+										const int kA = t * 32 + lx;
+										As[ly][lx] = (row < p.M && kA < p.K) ? a[row * p.K + kA] : 0.0;
 
-										As[ly][lx] = (row_valid && kA < p.K) ? a[row * p.K + kA] : 0.0;
-										Bs[ly][lx] = (col_valid && kB < p.K) ? b[kB * p.N + col] : 0.0;
+										const int brow = t * 32 + ly;
+										Bs[ly][lx] = (brow < p.K && col < p.N) ? b[brow * p.N + col] : 0.0;
+										Bs[ly + 8][lx] = (brow + 8 < p.K && col < p.N) ? b[(brow + 8) * p.N + col] : 0.0;
+										Bs[ly + 16][lx] = (brow + 16 < p.K && col < p.N) ? b[(brow + 16) * p.N + col] : 0.0;
+										Bs[ly + 24][lx] = (brow + 24 < p.K && col < p.N) ? b[(brow + 24) * p.N + col] : 0.0;
 
 										barrier();
 
 										if (out_valid) {
-												for (int k = 0; k < 16; ++k)
-														sum += As[ly][k] * Bs[k][lx];
+												for (int kk = 0; kk < 32; ++kk)
+														sum += As[ly][kk] * Bs[kk][lx];
 										}
 
 										barrier();
@@ -1864,10 +1861,12 @@ void ensure_recording() {
   deferred_frees[currentFrame].clear();
 
   // Reset Descriptor Pool logic: wipe the slate clean for this frame
-  auto descriptor_reset_start = profile_now();
-  VK_CHECK(vkResetDescriptorPool(device, descriptorPools[currentFrame], 0));
-  allocate_frame_descriptor_sets(currentFrame);
-  profile_cpu_event("vulkan.descriptor_pool_reset", descriptor_reset_start);
+  // Descriptor sets are pre-allocated once and then recycled per frame slot.
+  // Since we wait on the frame fence above, the GPU is done with this frame's
+  // descriptors and it is safe to reuse them by just rewinding the cursor.
+  auto descriptor_reuse_start = profile_now();
+  descriptorSetCursor[currentFrame] = 0;
+  profile_cpu_event("vulkan.descriptor_set_reuse", descriptor_reuse_start);
 
   VK_CHECK(vkResetFences(device, 1, &inFlightFences[currentFrame]));
 
@@ -1967,8 +1966,9 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
       if (isRecording)
         flush_batch();
       auto staging_wait_start = profile_now();
-      VK_CHECK(vkQueueWaitIdle(computeQueue));
-      profile_cpu_event("vulkan.staging_wait_idle", staging_wait_start);
+      VK_CHECK(vkWaitForFences(device, MAX_FRAMES_IN_FLIGHT, inFlightFences,
+                               VK_TRUE, UINT64_MAX));
+      profile_cpu_event("vulkan.staging_wait_fences", staging_wait_start);
       stagingOffset = 0; // Safe because queue is idle
       if (stagingSize < aligned) {
         if (stagingBuffer) {
@@ -1995,7 +1995,9 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
   if (src_dev.type == DeviceType::CPU && dst_dev.type == DeviceType::VULKAN) {
     size_t offset = 0;
     get_staging(bytes, offset);
+    auto h2d_memcpy_start = profile_now();
     std::memcpy((char *)stagingMapped + offset, src, bytes);
+    profile_cpu_event("vulkan.copy_h2d_memcpy", h2d_memcpy_start, bytes);
 
     ensure_recording();
     VkBufferCopy copyRegion{};
@@ -2040,9 +2042,14 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     currentBatchSize++;
     flush_batch();
     auto d2h_wait_start = profile_now();
-    VK_CHECK(vkQueueWaitIdle(computeQueue));
-    profile_cpu_event("vulkan.copy_d2h_wait_idle", d2h_wait_start, bytes);
+    int submitted_frame =
+        (currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
+    VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[submitted_frame],
+                             VK_TRUE, UINT64_MAX));
+    profile_cpu_event("vulkan.copy_d2h_wait_fence", d2h_wait_start, bytes);
+    auto d2h_memcpy_start = profile_now();
     std::memcpy(dst, (char *)stagingMapped + offset, bytes);
+    profile_cpu_event("vulkan.copy_d2h_memcpy", d2h_memcpy_start, bytes);
     stagingOffset =
         0; // Free entire staging buffer since we just forced a full wait
   }
@@ -2053,8 +2060,9 @@ void VulkanBackend::synchronize() {
     flush_batch();
 
   auto sync_wait_start = profile_now();
-  VK_CHECK(vkQueueWaitIdle(computeQueue));
-  profile_cpu_event("vulkan.synchronize_wait_idle", sync_wait_start);
+  VK_CHECK(vkWaitForFences(device, MAX_FRAMES_IN_FLIGHT, inFlightFences,
+                           VK_TRUE, UINT64_MAX));
+  profile_cpu_event("vulkan.synchronize_wait_fences", sync_wait_start);
 
   // Only attempt to fetch results if profiling is actually active and work was
   // done
@@ -2312,7 +2320,7 @@ void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
   } pc = {M, K, N, transA, transB};
   // Dispatch x maps to N (cols), y maps to M (rows)
   dispatch_kernel(matmulPipeline, {a.data(), b.data(), out.data()}, &pc,
-                  sizeof(pc), (N + 15) / 16, (M + 15) / 16, 1);
+                  sizeof(pc), (N + 31) / 32, (M + 7) / 8, 1);
 }
 
 // --- Spatial Stubs ---

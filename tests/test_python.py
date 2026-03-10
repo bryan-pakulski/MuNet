@@ -659,6 +659,124 @@ class TestBindings(unittest.TestCase):
             self.assertTrue(np.allclose(y_ref, y_eng, atol=1e-6))
 
 
+
+
+    def test_compile_onnx_to_munet_module(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX compile test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            onnx_path = os.path.join(d, "linear_relu.onnx")
+            out_npz = os.path.join(d, "compiled_model.npz")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
+
+            W = np.array([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=np.float32)
+            B = np.array([0.5, -1.0], dtype=np.float32)
+
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
+            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
+
+            gemm = helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0)
+            relu = helper.make_node("Relu", ["z"], ["y"])
+
+            graph = helper.make_graph([gemm, relu], "linear_relu_graph", [x_info], [y_info], [w_init, b_init])
+            model = helper.make_model(graph, producer_name="munet_compile_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, onnx_path)
+
+            module = munet.inference.compile_onnx(onnx_path, out_npz)
+            self.assertTrue(os.path.exists(out_npz))
+
+            x = munet.from_numpy(np.array([[1.0, 2.0, 3.0], [-1.0, 0.5, 2.0]], dtype=np.float32))
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+
+            expected = np.maximum(x.numpy() @ W + B, 0.0)
+            self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
+
+    def test_compile_onnx_report_unsupported_ops(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX unsupported-op report test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            onnx_path = os.path.join(d, "unsupported.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
+            node = helper.make_node("Erf", ["x"], ["y"])
+            graph = helper.make_graph([node], "unsupported_graph", [x_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_compile_report_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, onnx_path)
+
+            missing = munet.inference.compile_onnx(onnx_path, report_only=True)
+            self.assertIn("Erf", missing)
+
+            # ignore_unsupported now refuses to emit partial models unless allow_partial=True
+            with self.assertRaises(ValueError):
+                munet.inference.compile_onnx(onnx_path, ignore_unsupported=True)
+
+            # A mixed graph (supported + unsupported) should also fail by default
+            mixed_path = os.path.join(d, "mixed.onnx")
+            relu = helper.make_node("Relu", ["x"], ["z"])
+            erf = helper.make_node("Erf", ["z"], ["y"])
+            mixed_graph = helper.make_graph([relu, erf], "mixed_graph", [x_info], [y_info])
+            mixed_model = helper.make_model(mixed_graph, producer_name="munet_compile_mixed_test", opset_imports=[helper.make_opsetid("", 11)])
+            mixed_model.ir_version = 7
+            onnx.save(mixed_model, mixed_path)
+
+            with self.assertRaises(ValueError):
+                munet.inference.compile_onnx(mixed_path, ignore_unsupported=True)
+
+            # Explicit allow_partial opt-in should compile the supported prefix.
+            partial = munet.inference.compile_onnx(mixed_path, ignore_unsupported=True, allow_partial=True)
+            out = partial.forward(munet.from_numpy(np.array([[-2.0, 3.0, -4.0]], dtype=np.float32))).detach().numpy()
+            self.assertTrue(np.allclose(out, np.array([[0.0, 3.0, 0.0]], dtype=np.float32), atol=1e-5))
+
+            with self.assertRaises(ValueError):
+                munet.inference.compile_onnx(onnx_path, output_path=os.path.join(d, "bad.npz"), report_only=True)
+    def test_onnx_inference_wrapper(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+            import onnxruntime  # noqa: F401
+        except Exception:
+            print("\nSkipping ONNX wrapper test (onnx/onnxruntime not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "add_bias.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
+            b_init = helper.make_tensor(
+                "b", TensorProto.FLOAT, [1, 3], np.array([[1.0, 2.0, 3.0]], dtype=np.float32).flatten().tolist()
+            )
+            add_node = helper.make_node("Add", ["x", "b"], ["y"])
+
+            graph = helper.make_graph([add_node], "add_graph", [x_info], [y_info], [b_init])
+            model = helper.make_model(graph, producer_name="munet_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            engine = munet.inference.load_onnx(path)
+            self.assertTrue(hasattr(engine, "run"))
+
+            x = np.array([[10.0, 20.0, 30.0], [0.5, -1.0, 2.0]], dtype=np.float32)
+            y = engine.run(x)
+            y_np = np.array(y.detach(), copy=False)
+
+            expected = x + np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+            self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
     def test_inference_engine_dynamic_dims_with_wildcards(self):
         model = munet.nn.Sequential([
             munet.nn.Conv2d(3, 4, 3, padding=1),
