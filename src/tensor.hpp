@@ -3,6 +3,7 @@
 #include "types.hpp"
 #include <memory>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -126,6 +127,8 @@ public:
   Tensor reshape(Shape new_shape) const;
   Tensor masked_fill(const Tensor &mask, float value) const;
   Tensor gather_elements(const Tensor &indices, int axis) const;
+  std::pair<Tensor, Tensor> topk(int k, int dim = -1, bool largest = true,
+                                 bool sorted = true) const;
   float item() const;
 
   Tensor conv2d(const Tensor &weight, const Tensor &bias, int stride = 1,

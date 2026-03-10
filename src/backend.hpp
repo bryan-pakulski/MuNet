@@ -60,6 +60,10 @@ public:
                                 Storage &grad_in, int batch_size,
                                 int num_classes) = 0;
 
+  virtual void topk(const Storage &in, Storage &out_values,
+                    Storage &out_indices, int outer, int dim_size, int k,
+                    bool largest, bool sorted) = 0;
+
   virtual void concat(const std::vector<Storage *> &inputs, Storage &out,
                       int dim, const std::vector<Shape> &shapes) = 0;
 

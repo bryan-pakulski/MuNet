@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <utility>
 #include <stdexcept>
 
 namespace munet {
@@ -23,6 +24,8 @@ inline Tensor sqrt(const Tensor &a);
 inline Tensor clip(const Tensor &a, float min_value, float max_value);
 inline Tensor erf(const Tensor &a);
 inline Tensor gather_elements(const Tensor &data, const Tensor &indices, int axis);
+inline std::pair<Tensor, Tensor> topk(const Tensor &a, int k, int dim = -1,
+                                      bool largest = true, bool sorted = true);
 inline Tensor log_softmax(const Tensor &a, int dim = -1);
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
@@ -625,6 +628,62 @@ inline Tensor gather_elements(const Tensor &data, const Tensor &indices,
   }
   record_trace(out, "GatherElements", {data, indices}, {{"axis", {axis}}});
   return out;
+}
+
+
+inline std::pair<Tensor, Tensor> topk(const Tensor &a, int k, int dim,
+                                      bool largest, bool sorted_flag) {
+  auto shp = a.shape();
+  int rank = (int)shp.size();
+  if (rank == 0)
+    throw std::runtime_error("topk: rank must be >= 1");
+  int d = dim < 0 ? dim + rank : dim;
+  if (d < 0 || d >= rank)
+    throw std::runtime_error("topk: dim out of range");
+  if (k <= 0 || k > shp[d])
+    throw std::runtime_error("topk: invalid k");
+
+  Tensor work = a;
+  std::vector<int> perm;
+  std::vector<int> inv_perm;
+  bool need_permute = (d != rank - 1);
+  if (need_permute) {
+    perm.reserve(rank);
+    for (int i = 0; i < rank; ++i)
+      if (i != d)
+        perm.push_back(i);
+    perm.push_back(d);
+    inv_perm.assign(rank, 0);
+    for (int i = 0; i < rank; ++i)
+      inv_perm[perm[i]] = i;
+    work = a.permute(perm).contiguous();
+  }
+
+  auto ws = work.shape();
+  int dim_size = ws.back();
+  int outer = 1;
+  for (int i = 0; i < (int)ws.size() - 1; ++i)
+    outer *= ws[i];
+
+  Shape out_shape = ws;
+  out_shape.back() = k;
+  Tensor v(out_shape, work.device(), work.dtype());
+  Tensor i(out_shape, work.device(), work.dtype());
+  work.impl_->backend().topk(*work.impl_->storage, *v.impl_->storage,
+                             *i.impl_->storage, outer, dim_size, k, largest,
+                             sorted_flag);
+
+  if (need_permute) {
+    v = v.permute(inv_perm).contiguous();
+    i = i.permute(inv_perm).contiguous();
+  }
+
+  if (GradMode::is_enabled() && a.requires_grad())
+    throw std::runtime_error("TopK backward is not implemented yet");
+
+  record_trace(v, "TopKValues", {a}, {{"k", {k}}, {"dim", {d}}, {"largest", {largest ? 1 : 0}}, {"sorted", {sorted_flag ? 1 : 0}}});
+  record_trace(i, "TopKIndices", {a}, {{"k", {k}}, {"dim", {d}}, {"largest", {largest ? 1 : 0}}, {"sorted", {sorted_flag ? 1 : 0}}});
+  return {v, i};
 }
 
 // --- SOFTMAX ---

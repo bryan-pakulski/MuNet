@@ -137,7 +137,7 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Erf": {"status": "lowered", "munet": "graph/erf"},
     "Pad": {"status": "lowered", "munet": "graph/pad_constant"},
     "GatherElements": {"status": "lowered", "munet": "graph/gather_elements"},
-    "TopK": {"status": "planned", "munet": None},
+    "TopK": {"status": "lowered", "munet": "graph/topk"},
     "GridSample": {"status": "planned", "munet": None},
     "Squeeze": {"status": "lowered", "munet": "graph/squeeze"},
     "Expand": {"status": "lowered", "munet": "graph/expand"},
@@ -728,6 +728,20 @@ class _ONNXGraphModule:
                 idx = self._as_tensor(ins[1], data.device)
                 axis = int(self._get_attr(node, "axis", 0))
                 out = data.gather_elements(idx, axis)
+            elif op == "TopK":
+                x = self._as_tensor(ins[0])
+                if len(ins) < 2:
+                    raise ValueError("TopK requires k input")
+                k = int(self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1)[0])
+                largest = int(self._get_attr(node, "largest", 1)) != 0
+                sorted_flag = int(self._get_attr(node, "sorted", 1)) != 0
+                axis = int(self._get_attr(node, "axis", -1))
+                values, indices = x.topk(k, axis, largest, sorted_flag)
+                if len(node.output) != 2:
+                    raise ValueError(f"Unsupported output arity for TopK: {len(node.output)}")
+                env[node.output[0]] = values
+                env[node.output[1]] = indices
+                continue
             elif op == "Pad":
                 data = self._as_tensor(ins[0])
                 mode = self._get_attr(node, "mode", "constant")
@@ -832,6 +846,7 @@ _GRAPH_RUNTIME_SUPPORTED_OPS = {
     "Clip",
     "Erf",
     "Pad",
+    "TopK",
     "Relu",
     "LeakyRelu",
     "GlobalAveragePool",

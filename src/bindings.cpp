@@ -200,6 +200,14 @@ PYBIND11_MODULE(munet, m) {
            "Fills entries where mask is 1 with the given value.")
       .def("gather_elements", &Tensor::gather_elements, py::arg("indices"), py::arg("axis"),
            "Gathers values along an axis using per-element indices tensor.")
+      .def("topk",
+           [](const Tensor &t, int k, int dim, bool largest, bool sorted) {
+             auto out = t.topk(k, dim, largest, sorted);
+             return py::make_tuple(out.first, out.second);
+           },
+           py::arg("k"), py::arg("dim") = -1, py::arg("largest") = true,
+           py::arg("sorted") = true,
+           "Returns (values, indices) for TopK along a dimension.")
       .def_static("cat", &Tensor::cat, py::arg("inputs"), py::arg("dim") = 1,
                   "Concatenates tensors along a given dimension.")
       .def(

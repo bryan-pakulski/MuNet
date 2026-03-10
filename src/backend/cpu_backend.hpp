@@ -317,6 +317,49 @@ public:
     });
   }
 
+
+  void topk(const Storage &in, Storage &out_values, Storage &out_indices,
+            int outer, int dim_size, int k, bool largest,
+            bool sorted_flag) override {
+    const float *ip = (const float *)in.data();
+    float *ov = (float *)out_values.data();
+    float *oi = (float *)out_indices.data();
+
+    if (k <= 0 || k > dim_size)
+      throw std::runtime_error("topk: invalid k");
+
+    parallel_for(0, outer, [&](size_t s, size_t e) {
+      for (size_t row = s; row < e; ++row) {
+        std::vector<std::pair<float, int>> v;
+        v.reserve(dim_size);
+        const float *r = ip + row * dim_size;
+        for (int i = 0; i < dim_size; ++i)
+          v.push_back({r[i], i});
+
+        auto cmp_l = [](const auto &a, const auto &b) {
+          if (a.first != b.first)
+            return a.first > b.first;
+          return a.second < b.second;
+        };
+        auto cmp_s = [](const auto &a, const auto &b) {
+          if (a.first != b.first)
+            return a.first < b.first;
+          return a.second < b.second;
+        };
+
+        std::nth_element(v.begin(), v.begin() + k, v.end(), largest ? cmp_l : cmp_s);
+        v.resize(k);
+        if (sorted_flag)
+          std::sort(v.begin(), v.end(), largest ? cmp_l : cmp_s);
+
+        for (int j = 0; j < k; ++j) {
+          ov[row * k + j] = v[j].first;
+          oi[row * k + j] = (float)v[j].second;
+        }
+      }
+    });
+  }
+
   void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
               const std::vector<Shape> &shapes) override {
     float *out_ptr = (float *)out.data();

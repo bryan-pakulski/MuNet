@@ -77,7 +77,7 @@ static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
 static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
 static VkPipeline sigmoidPipeline, sigmoidBackwardPipeline;
 static VkPipeline logPipeline, sqrtPipeline, clipPipeline, erfPipeline;
-static VkPipeline softmaxPipeline, softmaxBackwardPipeline;
+static VkPipeline softmaxPipeline, softmaxBackwardPipeline, topkPipeline;
 static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
 static VkPipeline crossEntropyPipeline, crossEntropyBackwardPipeline;
 
@@ -806,6 +806,59 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
             uint i = gl_GlobalInvocationID.x;
             if (i < p.N)
                 c[i] = erf_approx(a[i]);
+        }
+    )");
+
+
+  topkPipeline = createComputePipeline("topk", R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer I { float in_d[]; };
+        layout(binding = 1) writeonly buffer OV { float out_v[]; };
+        layout(binding = 2) writeonly buffer OI { float out_i[]; };
+
+        layout(push_constant) uniform Push {
+            int outer;
+            int dim_size;
+            int k;
+            int largest;
+            int sorted_flag;
+        } p;
+
+        void main() {
+            const int MAXK = 64;
+            uint row = gl_GlobalInvocationID.x;
+            if (int(row) >= p.outer) return;
+            if (p.k > MAXK) return;
+
+            int sel[MAXK];
+            float sel_v[MAXK];
+            for (int j=0;j<p.k;++j){ sel[j]=-1; sel_v[j]=0.0; }
+
+            int base = int(row) * p.dim_size;
+            for (int j=0;j<p.k;++j) {
+                int best_i = -1;
+                float best_v = (p.largest!=0) ? -3.402823e38 : 3.402823e38;
+                for (int i=0;i<p.dim_size;++i) {
+                    bool used=false;
+                    for (int q=0;q<j;++q) if (sel[q]==i) used=true;
+                    if (used) continue;
+                    float v = in_d[base + i];
+                    if (p.largest!=0) {
+                        if (v > best_v || (v == best_v && i < best_i)) { best_v=v; best_i=i; }
+                    } else {
+                        if (v < best_v || (v == best_v && i < best_i)) { best_v=v; best_i=i; }
+                    }
+                }
+                sel[j]=best_i;
+                sel_v[j]=best_v;
+            }
+
+            for (int j=0;j<p.k;++j) {
+                out_v[int(row)*p.k + j] = sel_v[j];
+                out_i[int(row)*p.k + j] = float(sel[j]);
+            }
         }
     )");
 
@@ -1949,6 +2002,7 @@ VulkanBackend::~VulkanBackend() {
 
   vkDestroyPipeline(device, softmaxPipeline, nullptr);
   vkDestroyPipeline(device, softmaxBackwardPipeline, nullptr);
+  vkDestroyPipeline(device, topkPipeline, nullptr);
   vkDestroyPipeline(device, mseLossPipeline, nullptr);
   vkDestroyPipeline(device, mseLossBackwardPipeline, nullptr);
   vkDestroyPipeline(device, crossEntropyPipeline, nullptr);
@@ -2496,6 +2550,25 @@ void VulkanBackend::mse_loss_backward(const Storage &grad_out,
   dispatch_kernel(mseLossBackwardPipeline,
                   {grad_out.data(), pred.data(), target.data(), grad_in.data()},
                   &N, sizeof(N), (N + 255) / 256, 1, 1);
+}
+
+
+void VulkanBackend::topk(const Storage &in, Storage &out_values,
+                         Storage &out_indices, int outer, int dim_size, int k,
+                         bool largest, bool sorted_flag) {
+  if (k <= 0 || k > dim_size)
+    throw std::runtime_error("topk: invalid k");
+  if (k > 64)
+    throw std::runtime_error("topk: k>64 not supported yet on Vulkan");
+  struct {
+    int outer;
+    int dim_size;
+    int k;
+    int largest;
+    int sorted_flag;
+  } pc = {outer, dim_size, k, largest ? 1 : 0, sorted_flag ? 1 : 0};
+  dispatch_kernel(topkPipeline, {in.data(), out_values.data(), out_indices.data()},
+                  &pc, sizeof(pc), (outer + 255) / 256, 1, 1);
 }
 
 void VulkanBackend::cross_entropy(const Storage &logits, const Storage &targets,

@@ -260,6 +260,16 @@ public:
     base_->softmax_backward(grad_out, out, grad_in, batch_size, num_classes);
     check("softmax_backward", t.elapsed_us(), &grad_in);
   }
+  void topk(const Storage &in, Storage &out_values, Storage &out_indices,
+            int outer, int dim_size, int k, bool largest,
+            bool sorted_flag) override {
+    MUNET_DEBUG << "topk | outer=" << outer << " dim=" << dim_size
+                << " k=" << k << std::endl;
+    Timer t;
+    base_->topk(in, out_values, out_indices, outer, dim_size, k, largest,
+                sorted_flag);
+    check("topk_values", t.elapsed_us(), &out_values);
+  }
   void cross_entropy(const Storage &logits, const Storage &targets,
                      Storage &out_loss, int batch_size, int num_classes,
                      int spatial) override {

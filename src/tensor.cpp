@@ -187,6 +187,11 @@ Tensor Tensor::gather_elements(const Tensor &indices, int axis) const {
   return ops::gather_elements(*this, indices, axis);
 }
 
+std::pair<Tensor, Tensor> Tensor::topk(int k, int dim, bool largest,
+                                       bool sorted) const {
+  return ops::topk(*this, k, dim, largest, sorted);
+}
+
 float Tensor::item() const {
   if (size() != 1) {
     throw std::runtime_error(

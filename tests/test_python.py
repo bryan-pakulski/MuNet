@@ -864,6 +864,44 @@ class TestBindings(unittest.TestCase):
             expected = np.array([[[2.0, 4.0], [2.0, 4.0]], [[2.0, 4.0], [2.0, 4.0]]], dtype=np.float32)
             self.assertTrue(np.allclose(out, expected, atol=1e-6))
 
+    def test_tensor_topk_basic(self):
+        x_np = np.array([[1.0, 3.0, 2.0], [4.0, 0.0, 5.0]], dtype=np.float32)
+        x = munet.from_numpy(x_np)
+        vals, idx = x.topk(2, dim=1, largest=True, sorted=True)
+        vals_np = np.array(vals.detach(), copy=False)
+        idx_np = np.array(idx.detach(), copy=False)
+        self.assertTrue(np.allclose(vals_np, np.array([[3.0, 2.0], [5.0, 4.0]], dtype=np.float32), atol=1e-6))
+        self.assertTrue(np.allclose(idx_np, np.array([[1.0, 2.0], [2.0, 0.0]], dtype=np.float32), atol=1e-6))
+
+    def test_compile_onnx_topk(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX TopK test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "topk.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 4])
+            v_info = helper.make_tensor_value_info("v", TensorProto.FLOAT, [2, 2])
+            i_info = helper.make_tensor_value_info("i", TensorProto.INT64, [2, 2])
+            k_init = helper.make_tensor("k", TensorProto.INT64, [1], [2])
+            topk = helper.make_node("TopK", ["x", "k"], ["v", "i"], axis=1, largest=1, sorted=1)
+            graph = helper.make_graph([topk], "topk_graph", [x_info], [v_info, i_info], [k_init])
+            model = helper.make_model(graph, producer_name="munet_topk_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[1.0, 4.0, 3.0, 2.0], [8.0, 5.0, 6.0, 7.0]], dtype=np.float32)
+            x = munet.from_numpy(x_np)
+            out = module.forward(x)
+            vals = np.array(out[0].detach(), copy=False)
+            idx = np.array(out[1].detach(), copy=False)
+            self.assertTrue(np.allclose(vals, np.array([[4.0, 3.0], [8.0, 7.0]], dtype=np.float32), atol=1e-6))
+            self.assertTrue(np.allclose(idx, np.array([[1.0, 2.0], [0.0, 3.0]], dtype=np.float32), atol=1e-6))
+
     def test_compile_onnx_gather_elements(self):
         try:
             import onnx

@@ -160,6 +160,67 @@ __global__ void erf_kernel(const float *in, float *out, size_t N) {
     out[i] = erf_approx_cuda(in[i]);
 }
 
+
+__global__ void topk_kernel(const float *in, float *outv, float *outi,
+                           int outer, int dim_size, int k, int largest,
+                           int sorted_flag) {
+  const int MAXK = 64;
+  int row = blockIdx.x * blockDim.x + threadIdx.x;
+  if (row >= outer)
+    return;
+  if (k > MAXK) {
+    for (int j = 0; j < k; ++j) {
+      outv[row * k + j] = 0.0f;
+      outi[row * k + j] = 0.0f;
+    }
+    return;
+  }
+
+  int sel[MAXK];
+  float sel_v[MAXK];
+  for (int j = 0; j < k; ++j) {
+    sel[j] = -1;
+    sel_v[j] = 0.0f;
+  }
+
+  const float *r = in + row * dim_size;
+  for (int j = 0; j < k; ++j) {
+    int best_i = -1;
+    float best_v = largest ? -3.402823e38f : 3.402823e38f;
+    for (int i = 0; i < dim_size; ++i) {
+      bool used = false;
+      for (int p = 0; p < j; ++p)
+        if (sel[p] == i)
+          used = true;
+      if (used)
+        continue;
+      float v = r[i];
+      if (largest) {
+        if (v > best_v || (v == best_v && i < best_i)) {
+          best_v = v;
+          best_i = i;
+        }
+      } else {
+        if (v < best_v || (v == best_v && i < best_i)) {
+          best_v = v;
+          best_i = i;
+        }
+      }
+    }
+    sel[j] = best_i;
+    sel_v[j] = best_v;
+  }
+
+  if (!sorted_flag) {
+    // already in selection order
+  }
+
+  for (int j = 0; j < k; ++j) {
+    outv[row * k + j] = sel_v[j];
+    outi[row * k + j] = (float)sel[j];
+  }
+}
+
 __global__ void softmax_forward_kernel(const float *in, float *out,
                                        int batch_size, int num_classes) {
   int b = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1350,6 +1411,27 @@ void CUDABackend::mse_loss_backward(const Storage &grad_out,
   mse_loss_backward_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)pred.data(),
       (const float *)target.data(), (float *)grad_in.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+
+void CUDABackend::topk(const Storage &in, Storage &out_values,
+                       Storage &out_indices, int outer, int dim_size, int k,
+                       bool largest, bool sorted_flag) {
+  cudaSetDevice(device_index_);
+  if (k <= 0 || k > dim_size)
+    throw std::runtime_error("topk: invalid k");
+  if (k > 64)
+    throw std::runtime_error("topk: k>64 not supported yet on CUDA");
+  int threads = 256;
+  int blocks = (outer + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  topk_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                   (float *)out_values.data(),
+                                   (float *)out_indices.data(), outer,
+                                   dim_size, k, largest ? 1 : 0,
+                                   sorted_flag ? 1 : 0);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
