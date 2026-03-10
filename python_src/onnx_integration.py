@@ -453,6 +453,36 @@ class _ONNXGraphModule:
         t.uniform_(float(value), float(value))
         return t
 
+    def export_npz(self, output_path):
+        import json
+
+        payload = {
+            "__format__": self._np.asarray(["munet.onnx_graph_module.npz.v1"]),
+            "__opset__": self._np.asarray([int(self._opset)], dtype=self._np.int64),
+            "__input_names__": self._np.asarray(self._input_names, dtype=object),
+            "__output_names__": self._np.asarray([o.name for o in self._graph.output], dtype=object),
+        }
+
+        graph_meta = {
+            "graph_name": getattr(self._graph, "name", ""),
+            "nodes": [
+                {
+                    "name": node.name,
+                    "op_type": node.op_type,
+                    "input": list(node.input),
+                    "output": list(node.output),
+                }
+                for node in self._graph.node
+            ],
+        }
+        payload["__graph_json__"] = self._np.asarray([json.dumps(graph_meta)], dtype=object)
+
+        for name, value in self._consts.items():
+            payload[f"tensor/{name}"] = self._np.asarray(value)
+
+        self._np.savez_compressed(output_path, **payload)
+        return output_path
+
     def _value(self, env, name):
         if name in env:
             return env[name]
@@ -1037,10 +1067,7 @@ def compile_onnx(model_path, output_path=None, debug=False):
     module = _compile_onnx_graph_module(model_path)
 
     if output_path is not None:
-        raise ValueError(
-            "compile_onnx: output_path save is not yet supported for graph-runtime modules. "
-            "Convert first and run inference directly with returned module."
-        )
+        module.export_npz(output_path)
 
     if debug:
         print(
@@ -1049,6 +1076,12 @@ def compile_onnx(model_path, output_path=None, debug=False):
         )
 
     return module
+
+
+def export_onnx_npz(model_path, output_path, debug=False):
+    """Compile ONNX graph module and export it as a compressed NPZ bundle."""
+    module = compile_onnx(model_path, output_path=output_path, debug=debug)
+    return output_path
 
 
 def report_onnx_unsupported_ops(model_path):
@@ -1109,6 +1142,7 @@ def download_yolov5n_onnx(destination_path):
 inference.ONNXEngine = ONNXEngine
 inference.load_onnx = load_onnx
 inference.compile_onnx = compile_onnx
+inference.export_onnx_npz = export_onnx_npz
 inference.report_onnx_unsupported_ops = report_onnx_unsupported_ops
 inference.onnx_native_conversion_map = onnx_native_conversion_map
 inference.onnx_conversion_coverage_report = onnx_conversion_coverage_report

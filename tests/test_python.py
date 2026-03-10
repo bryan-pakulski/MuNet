@@ -699,6 +699,57 @@ class TestBindings(unittest.TestCase):
             expected = np.maximum(x.numpy() @ W + B, 0.0)
             self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
 
+    def test_compile_onnx_export_npz(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX export NPZ test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            onnx_path = os.path.join(d, "linear_relu.onnx")
+            npz_path = os.path.join(d, "linear_relu_export.npz")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
+
+            W = np.array([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=np.float32)
+            B = np.array([0.5, -1.0], dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
+            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
+
+            gemm = helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0)
+            relu = helper.make_node("Relu", ["z"], ["y"])
+            graph = helper.make_graph([gemm, relu], "linear_relu_graph", [x_info], [y_info], [w_init, b_init])
+            model = helper.make_model(graph, producer_name="munet_export_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, onnx_path)
+
+            module = munet.inference.compile_onnx(onnx_path, output_path=npz_path)
+            self.assertTrue(os.path.exists(npz_path))
+
+            state = np.load(npz_path, allow_pickle=True)
+            self.assertIn("__format__", state.files)
+            self.assertIn("__input_names__", state.files)
+            self.assertIn("__output_names__", state.files)
+            self.assertIn("tensor/W", state.files)
+            self.assertIn("tensor/B", state.files)
+            self.assertEqual(str(state["__format__"][0]), "munet.onnx_graph_module.npz.v1")
+            self.assertTrue(np.allclose(state["tensor/W"], W))
+            self.assertTrue(np.allclose(state["tensor/B"], B))
+
+            out_path2 = os.path.join(d, "linear_relu_export2.npz")
+            out_ret = munet.inference.export_onnx_npz(onnx_path, out_path2)
+            self.assertEqual(out_ret, out_path2)
+            self.assertTrue(os.path.exists(out_path2))
+
+            x = munet.from_numpy(np.array([[1.0, 2.0, 3.0]], dtype=np.float32))
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.maximum(x.numpy() @ W + B, 0.0)
+            self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
+
     def test_compile_onnx_report_unsupported_ops(self):
         try:
             import onnx
