@@ -481,7 +481,7 @@ class _ONNXGraphModule:
                     A = A.permute([1, 0]).contiguous()
                 if transB != 0:
                     B = B.permute([1, 0]).contiguous()
-                out = A.matmul(B)
+                out = A.__matmul__(B)
                 if alpha != 1.0:
                     out = out * self._scalar_tensor(alpha, out)
                 if C is not None:
