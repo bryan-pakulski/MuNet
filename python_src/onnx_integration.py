@@ -172,13 +172,6 @@ def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_
                 return [float(v) for v in a.floats]
         return default
 
-    class _TensorOp(munet.nn.Module):
-        def __init__(self, fn):
-            super().__init__()
-            self._fn = fn
-        def forward(self, x):
-            return self._fn(x)
-
     for node in graph.node:
         op = node.op_type
         _log(f"node op={op} inputs={list(node.input)} outputs={list(node.output)}")
@@ -249,18 +242,11 @@ def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_
             seq_layers.append(layer)
 
         elif op in ("Add", "Sub", "Mul", "Div"):
-            c = _const(node.input[1])
-            if c is None:
-                _unsupported(op)
-                continue
-            if op == "Add":
-                seq_layers.append(_TensorOp(lambda x, c=c: x + c))
-            elif op == "Sub":
-                seq_layers.append(_TensorOp(lambda x, c=c: x - c))
-            elif op == "Div":
-                seq_layers.append(_TensorOp(lambda x, c=c: x / c))
-            else:
-                seq_layers.append(_TensorOp(lambda x, c=c: x * c))
+            # NOTE: Python-defined nn.Module subclasses currently cannot be used
+            # safely as layers inside native nn::Sequential (pure virtual call).
+            # Keep these as unsupported until a native module exists.
+            _unsupported(op)
+            continue
 
         elif op == "Relu":
             seq_layers.append(munet.nn.ReLU())
@@ -271,64 +257,23 @@ def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_
         elif op == "Flatten":
             seq_layers.append(munet.nn.Flatten())
         elif op == "Softmax":
-            axis = _get_attr(node, "axis", -1)
-            seq_layers.append(_TensorOp(lambda x, axis=axis: x.softmax(axis)))
+            _unsupported("Softmax")
+            continue
         elif op == "Reshape":
-            shp = consts.get(node.input[1])
-            if shp is None:
-                _unsupported("Reshape")
-                continue
-            shp_list = [int(v) for v in np.asarray(shp).tolist()]
-            seq_layers.append(_TensorOp(lambda x, shp_list=shp_list: x.reshape(shp_list)))
+            _unsupported("Reshape")
+            continue
         elif op == "Transpose":
-            perm = _get_attr(node, "perm", None)
-            if perm is None:
-                _unsupported("Transpose")
-                continue
-            seq_layers.append(_TensorOp(lambda x, perm=perm: x.permute(perm)))
+            _unsupported("Transpose")
+            continue
         elif op == "Unsqueeze":
-            axes = _get_attr(node, "axes", None)
-            if axes is None and len(node.input) > 1 and node.input[1] in consts:
-                axes = [int(v) for v in np.asarray(consts[node.input[1]]).tolist()]
-            if axes is None:
-                _unsupported("Unsqueeze")
-                continue
-            def _unsq(x, axes=axes):
-                shape = list(x.shape)
-                for a in sorted([(ax if ax >= 0 else ax + len(shape) + 1) for ax in axes]):
-                    shape.insert(a, 1)
-                return x.reshape(shape)
-            seq_layers.append(_TensorOp(_unsq))
+            _unsupported("Unsqueeze")
+            continue
         elif op == "Squeeze":
-            axes = _get_attr(node, "axes", None)
-            if axes is None and len(node.input) > 1 and node.input[1] in consts:
-                axes = [int(v) for v in np.asarray(consts[node.input[1]]).tolist()]
-            if axes is None:
-                _unsupported("Squeeze")
-                continue
-            def _sq(x, axes=axes):
-                shape = list(x.shape)
-                rm = sorted([(ax if ax >= 0 else ax + len(shape)) for ax in axes], reverse=True)
-                for a in rm:
-                    if shape[a] != 1:
-                        raise RuntimeError("Squeeze: axis dim must be 1")
-                    shape.pop(a)
-                return x.reshape(shape)
-            seq_layers.append(_TensorOp(_sq))
+            _unsupported("Squeeze")
+            continue
         elif op == "Concat":
-            axis = _get_attr(node, "axis", 0)
-            others = []
-            ok = True
-            for inp in node.input[1:]:
-                t = _const(inp)
-                if t is None:
-                    ok = False
-                    break
-                others.append(t)
-            if not ok:
-                _unsupported("Concat")
-                continue
-            seq_layers.append(_TensorOp(lambda x, others=others, axis=axis: munet.Tensor.cat([x] + others, axis)))
+            _unsupported("Concat")
+            continue
         elif op == "Conv":
             W = _const(node.input[1])
             if W is None:
