@@ -744,6 +744,85 @@ class TestBindings(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 munet.inference.compile_onnx(onnx_path, output_path=os.path.join(d, "bad.npz"), report_only=True)
+
+    def test_onnx_native_conversion_map_api(self):
+        mp = munet.inference.onnx_native_conversion_map()
+        self.assertIn("Gemm", mp)
+        self.assertEqual(mp["Gemm"]["status"], "lowered")
+        self.assertEqual(mp["LeakyRelu"]["status"], "lowered")
+        self.assertEqual(mp["Gelu"]["status"], "lowered")
+        self.assertEqual(mp["GlobalAveragePool"]["status"], "lowered")
+
+    def test_compile_onnx_lower_leakyrelu_and_globalavgpool(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX LeakyRelu/GlobalAveragePool lowering test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_lrelu_gap.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 1, 1])
+
+            W = np.array([[[[1.0]]]], dtype=np.float32)
+            B = np.array([0.0], dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
+            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
+
+            conv = helper.make_node("Conv", ["x", "W", "B"], ["z"])
+            lrelu = helper.make_node("LeakyRelu", ["z"], ["a"], alpha=0.1)
+            gap = helper.make_node("GlobalAveragePool", ["a"], ["y"])
+
+            graph = helper.make_graph([conv, lrelu, gap], "conv_lrelu_gap", [x_info], [y_info], [w_init, b_init])
+            model = helper.make_model(graph, producer_name="munet_lrelu_gap_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x = munet.from_numpy(np.array([[[[-1.0, 3.0], [2.0, -4.0]]]], dtype=np.float32))
+            out = np.array(module.forward(x).detach(), copy=False)
+
+            expected = np.array([[[[( -0.1 + 3.0 + 2.0 - 0.4 ) / 4.0]]]], dtype=np.float32)
+            self.assertTrue(np.allclose(out, expected, atol=1e-5))
+
+    def test_compare_onnx_native_to_ort(self):
+        try:
+            import onnx
+            import onnxruntime  # noqa: F401
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX native-vs-ORT compare test (onnx/onnxruntime not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "compare_linear_relu.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
+
+            W = np.array([[1.0, 0.5], [0.0, -1.0], [2.0, 1.0]], dtype=np.float32)
+            B = np.array([0.25, -0.75], dtype=np.float32)
+
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
+            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
+            gemm = helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0)
+            relu = helper.make_node("Relu", ["z"], ["y"])
+
+            graph = helper.make_graph([gemm, relu], "compare_graph", [x_info], [y_info], [w_init, b_init])
+            model = helper.make_model(graph, producer_name="munet_compare_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            x = munet.from_numpy(np.array([[1.0, 2.0, 3.0], [-0.5, 0.0, 1.0]], dtype=np.float32))
+            metrics = munet.inference.compare_onnx_native_to_ort(path, x)
+
+            self.assertEqual(metrics["shape"], [2, 2])
+            self.assertLess(metrics["max_abs_error"], 1e-5)
+            self.assertLess(metrics["mean_abs_error"], 1e-6)
+            self.assertLess(metrics["rmse"], 1e-6)
+
     def test_onnx_inference_wrapper(self):
         try:
             import onnx

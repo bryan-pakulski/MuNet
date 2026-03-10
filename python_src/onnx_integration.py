@@ -121,6 +121,9 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Sigmoid": {"status": "lowered", "munet": "nn.Sigmoid"},
     "Tanh": {"status": "lowered", "munet": "nn.Tanh"},
     "Flatten": {"status": "lowered", "munet": "nn.Flatten"},
+    "LeakyRelu": {"status": "lowered", "munet": "nn.LeakyReLU"},
+    "Gelu": {"status": "lowered", "munet": "nn.GELU"},
+    "GlobalAveragePool": {"status": "lowered", "munet": "nn.GlobalAvgPool2d"},
     "Add": {"status": "planned", "munet": "binary_const/add"},
     "Sub": {"status": "planned", "munet": "binary_const/sub"},
     "Mul": {"status": "planned", "munet": "binary_const/mul"},
@@ -309,6 +312,24 @@ def _lower_flatten(node, ctx):
     return True
 
 
+def _lower_leaky_relu(node, ctx):
+    alpha = float(ctx.get_attr(node, "alpha", 0.01))
+    ctx.seq_layers.append(ctx.munet.nn.LeakyReLU(alpha))
+    return True
+
+
+def _lower_gelu(node, ctx):
+    # ONNX Gelu supports optional approximation mode; MuNet GELU currently
+    # provides a fast approximation implementation, so we map directly.
+    ctx.seq_layers.append(ctx.munet.nn.GELU())
+    return True
+
+
+def _lower_global_average_pool(node, ctx):
+    ctx.seq_layers.append(ctx.munet.nn.GlobalAvgPool2d())
+    return True
+
+
 _NODE_LOWERING_DISPATCH = {
     "Gemm": _lower_gemm,
     "MatMul": _lower_matmul,
@@ -318,6 +339,9 @@ _NODE_LOWERING_DISPATCH = {
     "Sigmoid": _lower_sigmoid,
     "Tanh": _lower_tanh,
     "Flatten": _lower_flatten,
+    "LeakyRelu": _lower_leaky_relu,
+    "Gelu": _lower_gelu,
+    "GlobalAveragePool": _lower_global_average_pool,
 }
 
 _PASS_THROUGH_OPS = {"Identity", "Cast"}
@@ -458,8 +482,40 @@ def report_onnx_unsupported_ops(model_path):
     )
 
 
+def compare_onnx_native_to_ort(model_path, input_data, output_device=None, providers=None):
+    """Run ONNXRuntime and native MuNet lowering and report numeric drift.
+
+    The model must be fully supported by `compile_onnx` (no partial lowering).
+    """
+    import numpy as np
+
+    ort_engine = load_onnx(model_path, device=output_device, providers=providers)
+    native_module = compile_onnx(model_path)
+
+    ort_out = ort_engine.run(input_data, output_device=output_device)
+    native_out = native_module.forward(input_data)
+
+    ort_np = np.asarray(ort_out.detach().to(ort_engine._m.Device(ort_engine._m.DeviceType.CPU, 0)).numpy(), dtype=np.float32)
+    native_np = np.asarray(native_out.detach().to(ort_engine._m.Device(ort_engine._m.DeviceType.CPU, 0)).numpy(), dtype=np.float32)
+
+    if ort_np.shape != native_np.shape:
+        raise ValueError(
+            f"compare_onnx_native_to_ort: output shape mismatch ORT={ort_np.shape} native={native_np.shape}"
+        )
+
+    diff = native_np - ort_np
+    abs_diff = np.abs(diff)
+    return {
+        "shape": list(ort_np.shape),
+        "max_abs_error": float(abs_diff.max()) if abs_diff.size > 0 else 0.0,
+        "mean_abs_error": float(abs_diff.mean()) if abs_diff.size > 0 else 0.0,
+        "rmse": float(np.sqrt(np.mean(diff * diff))) if abs_diff.size > 0 else 0.0,
+    }
+
+
 inference.ONNXEngine = ONNXEngine
 inference.load_onnx = load_onnx
 inference.compile_onnx = compile_onnx
 inference.report_onnx_unsupported_ops = report_onnx_unsupported_ops
 inference.onnx_native_conversion_map = onnx_native_conversion_map
+inference.compare_onnx_native_to_ort = compare_onnx_native_to_ort

@@ -45,9 +45,18 @@ This split is practical for incremental rollout because unsupported ops still ru
 - `Conv` (limited 2D case) -> `nn.Conv2d`
 - `MaxPool` (2D symmetric case) -> `nn.MaxPool2d`
 - `Relu` -> `nn.ReLU`
+- `LeakyRelu` -> `nn.LeakyReLU`
 - `Sigmoid` -> `nn.Sigmoid`
 - `Tanh` -> `nn.Tanh`
+- `Gelu` -> `nn.GELU`
 - `Flatten` -> `nn.Flatten`
+- `GlobalAveragePool` -> `nn.GlobalAvgPool2d`
+
+### Native vs ONNX Runtime drift check
+
+Use `munet.inference.compare_onnx_native_to_ort(model_path, input_data)` to run
+the same input through ONNX Runtime and native-lowered MuNet execution and
+return drift metrics (`max_abs_error`, `mean_abs_error`, `rmse`).
 
 ### Near-term recommended next mappings
 
