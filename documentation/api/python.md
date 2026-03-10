@@ -31,3 +31,8 @@ Common modules in `munet.nn` include:
 - `munet.save(model, path)`
 - `munet.load(path)` (full reconstruction for supported built-ins)
 - `munet.load(model, path)` / `munet.load_weights(model, path)` (weights-only)
+
+
+## Further reading
+
+- See the **Tensor Workflow** guide for recommended tensor creation, assignment, device transfer, and ONNX multi-input feeding patterns.
