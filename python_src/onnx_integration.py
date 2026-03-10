@@ -416,6 +416,11 @@ class _ONNXGraphModule:
             return self._np.asarray(v.detach().to(cpu).numpy())
         return self._np.asarray(v)
 
+    def _scalar_tensor(self, value, ref):
+        t = self._m.Tensor([1], ref.device, ref.dtype, False)
+        t.uniform_(float(value), float(value))
+        return t
+
     def _value(self, env, name):
         if name in env:
             return env[name]
@@ -455,6 +460,33 @@ class _ONNXGraphModule:
                 out = data.max_pool2d(int(ks[0]), int(st[0]), int(pd[0]))
             elif op == "Sigmoid":
                 out = self._as_tensor(ins[0]).sigmoid()
+            elif op == "Relu":
+                out = self._as_tensor(ins[0]).relu()
+            elif op == "LeakyRelu":
+                x = self._as_tensor(ins[0])
+                alpha = float(self._get_attr(node, "alpha", 0.01))
+                out = self._m.nn.LeakyReLU(alpha).forward(x)
+            elif op == "GlobalAveragePool":
+                x = self._as_tensor(ins[0])
+                out = self._m.nn.GlobalAvgPool2d().forward(x)
+            elif op == "Gemm":
+                A = self._as_tensor(ins[0])
+                B = self._as_tensor(ins[1], A.device)
+                C = self._as_tensor(ins[2], A.device) if len(ins) > 2 else None
+                transA = int(self._get_attr(node, "transA", 0))
+                transB = int(self._get_attr(node, "transB", 0))
+                alpha = float(self._get_attr(node, "alpha", 1.0))
+                beta = float(self._get_attr(node, "beta", 1.0))
+                if transA != 0:
+                    A = A.permute([1, 0]).contiguous()
+                if transB != 0:
+                    B = B.permute([1, 0]).contiguous()
+                out = A.matmul(B)
+                if alpha != 1.0:
+                    out = out * self._scalar_tensor(alpha, out)
+                if C is not None:
+                    c_term = C if beta == 1.0 else C * self._scalar_tensor(beta, C)
+                    out = out + c_term
             elif op == "Add":
                 a = self._as_tensor(ins[0])
                 b = self._as_tensor(ins[1], a.device)
@@ -565,6 +597,48 @@ def load_onnx(model_path, device=None, providers=None):
     )
 
 
+_GRAPH_RUNTIME_SUPPORTED_OPS = {
+    "Constant",
+    "Identity",
+    "Cast",
+    "Conv",
+    "MaxPool",
+    "Sigmoid",
+    "Relu",
+    "LeakyRelu",
+    "GlobalAveragePool",
+    "Gemm",
+    "Add",
+    "Mul",
+    "Concat",
+    "Reshape",
+    "Transpose",
+    "Unsqueeze",
+    "Shape",
+    "Slice",
+    "Split",
+    "Resize",
+    "Pow",
+    "Floor",
+}
+
+
+def _collect_runtime_missing_ops(graph):
+    from collections import Counter
+
+    op_counts = Counter(node.op_type for node in graph.node)
+    missing_unique = []
+    missing_total = 0
+    for op, count in sorted(op_counts.items()):
+        if op not in _GRAPH_RUNTIME_SUPPORTED_OPS:
+            missing_unique.append(op)
+            missing_total += int(count)
+    return {
+        "missing_runtime_unique": missing_unique,
+        "missing_runtime_total": int(missing_total),
+    }
+
+
 def _collect_conversion_failures(graph):
     from collections import Counter
 
@@ -609,9 +683,17 @@ def compile_onnx(model_path, output_path=None, debug=False):
 
     model = onnx.load(model_path)
     fail_info = _collect_conversion_failures(model.graph)
+    runtime_info = _collect_runtime_missing_ops(model.graph)
 
     if fail_info["unsupported_total"] > 0:
         raise ValueError(_format_conversion_failure(model_path, fail_info))
+    if runtime_info["missing_runtime_total"] > 0:
+        raise ValueError(
+            "compile_onnx: conversion failed due missing graph-runtime op implementations. "
+            f"model='{model_path}', "
+            f"missing_runtime_unique={runtime_info['missing_runtime_unique']}, "
+            f"missing_runtime_total={runtime_info['missing_runtime_total']}"
+        )
 
     module = _compile_onnx_graph_module(model_path)
 

@@ -782,9 +782,9 @@ class TestBindings(unittest.TestCase):
             path = os.path.join(d, "strict_fail.onnx")
             x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
             y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
-            erf1 = helper.make_node("Erf", ["x"], ["z1"])
-            erf2 = helper.make_node("Erf", ["z1"], ["y"])
-            graph = helper.make_graph([erf1, erf2], "strict_fail_graph", [x_info], [y_info])
+            soft = helper.make_node("Softmax", ["x"], ["z1"])
+            erf = helper.make_node("Erf", ["z1"], ["y"])
+            graph = helper.make_graph([soft, erf], "strict_fail_graph", [x_info], [y_info])
             model = helper.make_model(graph, producer_name="munet_strict_fail_test", opset_imports=[helper.make_opsetid("", 11)])
             model.ir_version = 7
             onnx.save(model, path)
@@ -793,8 +793,9 @@ class TestBindings(unittest.TestCase):
                 munet.inference.compile_onnx(path)
 
             msg = str(ctx.exception)
-            self.assertIn("unsupported_unique=['Erf']", msg)
             self.assertIn("unsupported_total=2", msg)
+            self.assertIn("Erf", msg)
+            self.assertIn("Softmax", msg)
 
     def test_onnx_conversion_coverage_report_generated_graph(self):
         try:
