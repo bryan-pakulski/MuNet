@@ -823,6 +823,67 @@ class TestBindings(unittest.TestCase):
             self.assertLess(metrics["mean_abs_error"], 1e-6)
             self.assertLess(metrics["rmse"], 1e-6)
 
+
+
+    def test_onnx_conversion_coverage_report_generated_graph(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX coverage-report test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "coverage_graph.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
+
+            W = np.array([[1.0, 0.5], [0.0, -1.0], [2.0, 1.0]], dtype=np.float32)
+            B = np.array([0.25, -0.75], dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
+            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
+
+            nodes = [
+                helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0),
+                helper.make_node("Relu", ["z"], ["a"]),
+                helper.make_node("Sigmoid", ["a"], ["y"]),
+            ]
+            graph = helper.make_graph(nodes, "coverage_graph", [x_info], [y_info], [w_init, b_init])
+            model = helper.make_model(graph, producer_name="munet_coverage_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            report = munet.inference.onnx_conversion_coverage_report(path)
+            self.assertEqual(report["total_nodes"], 3)
+            self.assertTrue(report["fully_lowerable"])
+            self.assertEqual(report["coverage"]["unsupported"], [])
+            self.assertEqual(report["coverage"]["unmapped"], [])
+
+    def test_yolov5n_onnx_conversion_coverage_report(self):
+        try:
+            import onnx  # noqa: F401
+        except Exception:
+            print("\nSkipping yolov5n coverage test (onnx not installed).")
+            return
+
+        import urllib.error
+
+        with tempfile.TemporaryDirectory() as d:
+            yolopath = os.path.join(d, "yolov5n.onnx")
+            try:
+                munet.inference.download_yolov5n_onnx(yolopath)
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                print(f"\nSkipping yolov5n coverage test (download unavailable): {e}")
+                return
+
+            report = munet.inference.onnx_conversion_coverage_report(yolopath)
+            self.assertGreater(report["total_nodes"], 0)
+            self.assertIn("Conv", report["unique_ops"])
+            # This test is intended to surface current conversion gaps.
+            self.assertTrue(
+                len(report["coverage"]["unsupported"]) > 0 or len(report["coverage"]["unmapped"]) > 0
+            )
+
     def test_onnx_inference_wrapper(self):
         try:
             import onnx

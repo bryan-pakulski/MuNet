@@ -482,6 +482,55 @@ def report_onnx_unsupported_ops(model_path):
     )
 
 
+
+
+def onnx_conversion_coverage_report(model_path):
+    """Return ONNX operator coverage against MuNet native conversion map.
+
+    This utility inspects graph operator types without compiling/running the model.
+    """
+    import onnx
+    from collections import Counter
+
+    model = onnx.load(model_path)
+    op_counts = Counter(node.op_type for node in model.graph.node)
+
+    coverage = {
+        "lowered": [],
+        "pass_through": [],
+        "planned": [],
+        "unsupported": [],
+        "unmapped": [],
+    }
+
+    for op in sorted(op_counts.keys()):
+        entry = ONNX_NATIVE_CONVERSION_MAP.get(op)
+        if entry is None:
+            coverage["unmapped"].append(op)
+        else:
+            coverage[entry["status"]].append(op)
+
+    return {
+        "model_path": model_path,
+        "total_nodes": int(sum(op_counts.values())),
+        "unique_ops": sorted(op_counts.keys()),
+        "op_counts": dict(sorted(op_counts.items())),
+        "coverage": coverage,
+        "fully_lowerable": len(coverage["unsupported"]) == 0 and len(coverage["unmapped"]) == 0,
+    }
+
+
+def download_yolov5n_onnx(destination_path):
+    """Download public yolov5n ONNX model used for conversion coverage checks."""
+    import urllib.request
+
+    url = (
+        "https://github.com/yakhyo/yolov5-onnx-inference/releases/download/"
+        "v0.0.1/yolov5n.onnx"
+    )
+    urllib.request.urlretrieve(url, destination_path)
+    return destination_path
+
 def compare_onnx_native_to_ort(model_path, input_data, output_device=None, providers=None):
     """Run ONNXRuntime and native MuNet lowering and report numeric drift.
 
@@ -518,4 +567,6 @@ inference.load_onnx = load_onnx
 inference.compile_onnx = compile_onnx
 inference.report_onnx_unsupported_ops = report_onnx_unsupported_ops
 inference.onnx_native_conversion_map = onnx_native_conversion_map
+inference.onnx_conversion_coverage_report = onnx_conversion_coverage_report
+inference.download_yolov5n_onnx = download_yolov5n_onnx
 inference.compare_onnx_native_to_ort = compare_onnx_native_to_ort

@@ -63,3 +63,33 @@ return drift metrics (`max_abs_error`, `mean_abs_error`, `rmse`).
 - binary constant ops: `Add`, `Sub`, `Mul`, `Div`
 - layout ops: `Reshape`, `Transpose`
 - basic graph joins: `Concat`
+
+## YOLOv5 ONNX operator coverage check
+
+You can inspect a downloaded ONNX model without compiling it natively:
+
+```python
+import munet
+report = munet.inference.onnx_conversion_coverage_report("yolov5n.onnx")
+print(report["unique_ops"])
+print("unsupported:", report["coverage"]["unsupported"])
+print("unmapped:", report["coverage"]["unmapped"])
+```
+
+To fetch the reference model used by tests/utilities:
+
+```python
+import munet
+munet.inference.download_yolov5n_onnx("/tmp/yolov5n.onnx")
+```
+
+## Builder container for reproducible local builds
+
+If local pybind11/Python toolchain setup is problematic, use the builder image:
+
+```bash
+./tools/build_in_docker.sh
+```
+
+This builds `docker/Dockerfile.builder` and runs a release CMake build inside
+an Ubuntu 22.04 container with Python, CMake, pybind prerequisites, and ONNX tooling.
