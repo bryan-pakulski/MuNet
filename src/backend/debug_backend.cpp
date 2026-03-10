@@ -372,6 +372,16 @@ public:
     base_->upsample2d_backward(grad_out, grad_in, B, C, iH, iW, scale);
     check("upsample2d_backward", t.elapsed_us(), &grad_in);
   }
+  void grid_sample(const Storage &in, const Storage &grid, Storage &out,
+                   int B, int C, int iH, int iW, int oH, int oW, int mode,
+                   bool align_corners) override {
+    MUNET_DEBUG << "grid_sample | " << B << "x" << C << " " << iH << "x"
+                << iW << " -> " << oH << "x" << oW << std::endl;
+    Timer t;
+    base_->grid_sample(in, grid, out, B, C, iH, iW, oH, oW, mode,
+                       align_corners);
+    check("grid_sample", t.elapsed_us(), &out);
+  }
   void batch_norm(const Storage &in, const Storage &scale, const Storage &bias,
                   Storage &running_mean, Storage &running_var,
                   Storage &save_mean, Storage &save_var, Storage &out, int B,
