@@ -1341,6 +1341,38 @@ class TestBindings(unittest.TestCase):
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
 
+    def test_compile_onnx_conv_asymmetric_padding(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX conv asymmetric padding test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_asym_pad.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 4, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 4, 7])
+
+            w_np = np.ones((1, 1, 1, 1), dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], pads=[0, 1, 0, 2], strides=[1, 1])
+
+            graph = helper.make_graph([conv], "conv_asym_pad", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_asym_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4)
+            x = munet.from_numpy(x_np)
+
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.pad(x_np, ((0, 0), (0, 0), (0, 0), (1, 2)), mode="constant")
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_concat_negative_axis(self):
         try:
             import onnx

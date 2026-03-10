@@ -448,6 +448,42 @@ class _ONNXGraphModule:
                 t = t.to(like.device)
         return t
 
+    def _pad_tensor_constant(self, data, pads_begin, pads_end, value=0.0):
+        rank = len(data.shape)
+        if len(pads_begin) != rank or len(pads_end) != rank:
+            raise ValueError(
+                f"pad rank mismatch: rank={rank}, pads_begin={pads_begin}, pads_end={pads_end}"
+            )
+
+        cur = data
+        for ax in range(rank):
+            pb = int(pads_begin[ax])
+            pe = int(pads_end[ax])
+            if pb < 0 or pe < 0:
+                raise ValueError("negative padding is not supported")
+
+            parts = []
+            if pb > 0:
+                left_shape = list(cur.shape)
+                left_shape[ax] = pb
+                left = self._m.Tensor(left_shape, cur.device, cur.dtype, False)
+                left.uniform_(float(value), float(value))
+                parts.append(left)
+
+            parts.append(cur)
+
+            if pe > 0:
+                right_shape = list(cur.shape)
+                right_shape[ax] = pe
+                right = self._m.Tensor(right_shape, cur.device, cur.dtype, False)
+                right.uniform_(float(value), float(value))
+                parts.append(right)
+
+            if len(parts) > 1:
+                cur = self._m.Tensor.cat(parts, ax)
+
+        return cur
+
     def _scalar_tensor(self, value, ref):
         t = self._m.Tensor([1], ref.device, ref.dtype, False)
         t.uniform_(float(value), float(value))
@@ -553,9 +589,34 @@ class _ONNXGraphModule:
                 data = self._as_tensor(ins[0])
                 W = self._as_tensor(ins[1], data.device)
                 B = self._as_tensor(ins[2], data.device) if len(ins) > 2 else self._m.Tensor()
-                strides = self._get_attr(node, "strides", [1, 1])
-                pads = self._get_attr(node, "pads", [0, 0, 0, 0])
-                out = data.conv2d(W, B, int(strides[0]), int(pads[0]))
+
+                strides = [int(v) for v in self._get_attr(node, "strides", [1, 1])]
+                pads = [int(v) for v in self._get_attr(node, "pads", [0, 0, 0, 0])]
+                dilations = [int(v) for v in self._get_attr(node, "dilations", [1, 1])]
+                groups = int(self._get_attr(node, "group", 1))
+
+                if len(strides) != 2:
+                    raise ValueError(f"Conv only supports 2D strides, got {strides}")
+                if len(pads) != 4:
+                    raise ValueError(f"Conv only supports 2D pads [t,l,b,r], got {pads}")
+                if len(dilations) != 2 or dilations != [1, 1]:
+                    raise ValueError(f"Conv currently supports dilation=[1,1], got {dilations}")
+                if groups != 1:
+                    raise ValueError(f"Conv currently supports group=1, got {groups}")
+                if strides[0] != strides[1]:
+                    raise ValueError(f"Conv currently supports equal spatial stride, got {strides}")
+
+                pt, pl, pb, pr = pads
+                if any(v < 0 for v in (pt, pl, pb, pr)):
+                    raise ValueError(f"Conv does not support negative padding, got {pads}")
+
+                if any(v != 0 for v in (pt, pl, pb, pr)) and not (pt == pb and pl == pr and pt == pl):
+                    data = self._pad_tensor_constant(data, [0, 0, pt, pl], [0, 0, pb, pr], value=0.0)
+                    conv_padding = 0
+                else:
+                    conv_padding = int(pt)
+
+                out = data.conv2d(W, B, int(strides[0]), conv_padding)
             elif op == "MaxPool":
                 data = self._as_tensor(ins[0])
                 ks = self._get_attr(node, "kernel_shape", [2, 2])
@@ -948,34 +1009,7 @@ class _ONNXGraphModule:
 
                 pads_begin = pads[:rank]
                 pads_end = pads[rank:]
-                cur = data
-                for ax in range(rank):
-                    pb = int(pads_begin[ax])
-                    pe = int(pads_end[ax])
-                    if pb < 0 or pe < 0:
-                        raise ValueError("Pad currently does not support negative pads")
-
-                    parts = []
-                    if pb > 0:
-                        left_shape = list(cur.shape)
-                        left_shape[ax] = pb
-                        left = self._m.Tensor(left_shape, cur.device, cur.dtype, False)
-                        left.uniform_(value, value)
-                        parts.append(left)
-
-                    parts.append(cur)
-
-                    if pe > 0:
-                        right_shape = list(cur.shape)
-                        right_shape[ax] = pe
-                        right = self._m.Tensor(right_shape, cur.device, cur.dtype, False)
-                        right.uniform_(value, value)
-                        parts.append(right)
-
-                    if len(parts) > 1:
-                        cur = self._m.Tensor.cat(parts, ax)
-
-                out = cur
+                out = self._pad_tensor_constant(data, pads_begin, pads_end, value=value)
             elif op == "Pow":
                 a = self._as_numpy(ins[0]).astype(self._np.float32)
                 b = self._as_numpy(ins[1]).astype(self._np.float32)
