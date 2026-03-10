@@ -122,6 +122,7 @@ public:
   Tensor softmax(int dim = -1) const;
   Tensor log_softmax(int dim = -1) const;
   Tensor sum() const;
+  Tensor sum_to_shape(Shape target_shape) const;
   Tensor reshape(Shape new_shape) const;
   Tensor masked_fill(const Tensor &mask, float value) const;
   float item() const;

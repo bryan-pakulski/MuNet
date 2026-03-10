@@ -191,6 +191,8 @@ PYBIND11_MODULE(munet, m) {
            [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
       .def("sum", &Tensor::sum,
            "Returns the sum of all elements in the tensor.")
+      .def("sum_to_shape", &Tensor::sum_to_shape, py::arg("target_shape"),
+           "Reduces this tensor by summing broadcasted dimensions into target_shape.")
       .def("reshape", &Tensor::reshape, py::arg("shape"),
            "Returns a tensor with the same data and number of elements, but "
            "with the specified shape.")

@@ -171,6 +171,9 @@ Tensor Tensor::cat(const std::vector<Tensor> &inputs, int dim) {
 }
 
 Tensor Tensor::sum() const { return ops::sum(*this); }
+Tensor Tensor::sum_to_shape(Shape target_shape) const {
+  return ops::sum_to_shape(*this, target_shape);
+}
 
 Tensor Tensor::reshape(Shape new_shape) const {
   return ops::reshape(*this, new_shape);

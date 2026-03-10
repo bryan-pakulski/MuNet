@@ -573,19 +573,21 @@ class _ONNXGraphModule:
 
                 if len(axes) == 0:
                     out = data
-                elif axes == list(range(rank)):
-                    out = data.sum()
+                else:
+                    keep_shape = [1 if i in axes else int(in_shape[i]) for i in range(rank)]
+                    out = data.sum_to_shape(keep_shape)
+
                     if op == "ReduceMean":
                         count = 1
-                        for d in in_shape:
-                            count *= int(d)
+                        for ax in axes:
+                            count *= int(in_shape[ax])
                         out = out / self._scalar_tensor(float(count), out)
-                    if keepdims == 1:
-                        out = out.reshape([1] * rank)
-                else:
-                    raise ValueError(
-                        f"{op} currently supports only full-tensor reduction axes; got axes={axes} for rank={rank}"
-                    )
+
+                    if keepdims == 0:
+                        final_shape = [int(in_shape[i]) for i in range(rank) if i not in axes]
+                        if len(final_shape) == 0:
+                            final_shape = [1]
+                        out = out.reshape(final_shape)
             elif op == "Concat":
                 axis = int(self._get_attr(node, "axis", 0))
                 base = self._as_tensor(ins[0])
