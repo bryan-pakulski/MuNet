@@ -426,6 +426,24 @@ class _ONNXGraphModule:
                 return a.s.decode("utf-8")
         return default
 
+    def _cast_numpy(self, arr, to):
+        tp = self._onnx.TensorProto
+        dtype_map = {
+            tp.FLOAT: self._np.float32,
+            tp.DOUBLE: self._np.float64,
+            tp.FLOAT16: self._np.float16,
+            tp.BFLOAT16: self._np.float32,
+            tp.INT64: self._np.int64,
+            tp.INT32: self._np.int32,
+            tp.INT16: self._np.int16,
+            tp.INT8: self._np.int8,
+            tp.UINT8: self._np.uint8,
+            tp.BOOL: self._np.bool_,
+        }
+        if to not in dtype_map:
+            raise ValueError(f"Cast target dtype not supported: {to}")
+        return self._np.asarray(arr).astype(dtype_map[to], copy=False)
+
     def _as_tensor(self, v, ref_device=None):
         if isinstance(v, self._m.Tensor):
             return v
@@ -610,7 +628,16 @@ class _ONNXGraphModule:
             if op == "Identity":
                 out = ins[0]
             elif op == "Cast":
-                out = ins[0]
+                to = int(self._get_attr(node, "to", -1))
+                if to < 0:
+                    raise ValueError("Cast requires 'to' attribute")
+                src = ins[0]
+                if isinstance(src, self._m.Tensor):
+                    arr = self._as_numpy(src)
+                    casted = self._cast_numpy(arr, to)
+                    out = self._from_numpy_like(casted, src)
+                else:
+                    out = self._cast_numpy(src, to)
             elif op == "Conv":
                 data = self._as_tensor(ins[0])
                 W = self._as_tensor(ins[1], data.device)
@@ -705,21 +732,33 @@ class _ONNXGraphModule:
                     c_term = C if beta == 1.0 else C * self._scalar_tensor(beta, C)
                     out = out + c_term
             elif op == "Add":
-                a = self._as_tensor(ins[0])
-                b = self._as_tensor(ins[1], a.device)
-                out = a + b
+                if isinstance(ins[0], self._m.Tensor) or isinstance(ins[1], self._m.Tensor):
+                    a = self._as_tensor(ins[0])
+                    b = self._as_tensor(ins[1], a.device)
+                    out = a + b
+                else:
+                    out = self._as_numpy(ins[0]) + self._as_numpy(ins[1])
             elif op == "Mul":
-                a = self._as_tensor(ins[0])
-                b = self._as_tensor(ins[1], a.device)
-                out = a * b
+                if isinstance(ins[0], self._m.Tensor) or isinstance(ins[1], self._m.Tensor):
+                    a = self._as_tensor(ins[0])
+                    b = self._as_tensor(ins[1], a.device)
+                    out = a * b
+                else:
+                    out = self._as_numpy(ins[0]) * self._as_numpy(ins[1])
             elif op == "Sub":
-                a = self._as_tensor(ins[0])
-                b = self._as_tensor(ins[1], a.device)
-                out = a - b
+                if isinstance(ins[0], self._m.Tensor) or isinstance(ins[1], self._m.Tensor):
+                    a = self._as_tensor(ins[0])
+                    b = self._as_tensor(ins[1], a.device)
+                    out = a - b
+                else:
+                    out = self._as_numpy(ins[0]) - self._as_numpy(ins[1])
             elif op == "Div":
-                a = self._as_tensor(ins[0])
-                b = self._as_tensor(ins[1], a.device)
-                out = a / b
+                if isinstance(ins[0], self._m.Tensor) or isinstance(ins[1], self._m.Tensor):
+                    a = self._as_tensor(ins[0])
+                    b = self._as_tensor(ins[1], a.device)
+                    out = a / b
+                else:
+                    out = self._as_numpy(ins[0]) / self._as_numpy(ins[1])
             elif op == "Softmax":
                 x = self._as_tensor(ins[0])
                 rank = len(x.shape)
@@ -950,7 +989,10 @@ class _ONNXGraphModule:
                     idx = self._np.cumsum(split)[:-1]
                     parts = self._np.split(arr, idx, axis=axis)
                 for out_name, part in zip(node.output, parts):
-                    env[out_name] = self._m.from_numpy(self._np.asarray(part, dtype=self._np.float32))
+                    if isinstance(ins[0], self._m.Tensor):
+                        env[out_name] = self._m.from_numpy(self._np.asarray(part, dtype=self._np.float32))
+                    else:
+                        env[out_name] = self._np.asarray(part)
                 continue
             elif op == "Resize":
                 data = self._as_tensor(ins[0])
