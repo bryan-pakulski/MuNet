@@ -124,16 +124,22 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "LeakyRelu": {"status": "lowered", "munet": "nn.LeakyReLU"},
     "Gelu": {"status": "lowered", "munet": "nn.GELU"},
     "GlobalAveragePool": {"status": "lowered", "munet": "nn.GlobalAvgPool2d"},
-    "Add": {"status": "planned", "munet": "binary_const/add"},
+    "Add": {"status": "lowered", "munet": "graph/add"},
     "Sub": {"status": "planned", "munet": "binary_const/sub"},
-    "Mul": {"status": "planned", "munet": "binary_const/mul"},
+    "Mul": {"status": "lowered", "munet": "graph/mul"},
     "Div": {"status": "planned", "munet": "binary_const/div"},
     "Softmax": {"status": "unsupported", "munet": None},
-    "Reshape": {"status": "unsupported", "munet": None},
-    "Transpose": {"status": "unsupported", "munet": None},
-    "Unsqueeze": {"status": "unsupported", "munet": None},
     "Squeeze": {"status": "unsupported", "munet": None},
-    "Concat": {"status": "unsupported", "munet": None},
+    "Concat": {"status": "lowered", "munet": "graph/concat"},
+    "Reshape": {"status": "lowered", "munet": "graph/reshape"},
+    "Transpose": {"status": "lowered", "munet": "graph/transpose"},
+    "Unsqueeze": {"status": "lowered", "munet": "graph/unsqueeze"},
+    "Shape": {"status": "lowered", "munet": "graph/shape"},
+    "Slice": {"status": "lowered", "munet": "graph/slice"},
+    "Split": {"status": "lowered", "munet": "graph/split"},
+    "Resize": {"status": "lowered", "munet": "graph/resize_nearest"},
+    "Pow": {"status": "lowered", "munet": "graph/pow"},
+    "Floor": {"status": "lowered", "munet": "graph/floor"},
 }
 
 
@@ -347,6 +353,205 @@ _NODE_LOWERING_DISPATCH = {
 _PASS_THROUGH_OPS = {"Identity", "Cast"}
 
 
+
+
+class _ONNXGraphModule:
+    """General ONNX graph interpreter backed by MuNet tensor ops + safe numpy fallbacks."""
+
+    def __init__(self, model, munet_module, np_module):
+        self._model = model
+        self._graph = model.graph
+        self._m = munet_module
+        self._np = np_module
+
+        self._consts = {}
+        for init in self._graph.initializer:
+            self._consts[init.name] = self._onnx_numpy_helper.to_array(init)
+
+        for node in self._graph.node:
+            if node.op_type == "Constant" and len(node.output) > 0:
+                for a in node.attribute:
+                    if a.name == "value" and a.type == self._onnx.AttributeProto.TENSOR:
+                        self._consts[node.output[0]] = self._onnx_numpy_helper.to_array(a.t)
+                        break
+
+    @property
+    def _onnx(self):
+        import onnx
+        return onnx
+
+    @property
+    def _onnx_numpy_helper(self):
+        from onnx import numpy_helper
+        return numpy_helper
+
+    def _get_attr(self, node, name, default=None):
+        for a in node.attribute:
+            if a.name != name:
+                continue
+            if a.type == self._onnx.AttributeProto.INT:
+                return int(a.i)
+            if a.type == self._onnx.AttributeProto.FLOAT:
+                return float(a.f)
+            if a.type == self._onnx.AttributeProto.INTS:
+                return [int(v) for v in a.ints]
+            if a.type == self._onnx.AttributeProto.FLOATS:
+                return [float(v) for v in a.floats]
+            if a.type == self._onnx.AttributeProto.STRING:
+                return a.s.decode("utf-8")
+        return default
+
+    def _as_tensor(self, v, ref_device=None):
+        if isinstance(v, self._m.Tensor):
+            return v
+        arr = self._np.asarray(v, dtype=self._np.float32)
+        t = self._m.from_numpy(arr)
+        if ref_device is not None and ref_device.type != self._m.DeviceType.CPU:
+            t = t.to(ref_device)
+        return t
+
+    def _as_numpy(self, v):
+        if isinstance(v, self._m.Tensor):
+            cpu = self._m.Device(self._m.DeviceType.CPU, 0)
+            return self._np.asarray(v.detach().to(cpu).numpy())
+        return self._np.asarray(v)
+
+    def _value(self, env, name):
+        if name in env:
+            return env[name]
+        if name in self._consts:
+            return self._consts[name]
+        raise KeyError(f"Missing ONNX value: {name}")
+
+    def forward(self, x):
+        env = {}
+        if len(self._graph.input) != 1:
+            raise ValueError("_ONNXGraphModule currently supports single-input graphs")
+        env[self._graph.input[0].name] = x
+
+        for node in self._graph.node:
+            op = node.op_type
+            if op == "Constant":
+                continue
+
+            ins = [self._value(env, n) for n in node.input if n != ""]
+
+            if op == "Identity":
+                out = ins[0]
+            elif op == "Cast":
+                out = ins[0]
+            elif op == "Conv":
+                data = self._as_tensor(ins[0])
+                W = self._as_tensor(ins[1], data.device)
+                B = self._as_tensor(ins[2], data.device) if len(ins) > 2 else self._m.Tensor()
+                strides = self._get_attr(node, "strides", [1, 1])
+                pads = self._get_attr(node, "pads", [0, 0, 0, 0])
+                out = data.conv2d(W, B, int(strides[0]), int(pads[0]))
+            elif op == "MaxPool":
+                data = self._as_tensor(ins[0])
+                ks = self._get_attr(node, "kernel_shape", [2, 2])
+                st = self._get_attr(node, "strides", ks)
+                pd = self._get_attr(node, "pads", [0, 0, 0, 0])
+                out = data.max_pool2d(int(ks[0]), int(st[0]), int(pd[0]))
+            elif op == "Sigmoid":
+                out = self._as_tensor(ins[0]).sigmoid()
+            elif op == "Add":
+                a = self._as_tensor(ins[0])
+                b = self._as_tensor(ins[1], a.device)
+                out = a + b
+            elif op == "Mul":
+                a = self._as_tensor(ins[0])
+                b = self._as_tensor(ins[1], a.device)
+                out = a * b
+            elif op == "Concat":
+                axis = int(self._get_attr(node, "axis", 0))
+                np_ins = [self._as_numpy(v).astype(self._np.float32) for v in ins]
+                out = self._m.from_numpy(self._np.concatenate(np_ins, axis=axis))
+            elif op == "Reshape":
+                data = self._as_tensor(ins[0])
+                new_shape = [int(v) for v in self._as_numpy(ins[1]).reshape(-1).tolist()]
+                out = data.reshape(new_shape)
+            elif op == "Transpose":
+                data = self._as_tensor(ins[0])
+                perm = self._get_attr(node, "perm", list(range(len(data.shape) - 1, -1, -1)))
+                out = data.permute([int(v) for v in perm]).contiguous()
+            elif op == "Unsqueeze":
+                data = self._as_tensor(ins[0])
+                axes = self._get_attr(node, "axes", None)
+                if axes is None and len(ins) > 1:
+                    axes = [int(v) for v in self._as_numpy(ins[1]).reshape(-1).tolist()]
+                old_shape = list(data.shape)
+                rank = len(old_shape)
+                norm = sorted([a if a >= 0 else a + rank + len(axes) for a in axes])
+                for ax in norm:
+                    old_shape.insert(ax, 1)
+                out = data.reshape(old_shape)
+            elif op == "Shape":
+                out = self._np.asarray(self._as_tensor(ins[0]).shape, dtype=self._np.int64)
+            elif op == "Slice":
+                arr = self._as_numpy(ins[0])
+                starts = self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1)
+                ends = self._as_numpy(ins[2]).astype(self._np.int64).reshape(-1)
+                axes = self._as_numpy(ins[3]).astype(self._np.int64).reshape(-1) if len(ins) > 3 else self._np.arange(len(starts), dtype=self._np.int64)
+                steps = self._as_numpy(ins[4]).astype(self._np.int64).reshape(-1) if len(ins) > 4 else self._np.ones_like(starts)
+                sl = [slice(None)] * arr.ndim
+                for i, ax in enumerate(axes.tolist()):
+                    sl[int(ax)] = slice(int(starts[i]), int(ends[i]), int(steps[i]))
+                out = arr[tuple(sl)]
+            elif op == "Split":
+                axis = int(self._get_attr(node, "axis", 0))
+                arr = self._as_numpy(ins[0])
+                split = self._get_attr(node, "split", None)
+                if split is None:
+                    parts = self._np.array_split(arr, len(node.output), axis=axis)
+                else:
+                    idx = self._np.cumsum(split)[:-1]
+                    parts = self._np.split(arr, idx, axis=axis)
+                for out_name, part in zip(node.output, parts):
+                    env[out_name] = self._m.from_numpy(self._np.asarray(part, dtype=self._np.float32))
+                continue
+            elif op == "Resize":
+                data = self._as_tensor(ins[0])
+                scales = None
+                if len(ins) >= 3 and self._as_numpy(ins[2]).size > 0:
+                    scales = self._as_numpy(ins[2]).astype(self._np.float32)
+                mode = self._get_attr(node, "mode", "nearest")
+                if mode != "nearest":
+                    raise ValueError("Resize only supports nearest mode")
+                if scales is not None and len(scales) >= 4:
+                    sf_h = int(round(float(scales[-2])))
+                    sf_w = int(round(float(scales[-1])))
+                    if sf_h == sf_w and sf_h >= 1:
+                        out = data.upsample2d(sf_h)
+                    else:
+                        raise ValueError("Resize only supports equal integer spatial scale")
+                else:
+                    raise ValueError("Resize requires scales input")
+            elif op == "Pow":
+                a = self._as_numpy(ins[0]).astype(self._np.float32)
+                b = self._as_numpy(ins[1]).astype(self._np.float32)
+                out = self._m.from_numpy(self._np.power(a, b).astype(self._np.float32))
+            elif op == "Floor":
+                arr = self._as_numpy(ins[0]).astype(self._np.float32)
+                out = self._m.from_numpy(self._np.floor(arr).astype(self._np.float32))
+            else:
+                raise ValueError(f"Unsupported op in graph runtime: {op}")
+
+            if len(node.output) != 1:
+                raise ValueError(f"Unsupported output arity for op {op}: {len(node.output)}")
+            env[node.output[0]] = out
+
+        outs = [env[o.name] for o in self._graph.output]
+        return outs[0] if len(outs) == 1 else outs
+
+
+def _compile_onnx_graph_module(model_path):
+    import numpy as np
+    import munet
+    import onnx
+    model = onnx.load(model_path)
+    return _ONNXGraphModule(model, munet, np)
+
 def load_onnx(model_path, device=None, providers=None):
     """Create an ONNXRuntime-backed inference engine.
 
@@ -365,6 +570,7 @@ def compile_onnx(
     report_only=False,
     allow_partial=False,
     debug=False,
+    prefer_graph_runtime=True,
 ):
     """Compile a supported ONNX graph into a MuNet model module.
 
@@ -399,6 +605,21 @@ def compile_onnx(
 
     model = onnx.load(model_path)
     graph = model.graph
+
+    if prefer_graph_runtime and not report_only:
+        # Graph-runtime handles branching/shape ops (needed for models like YOLOv5n).
+        # Keep legacy sequential lowering path for simple linear chains and saveable modules.
+        try:
+            gm = _compile_onnx_graph_module(model_path)
+            if output_path is not None:
+                raise ValueError("compile_onnx: output_path save is only supported for legacy sequential lowering")
+            return gm
+        except Exception:
+            if debug:
+                import traceback
+                print("[compile_onnx][debug] graph-runtime fallback failed; using legacy lowering")
+                traceback.print_exc()
+
     ctx = _ConversionContext(graph, munet, np, onnx, numpy_helper, debug=debug)
 
     for node in graph.node:

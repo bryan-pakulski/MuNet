@@ -93,3 +93,13 @@ If local pybind11/Python toolchain setup is problematic, use the builder image:
 
 This builds `docker/Dockerfile.builder` and runs a release CMake build inside
 an Ubuntu 22.04 container with Python, CMake, pybind prerequisites, and ONNX tooling.
+
+### YOLOv5n conversion status
+
+The ONNX op set observed in `yolov5n.onnx` is now covered by the native
+conversion map and graph-runtime lowering path (`compile_onnx(..., prefer_graph_runtime=True)`),
+including:
+
+- `Add`, `Cast`, `Concat`, `Constant`, `Conv`, `Floor`, `MaxPool`, `Mul`,
+  `Pow`, `Reshape`, `Resize`, `Shape`, `Sigmoid`, `Slice`, `Split`,
+  `Transpose`, `Unsqueeze`.

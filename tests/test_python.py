@@ -764,7 +764,7 @@ class TestBindings(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "conv_lrelu_gap.onnx")
 
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2, 2, 2])
             y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 1, 1])
 
             W = np.array([[[[1.0]]]], dtype=np.float32)
@@ -879,10 +879,60 @@ class TestBindings(unittest.TestCase):
             report = munet.inference.onnx_conversion_coverage_report(yolopath)
             self.assertGreater(report["total_nodes"], 0)
             self.assertIn("Conv", report["unique_ops"])
-            # This test is intended to surface current conversion gaps.
-            self.assertTrue(
-                len(report["coverage"]["unsupported"]) > 0 or len(report["coverage"]["unmapped"]) > 0
+            self.assertEqual(report["coverage"]["unsupported"], [])
+            self.assertEqual(report["coverage"]["unmapped"], [])
+            self.assertTrue(report["fully_lowerable"])
+
+
+
+    def test_compile_onnx_graph_runtime_branching_ops(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX graph-runtime branching test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "branching_ops.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2, 2, 2])
+            y_info = helper.make_tensor_value_info("out", TensorProto.FLOAT, [1, 1, 2, 2, 2])
+
+            split = helper.make_node("Split", ["x"], ["a", "b"], axis=1, split=[1, 1])
+            idn = helper.make_node("Identity", ["b"], ["b2"])
+            cat = helper.make_node("Concat", ["a", "b2"], ["c"], axis=1)
+            shape_const = helper.make_tensor("shape", TensorProto.INT64, [4], [1, 2, 2, 2])
+            reshape = helper.make_node("Reshape", ["c", "shape"], ["r"])
+            trans = helper.make_node("Transpose", ["r"], ["t"], perm=[0, 1, 2, 3])
+            unsq_axes = helper.make_tensor("axes", TensorProto.INT64, [1], [0])
+            unsq = helper.make_node("Unsqueeze", ["t", "axes"], ["u"])
+            shape = helper.make_node("Shape", ["u"], ["sh"])
+            st = helper.make_tensor("st", TensorProto.INT64, [1], [0])
+            en = helper.make_tensor("en", TensorProto.INT64, [1], [1])
+            ax = helper.make_tensor("ax", TensorProto.INT64, [1], [0])
+            sl = helper.make_node("Slice", ["sh", "st", "en", "ax"], ["slv"])
+            pw = helper.make_tensor("pw", TensorProto.FLOAT, [1], [2.0])
+            pwn = helper.make_node("Pow", ["slv", "pw"], ["p2"])
+            fl = helper.make_node("Floor", ["p2"], ["f"])
+            cast = helper.make_node("Cast", ["f"], ["f32"], to=TensorProto.FLOAT)
+            add = helper.make_node("Add", ["u", "f32"], ["out"])
+
+            graph = helper.make_graph(
+                [split, idn, cat, reshape, trans, unsq, shape, sl, pwn, fl, cast, add],
+                "branching_ops",
+                [x_info],
+                [y_info],
+                [shape_const, unsq_axes, st, en, ax, pw],
             )
+            model = helper.make_model(graph, producer_name="munet_graph_runtime_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path, prefer_graph_runtime=True)
+            x = munet.from_numpy(np.array([[[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]], dtype=np.float32))
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
 
     def test_onnx_inference_wrapper(self):
         try:
