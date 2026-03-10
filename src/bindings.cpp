@@ -610,6 +610,7 @@ PYBIND11_MODULE(munet, m) {
   // ============================================================================
   // Python Injected Helpers
   // ============================================================================
+  m.attr("__munet_helper_source_dir__") = py::str(MUNET_PY_HELPER_SOURCE_DIR);
   if (py::hasattr(m, "__file__")) {
     m.attr("__munet_file__") = m.attr("__file__");
   }
@@ -793,6 +794,15 @@ PYBIND11_MODULE(munet, m) {
      import pathlib
      import sys
 
+     # Prefer compile-time source helper dir when available (dev builds).
+     helper_dir = globals().get("__munet_helper_source_dir__", None)
+     if helper_dir is not None:
+         helper_path = pathlib.Path(helper_dir) / filename
+         if helper_path.exists():
+             src = helper_path.read_text(encoding="utf-8")
+             exec(compile(src, str(helper_path), "exec"), globals(), globals())
+             return
+
      # Avoid importing `munet` while module init is still running, which can
      # recursively execute bindings init and trigger pybind duplicate type registration.
      mod_file = globals().get("__munet_file__", None)
@@ -802,19 +812,17 @@ PYBIND11_MODULE(munet, m) {
      if mod_file is None:
          spec = globals().get("__spec__", None)
          mod_file = getattr(spec, "origin", None)
-     if mod_file is None:
-         raise RuntimeError(
-             "Cannot resolve MuNet module path for helper loading (missing module origin/file)."
-         )
+     if mod_file is not None:
+         helper_path = pathlib.Path(mod_file).resolve().parent / "python_src" / filename
+         if helper_path.exists():
+             src = helper_path.read_text(encoding="utf-8")
+             exec(compile(src, str(helper_path), "exec"), globals(), globals())
+             return
 
-     helper_path = pathlib.Path(mod_file).resolve().parent / "python_src" / filename
-     if not helper_path.exists():
-         raise RuntimeError(
-             f"Required MuNet python helper missing: {helper_path}. "
-             "Rebuild MuNet so helper scripts are copied next to the extension module."
-         )
-     src = helper_path.read_text(encoding="utf-8")
-     exec(compile(src, str(helper_path), "exec"), globals(), globals())
+     raise RuntimeError(
+         f"Required MuNet python helper '{filename}' could not be located. "
+         f"Searched source helper dir={helper_dir!r} and module-adjacent python_src."
+     )
 
  _load_python_helper("onnx_integration.py")
  )",
