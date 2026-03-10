@@ -864,6 +864,34 @@ class TestBindings(unittest.TestCase):
             expected = np.array([[[2.0, 4.0], [2.0, 4.0]], [[2.0, 4.0], [2.0, 4.0]]], dtype=np.float32)
             self.assertTrue(np.allclose(out, expected, atol=1e-6))
 
+    def test_compile_onnx_pad_constant(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX pad test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pad_constant.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 4, 6])
+
+            pads = helper.make_tensor("pads", TensorProto.INT64, [8], [0, 0, 1, 2, 0, 0, 1, 2])
+            val = helper.make_tensor("val", TensorProto.FLOAT, [1], [3.0])
+            pad = helper.make_node("Pad", ["x", "pads", "val"], ["y"], mode="constant")
+            graph = helper.make_graph([pad], "pad_graph", [x_info], [y_info], [pads, val])
+            model = helper.make_model(graph, producer_name="munet_pad_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[[[1.0, 2.0], [3.0, 4.0]]]], dtype=np.float32)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.pad(x_np, ((0,0),(0,0),(1,1),(2,2)), mode="constant", constant_values=3.0)
+            self.assertTrue(np.allclose(out, expected, atol=1e-6))
+
     def test_compile_onnx_erf(self):
         try:
             import onnx

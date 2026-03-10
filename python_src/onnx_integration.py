@@ -135,6 +135,10 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Sqrt": {"status": "lowered", "munet": "graph/sqrt"},
     "Clip": {"status": "lowered", "munet": "graph/clip"},
     "Erf": {"status": "lowered", "munet": "graph/erf"},
+    "Pad": {"status": "lowered", "munet": "graph/pad_constant"},
+    "GatherElements": {"status": "planned", "munet": None},
+    "TopK": {"status": "planned", "munet": None},
+    "GridSample": {"status": "planned", "munet": None},
     "Squeeze": {"status": "lowered", "munet": "graph/squeeze"},
     "Expand": {"status": "lowered", "munet": "graph/expand"},
     "Tile": {"status": "lowered", "munet": "graph/tile"},
@@ -719,6 +723,57 @@ class _ONNXGraphModule:
             elif op == "Erf":
                 x = self._as_tensor(ins[0])
                 out = x.erf()
+            elif op == "Pad":
+                data = self._as_tensor(ins[0])
+                mode = self._get_attr(node, "mode", "constant")
+                if mode != "constant":
+                    raise ValueError("Pad currently supports only constant mode")
+
+                if len(ins) < 2:
+                    raise ValueError("Pad requires pads input")
+                pads = [int(v) for v in self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1).tolist()]
+                rank = len(data.shape)
+                if len(pads) != 2 * rank:
+                    raise ValueError(f"Pad expects pads length {2*rank}, got {len(pads)}")
+
+                value = 0.0
+                if len(ins) > 2 and self._as_numpy(ins[2]).size > 0:
+                    value = float(self._as_numpy(ins[2]).reshape(-1)[0])
+                elif len(ins) > 3 and self._as_numpy(ins[3]).size > 0:
+                    value = float(self._as_numpy(ins[3]).reshape(-1)[0])
+                else:
+                    value = float(self._get_attr(node, "value", 0.0))
+
+                pads_begin = pads[:rank]
+                pads_end = pads[rank:]
+                cur = data
+                for ax in range(rank):
+                    pb = int(pads_begin[ax])
+                    pe = int(pads_end[ax])
+                    if pb < 0 or pe < 0:
+                        raise ValueError("Pad currently does not support negative pads")
+
+                    parts = []
+                    if pb > 0:
+                        left_shape = list(cur.shape)
+                        left_shape[ax] = pb
+                        left = self._m.Tensor(left_shape, cur.device, cur.dtype, False)
+                        left.uniform_(value, value)
+                        parts.append(left)
+
+                    parts.append(cur)
+
+                    if pe > 0:
+                        right_shape = list(cur.shape)
+                        right_shape[ax] = pe
+                        right = self._m.Tensor(right_shape, cur.device, cur.dtype, False)
+                        right.uniform_(value, value)
+                        parts.append(right)
+
+                    if len(parts) > 1:
+                        cur = self._m.Tensor.cat(parts, ax)
+
+                out = cur
             elif op == "Pow":
                 a = self._as_numpy(ins[0]).astype(self._np.float32)
                 b = self._as_numpy(ins[1]).astype(self._np.float32)
@@ -771,6 +826,7 @@ _GRAPH_RUNTIME_SUPPORTED_OPS = {
     "Sqrt",
     "Clip",
     "Erf",
+    "Pad",
     "Relu",
     "LeakyRelu",
     "GlobalAveragePool",
