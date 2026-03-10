@@ -115,3 +115,57 @@ TEST_P(TensorTest, LogSoftmaxDim) {
   float p2 = std::exp(o[2]);
   EXPECT_NEAR(p0 + p1 + p2, 1.0f, 1e-4f);
 }
+
+
+TEST_P(TensorTest, TopKBasic) {
+  Tensor x({2, 3}, dev());
+  Tensor x_cpu({2, 3}, {DeviceType::CPU, 0});
+  float *d = (float *)x_cpu.data();
+  d[0] = 1.0f; d[1] = 3.0f; d[2] = 2.0f;
+  d[3] = 4.0f; d[4] = 0.0f; d[5] = 5.0f;
+  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(), dev());
+
+  auto out = x.topk(2, 1, true, true);
+  Tensor v = out.first.to({DeviceType::CPU, 0});
+  Tensor i = out.second.to({DeviceType::CPU, 0});
+  const float *vv = (const float *)v.data();
+  const float *ii = (const float *)i.data();
+
+  EXPECT_FLOAT_EQ(vv[0], 3.0f);
+  EXPECT_FLOAT_EQ(vv[1], 2.0f);
+  EXPECT_FLOAT_EQ(vv[2], 5.0f);
+  EXPECT_FLOAT_EQ(vv[3], 4.0f);
+  EXPECT_FLOAT_EQ(ii[0], 1.0f);
+  EXPECT_FLOAT_EQ(ii[1], 2.0f);
+  EXPECT_FLOAT_EQ(ii[2], 2.0f);
+  EXPECT_FLOAT_EQ(ii[3], 0.0f);
+}
+
+TEST_P(TensorTest, GatherElementsBasic) {
+  Tensor x({2, 3}, dev());
+  Tensor idx({2, 3}, dev());
+
+  Tensor x_cpu({2, 3}, {DeviceType::CPU, 0});
+  Tensor i_cpu({2, 3}, {DeviceType::CPU, 0});
+  float *xd = (float *)x_cpu.data();
+  float *id = (float *)i_cpu.data();
+
+  xd[0] = 10.0f; xd[1] = 20.0f; xd[2] = 30.0f;
+  xd[3] = 40.0f; xd[4] = 50.0f; xd[5] = 60.0f;
+
+  id[0] = 0.0f; id[1] = 2.0f; id[2] = 1.0f;
+  id[3] = -1.0f; id[4] = 1.0f; id[5] = 0.0f;
+
+  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(), dev());
+  idx.impl_->backend().copy(i_cpu.data(), idx.data(), idx.bytes(), i_cpu.device(), dev());
+
+  Tensor y = x.gather_elements(idx, 1).to({DeviceType::CPU, 0});
+  const float *o = (const float *)y.data();
+  EXPECT_FLOAT_EQ(o[0], 10.0f);
+  EXPECT_FLOAT_EQ(o[1], 30.0f);
+  EXPECT_FLOAT_EQ(o[2], 20.0f);
+  EXPECT_FLOAT_EQ(o[3], 60.0f);
+  EXPECT_FLOAT_EQ(o[4], 50.0f);
+  EXPECT_FLOAT_EQ(o[5], 40.0f);
+}
+

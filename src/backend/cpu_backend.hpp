@@ -347,10 +347,17 @@ public:
           return a.second < b.second;
         };
 
-        std::nth_element(v.begin(), v.begin() + k, v.end(), largest ? cmp_l : cmp_s);
-        v.resize(k);
-        if (sorted_flag)
-          std::sort(v.begin(), v.end(), largest ? cmp_l : cmp_s);
+        if (largest) {
+          std::nth_element(v.begin(), v.begin() + k, v.end(), cmp_l);
+          v.resize(k);
+          if (sorted_flag)
+            std::sort(v.begin(), v.end(), cmp_l);
+        } else {
+          std::nth_element(v.begin(), v.begin() + k, v.end(), cmp_s);
+          v.resize(k);
+          if (sorted_flag)
+            std::sort(v.begin(), v.end(), cmp_s);
+        }
 
         for (int j = 0; j < k; ++j) {
           ov[row * k + j] = v[j].first;
