@@ -125,9 +125,9 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Gelu": {"status": "lowered", "munet": "nn.GELU"},
     "GlobalAveragePool": {"status": "lowered", "munet": "nn.GlobalAvgPool2d"},
     "Add": {"status": "lowered", "munet": "graph/add"},
-    "Sub": {"status": "planned", "munet": "binary_const/sub"},
+    "Sub": {"status": "lowered", "munet": "graph/sub"},
     "Mul": {"status": "lowered", "munet": "graph/mul"},
-    "Div": {"status": "planned", "munet": "binary_const/div"},
+    "Div": {"status": "lowered", "munet": "graph/div"},
     "Softmax": {"status": "unsupported", "munet": None},
     "Squeeze": {"status": "unsupported", "munet": None},
     "Concat": {"status": "lowered", "munet": "graph/concat"},
@@ -495,6 +495,14 @@ class _ONNXGraphModule:
                 a = self._as_tensor(ins[0])
                 b = self._as_tensor(ins[1], a.device)
                 out = a * b
+            elif op == "Sub":
+                a = self._as_tensor(ins[0])
+                b = self._as_tensor(ins[1], a.device)
+                out = a - b
+            elif op == "Div":
+                a = self._as_numpy(ins[0]).astype(self._np.float32)
+                b = self._as_numpy(ins[1]).astype(self._np.float32)
+                out = self._m.from_numpy((a / b).astype(self._np.float32))
             elif op == "Concat":
                 axis = int(self._get_attr(node, "axis", 0))
                 np_ins = [self._as_numpy(v).astype(self._np.float32) for v in ins]
@@ -610,6 +618,8 @@ _GRAPH_RUNTIME_SUPPORTED_OPS = {
     "Gemm",
     "Add",
     "Mul",
+    "Sub",
+    "Div",
     "Concat",
     "Reshape",
     "Transpose",

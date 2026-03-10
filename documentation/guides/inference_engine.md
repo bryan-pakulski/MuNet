@@ -52,7 +52,7 @@ There is no runtime fallback path in conversion.
 - `Flatten` -> `nn.Flatten`
 - `GlobalAveragePool` -> `nn.GlobalAvgPool2d`
 
-### Near-term recommended next mappings
+### Recently completed mappings
 
 - binary constant ops: `Add`, `Sub`, `Mul`, `Div`
 - layout ops: `Reshape`, `Transpose`

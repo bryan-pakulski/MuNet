@@ -734,6 +734,13 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(mp["LeakyRelu"]["status"], "lowered")
         self.assertEqual(mp["Gelu"]["status"], "lowered")
         self.assertEqual(mp["GlobalAveragePool"]["status"], "lowered")
+        self.assertEqual(mp["Add"]["status"], "lowered")
+        self.assertEqual(mp["Sub"]["status"], "lowered")
+        self.assertEqual(mp["Mul"]["status"], "lowered")
+        self.assertEqual(mp["Div"]["status"], "lowered")
+        self.assertEqual(mp["Reshape"]["status"], "lowered")
+        self.assertEqual(mp["Transpose"]["status"], "lowered")
+        self.assertEqual(mp["Concat"]["status"], "lowered")
 
     def test_compile_onnx_lower_leakyrelu_and_globalavgpool(self):
         try:
@@ -769,6 +776,40 @@ class TestBindings(unittest.TestCase):
 
             expected = np.array([[[[( -0.1 + 3.0 + 2.0 - 0.4 ) / 4.0]]]], dtype=np.float32)
             self.assertTrue(np.allclose(out, expected, atol=1e-5))
+
+    def test_compile_onnx_binary_ops_add_sub_mul_div(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX binary ops lowering test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "binary_ops.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 3])
+
+            c_add = helper.make_tensor("c_add", TensorProto.FLOAT, [1, 3], [1.0, 2.0, 3.0])
+            c_sub = helper.make_tensor("c_sub", TensorProto.FLOAT, [1, 3], [0.5, 1.0, 1.5])
+            c_mul = helper.make_tensor("c_mul", TensorProto.FLOAT, [1, 3], [2.0, 2.0, 2.0])
+            c_div = helper.make_tensor("c_div", TensorProto.FLOAT, [1, 3], [2.0, 4.0, 8.0])
+
+            n1 = helper.make_node("Add", ["x", "c_add"], ["a"])
+            n2 = helper.make_node("Sub", ["a", "c_sub"], ["b"])
+            n3 = helper.make_node("Mul", ["b", "c_mul"], ["c"])
+            n4 = helper.make_node("Div", ["c", "c_div"], ["y"])
+
+            graph = helper.make_graph([n1, n2, n3, n4], "binary_ops_graph", [x_info], [y_info], [c_add, c_sub, c_mul, c_div])
+            model = helper.make_model(graph, producer_name="munet_binary_ops_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x = np.array([[2.0, 4.0, 8.0]], dtype=np.float32)
+            y = np.array(module.forward(munet.from_numpy(x)).detach(), copy=False)
+            expected = (((x + np.array([[1.0, 2.0, 3.0]], dtype=np.float32)) - np.array([[0.5, 1.0, 1.5]], dtype=np.float32)) * 2.0) / np.array([[2.0, 4.0, 8.0]], dtype=np.float32)
+            self.assertTrue(np.allclose(y, expected, atol=1e-6))
 
     def test_compile_onnx_strict_failure_reports_counts(self):
         try:
