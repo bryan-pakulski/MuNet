@@ -982,7 +982,7 @@ def compile_onnx(model_path, output_path=None, debug=False):
         raise ValueError(_format_conversion_failure(model_path, fail_info))
     if runtime_info["missing_runtime_total"] > 0:
         raise ValueError(
-            "compile_onnx: conversion failed due missing graph-runtime op implementations. "
+            "compile_onnx: conversion failed due to missing graph-runtime op implementations. "
             f"model='{model_path}', "
             f"missing_runtime_unique={runtime_info['missing_runtime_unique']}, "
             f"missing_runtime_total={runtime_info['missing_runtime_total']}"
@@ -1034,7 +1034,7 @@ def onnx_conversion_coverage_report(model_path):
         if entry is None:
             coverage["unmapped"].append(op)
         else:
-            coverage[entry["status"]].append(op)
+            coverage.setdefault(entry["status"], []).append(op)
 
     return {
         "model_path": model_path,
