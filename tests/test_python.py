@@ -1341,6 +1341,38 @@ class TestBindings(unittest.TestCase):
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
 
+    def test_compile_onnx_reshape_with_zero_and_negative_one(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX reshape zero/-1 test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "reshape_zero_minus_one.onnx")
+
+            x_info = helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 2, 3, 4])
+            shape_info = helper.make_tensor_value_info("orig_target_sizes", TensorProto.INT64, [3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2, 12])
+            reshape = helper.make_node("Reshape", ["images", "orig_target_sizes"], ["y"])
+
+            graph = helper.make_graph([reshape], "reshape_zero_minus_one", [x_info, shape_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_reshape_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+
+            x_np = np.arange(24, dtype=np.float32).reshape(1, 2, 3, 4)
+            x = munet.from_numpy(x_np)
+            target_shape = np.array([1, 0, -1], dtype=np.int64)
+
+            y = module.forward({"images": x, "orig_target_sizes": target_shape})
+            y_np = np.array(y.detach(), copy=False)
+            expected = x_np.reshape(1, 2, 12)
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_graph_runtime_multi_input_forward(self):
         try:
             import onnx

@@ -704,8 +704,57 @@ class _ONNXGraphModule:
                 out = self._m.Tensor.cat(ts, axis)
             elif op == "Reshape":
                 data = self._as_tensor(ins[0])
-                new_shape = [int(v) for v in self._as_numpy(ins[1]).reshape(-1).tolist()]
-                out = data.reshape(new_shape)
+                raw_shape = [int(v) for v in self._as_numpy(ins[1]).reshape(-1).tolist()]
+                in_shape = [int(v) for v in data.shape]
+                allowzero = int(self._get_attr(node, "allowzero", 0))
+
+                if len(raw_shape) == 0:
+                    raise ValueError("Reshape requires non-empty target shape")
+
+                resolved_shape = []
+                infer_idx = -1
+                known_product = 1
+
+                for i, d in enumerate(raw_shape):
+                    if d == -1:
+                        if infer_idx != -1:
+                            raise ValueError("Reshape allows at most one -1 dimension")
+                        infer_idx = i
+                        resolved_shape.append(-1)
+                        continue
+
+                    if d == 0 and allowzero == 0:
+                        if i >= len(in_shape):
+                            raise ValueError(
+                                f"Reshape uses 0 for dim copy at axis {i}, but input rank is {len(in_shape)}"
+                            )
+                        d = in_shape[i]
+
+                    if d < 0:
+                        raise ValueError(f"Reshape has invalid negative dim {d} at axis {i}")
+
+                    resolved_shape.append(int(d))
+                    known_product *= int(d)
+
+                input_elems = 1
+                for d in in_shape:
+                    input_elems *= int(d)
+
+                if infer_idx != -1:
+                    if known_product == 0:
+                        raise ValueError("Reshape with -1 cannot infer when known product is zero")
+                    if input_elems % known_product != 0:
+                        raise ValueError(
+                            f"Reshape cannot infer -1 dimension: input_elems={input_elems}, known_product={known_product}"
+                        )
+                    resolved_shape[infer_idx] = int(input_elems // known_product)
+                else:
+                    if known_product != input_elems:
+                        raise ValueError(
+                            f"Reshape: element count mismatch (input={input_elems}, target={known_product})"
+                        )
+
+                out = data.reshape(resolved_shape)
             elif op == "Transpose":
                 data = self._as_tensor(ins[0])
                 perm = self._get_attr(node, "perm", list(range(len(data.shape) - 1, -1, -1)))
