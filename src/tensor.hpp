@@ -118,6 +118,7 @@ public:
   Tensor log() const;
   Tensor sqrt() const;
   Tensor clip(float min_value, float max_value) const;
+  Tensor erf() const;
   Tensor softmax(int dim = -1) const;
   Tensor log_softmax(int dim = -1) const;
   Tensor sum() const;

@@ -144,6 +144,22 @@ __global__ void clip_kernel(const float *in, float *out, float min_value,
   }
 }
 
+__device__ inline float erf_approx_cuda(float x) {
+  const float a = 0.147f;
+  float sign = x < 0.0f ? -1.0f : 1.0f;
+  float ax = fabsf(x);
+  float x2 = ax * ax;
+  float t = 1.0f + a * x2;
+  float inside = 1.0f - expf(-x2 * (4.0f / 3.14159265358979323846f + a * x2) / t);
+  return sign * sqrtf(fmaxf(0.0f, inside));
+}
+
+__global__ void erf_kernel(const float *in, float *out, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N)
+    out[i] = erf_approx_cuda(in[i]);
+}
+
 __global__ void softmax_forward_kernel(const float *in, float *out,
                                        int batch_size, int num_classes) {
   int b = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1238,6 +1254,17 @@ void CUDABackend::clip(const Storage &in, Storage &out, float min_value,
   cudaEventRecord((cudaEvent_t)start_event_);
   clip_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
                                    min_value, max_value, num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::erf(const Storage &in, Storage &out, size_t num_elements) {
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  erf_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
+                                  num_elements);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }

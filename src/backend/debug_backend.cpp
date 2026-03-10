@@ -229,6 +229,12 @@ public:
     base_->clip(in, out, min_value, max_value, num_elements);
     check("clip", t.elapsed_us(), &out);
   }
+  void erf(const Storage &in, Storage &out, size_t num_elements) override {
+    MUNET_DEBUG << "erf | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->erf(in, out, num_elements);
+    check("erf", t.elapsed_us(), &out);
+  }
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
     MUNET_DEBUG << "softmax | " << batch_size << " batches, " << num_classes

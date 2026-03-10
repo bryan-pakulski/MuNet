@@ -63,6 +63,7 @@ Tensor Tensor::sqrt() const { return ops::sqrt(*this); }
 Tensor Tensor::clip(float min_value, float max_value) const {
   return ops::clip(*this, min_value, max_value);
 }
+Tensor Tensor::erf() const { return ops::erf(*this); }
 Tensor Tensor::softmax(int dim) const { return ops::softmax(*this, dim); }
 Tensor Tensor::log_softmax(int dim) const { return ops::log_softmax(*this, dim); }
 

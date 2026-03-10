@@ -76,7 +76,7 @@ static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
     sumToShapePipeline;
 static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
 static VkPipeline sigmoidPipeline, sigmoidBackwardPipeline;
-static VkPipeline logPipeline, sqrtPipeline, clipPipeline;
+static VkPipeline logPipeline, sqrtPipeline, clipPipeline, erfPipeline;
 static VkPipeline softmaxPipeline, softmaxBackwardPipeline;
 static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
 static VkPipeline crossEntropyPipeline, crossEntropyBackwardPipeline;
@@ -734,6 +734,34 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
             uint i = gl_GlobalInvocationID.x;
             if (i < p.N)
                 c[i] = clamp(a[i], p.min_v, p.max_v);
+        }
+    )");
+
+
+  erfPipeline = createComputePipeline("erf",
+                                      R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer A { float a[]; };
+        layout(binding = 1) writeonly buffer C { float c[]; };
+
+        layout(push_constant) uniform Push { uint N; } p;
+
+        float erf_approx(float x) {
+            float s = (x < 0.0) ? -1.0 : 1.0;
+            float ax = abs(x);
+            float x2 = ax * ax;
+            float aa = 0.147;
+            float t = 1.0 + aa * x2;
+            float inside = 1.0 - exp(-x2 * (4.0 / 3.14159265358979323846 + aa * x2) / t);
+            return s * sqrt(max(inside, 0.0));
+        }
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                c[i] = erf_approx(a[i]);
         }
     )");
 
@@ -1873,6 +1901,7 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyPipeline(device, logPipeline, nullptr);
   vkDestroyPipeline(device, sqrtPipeline, nullptr);
   vkDestroyPipeline(device, clipPipeline, nullptr);
+  vkDestroyPipeline(device, erfPipeline, nullptr);
 
   vkDestroyPipeline(device, softmaxPipeline, nullptr);
   vkDestroyPipeline(device, softmaxBackwardPipeline, nullptr);
@@ -2378,6 +2407,12 @@ void VulkanBackend::clip(const Storage &in, Storage &out, float min_value,
   } pc = {(uint32_t)num_elements, min_value, max_value};
   dispatch_kernel(clipPipeline, {in.data(), out.data()}, &pc, sizeof(pc),
                   (pc.N + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::erf(const Storage &in, Storage &out, size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(erfPipeline, {in.data(), out.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
 }
 
 void VulkanBackend::softmax(const Storage &in, Storage &out, int batch_size,

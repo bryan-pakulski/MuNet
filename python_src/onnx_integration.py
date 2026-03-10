@@ -134,6 +134,7 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Log": {"status": "lowered", "munet": "graph/log"},
     "Sqrt": {"status": "lowered", "munet": "graph/sqrt"},
     "Clip": {"status": "lowered", "munet": "graph/clip"},
+    "Erf": {"status": "lowered", "munet": "graph/erf"},
     "Squeeze": {"status": "lowered", "munet": "graph/squeeze"},
     "Expand": {"status": "lowered", "munet": "graph/expand"},
     "Tile": {"status": "lowered", "munet": "graph/tile"},
@@ -713,6 +714,9 @@ class _ONNXGraphModule:
                 else:
                     max_v = float(self._get_attr(node, "max", 3.4028235e38))
                 out = x.clip(min_v, max_v)
+            elif op == "Erf":
+                x = self._as_tensor(ins[0])
+                out = x.erf()
             elif op == "Pow":
                 a = self._as_numpy(ins[0]).astype(self._np.float32)
                 b = self._as_numpy(ins[1]).astype(self._np.float32)
@@ -764,6 +768,7 @@ _GRAPH_RUNTIME_SUPPORTED_OPS = {
     "Log",
     "Sqrt",
     "Clip",
+    "Erf",
     "Relu",
     "LeakyRelu",
     "GlobalAveragePool",

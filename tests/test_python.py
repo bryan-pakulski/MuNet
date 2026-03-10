@@ -711,14 +711,14 @@ class TestBindings(unittest.TestCase):
             onnx_path = os.path.join(d, "unsupported.onnx")
             x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
             y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
-            node = helper.make_node("Erf", ["x"], ["y"])
+            node = helper.make_node("Sin", ["x"], ["y"])
             graph = helper.make_graph([node], "unsupported_graph", [x_info], [y_info])
             model = helper.make_model(graph, producer_name="munet_compile_report_test", opset_imports=[helper.make_opsetid("", 11)])
             model.ir_version = 7
             onnx.save(model, onnx_path)
 
             missing = munet.inference.report_onnx_unsupported_ops(onnx_path)
-            self.assertIn("Erf", missing)
+            self.assertIn("Sin", missing)
 
             with self.assertRaises(ValueError) as ctx:
                 munet.inference.compile_onnx(onnx_path)
@@ -726,7 +726,7 @@ class TestBindings(unittest.TestCase):
             msg = str(ctx.exception)
             self.assertIn("unsupported_unique", msg)
             self.assertIn("unsupported_total", msg)
-            self.assertIn("Erf", msg)
+            self.assertIn("Sin", msg)
 
     def test_onnx_native_conversion_map_api(self):
         mp = munet.inference.onnx_native_conversion_map()
@@ -864,6 +864,31 @@ class TestBindings(unittest.TestCase):
             expected = np.array([[[2.0, 4.0], [2.0, 4.0]], [[2.0, 4.0], [2.0, 4.0]]], dtype=np.float32)
             self.assertTrue(np.allclose(out, expected, atol=1e-6))
 
+    def test_compile_onnx_erf(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX erf test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "erf.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 2])
+            n = helper.make_node("Erf", ["x"], ["y"])
+            graph = helper.make_graph([n], "erf_graph", [x_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_erf_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[-1.0, -0.5], [0.5, 1.0]], dtype=np.float32)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.vectorize(math.erf)(x_np).astype(np.float32)
+            self.assertTrue(np.allclose(out, expected, atol=2e-3))
+
     def test_compile_onnx_log_sqrt_clip(self):
         try:
             import onnx
@@ -941,8 +966,8 @@ class TestBindings(unittest.TestCase):
             x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
             y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
             soft = helper.make_node("Softmax", ["x"], ["z1"])
-            erf = helper.make_node("Erf", ["z1"], ["y"])
-            graph = helper.make_graph([soft, erf], "strict_fail_graph", [x_info], [y_info])
+            sin = helper.make_node("Sin", ["z1"], ["y"])
+            graph = helper.make_graph([soft, sin], "strict_fail_graph", [x_info], [y_info])
             model = helper.make_model(graph, producer_name="munet_strict_fail_test", opset_imports=[helper.make_opsetid("", 11)])
             model.ir_version = 7
             onnx.save(model, path)
@@ -952,7 +977,7 @@ class TestBindings(unittest.TestCase):
 
             msg = str(ctx.exception)
             self.assertIn("unsupported_total=1", msg)
-            self.assertIn("Erf", msg)
+            self.assertIn("Sin", msg)
             self.assertNotIn("Softmax", msg)
 
     def test_onnx_conversion_coverage_report_generated_graph(self):

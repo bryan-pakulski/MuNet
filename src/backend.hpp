@@ -52,6 +52,7 @@ public:
   virtual void sqrt(const Storage &in, Storage &out, size_t num_elements) = 0;
   virtual void clip(const Storage &in, Storage &out, float min_value,
                     float max_value, size_t num_elements) = 0;
+  virtual void erf(const Storage &in, Storage &out, size_t num_elements) = 0;
 
   virtual void softmax(const Storage &in, Storage &out, int batch_size,
                        int num_classes) = 0;

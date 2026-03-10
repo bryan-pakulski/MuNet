@@ -21,6 +21,7 @@ inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value);
 inline Tensor log(const Tensor &a);
 inline Tensor sqrt(const Tensor &a);
 inline Tensor clip(const Tensor &a, float min_value, float max_value);
+inline Tensor erf(const Tensor &a);
 inline Tensor log_softmax(const Tensor &a, int dim = -1);
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
@@ -592,6 +593,16 @@ inline Tensor clip(const Tensor &a, float min_value, float max_value) {
     throw std::runtime_error("Clip backward is not implemented yet");
   }
   record_trace(out, "Clip", {a}, {}, {{"min", min_value}, {"max", max_value}});
+  return out;
+}
+
+inline Tensor erf(const Tensor &a) {
+  Tensor out(a.shape(), a.device(), a.dtype());
+  a.impl_->backend().erf(*a.impl_->storage, *out.impl_->storage, a.size());
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    throw std::runtime_error("Erf backward is not implemented yet");
+  }
+  record_trace(out, "Erf", {a});
   return out;
 }
 
