@@ -455,12 +455,38 @@ class _ONNXGraphModule:
                 f"pad rank mismatch: rank={rank}, pads_begin={pads_begin}, pads_end={pads_end}"
             )
 
+        pads_begin = [int(v) for v in pads_begin]
+        pads_end = [int(v) for v in pads_end]
+
+        # ONNX Pad allows negative pads, which means cropping.
+        if any(v < 0 for v in pads_begin + pads_end):
+            arr = self._as_numpy(data).astype(self._np.float32)
+
+            sl = []
+            for ax in range(rank):
+                crop_before = max(-pads_begin[ax], 0)
+                crop_after = max(-pads_end[ax], 0)
+                end = arr.shape[ax] - crop_after
+                if crop_before > end:
+                    raise ValueError(
+                        f"Pad crop exceeds dimension at axis {ax}: "
+                        f"shape={arr.shape[ax]}, pads_begin={pads_begin[ax]}, pads_end={pads_end[ax]}"
+                    )
+                sl.append(slice(crop_before, end))
+            arr = arr[tuple(sl)]
+
+            np_pads = [
+                (max(pads_begin[ax], 0), max(pads_end[ax], 0)) for ax in range(rank)
+            ]
+            if any(pb > 0 or pe > 0 for pb, pe in np_pads):
+                arr = self._np.pad(arr, np_pads, mode="constant", constant_values=float(value))
+
+            return self._from_numpy_like(arr.astype(self._np.float32), data)
+
         cur = data
         for ax in range(rank):
-            pb = int(pads_begin[ax])
-            pe = int(pads_end[ax])
-            if pb < 0 or pe < 0:
-                raise ValueError("negative padding is not supported")
+            pb = pads_begin[ax]
+            pe = pads_end[ax]
 
             parts = []
             if pb > 0:

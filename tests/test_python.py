@@ -1341,6 +1341,37 @@ class TestBindings(unittest.TestCase):
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
 
+    def test_compile_onnx_pad_negative_cropping(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX negative-pad cropping test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pad_negative_crop.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 4, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 2])
+            pads_init = helper.make_tensor(
+                "pads", TensorProto.INT64, [8], [0, 0, -1, -1, 0, 0, -1, -1]
+            )
+            pad = helper.make_node("Pad", ["x", "pads"], ["y"], mode="constant")
+
+            graph = helper.make_graph([pad], "pad_negative_crop", [x_info], [y_info], [pads_init])
+            model = helper.make_model(graph, producer_name="munet_pad_crop_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4)
+            x = munet.from_numpy(x_np)
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            expected = x_np[:, :, 1:3, 1:3]
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_conv_asymmetric_padding(self):
         try:
             import onnx
