@@ -57,6 +57,7 @@ There is no runtime fallback path in conversion.
 - binary constant ops: `Add`, `Sub`, `Mul`, `Div`
 - layout ops: `Reshape`, `Transpose`
 - basic graph joins: `Concat`
+- shape/index ops: `Squeeze`, `Expand`, `Tile`, `ConstantOfShape`, `Gather`
 
 ## YOLOv5 ONNX operator coverage check
 

@@ -129,7 +129,11 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Mul": {"status": "lowered", "munet": "graph/mul"},
     "Div": {"status": "lowered", "munet": "graph/div"},
     "Softmax": {"status": "unsupported", "munet": None},
-    "Squeeze": {"status": "unsupported", "munet": None},
+    "Squeeze": {"status": "lowered", "munet": "graph/squeeze"},
+    "Expand": {"status": "lowered", "munet": "graph/expand"},
+    "Tile": {"status": "lowered", "munet": "graph/tile"},
+    "ConstantOfShape": {"status": "lowered", "munet": "graph/constant_of_shape"},
+    "Gather": {"status": "lowered", "munet": "graph/gather"},
     "Concat": {"status": "lowered", "munet": "graph/concat"},
     "Reshape": {"status": "lowered", "munet": "graph/reshape"},
     "Transpose": {"status": "lowered", "munet": "graph/transpose"},
@@ -416,6 +420,13 @@ class _ONNXGraphModule:
             return self._np.asarray(v.detach().to(cpu).numpy())
         return self._np.asarray(v)
 
+    def _from_numpy_like(self, arr, like=None):
+        t = self._m.from_numpy(self._np.asarray(arr, dtype=self._np.float32))
+        if like is not None and isinstance(like, self._m.Tensor):
+            if like.device.type != self._m.DeviceType.CPU:
+                t = t.to(like.device)
+        return t
+
     def _scalar_tensor(self, value, ref):
         t = self._m.Tensor([1], ref.device, ref.dtype, False)
         t.uniform_(float(value), float(value))
@@ -502,11 +513,11 @@ class _ONNXGraphModule:
             elif op == "Div":
                 a = self._as_numpy(ins[0]).astype(self._np.float32)
                 b = self._as_numpy(ins[1]).astype(self._np.float32)
-                out = self._m.from_numpy((a / b).astype(self._np.float32))
+                out = self._from_numpy_like((a / b).astype(self._np.float32), ins[0])
             elif op == "Concat":
                 axis = int(self._get_attr(node, "axis", 0))
                 np_ins = [self._as_numpy(v).astype(self._np.float32) for v in ins]
-                out = self._m.from_numpy(self._np.concatenate(np_ins, axis=axis))
+                out = self._from_numpy_like(self._np.concatenate(np_ins, axis=axis), ins[0])
             elif op == "Reshape":
                 data = self._as_tensor(ins[0])
                 new_shape = [int(v) for v in self._as_numpy(ins[1]).reshape(-1).tolist()]
@@ -526,6 +537,50 @@ class _ONNXGraphModule:
                 for ax in norm:
                     old_shape.insert(ax, 1)
                 out = data.reshape(old_shape)
+            elif op == "Squeeze":
+                data = self._as_tensor(ins[0])
+                axes = self._get_attr(node, "axes", None)
+                if axes is None and len(ins) > 1:
+                    axes = [int(v) for v in self._as_numpy(ins[1]).reshape(-1).tolist()]
+                shape = list(data.shape)
+                if axes is None:
+                    new_shape = [d for d in shape if int(d) != 1]
+                    if not new_shape:
+                        new_shape = [1]
+                else:
+                    rank = len(shape)
+                    norm_axes = sorted(set((a if a >= 0 else a + rank) for a in axes), reverse=True)
+                    for ax in norm_axes:
+                        if shape[ax] != 1:
+                            raise ValueError(f"Squeeze axis {ax} has dim {shape[ax]} != 1")
+                        shape.pop(ax)
+                    new_shape = shape if shape else [1]
+                out = data.reshape(new_shape)
+            elif op == "ConstantOfShape":
+                shp = self._as_numpy(ins[0]).astype(self._np.int64).reshape(-1).tolist()
+                value = 0.0
+                for a in node.attribute:
+                    if a.name == "value" and a.type == self._onnx.AttributeProto.TENSOR:
+                        v = self._onnx_numpy_helper.to_array(a.t)
+                        value = float(v.reshape(-1)[0]) if v.size > 0 else 0.0
+                out = self._from_numpy_like(self._np.full(shp, value, dtype=self._np.float32))
+            elif op == "Expand":
+                data_np = self._as_numpy(ins[0]).astype(self._np.float32)
+                shape = [int(v) for v in self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1).tolist()]
+                out = self._from_numpy_like(self._np.broadcast_to(data_np, shape).copy(), ins[0])
+            elif op == "Tile":
+                data_np = self._as_numpy(ins[0]).astype(self._np.float32)
+                reps = [int(v) for v in self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1).tolist()]
+                out = self._from_numpy_like(self._np.tile(data_np, reps), ins[0])
+            elif op == "Gather":
+                data_np = self._as_numpy(ins[0])
+                idx_np = self._as_numpy(ins[1]).astype(self._np.int64)
+                axis = int(self._get_attr(node, "axis", 0))
+                gathered = self._np.take(data_np, idx_np, axis=axis)
+                if isinstance(ins[0], self._m.Tensor):
+                    out = self._from_numpy_like(gathered.astype(self._np.float32), ins[0])
+                else:
+                    out = gathered
             elif op == "Shape":
                 out = self._np.asarray(self._as_tensor(ins[0]).shape, dtype=self._np.int64)
             elif op == "Slice":
@@ -570,10 +625,10 @@ class _ONNXGraphModule:
             elif op == "Pow":
                 a = self._as_numpy(ins[0]).astype(self._np.float32)
                 b = self._as_numpy(ins[1]).astype(self._np.float32)
-                out = self._m.from_numpy(self._np.power(a, b).astype(self._np.float32))
+                out = self._from_numpy_like(self._np.power(a, b).astype(self._np.float32), ins[0])
             elif op == "Floor":
                 arr = self._as_numpy(ins[0]).astype(self._np.float32)
-                out = self._m.from_numpy(self._np.floor(arr).astype(self._np.float32))
+                out = self._from_numpy_like(self._np.floor(arr).astype(self._np.float32), ins[0])
             else:
                 raise ValueError(f"Unsupported op in graph runtime: {op}")
 
@@ -624,6 +679,11 @@ _GRAPH_RUNTIME_SUPPORTED_OPS = {
     "Reshape",
     "Transpose",
     "Unsqueeze",
+    "Squeeze",
+    "ConstantOfShape",
+    "Expand",
+    "Tile",
+    "Gather",
     "Shape",
     "Slice",
     "Split",

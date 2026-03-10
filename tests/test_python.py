@@ -741,6 +741,11 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(mp["Reshape"]["status"], "lowered")
         self.assertEqual(mp["Transpose"]["status"], "lowered")
         self.assertEqual(mp["Concat"]["status"], "lowered")
+        self.assertEqual(mp["Squeeze"]["status"], "lowered")
+        self.assertEqual(mp["Expand"]["status"], "lowered")
+        self.assertEqual(mp["Tile"]["status"], "lowered")
+        self.assertEqual(mp["ConstantOfShape"]["status"], "lowered")
+        self.assertEqual(mp["Gather"]["status"], "lowered")
 
     def test_compile_onnx_lower_leakyrelu_and_globalavgpool(self):
         try:
@@ -810,6 +815,53 @@ class TestBindings(unittest.TestCase):
             y = np.array(module.forward(munet.from_numpy(x)).detach(), copy=False)
             expected = (((x + np.array([[1.0, 2.0, 3.0]], dtype=np.float32)) - np.array([[0.5, 1.0, 1.5]], dtype=np.float32)) * 2.0) / np.array([[2.0, 4.0, 8.0]], dtype=np.float32)
             self.assertTrue(np.allclose(y, expected, atol=1e-6))
+
+    def test_compile_onnx_phase1_shape_index_ops(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX phase1 shape/index ops test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "phase1_shape_index.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 1, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 2, 2])
+
+            # ConstantOfShape input shape
+            shp = helper.make_tensor("shape_vec", TensorProto.INT64, [4], [2, 1, 2, 2])
+            cshape = helper.make_node("ConstantOfShape", ["shape_vec"], ["base"])
+            add = helper.make_node("Add", ["base", "x"], ["a"])
+
+            # Expand to same shape (exercise operator semantics)
+            exp_shape = helper.make_tensor("exp_shape", TensorProto.INT64, [4], [2, 1, 2, 2])
+            expand = helper.make_node("Expand", ["a", "exp_shape"], ["e"])
+
+            # Tile channel dim then gather first channel back
+            reps = helper.make_tensor("reps", TensorProto.INT64, [4], [1, 2, 1, 1])
+            tile = helper.make_node("Tile", ["e", "reps"], ["t"])
+            idx = helper.make_tensor("idx", TensorProto.INT64, [1], [0])
+            gather = helper.make_node("Gather", ["t", "idx"], ["g"], axis=1)
+            sq_axes = helper.make_tensor("sq_axes", TensorProto.INT64, [1], [1])
+            squeeze = helper.make_node("Squeeze", ["g", "sq_axes"], ["y"])
+
+            graph = helper.make_graph(
+                [cshape, add, expand, tile, gather, squeeze],
+                "phase1_shape_index_graph",
+                [x_info],
+                [y_info],
+                [shp, exp_shape, reps, idx, sq_axes],
+            )
+            model = helper.make_model(graph, producer_name="munet_phase1_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x = munet.from_numpy(np.array([[[[2.0, 4.0]]]], dtype=np.float32))
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.array([[[2.0, 4.0], [2.0, 4.0]], [[2.0, 4.0], [2.0, 4.0]]], dtype=np.float32)
+            self.assertTrue(np.allclose(out, expected, atol=1e-6))
 
     def test_compile_onnx_strict_failure_reports_counts(self):
         try:
