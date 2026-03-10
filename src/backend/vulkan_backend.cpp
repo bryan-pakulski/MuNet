@@ -76,6 +76,7 @@ static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
     sumToShapePipeline;
 static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
 static VkPipeline sigmoidPipeline, sigmoidBackwardPipeline;
+static VkPipeline logPipeline, sqrtPipeline, clipPipeline;
 static VkPipeline softmaxPipeline, softmaxBackwardPipeline;
 static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
 static VkPipeline crossEntropyPipeline, crossEntropyBackwardPipeline;
@@ -677,6 +678,62 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
                 float s = out_d[i];
                 gi[i] = go[i] * s * (1.0 - s);
             }
+        }
+    )");
+
+
+  logPipeline = createComputePipeline("log",
+                                      R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer A { float a[]; };
+        layout(binding = 1) writeonly buffer C { float c[]; };
+
+        layout(push_constant) uniform Push { uint N; } p;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                c[i] = log(a[i]);
+        }
+    )");
+
+  sqrtPipeline = createComputePipeline("sqrt",
+                                       R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer A { float a[]; };
+        layout(binding = 1) writeonly buffer C { float c[]; };
+
+        layout(push_constant) uniform Push { uint N; } p;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                c[i] = sqrt(a[i]);
+        }
+    )");
+
+  clipPipeline = createComputePipeline("clip",
+                                       R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer A { float a[]; };
+        layout(binding = 1) writeonly buffer C { float c[]; };
+
+        layout(push_constant) uniform Push {
+            uint N;
+            float min_v;
+            float max_v;
+        } p;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                c[i] = clamp(a[i], p.min_v, p.max_v);
         }
     )");
 
@@ -1813,6 +1870,9 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyPipeline(device, reluBackwardPipeline, nullptr);
   vkDestroyPipeline(device, sigmoidPipeline, nullptr);
   vkDestroyPipeline(device, sigmoidBackwardPipeline, nullptr);
+  vkDestroyPipeline(device, logPipeline, nullptr);
+  vkDestroyPipeline(device, sqrtPipeline, nullptr);
+  vkDestroyPipeline(device, clipPipeline, nullptr);
 
   vkDestroyPipeline(device, softmaxPipeline, nullptr);
   vkDestroyPipeline(device, softmaxBackwardPipeline, nullptr);
@@ -2296,6 +2356,30 @@ void VulkanBackend::sigmoid_backward(const Storage &grad_out,
                   {grad_out.data(), out.data(), grad_in.data()}, &N, sizeof(N),
                   (N + 255) / 256, 1, 1);
 }
+
+void VulkanBackend::log(const Storage &in, Storage &out, size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(logPipeline, {in.data(), out.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::sqrt(const Storage &in, Storage &out, size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(sqrtPipeline, {in.data(), out.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::clip(const Storage &in, Storage &out, float min_value,
+                         float max_value, size_t num_elements) {
+  struct {
+    uint32_t N;
+    float min_v;
+    float max_v;
+  } pc = {(uint32_t)num_elements, min_value, max_value};
+  dispatch_kernel(clipPipeline, {in.data(), out.data()}, &pc, sizeof(pc),
+                  (pc.N + 255) / 256, 1, 1);
+}
+
 void VulkanBackend::softmax(const Storage &in, Storage &out, int batch_size,
                             int num_classes) {
   struct {

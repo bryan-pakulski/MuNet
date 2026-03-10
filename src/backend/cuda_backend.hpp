@@ -45,6 +45,10 @@ public:
   void sigmoid(const Storage &in, Storage &out, size_t num_elements) override;
   void sigmoid_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, size_t num_elements) override;
+  void log(const Storage &in, Storage &out, size_t num_elements) override;
+  void sqrt(const Storage &in, Storage &out, size_t num_elements) override;
+  void clip(const Storage &in, Storage &out, float min_value, float max_value,
+            size_t num_elements) override;
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override;
   void softmax_backward(const Storage &grad_out, const Storage &out,

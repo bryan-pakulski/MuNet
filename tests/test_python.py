@@ -1,4 +1,5 @@
 import sys
+import math
 import os
 import unittest
 import numpy as np
@@ -863,6 +864,70 @@ class TestBindings(unittest.TestCase):
             expected = np.array([[[2.0, 4.0], [2.0, 4.0]], [[2.0, 4.0], [2.0, 4.0]]], dtype=np.float32)
             self.assertTrue(np.allclose(out, expected, atol=1e-6))
 
+    def test_compile_onnx_log_sqrt_clip(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX log/sqrt/clip test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "log_sqrt_clip.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 2])
+
+            clip_min = helper.make_tensor("clip_min", TensorProto.FLOAT, [1], [1.5])
+            clip_max = helper.make_tensor("clip_max", TensorProto.FLOAT, [1], [2.0])
+            n1 = helper.make_node("Log", ["x"], ["l"])
+            n2 = helper.make_node("Sqrt", ["l"], ["s"])
+            n3 = helper.make_node("Clip", ["s", "clip_min", "clip_max"], ["y"])
+
+            graph = helper.make_graph([n1, n2, n3], "log_sqrt_clip_graph", [x_info], [y_info], [clip_min, clip_max])
+            model = helper.make_model(graph, producer_name="munet_unary_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[math.e, math.e**4], [math.e**9, math.e**16]], dtype=np.float32)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.clip(np.sqrt(np.log(x_np)), 1.5, 2.0)
+            self.assertTrue(np.allclose(out, expected, atol=1e-5))
+
+    def test_compile_onnx_reduce_sum_mean_full_tensor(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX reduce-sum/mean test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "reduce_sum_mean.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1])
+
+            axes = helper.make_tensor("axes", TensorProto.INT64, [2], [0, 1])
+            rsum = helper.make_node("ReduceSum", ["x", "axes"], ["s"], keepdims=1)
+            rmean = helper.make_node("ReduceMean", ["s"], ["y"], keepdims=1)
+
+            graph = helper.make_graph(
+                [rsum, rmean],
+                "reduce_sum_mean_graph",
+                [x_info],
+                [y_info],
+                [axes],
+            )
+            model = helper.make_model(graph, producer_name="munet_reduce_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x = munet.from_numpy(np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32))
+            out = np.array(module.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(out, np.array([[21.0]], dtype=np.float32), atol=1e-6))
+
     def test_compile_onnx_strict_failure_reports_counts(self):
         try:
             import onnx
@@ -886,9 +951,9 @@ class TestBindings(unittest.TestCase):
                 munet.inference.compile_onnx(path)
 
             msg = str(ctx.exception)
-            self.assertIn("unsupported_total=2", msg)
+            self.assertIn("unsupported_total=1", msg)
             self.assertIn("Erf", msg)
-            self.assertIn("Softmax", msg)
+            self.assertNotIn("Softmax", msg)
 
     def test_onnx_conversion_coverage_report_generated_graph(self):
         try:

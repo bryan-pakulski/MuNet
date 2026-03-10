@@ -128,7 +128,12 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Sub": {"status": "lowered", "munet": "graph/sub"},
     "Mul": {"status": "lowered", "munet": "graph/mul"},
     "Div": {"status": "lowered", "munet": "graph/div"},
-    "Softmax": {"status": "unsupported", "munet": None},
+    "Softmax": {"status": "lowered", "munet": "graph/softmax"},
+    "ReduceSum": {"status": "lowered", "munet": "graph/reduce_sum"},
+    "ReduceMean": {"status": "lowered", "munet": "graph/reduce_mean"},
+    "Log": {"status": "lowered", "munet": "graph/log"},
+    "Sqrt": {"status": "lowered", "munet": "graph/sqrt"},
+    "Clip": {"status": "lowered", "munet": "graph/clip"},
     "Squeeze": {"status": "lowered", "munet": "graph/squeeze"},
     "Expand": {"status": "lowered", "munet": "graph/expand"},
     "Tile": {"status": "lowered", "munet": "graph/tile"},
@@ -368,6 +373,12 @@ class _ONNXGraphModule:
         self._m = munet_module
         self._np = np_module
 
+        self._opset = 13
+        for imp in model.opset_import:
+            if getattr(imp, "domain", "") in ("", None):
+                self._opset = int(imp.version)
+                break
+
         self._consts = {}
         for init in self._graph.initializer:
             self._consts[init.name] = self._onnx_numpy_helper.to_array(init)
@@ -514,6 +525,66 @@ class _ONNXGraphModule:
                 a = self._as_tensor(ins[0])
                 b = self._as_tensor(ins[1], a.device)
                 out = a / b
+            elif op == "Softmax":
+                x = self._as_tensor(ins[0])
+                rank = len(x.shape)
+                if rank == 0:
+                    raise ValueError("Softmax requires rank >= 1")
+                default_axis = -1 if self._opset >= 13 else 1
+                axis = int(self._get_attr(node, "axis", default_axis))
+                axis = axis if axis >= 0 else axis + rank
+                if axis < 0 or axis >= rank:
+                    raise ValueError(f"Softmax axis out of range: axis={axis}, rank={rank}")
+
+                if axis == rank - 1:
+                    out = x.softmax(-1)
+                else:
+                    perm = [d for d in range(rank) if d != axis] + [axis]
+                    inv_perm = [0] * rank
+                    for i, p in enumerate(perm):
+                        inv_perm[p] = i
+                    moved = x.permute(perm).contiguous()
+                    sm = moved.softmax(-1)
+                    out = sm.permute(inv_perm).contiguous()
+            elif op in ("ReduceSum", "ReduceMean"):
+                data = self._as_tensor(ins[0])
+                in_shape = list(data.shape)
+                rank = len(in_shape)
+
+                if len(ins) > 1 and self._as_numpy(ins[1]).size > 0:
+                    axes_raw = [int(v) for v in self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1).tolist()]
+                else:
+                    axes_raw = self._get_attr(node, "axes", None)
+
+                noop_with_empty_axes = int(self._get_attr(node, "noop_with_empty_axes", 0))
+                keepdims = int(self._get_attr(node, "keepdims", 1))
+
+                if axes_raw is None:
+                    axes = list(range(rank))
+                elif len(axes_raw) == 0:
+                    axes = [] if noop_with_empty_axes == 1 else list(range(rank))
+                else:
+                    axes = sorted(set((ax if ax >= 0 else ax + rank) for ax in axes_raw))
+
+                for ax in axes:
+                    if ax < 0 or ax >= rank:
+                        raise ValueError(f"{op} axis out of range: axis={ax}, rank={rank}")
+
+                if len(axes) == 0:
+                    out = data
+                elif axes == list(range(rank)):
+                    out = data.sum()
+                    if op == "ReduceMean":
+                        count = 1
+                        for d in in_shape:
+                            count *= int(d)
+                        out = out / self._scalar_tensor(float(count), out)
+                    if keepdims == 1:
+                        out = out.reshape([1] * rank)
+                else:
+                    raise ValueError(
+                        f"{op} currently supports only full-tensor reduction axes; got axes={axes} for rank={rank}"
+                    )
             elif op == "Concat":
                 axis = int(self._get_attr(node, "axis", 0))
                 base = self._as_tensor(ins[0])
@@ -625,6 +696,23 @@ class _ONNXGraphModule:
                         raise ValueError("Resize only supports equal integer spatial scale")
                 else:
                     raise ValueError("Resize requires scales input")
+            elif op == "Log":
+                x = self._as_tensor(ins[0])
+                out = x.log()
+            elif op == "Sqrt":
+                x = self._as_tensor(ins[0])
+                out = x.sqrt()
+            elif op == "Clip":
+                x = self._as_tensor(ins[0])
+                if len(ins) > 1 and self._as_numpy(ins[1]).size > 0:
+                    min_v = float(self._as_numpy(ins[1]).reshape(-1)[0])
+                else:
+                    min_v = float(self._get_attr(node, "min", -3.4028235e38))
+                if len(ins) > 2 and self._as_numpy(ins[2]).size > 0:
+                    max_v = float(self._as_numpy(ins[2]).reshape(-1)[0])
+                else:
+                    max_v = float(self._get_attr(node, "max", 3.4028235e38))
+                out = x.clip(min_v, max_v)
             elif op == "Pow":
                 a = self._as_numpy(ins[0]).astype(self._np.float32)
                 b = self._as_numpy(ins[1]).astype(self._np.float32)
@@ -670,6 +758,12 @@ _GRAPH_RUNTIME_SUPPORTED_OPS = {
     "Conv",
     "MaxPool",
     "Sigmoid",
+    "Softmax",
+    "ReduceSum",
+    "ReduceMean",
+    "Log",
+    "Sqrt",
+    "Clip",
     "Relu",
     "LeakyRelu",
     "GlobalAveragePool",

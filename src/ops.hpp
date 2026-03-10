@@ -18,6 +18,9 @@ inline Tensor div(const Tensor &a, const Tensor &b);
 inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
                          const Tensor &bias, float eps = 1e-5f);
 inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value);
+inline Tensor log(const Tensor &a);
+inline Tensor sqrt(const Tensor &a);
+inline Tensor clip(const Tensor &a, float min_value, float max_value);
 inline Tensor log_softmax(const Tensor &a, int dim = -1);
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
@@ -557,6 +560,38 @@ inline Tensor sigmoid(const Tensor &a) {
     out.impl_->grad_fn = fn;
   }
   record_trace(out, "Sigmoid", {a});
+  return out;
+}
+
+
+inline Tensor log(const Tensor &a) {
+  Tensor out(a.shape(), a.device(), a.dtype());
+  a.impl_->backend().log(*a.impl_->storage, *out.impl_->storage, a.size());
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    throw std::runtime_error("Log backward is not implemented yet");
+  }
+  record_trace(out, "Log", {a});
+  return out;
+}
+
+inline Tensor sqrt(const Tensor &a) {
+  Tensor out(a.shape(), a.device(), a.dtype());
+  a.impl_->backend().sqrt(*a.impl_->storage, *out.impl_->storage, a.size());
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    throw std::runtime_error("Sqrt backward is not implemented yet");
+  }
+  record_trace(out, "Sqrt", {a});
+  return out;
+}
+
+inline Tensor clip(const Tensor &a, float min_value, float max_value) {
+  Tensor out(a.shape(), a.device(), a.dtype());
+  a.impl_->backend().clip(*a.impl_->storage, *out.impl_->storage, min_value,
+                          max_value, a.size());
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    throw std::runtime_error("Clip backward is not implemented yet");
+  }
+  record_trace(out, "Clip", {a}, {}, {{"min", min_value}, {"max", max_value}});
   return out;
 }
 

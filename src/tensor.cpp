@@ -58,6 +58,11 @@ Tensor Tensor::matmul(const Tensor &other) const {
 
 Tensor Tensor::relu() const { return ops::relu(*this); }
 Tensor Tensor::sigmoid() const { return ops::sigmoid(*this); }
+Tensor Tensor::log() const { return ops::log(*this); }
+Tensor Tensor::sqrt() const { return ops::sqrt(*this); }
+Tensor Tensor::clip(float min_value, float max_value) const {
+  return ops::clip(*this, min_value, max_value);
+}
 Tensor Tensor::softmax(int dim) const { return ops::softmax(*this, dim); }
 Tensor Tensor::log_softmax(int dim) const { return ops::log_softmax(*this, dim); }
 

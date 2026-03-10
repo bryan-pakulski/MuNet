@@ -210,6 +210,25 @@ public:
     base_->sigmoid_backward(grad_out, out, grad_in, num_elements);
     check("sigmoid_backward", t.elapsed_us(), &grad_in);
   }
+  void log(const Storage &in, Storage &out, size_t num_elements) override {
+    MUNET_DEBUG << "log | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->log(in, out, num_elements);
+    check("log", t.elapsed_us(), &out);
+  }
+  void sqrt(const Storage &in, Storage &out, size_t num_elements) override {
+    MUNET_DEBUG << "sqrt | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->sqrt(in, out, num_elements);
+    check("sqrt", t.elapsed_us(), &out);
+  }
+  void clip(const Storage &in, Storage &out, float min_value, float max_value,
+            size_t num_elements) override {
+    MUNET_DEBUG << "clip | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->clip(in, out, min_value, max_value, num_elements);
+    check("clip", t.elapsed_us(), &out);
+  }
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
     MUNET_DEBUG << "softmax | " << batch_size << " batches, " << num_classes
