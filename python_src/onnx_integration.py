@@ -370,6 +370,11 @@ def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_
         munet.save(module, output_path)
     return module
 
+
+def report_onnx_unsupported_ops(model_path):
+    """Return a sorted unique list of unsupported ONNX ops for native compile."""
+    return compile_onnx(model_path, output_path=None, ignore_unsupported=True, report_only=True)
+
 inference.ONNXEngine = ONNXEngine
 inference.load_onnx = load_onnx
 inference.compile_onnx = compile_onnx
