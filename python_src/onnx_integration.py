@@ -131,6 +131,7 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Softmax": {"status": "lowered", "munet": "graph/softmax"},
     "ReduceSum": {"status": "lowered", "munet": "graph/reduce_sum"},
     "ReduceMean": {"status": "lowered", "munet": "graph/reduce_mean"},
+    "ReduceMax": {"status": "lowered", "munet": "graph/reduce_max"},
     "Log": {"status": "lowered", "munet": "graph/log"},
     "Sqrt": {"status": "lowered", "munet": "graph/sqrt"},
     "Clip": {"status": "lowered", "munet": "graph/clip"},
@@ -551,7 +552,7 @@ class _ONNXGraphModule:
                     moved = x.permute(perm).contiguous()
                     sm = moved.softmax(-1)
                     out = sm.permute(inv_perm).contiguous()
-            elif op in ("ReduceSum", "ReduceMean"):
+            elif op in ("ReduceSum", "ReduceMean", "ReduceMax"):
                 data = self._as_tensor(ins[0])
                 in_shape = list(data.shape)
                 rank = len(in_shape)
@@ -579,13 +580,20 @@ class _ONNXGraphModule:
                     out = data
                 else:
                     keep_shape = [1 if i in axes else int(in_shape[i]) for i in range(rank)]
-                    out = data.sum_to_shape(keep_shape)
+                    if op == "ReduceMax":
+                        out = data
+                        # reduce one axis at a time (descending to keep axis positions stable)
+                        for ax in sorted(axes, reverse=True):
+                            vals, _ = out.topk(1, ax, True, True)
+                            out = vals
+                    else:
+                        out = data.sum_to_shape(keep_shape)
 
-                    if op == "ReduceMean":
-                        count = 1
-                        for ax in axes:
-                            count *= int(in_shape[ax])
-                        out = out / self._scalar_tensor(float(count), out)
+                        if op == "ReduceMean":
+                            count = 1
+                            for ax in axes:
+                                count *= int(in_shape[ax])
+                            out = out / self._scalar_tensor(float(count), out)
 
                     if keepdims == 0:
                         final_shape = [int(in_shape[i]) for i in range(rank) if i not in axes]
@@ -852,6 +860,7 @@ _GRAPH_RUNTIME_SUPPORTED_OPS = {
     "Softmax",
     "ReduceSum",
     "ReduceMean",
+    "ReduceMax",
     "Log",
     "Sqrt",
     "Clip",

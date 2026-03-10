@@ -1038,6 +1038,32 @@ class TestBindings(unittest.TestCase):
             expected = np.clip(np.sqrt(np.log(x_np)), 1.5, 2.0)
             self.assertTrue(np.allclose(out, expected, atol=1e-5))
 
+    def test_compile_onnx_reduce_max_partial_axes(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX ReduceMax test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "reduce_max_partial.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 4])
+            axes = helper.make_tensor("axes", TensorProto.INT64, [1], [1])
+            rmax = helper.make_node("ReduceMax", ["x", "axes"], ["y"], keepdims=0)
+            graph = helper.make_graph([rmax], "reduce_max_graph", [x_info], [y_info], [axes])
+            model = helper.make_model(graph, producer_name="munet_reduce_max_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.max(x_np, axis=1)
+            self.assertTrue(np.allclose(out, expected, atol=1e-6))
+
     def test_compile_onnx_reduce_sum_mean_partial_axes(self):
         try:
             import onnx
