@@ -180,6 +180,13 @@ PYBIND11_MODULE(munet, m) {
              bt.uniform_(b, b);
              return a * bt;
            })
+      .def("__truediv__", [](const Tensor &a, const Tensor &b) { return a / b; })
+      .def("__truediv__",
+           [](const Tensor &a, float b) {
+             Tensor bt({1}, a.device(), a.dtype());
+             bt.uniform_(b, b);
+             return a / bt;
+           })
       .def("__matmul__",
            [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
       .def("sum", &Tensor::sum,
@@ -189,6 +196,8 @@ PYBIND11_MODULE(munet, m) {
            "with the specified shape.")
       .def("masked_fill", &Tensor::masked_fill, py::arg("mask"), py::arg("value"),
            "Fills entries where mask is 1 with the given value.")
+      .def_static("cat", &Tensor::cat, py::arg("inputs"), py::arg("dim") = 1,
+                  "Concatenates tensors along a given dimension.")
       .def(
           "numpy", [](py::object self) { return py::cast<py::array>(self); },
           "Returns the tensor as a NumPy ndarray. The returned array and the "

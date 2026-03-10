@@ -24,8 +24,12 @@ doc:
 	 mkdir -p docs                                                                          
 	 cd build && pdoc ./munet -o ../docs                                   
 
-PHONY: all build build-release unit-test py-test perf-test format docs
+PHONY: all build build-release unit-test py-test perf-test format docs docker-build
 
 perf-test: build-release
 	 MUNET_RUN_PERF_TESTS=1 ./build/munet_tests --gtest_filter=PerformanceTest.*
 
+
+
+docker-build:
+	 ./tools/build_in_docker.sh

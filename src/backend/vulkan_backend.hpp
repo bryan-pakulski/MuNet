@@ -33,6 +33,8 @@ public:
            const BroadcastInfo &info) override;
   void mul(const Storage &a, const Storage &b, Storage &out,
            const BroadcastInfo &info) override;
+  void div(const Storage &a, const Storage &b, Storage &out,
+           const BroadcastInfo &info) override;
   void sub(const Storage &a, const Storage &b, Storage &out,
            const BroadcastInfo &info) override;
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,

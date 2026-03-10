@@ -14,6 +14,7 @@ namespace ops {
 inline Tensor add(const Tensor &a, const Tensor &b);
 inline Tensor sub(const Tensor &a, const Tensor &b);
 inline Tensor mul(const Tensor &a, const Tensor &b);
+inline Tensor div(const Tensor &a, const Tensor &b);
 inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
                          const Tensor &bias, float eps = 1e-5f);
 inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value);
@@ -843,6 +844,49 @@ inline Tensor mul(const Tensor &a, const Tensor &b) {
     out.impl_->grad_fn = fn;
   }
   record_trace(out, "Mul", {a, b});
+  return out;
+}
+
+// --- DIV ---
+struct DivBackward : public Node {
+  Tensor A, B;
+  DivBackward(Tensor a, Tensor b) : A(a), B(b) {}
+  std::string name() const override { return "DivBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_out = grads[0];
+    Tensor da = div(grad_out, B);
+
+    Tensor b2 = mul(B, B);
+    Tensor num = mul(grad_out, A);
+    Tensor db_pos = div(num, b2);
+    Tensor zeros(db_pos.shape(), db_pos.device(), db_pos.dtype());
+    zeros.impl_->storage->zero_();
+    Tensor db = sub(zeros, db_pos);
+
+    return {sum_to_shape(da, A.shape()), sum_to_shape(db, B.shape())};
+  }
+};
+
+inline Tensor div(const Tensor &a, const Tensor &b) {
+  if (a.device() != b.device())
+    throw std::runtime_error("Div: device mismatch");
+
+  auto info = compute_broadcast(a.shape(), a.strides(), b.shape(), b.strides());
+  if (!info.can_broadcast) {
+    throw std::runtime_error("Div: shape mismatch");
+  }
+
+  Tensor out(info.out_shape, a.device(), a.dtype());
+  a.impl_->backend().div(*a.impl_->storage, *b.impl_->storage,
+                         *out.impl_->storage, info);
+
+  if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
+    auto fn = std::make_shared<DivBackward>(a, b);
+    link_backward_edges(fn.get(), {a, b});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_trace(out, "Div", {a, b});
   return out;
 }
 

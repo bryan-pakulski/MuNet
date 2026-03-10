@@ -36,7 +36,7 @@ static VkInstance instance;
 static VkPhysicalDevice physicalDevice;
 static VkDevice device;
 static VkQueue computeQueue;
-static uint32_t queueFamilyIndex;
+static uint32_t queueFamilyIndex = UINT32_MAX;
 static VkCommandPool commandPool;
 static VkDescriptorSetLayout descriptorSetLayout;
 
@@ -70,8 +70,9 @@ static void *stagingMapped = nullptr;
 static VkCommandBuffer immediateCmdBuffer = VK_NULL_HANDLE;
 
 static VkPipelineLayout pipelineLayout;
-static VkPipeline addPipeline, mulPipeline, subPipeline, matmulPipeline;
-static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline,
+static VkPipeline addPipeline, mulPipeline, subPipeline, divPipeline,
+    matmulPipeline;
+static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
     sumToShapePipeline;
 static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
 static VkPipeline sigmoidPipeline, sigmoidBackwardPipeline;
@@ -225,6 +226,9 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
       queueFamilyIndex = i;
       break;
     }
+  }
+  if (queueFamilyIndex == UINT32_MAX) {
+    throw std::runtime_error("No Vulkan compute queue family found.");
   }
 
   float queuePriority = 1.0f;
@@ -384,6 +388,19 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 				}
   )");
 
+  divPipeline = createComputePipeline("div", R"(
+				#version 450
+				layout(local_size_x = 256) in;
+				layout(binding = 0) buffer A { float a[]; };
+				layout(binding = 1) buffer B { float b[]; };
+				layout(binding = 2) buffer C { float c[]; };
+				layout(push_constant) uniform Push { uint N; } p;
+				void main() {
+						uint i = gl_GlobalInvocationID.x;
+						if (i < p.N) c[i] = a[i] / b[i];
+				}
+  )");
+
   addBCPipeline = createComputePipeline("add_bc_fast", R"(
         #version 450
 
@@ -456,6 +473,31 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 								off_b += coord * uint(u.info[19 + d]);
 						}
 						c[idx] = a[off_a] - b[off_b];
+				}
+				)");
+
+  divBCPipeline = createComputePipeline("div_bc_fast", R"(
+        #version 450
+
+				layout(local_size_x = 256) in;
+				layout(binding = 0) buffer A { float a[]; };
+				layout(binding = 1) buffer B { float b[]; };
+				layout(binding = 2) buffer C { float c[]; };
+				layout(push_constant) uniform P { int info[26]; } u;
+				void main() {
+						uint total = uint(u.info[25]);
+						uint idx = gl_GlobalInvocationID.x;
+						if (idx >= total) return;
+						int ndim = u.info[0];
+						uint off_a = 0;
+						uint off_b = 0;
+						for (int d = 0; d < ndim; ++d) {
+								uint stride = uint(u.info[7 + d]);
+								uint coord  = (idx / stride) % uint(u.info[1 + d]);
+								off_a += coord * uint(u.info[13 + d]);
+								off_b += coord * uint(u.info[19 + d]);
+						}
+						c[idx] = a[off_a] / b[off_b];
 				}
 				)");
 
@@ -1757,10 +1799,12 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyPipeline(device, addPipeline, nullptr);
   vkDestroyPipeline(device, mulPipeline, nullptr);
   vkDestroyPipeline(device, subPipeline, nullptr);
+  vkDestroyPipeline(device, divPipeline, nullptr);
 
   vkDestroyPipeline(device, addBCPipeline, nullptr);
   vkDestroyPipeline(device, mulBCPipeline, nullptr);
   vkDestroyPipeline(device, subBCPipeline, nullptr);
+  vkDestroyPipeline(device, divBCPipeline, nullptr);
   vkDestroyPipeline(device, sumToShapePipeline, nullptr);
 
   vkDestroyPipeline(device, updatePipeline, nullptr);
@@ -2207,6 +2251,21 @@ void VulkanBackend::sub(const Storage &a, const Storage &b, Storage &out,
     auto gpu_info = to_gpu_info(info);
     size_t total = numel(info.out_shape);
     dispatch_kernel(subBCPipeline, {a.data(), b.data(), out.data()}, &gpu_info,
+                    sizeof(gpu_info), (total + 255) / 256, 1, 1);
+  }
+}
+
+void VulkanBackend::div(const Storage &a, const Storage &b, Storage &out,
+                        const BroadcastInfo &info) {
+  size_t total = numel(info.out_shape);
+  if (info.strides_a == default_strides(info.out_shape) &&
+      info.strides_b == default_strides(info.out_shape)) {
+    uint32_t N = (uint32_t)total;
+    dispatch_kernel(divPipeline, {a.data(), b.data(), out.data()}, &N,
+                    sizeof(N), (N + 255) / 256, 1, 1);
+  } else {
+    auto gpu_info = to_gpu_info(info);
+    dispatch_kernel(divBCPipeline, {a.data(), b.data(), out.data()}, &gpu_info,
                     sizeof(gpu_info), (total + 255) / 256, 1, 1);
   }
 }

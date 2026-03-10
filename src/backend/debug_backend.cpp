@@ -130,6 +130,14 @@ public:
     check("mul", t.elapsed_us(), &out);
   }
 
+  void div(const Storage &a, const Storage &b, Storage &out,
+           const BroadcastInfo &info) override {
+    MUNET_DEBUG << "div (broadcast)" << std::endl;
+    Timer t;
+    base_->div(a, b, out, info);
+    check("div", t.elapsed_us(), &out);
+  }
+
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override {
     MUNET_DEBUG << "matmul | " << M << "x" << K << "x" << N << " matrix"
