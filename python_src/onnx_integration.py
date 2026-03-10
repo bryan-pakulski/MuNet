@@ -497,6 +497,25 @@ class _ONNXGraphModule:
             elif op == "GlobalAveragePool":
                 x = self._as_tensor(ins[0])
                 out = self._m.nn.GlobalAvgPool2d().forward(x)
+            elif op == "Flatten":
+                data = self._as_tensor(ins[0])
+                axis = int(self._get_attr(node, "axis", 1))
+                rank = len(data.shape)
+                axis = axis if axis >= 0 else axis + rank
+                if axis < 0 or axis > rank:
+                    raise ValueError(f"Flatten axis out of range: axis={axis}, rank={rank}")
+                shape = list(data.shape)
+                d0 = 1
+                for v in shape[:axis]:
+                    d0 *= int(v)
+                d1 = 1
+                for v in shape[axis:]:
+                    d1 *= int(v)
+                out = data.reshape([d0, d1])
+            elif op == "MatMul":
+                a = self._as_tensor(ins[0])
+                b = self._as_tensor(ins[1], a.device)
+                out = a.__matmul__(b)
             elif op == "Gemm":
                 A = self._as_tensor(ins[0])
                 B = self._as_tensor(ins[1], A.device)
@@ -872,6 +891,8 @@ _GRAPH_RUNTIME_SUPPORTED_OPS = {
     "LeakyRelu",
     "GlobalAveragePool",
     "Gemm",
+    "MatMul",
+    "Flatten",
     "Add",
     "Mul",
     "Sub",
