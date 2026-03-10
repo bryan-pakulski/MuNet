@@ -200,6 +200,9 @@ PYBIND11_MODULE(munet, m) {
            "Fills entries where mask is 1 with the given value.")
       .def("gather_elements", &Tensor::gather_elements, py::arg("indices"), py::arg("axis"),
            "Gathers values along an axis using per-element indices tensor.")
+      .def("grid_sample", &Tensor::grid_sample, py::arg("grid"),
+           py::arg("mode") = "bilinear", py::arg("align_corners") = false,
+           "Samples input tensor using normalized grid coordinates.")
       .def("topk",
            [](const Tensor &t, int k, int dim, bool largest, bool sorted) {
              auto out = t.topk(k, dim, largest, sorted);

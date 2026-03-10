@@ -138,7 +138,7 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Pad": {"status": "lowered", "munet": "graph/pad_constant"},
     "GatherElements": {"status": "lowered", "munet": "graph/gather_elements"},
     "TopK": {"status": "lowered", "munet": "graph/topk"},
-    "GridSample": {"status": "planned", "munet": None},
+    "GridSample": {"status": "lowered", "munet": "graph/grid_sample"},
     "Squeeze": {"status": "lowered", "munet": "graph/squeeze"},
     "Expand": {"status": "lowered", "munet": "graph/expand"},
     "Tile": {"status": "lowered", "munet": "graph/tile"},
@@ -742,6 +742,17 @@ class _ONNXGraphModule:
                 env[node.output[0]] = values
                 env[node.output[1]] = indices
                 continue
+            elif op == "GridSample":
+                x = self._as_tensor(ins[0])
+                grid = self._as_tensor(ins[1], x.device)
+                mode = self._get_attr(node, "mode", "bilinear")
+                padding_mode = self._get_attr(node, "padding_mode", "zeros")
+                align_corners = int(self._get_attr(node, "align_corners", 0)) != 0
+                if padding_mode != "zeros":
+                    raise ValueError("GridSample currently supports only padding_mode='zeros'")
+                if mode not in ("bilinear", "nearest"):
+                    raise ValueError("GridSample currently supports mode in {'bilinear','nearest'}")
+                out = x.grid_sample(grid, mode, align_corners)
             elif op == "Pad":
                 data = self._as_tensor(ins[0])
                 mode = self._get_attr(node, "mode", "constant")
@@ -847,6 +858,7 @@ _GRAPH_RUNTIME_SUPPORTED_OPS = {
     "Erf",
     "Pad",
     "TopK",
+    "GridSample",
     "Relu",
     "LeakyRelu",
     "GlobalAveragePool",

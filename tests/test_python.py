@@ -873,6 +873,32 @@ class TestBindings(unittest.TestCase):
         self.assertTrue(np.allclose(vals_np, np.array([[3.0, 2.0], [5.0, 4.0]], dtype=np.float32), atol=1e-6))
         self.assertTrue(np.allclose(idx_np, np.array([[1.0, 2.0], [2.0, 0.0]], dtype=np.float32), atol=1e-6))
 
+    def test_compile_onnx_gridsample_nearest(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX GridSample test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "gridsample.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 2])
+            g_np = np.array([[[[-1.0, -1.0], [1.0, -1.0]], [[-1.0, 1.0], [1.0, 1.0]]]], dtype=np.float32)
+            g_init = helper.make_tensor("g", TensorProto.FLOAT, g_np.shape, g_np.flatten().tolist())
+            node = helper.make_node("GridSample", ["x", "g"], ["y"], mode="nearest", padding_mode="zeros", align_corners=1)
+            graph = helper.make_graph([node], "gridsample_graph", [x_info], [y_info], [g_init])
+            model = helper.make_model(graph, producer_name="munet_gridsample_test", opset_imports=[helper.make_opsetid("", 16)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[[[1.0, 2.0], [3.0, 4.0]]]], dtype=np.float32)
+            out = module.forward(munet.from_numpy(x_np))
+            y = np.array(out.detach(), copy=False)
+            self.assertTrue(np.allclose(y, x_np, atol=1e-6))
+
     def test_compile_onnx_topk(self):
         try:
             import onnx

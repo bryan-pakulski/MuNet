@@ -97,6 +97,9 @@ public:
                   int scale) override;
   void upsample2d_backward(const Storage &grad_out, Storage &grad_in, int B,
                            int C, int iH, int iW, int scale) override;
+  void grid_sample(const Storage &in, const Storage &grid, Storage &out,
+                   int B, int C, int iH, int iW, int oH, int oW, int mode,
+                   bool align_corners) override;
 
   void batch_norm(const Storage &in, const Storage &scale, const Storage &bias,
                   Storage &running_mean, Storage &running_var,

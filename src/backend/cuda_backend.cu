@@ -587,6 +587,68 @@ __global__ void maxpool2d_backward_kernel(const float *__restrict__ grad_out,
   }
 }
 
+
+__device__ inline float grid_src_coord(float g, int size, int align_corners) {
+  if (align_corners) {
+    if (size <= 1)
+      return 0.0f;
+    return ((g + 1.0f) * 0.5f) * (float)(size - 1);
+  }
+  return ((g + 1.0f) * (float)size - 1.0f) * 0.5f;
+}
+
+__device__ inline float sample_zero(const float *in, int B, int C, int H,
+                                    int W, int b, int c, int y, int x) {
+  if (x < 0 || x >= W || y < 0 || y >= H)
+    return 0.0f;
+  size_t off = (((size_t)b * C + c) * H + y) * W + x;
+  return in[off];
+}
+
+__global__ void grid_sample_kernel(const float *in, const float *grid,
+                                   float *out, int B, int C, int iH, int iW,
+                                   int oH, int oW, int mode,
+                                   int align_corners) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t N = (size_t)B * C * oH * oW;
+  if (idx >= N)
+    return;
+
+  int ox = idx % oW;
+  size_t t = idx / oW;
+  int oy = t % oH;
+  t /= oH;
+  int c = t % C;
+  int b = t / C;
+
+  size_t goff = (((size_t)b * oH + oy) * oW + ox) * 2;
+  float gx = grid[goff + 0];
+  float gy = grid[goff + 1];
+  float sx = grid_src_coord(gx, iW, align_corners);
+  float sy = grid_src_coord(gy, iH, align_corners);
+
+  float outv = 0.0f;
+  if (mode == 1) {
+    int nx = (int)nearbyintf(sx);
+    int ny = (int)nearbyintf(sy);
+    outv = sample_zero(in, B, C, iH, iW, b, c, ny, nx);
+  } else {
+    int x0 = (int)floorf(sx);
+    int y0 = (int)floorf(sy);
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+    float wx1 = sx - (float)x0;
+    float wy1 = sy - (float)y0;
+    float wx0 = 1.0f - wx1;
+    float wy0 = 1.0f - wy1;
+    outv = sample_zero(in, B, C, iH, iW, b, c, y0, x0) * wx0 * wy0 +
+           sample_zero(in, B, C, iH, iW, b, c, y0, x1) * wx1 * wy0 +
+           sample_zero(in, B, C, iH, iW, b, c, y1, x0) * wx0 * wy1 +
+           sample_zero(in, B, C, iH, iW, b, c, y1, x1) * wx1 * wy1;
+  }
+  out[idx] = outv;
+}
+
 __global__ void upsample2d_kernel(const float *__restrict__ in,
                                   float *__restrict__ out, int B, int C, int iH,
                                   int iW, int scale) {
@@ -1105,6 +1167,23 @@ void CUDABackend::relu_backward(const Storage &grad_out, const Storage &input,
   relu_backward_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)input.data(),
       (float *)grad_in.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+
+void CUDABackend::grid_sample(const Storage &in, const Storage &grid,
+                              Storage &out, int B, int C, int iH, int iW,
+                              int oH, int oW, int mode,
+                              bool align_corners) {
+  cudaSetDevice(device_index_);
+  size_t total = (size_t)B * C * oH * oW;
+  int blocks = (total + 255) / 256;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  grid_sample_kernel<<<blocks, 256>>>((const float *)in.data(),
+                                      (const float *)grid.data(),
+                                      (float *)out.data(), B, C, iH, iW, oH,
+                                      oW, mode, align_corners ? 1 : 0);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }

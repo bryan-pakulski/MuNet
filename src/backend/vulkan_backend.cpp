@@ -77,7 +77,8 @@ static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
 static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
 static VkPipeline sigmoidPipeline, sigmoidBackwardPipeline;
 static VkPipeline logPipeline, sqrtPipeline, clipPipeline, erfPipeline;
-static VkPipeline softmaxPipeline, softmaxBackwardPipeline, topkPipeline;
+static VkPipeline softmaxPipeline, softmaxBackwardPipeline, topkPipeline,
+    gridSamplePipeline;
 static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
 static VkPipeline crossEntropyPipeline, crossEntropyBackwardPipeline;
 
@@ -1630,6 +1631,77 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
          }
      )");
 
+
+  gridSamplePipeline = createComputePipeline("grid_sample", R"(
+        #version 450
+        layout(local_size_x=256) in;
+
+        layout(binding=0) readonly buffer I { float in_d[]; };
+        layout(binding=1) readonly buffer G { float grid_d[]; };
+        layout(binding=2) writeonly buffer O { float out_d[]; };
+
+        layout(push_constant) uniform P {
+            int B, C, iH, iW, oH, oW;
+            int mode;
+            int align;
+        } u;
+
+        float src_coord(float g, int size, int align_corners) {
+            if (align_corners != 0) {
+                if (size <= 1) return 0.0;
+                return ((g + 1.0) * 0.5) * float(size - 1);
+            }
+            return ((g + 1.0) * float(size) - 1.0) * 0.5;
+        }
+
+        float sample_zero(int b, int c, int y, int x) {
+            if (x < 0 || x >= u.iW || y < 0 || y >= u.iH) return 0.0;
+            int off = ((b*u.C + c)*u.iH + y)*u.iW + x;
+            return in_d[off];
+        }
+
+        void main() {
+            uint idx = gl_GlobalInvocationID.x;
+            uint N = uint(u.B*u.C*u.oH*u.oW);
+            if (idx >= N) return;
+
+            int ox = int(idx % uint(u.oW));
+            uint t = idx / uint(u.oW);
+            int oy = int(t % uint(u.oH));
+            t = t / uint(u.oH);
+            int c = int(t % uint(u.C));
+            int b = int(t / uint(u.C));
+
+            int goff = ((b*u.oH + oy)*u.oW + ox)*2;
+            float gx = grid_d[goff + 0];
+            float gy = grid_d[goff + 1];
+            float sx = src_coord(gx, u.iW, u.align);
+            float sy = src_coord(gy, u.iH, u.align);
+
+            float outv = 0.0;
+            if (u.mode == 1) {
+                int nx = int(round(sx));
+                int ny = int(round(sy));
+                outv = sample_zero(b, c, ny, nx);
+            } else {
+                int x0 = int(floor(sx));
+                int y0 = int(floor(sy));
+                int x1 = x0 + 1;
+                int y1 = y0 + 1;
+                float wx1 = sx - float(x0);
+                float wy1 = sy - float(y0);
+                float wx0 = 1.0 - wx1;
+                float wy0 = 1.0 - wy1;
+                outv = sample_zero(b, c, y0, x0) * wx0 * wy0 +
+                       sample_zero(b, c, y0, x1) * wx1 * wy0 +
+                       sample_zero(b, c, y1, x0) * wx0 * wy1 +
+                       sample_zero(b, c, y1, x1) * wx1 * wy1;
+            }
+
+            out_d[idx] = outv;
+        }
+    )");
+
   concatPipeline = createComputePipeline("concat", R"(
       #version 450
       layout(local_size_x = 256) in;
@@ -1968,6 +2040,7 @@ VulkanBackend::~VulkanBackend() {
 
   vkDestroyPipeline(device, upsamplePipeline, nullptr);
   vkDestroyPipeline(device, upsampleBackPipeline, nullptr);
+  vkDestroyPipeline(device, gridSamplePipeline, nullptr);
 
   vkDestroyPipeline(device, uniformPipeline, nullptr);
   vkDestroyPipeline(device, sumPipeline, nullptr);
@@ -2709,6 +2782,20 @@ void VulkanBackend::upsample2d_backward(const Storage &grad_out,
   } pc = {B, C, iH, iW, scale};
   dispatch_kernel(upsampleBackPipeline, {grad_out.data(), grad_in.data()}, &pc,
                   sizeof(pc), (B * C * iH * iW + 255) / 256, 1, 1);
+}
+
+
+void VulkanBackend::grid_sample(const Storage &in, const Storage &grid,
+                                Storage &out, int B, int C, int iH, int iW,
+                                int oH, int oW, int mode,
+                                bool align_corners) {
+  struct {
+    int B, C, iH, iW, oH, oW;
+    int mode;
+    int align;
+  } pc = {B, C, iH, iW, oH, oW, mode, align_corners ? 1 : 0};
+  dispatch_kernel(gridSamplePipeline, {in.data(), grid.data(), out.data()}, &pc,
+                  sizeof(pc), (B * C * oH * oW + 255) / 256, 1, 1);
 }
 
 void VulkanBackend::batch_norm(const Storage &in, const Storage &scale,

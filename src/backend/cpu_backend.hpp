@@ -856,6 +856,70 @@ public:
     }
   }
 
+
+  void grid_sample(const Storage &in, const Storage &grid, Storage &out, int B,
+                   int C, int iH, int iW, int oH, int oW, int mode,
+                   bool align_corners) override {
+    const float *ip = (const float *)in.data();
+    const float *gp = (const float *)grid.data();
+    float *op = (float *)out.data();
+
+    auto compute_src = [&](float g, int size) {
+      if (align_corners) {
+        if (size <= 1)
+          return 0.0f;
+        return ((g + 1.0f) * 0.5f) * (float)(size - 1);
+      }
+      return ((g + 1.0f) * (float)size - 1.0f) * 0.5f;
+    };
+
+    auto sample = [&](int b, int c, int y, int x) {
+      if (x < 0 || x >= iW || y < 0 || y >= iH)
+        return 0.0f;
+      size_t off = (((size_t)b * C + c) * iH + y) * iW + x;
+      return ip[off];
+    };
+
+    parallel_for(0, (size_t)B, [&](size_t bs, size_t be) {
+      for (size_t bb = bs; bb < be; ++bb) {
+        int b = (int)bb;
+        for (int oy = 0; oy < oH; ++oy) {
+          for (int ox = 0; ox < oW; ++ox) {
+            size_t goff = (((size_t)b * oH + oy) * oW + ox) * 2;
+            float gx = gp[goff + 0];
+            float gy = gp[goff + 1];
+            float sx = compute_src(gx, iW);
+            float sy = compute_src(gy, iH);
+
+            for (int c = 0; c < C; ++c) {
+              float outv = 0.0f;
+              if (mode == 1) {
+                int nx = (int)std::nearbyint(sx);
+                int ny = (int)std::nearbyint(sy);
+                outv = sample(b, c, ny, nx);
+              } else {
+                int x0 = (int)std::floor(sx);
+                int y0 = (int)std::floor(sy);
+                int x1 = x0 + 1;
+                int y1 = y0 + 1;
+                float wx1 = sx - (float)x0;
+                float wy1 = sy - (float)y0;
+                float wx0 = 1.0f - wx1;
+                float wy0 = 1.0f - wy1;
+                outv = sample(b, c, y0, x0) * wx0 * wy0 +
+                       sample(b, c, y0, x1) * wx1 * wy0 +
+                       sample(b, c, y1, x0) * wx0 * wy1 +
+                       sample(b, c, y1, x1) * wx1 * wy1;
+              }
+              size_t ooff = (((size_t)b * C + c) * oH + oy) * oW + ox;
+              op[ooff] = outv;
+            }
+          }
+        }
+      }
+    });
+  }
+
   void batch_norm(const Storage &in, const Storage &scale, const Storage &bias,
                   Storage &running_mean, Storage &running_var,
                   Storage &save_mean, Storage &save_var, Storage &out, int B,

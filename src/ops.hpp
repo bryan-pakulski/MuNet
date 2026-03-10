@@ -26,6 +26,9 @@ inline Tensor erf(const Tensor &a);
 inline Tensor gather_elements(const Tensor &data, const Tensor &indices, int axis);
 inline std::pair<Tensor, Tensor> topk(const Tensor &a, int k, int dim = -1,
                                       bool largest = true, bool sorted = true);
+inline Tensor grid_sample(const Tensor &input, const Tensor &grid,
+                          const std::string &mode = "bilinear",
+                          bool align_corners = false);
 inline Tensor log_softmax(const Tensor &a, int dim = -1);
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
@@ -684,6 +687,44 @@ inline std::pair<Tensor, Tensor> topk(const Tensor &a, int k, int dim,
   record_trace(v, "TopKValues", {a}, {{"k", {k}}, {"dim", {d}}, {"largest", {largest ? 1 : 0}}, {"sorted", {sorted_flag ? 1 : 0}}});
   record_trace(i, "TopKIndices", {a}, {{"k", {k}}, {"dim", {d}}, {"largest", {largest ? 1 : 0}}, {"sorted", {sorted_flag ? 1 : 0}}});
   return {v, i};
+}
+
+
+inline Tensor grid_sample(const Tensor &input, const Tensor &grid,
+                          const std::string &mode, bool align_corners) {
+  auto xs = input.shape();
+  auto gs = grid.shape();
+  if (xs.size() != 4)
+    throw std::runtime_error("grid_sample: input must be rank-4 NCHW");
+  if (gs.size() != 4 || gs[3] != 2)
+    throw std::runtime_error("grid_sample: grid must be rank-4 [N,H,W,2]");
+  if (xs[0] != gs[0])
+    throw std::runtime_error("grid_sample: batch mismatch");
+  if (input.device() != grid.device())
+    throw std::runtime_error("grid_sample: device mismatch");
+
+  int mode_id = 0;
+  if (mode == "bilinear")
+    mode_id = 0;
+  else if (mode == "nearest")
+    mode_id = 1;
+  else
+    throw std::runtime_error("grid_sample: supported modes are bilinear/nearest");
+
+  int B = xs[0], C = xs[1], iH = xs[2], iW = xs[3];
+  int oH = gs[1], oW = gs[2];
+  Tensor out({B, C, oH, oW}, input.device(), input.dtype());
+
+  input.impl_->backend().grid_sample(*input.impl_->storage, *grid.impl_->storage,
+                                     *out.impl_->storage, B, C, iH, iW, oH,
+                                     oW, mode_id, align_corners);
+  if (GradMode::is_enabled() && (input.requires_grad() || grid.requires_grad()))
+    throw std::runtime_error("GridSample backward is not implemented yet");
+
+  record_trace(out, "GridSample", {input, grid},
+               {{"mode", {mode_id}},
+                {"align_corners", {align_corners ? 1 : 0}}});
+  return out;
 }
 
 // --- SOFTMAX ---

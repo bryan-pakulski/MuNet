@@ -192,6 +192,11 @@ std::pair<Tensor, Tensor> Tensor::topk(int k, int dim, bool largest,
   return ops::topk(*this, k, dim, largest, sorted);
 }
 
+Tensor Tensor::grid_sample(const Tensor &grid, const std::string &mode,
+                           bool align_corners) const {
+  return ops::grid_sample(*this, grid, mode, align_corners);
+}
+
 float Tensor::item() const {
   if (size() != 1) {
     throw std::runtime_error(

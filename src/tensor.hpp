@@ -129,6 +129,8 @@ public:
   Tensor gather_elements(const Tensor &indices, int axis) const;
   std::pair<Tensor, Tensor> topk(int k, int dim = -1, bool largest = true,
                                  bool sorted = true) const;
+  Tensor grid_sample(const Tensor &grid, const std::string &mode = "bilinear",
+                     bool align_corners = false) const;
   float item() const;
 
   Tensor conv2d(const Tensor &weight, const Tensor &bias, int stride = 1,

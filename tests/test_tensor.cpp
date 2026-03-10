@@ -169,3 +169,32 @@ TEST_P(TensorTest, GatherElementsBasic) {
   EXPECT_FLOAT_EQ(o[5], 40.0f);
 }
 
+
+
+TEST_P(TensorTest, GridSampleNearestIdentity) {
+  Tensor x({1, 1, 2, 2}, dev());
+  Tensor g({1, 2, 2, 2}, dev());
+
+  Tensor x_cpu({1, 1, 2, 2}, {DeviceType::CPU, 0});
+  Tensor g_cpu({1, 2, 2, 2}, {DeviceType::CPU, 0});
+  float *xd = (float *)x_cpu.data();
+  float *gd = (float *)g_cpu.data();
+  xd[0] = 1.0f; xd[1] = 2.0f; xd[2] = 3.0f; xd[3] = 4.0f;
+
+  // normalized coords for corners with align_corners=true
+  gd[0] = -1.0f; gd[1] = -1.0f;
+  gd[2] =  1.0f; gd[3] = -1.0f;
+  gd[4] = -1.0f; gd[5] =  1.0f;
+  gd[6] =  1.0f; gd[7] =  1.0f;
+
+  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(), dev());
+  g.impl_->backend().copy(g_cpu.data(), g.data(), g.bytes(), g_cpu.device(), dev());
+
+  Tensor y = x.grid_sample(g, "nearest", true).to({DeviceType::CPU, 0});
+  const float *o = (const float *)y.data();
+  EXPECT_FLOAT_EQ(o[0], 1.0f);
+  EXPECT_FLOAT_EQ(o[1], 2.0f);
+  EXPECT_FLOAT_EQ(o[2], 3.0f);
+  EXPECT_FLOAT_EQ(o[3], 4.0f);
+}
+
