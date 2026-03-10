@@ -696,11 +696,31 @@ class _ONNXGraphModule:
                             final_shape = [1]
                         out = out.reshape(final_shape)
             elif op == "Concat":
-                axis = int(self._get_attr(node, "axis", 0))
                 base = self._as_tensor(ins[0])
                 ts = [base]
                 for v in ins[1:]:
                     ts.append(self._as_tensor(v, base.device))
+
+                rank = len(base.shape)
+                axis = int(self._get_attr(node, "axis", 0))
+                axis = axis if axis >= 0 else axis + rank
+                if axis < 0 or axis >= rank:
+                    raise ValueError(f"Concat axis out of range: axis={axis}, rank={rank}")
+
+                base_shape = [int(d) for d in base.shape]
+                for i, t in enumerate(ts[1:], start=1):
+                    tshape = [int(d) for d in t.shape]
+                    if len(tshape) != rank:
+                        raise ValueError(
+                            f"Concat input rank mismatch: input0_rank={rank}, input{i}_rank={len(tshape)}"
+                        )
+                    for dim in range(rank):
+                        if dim != axis and tshape[dim] != base_shape[dim]:
+                            raise ValueError(
+                                "Concat shape mismatch: "
+                                f"axis={axis}, input0_shape={base_shape}, input{i}_shape={tshape}"
+                            )
+
                 out = self._m.Tensor.cat(ts, axis)
             elif op == "Reshape":
                 data = self._as_tensor(ins[0])

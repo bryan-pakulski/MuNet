@@ -1341,6 +1341,38 @@ class TestBindings(unittest.TestCase):
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
 
+    def test_compile_onnx_concat_negative_axis(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX concat negative-axis test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "concat_negative_axis.onnx")
+
+            a_info = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 2, 3])
+            b_info = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 2, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2, 6])
+            cat = helper.make_node("Concat", ["a", "b"], ["y"], axis=-1)
+
+            graph = helper.make_graph([cat], "concat_negative_axis", [a_info, b_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_concat_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            a_np = np.arange(6, dtype=np.float32).reshape(1, 2, 3)
+            b_np = (100 + np.arange(6, dtype=np.float32)).reshape(1, 2, 3)
+            a = munet.from_numpy(a_np)
+            b = munet.from_numpy(b_np)
+
+            y = module.forward({"a": a, "b": b})
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.concatenate([a_np, b_np], axis=-1)
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_reshape_with_zero_and_negative_one(self):
         try:
             import onnx
