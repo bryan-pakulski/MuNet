@@ -721,9 +721,27 @@ class TestBindings(unittest.TestCase):
             missing = munet.inference.compile_onnx(onnx_path, report_only=True)
             self.assertIn("Erf", missing)
 
-            # ignore_unsupported should continue scan but fail if nothing compiles
+            # ignore_unsupported now refuses to emit partial models unless allow_partial=True
             with self.assertRaises(ValueError):
                 munet.inference.compile_onnx(onnx_path, ignore_unsupported=True)
+
+            # A mixed graph (supported + unsupported) should also fail by default
+            mixed_path = os.path.join(d, "mixed.onnx")
+            bias = helper.make_tensor("b", TensorProto.FLOAT, [1, 3], np.array([[1.0, 1.0, 1.0]], dtype=np.float32).flatten().tolist())
+            add = helper.make_node("Add", ["x", "b"], ["z"])
+            erf = helper.make_node("Erf", ["z"], ["y"])
+            mixed_graph = helper.make_graph([add, erf], "mixed_graph", [x_info], [y_info], [bias])
+            mixed_model = helper.make_model(mixed_graph, producer_name="munet_compile_mixed_test", opset_imports=[helper.make_opsetid("", 11)])
+            mixed_model.ir_version = 7
+            onnx.save(mixed_model, mixed_path)
+
+            with self.assertRaises(ValueError):
+                munet.inference.compile_onnx(mixed_path, ignore_unsupported=True)
+
+            # Explicit allow_partial opt-in should compile the supported prefix.
+            partial = munet.inference.compile_onnx(mixed_path, ignore_unsupported=True, allow_partial=True)
+            out = partial.forward(munet.from_numpy(np.array([[2.0, 3.0, 4.0]], dtype=np.float32))).detach().numpy()
+            self.assertTrue(np.allclose(out, np.array([[3.0, 4.0, 5.0]], dtype=np.float32), atol=1e-5))
 
             with self.assertRaises(ValueError):
                 munet.inference.compile_onnx(onnx_path, output_path=os.path.join(d, "bad.npz"), report_only=True)

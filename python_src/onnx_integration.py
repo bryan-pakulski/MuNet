@@ -99,7 +99,7 @@ def load_onnx(model_path, device=None, providers=None):
     """
     return ONNXEngine(model_path, device=device, providers=providers)
 
-def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_only=False):
+def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_only=False, allow_partial=False, debug=False):
     """Compile a supported ONNX graph into a MuNet model module.
 
     Native lowering currently targets single-input forward graphs where each node
@@ -112,6 +112,8 @@ def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_
         output_path: Optional .npz destination for compiled MuNet model
         ignore_unsupported: If True, skip unsupported ops and continue scan.
         report_only: If True, return sorted unique unsupported op names.
+        allow_partial: If True and ignore_unsupported=True, allow emitting partial model.
+        debug: If True, print per-node lowering decisions and summary.
     """
     import numpy as np
     import munet
@@ -132,12 +134,18 @@ def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_
     consts = {init.name: numpy_helper.to_array(init).astype(np.float32) for init in graph.initializer}
     unsupported_ops = set()
     seq_layers = []
+    lowered_count = 0
 
     # Track simple single-stream tensor name through graph.
     stream_name = graph.input[0].name if len(graph.input) > 0 else None
 
+    def _log(msg):
+        if debug:
+            print(f"[compile_onnx][debug] {msg}")
+
     def _unsupported(op):
         unsupported_ops.add(op)
+        _log(f"unsupported op: {op}")
         if not ignore_unsupported and not report_only:
             raise ValueError(
                 f"compile_onnx: unsupported op '{op}'. "
@@ -173,6 +181,7 @@ def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_
 
     for node in graph.node:
         op = node.op_type
+        _log(f"node op={op} inputs={list(node.input)} outputs={list(node.output)}")
 
         if op == "Constant":
             # Capture constant outputs for downstream constant-fed ops.
@@ -353,17 +362,33 @@ def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_
         else:
             _unsupported(op)
 
+        lowered_count += 1
+
         if len(node.output) > 0:
             stream_name = node.output[0]
 
     if report_only:
+        if debug:
+            print(f"[compile_onnx] report_only unsupported_ops={sorted(list(unsupported_ops))}")
         return sorted(list(unsupported_ops))
 
-    if unsupported_ops and ignore_unsupported:
-        print(f"[compile_onnx] warning: skipped unsupported ops: {sorted(list(unsupported_ops))}")
+    if unsupported_ops:
+        skipped = sorted(list(unsupported_ops))
+        if ignore_unsupported:
+            if not allow_partial:
+                raise ValueError(
+                    "compile_onnx: graph contains unsupported ops; refusing to emit partial model. "
+                    f"Unsupported ops: {skipped}. "
+                    "Use report_only=True to inspect, or set allow_partial=True to emit best-effort partial model."
+                )
+            print(f"[compile_onnx] warning: emitting partial model; skipped unsupported ops: {skipped}")
+        # non-ignore case already raised at first unsupported op
 
     if not seq_layers:
         raise ValueError("compile_onnx: no supported nodes found in graph")
+
+    if debug:
+        print(f"[compile_onnx] lowered_nodes={lowered_count} total_nodes={len(graph.node)} layers={len(seq_layers)}")
 
     module = munet.nn.Sequential(seq_layers)
     if output_path is not None:
@@ -373,7 +398,7 @@ def compile_onnx(model_path, output_path=None, ignore_unsupported=False, report_
 
 def report_onnx_unsupported_ops(model_path):
     """Return a sorted unique list of unsupported ONNX ops for native compile."""
-    return compile_onnx(model_path, output_path=None, ignore_unsupported=True, report_only=True)
+    return compile_onnx(model_path, output_path=None, ignore_unsupported=True, report_only=True, allow_partial=True, debug=False)
 
 inference.ONNXEngine = ONNXEngine
 inference.load_onnx = load_onnx
