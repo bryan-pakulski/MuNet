@@ -829,32 +829,42 @@ class _ONNXGraphModule:
                             final_shape = [1]
                         out = out.reshape(final_shape)
             elif op == "Concat":
-                base = self._as_tensor(ins[0])
-                ts = [base]
-                for v in ins[1:]:
-                    ts.append(self._as_tensor(v, base.device))
-
-                rank = len(base.shape)
+                all_numpy = not any(isinstance(v, self._m.Tensor) for v in ins)
                 axis = int(self._get_attr(node, "axis", 0))
-                axis = axis if axis >= 0 else axis + rank
-                if axis < 0 or axis >= rank:
-                    raise ValueError(f"Concat axis out of range: axis={axis}, rank={rank}")
 
-                base_shape = [int(d) for d in base.shape]
-                for i, t in enumerate(ts[1:], start=1):
-                    tshape = [int(d) for d in t.shape]
-                    if len(tshape) != rank:
-                        raise ValueError(
-                            f"Concat input rank mismatch: input0_rank={rank}, input{i}_rank={len(tshape)}"
-                        )
-                    for dim in range(rank):
-                        if dim != axis and tshape[dim] != base_shape[dim]:
+                if all_numpy:
+                    arrs = [self._as_numpy(v) for v in ins]
+                    rank = arrs[0].ndim
+                    axis = axis if axis >= 0 else axis + rank
+                    if axis < 0 or axis >= rank:
+                        raise ValueError(f"Concat axis out of range: axis={axis}, rank={rank}")
+                    out = self._np.concatenate(arrs, axis=axis)
+                else:
+                    base = self._as_tensor(ins[0])
+                    ts = [base]
+                    for v in ins[1:]:
+                        ts.append(self._as_tensor(v, base.device))
+
+                    rank = len(base.shape)
+                    axis = axis if axis >= 0 else axis + rank
+                    if axis < 0 or axis >= rank:
+                        raise ValueError(f"Concat axis out of range: axis={axis}, rank={rank}")
+
+                    base_shape = [int(d) for d in base.shape]
+                    for i, t in enumerate(ts[1:], start=1):
+                        tshape = [int(d) for d in t.shape]
+                        if len(tshape) != rank:
                             raise ValueError(
-                                "Concat shape mismatch: "
-                                f"axis={axis}, input0_shape={base_shape}, input{i}_shape={tshape}"
+                                f"Concat input rank mismatch: input0_rank={rank}, input{i}_rank={len(tshape)}"
                             )
+                        for dim in range(rank):
+                            if dim != axis and tshape[dim] != base_shape[dim]:
+                                raise ValueError(
+                                    "Concat shape mismatch: "
+                                    f"axis={axis}, input0_shape={base_shape}, input{i}_shape={tshape}"
+                                )
 
-                out = self._m.Tensor.cat(ts, axis)
+                    out = self._m.Tensor.cat(ts, axis)
             elif op == "Reshape":
                 data = self._as_tensor(ins[0])
                 raw_shape = [int(v) for v in self._as_numpy(ins[1]).reshape(-1).tolist()]
@@ -1069,7 +1079,13 @@ class _ONNXGraphModule:
 
                 if len(ins) < 2:
                     raise ValueError("Pad requires pads input")
-                pads = [int(v) for v in self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1).tolist()]
+                pads_arr = self._as_numpy(ins[1]).reshape(-1)
+                if self._np.issubdtype(pads_arr.dtype, self._np.floating):
+                    if not self._np.all(self._np.isfinite(pads_arr)):
+                        raise ValueError(f"Pad received non-finite pads values: {pads_arr.tolist()}")
+                    if not self._np.all(self._np.isclose(pads_arr, self._np.round(pads_arr), atol=1e-5)):
+                        raise ValueError(f"Pad received non-integer pads values: {pads_arr.tolist()}")
+                pads = [int(v) for v in pads_arr.astype(self._np.int64).tolist()]
                 rank = len(data.shape)
                 if len(pads) != 2 * rank:
                     raise ValueError(f"Pad expects pads length {2*rank}, got {len(pads)}")

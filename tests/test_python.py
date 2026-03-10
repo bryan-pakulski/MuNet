@@ -1385,6 +1385,37 @@ class TestBindings(unittest.TestCase):
             )
             np.testing.assert_allclose(y_np, expected, atol=1e-6)
 
+    def test_compile_onnx_pad_with_concat_int64_pads(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX pad int64-concat pads test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pad_concat_int64.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 4])
+
+            z0 = helper.make_tensor("z0", TensorProto.INT64, [1], [0])
+            z2 = helper.make_tensor("z2", TensorProto.INT64, [1], [2])
+            pads = helper.make_node("Concat", ["z0", "z0", "z0", "z0", "z0", "z0", "z0", "z2"], ["pads"], axis=0)
+            pad = helper.make_node("Pad", ["x", "pads"], ["y"], mode="constant")
+
+            graph = helper.make_graph([pads, pad], "pad_concat_int64", [x_info], [y_info], [z0, z2])
+            model = helper.make_model(graph, producer_name="munet_pad_concat_int64_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(4, dtype=np.float32).reshape(1, 1, 2, 2)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.pad(x_np, ((0, 0), (0, 0), (0, 0), (0, 2)), mode="constant")
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_pad_negative_cropping(self):
         try:
             import onnx
