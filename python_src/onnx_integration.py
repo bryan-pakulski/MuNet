@@ -616,6 +616,13 @@ class _ONNXGraphModule:
                 W = self._as_tensor(ins[1], data.device)
                 B = self._as_tensor(ins[2], data.device) if len(ins) > 2 else self._m.Tensor()
 
+                # ONNX Conv is typically NCHW. If caller passes NHWC by mistake and it
+                # is unambiguous (last dim matches Conv in-channels), transpose to NCHW.
+                if len(data.shape) == 4 and len(W.shape) == 4:
+                    in_ch = int(W.shape[1])
+                    if int(data.shape[1]) != in_ch and int(data.shape[3]) == in_ch:
+                        data = data.permute([0, 3, 1, 2]).contiguous()
+
                 strides = [int(v) for v in self._get_attr(node, "strides", [1, 1])]
                 pads = [int(v) for v in self._get_attr(node, "pads", [0, 0, 0, 0])]
                 dilations = [int(v) for v in self._get_attr(node, "dilations", [1, 1])]

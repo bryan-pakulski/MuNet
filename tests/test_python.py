@@ -1341,6 +1341,50 @@ class TestBindings(unittest.TestCase):
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
 
+    def test_compile_onnx_conv_accepts_nhwc_input(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX NHWC input auto-transpose test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_nhwc_input.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 2])
+
+            # 1 output channel, 3 input channels, 1x1 kernel
+            w_np = np.array([[[[1.0]], [[2.0]], [[3.0]]]], dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], pads=[0, 0, 0, 0], strides=[1, 1])
+
+            graph = helper.make_graph([conv], "conv_nhwc_input", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_nhwc_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+
+            # Intentionally pass NHWC data [N,H,W,C]. Runtime should auto-transpose.
+            x_nhwc = np.array(
+                [[[[1.0, 10.0, 100.0], [2.0, 20.0, 200.0]],
+                  [[3.0, 30.0, 300.0], [4.0, 40.0, 400.0]]]],
+                dtype=np.float32,
+            )
+            x = munet.from_numpy(x_nhwc)
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+
+            x_nchw = np.transpose(x_nhwc, (0, 3, 1, 2))
+            expected = (
+                x_nchw[:, 0:1, :, :] * 1.0
+                + x_nchw[:, 1:2, :, :] * 2.0
+                + x_nchw[:, 2:3, :, :] * 3.0
+            )
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_pad_negative_cropping(self):
         try:
             import onnx
