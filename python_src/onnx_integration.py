@@ -667,7 +667,7 @@ class _ONNXGraphModule:
             elif op == "Conv":
                 data = self._as_tensor(ins[0])
                 W = self._as_tensor(ins[1], data.device)
-                B = self._as_tensor(ins[2], data.device) if len(ins) > 2 else self._m.Tensor()
+                B = self._as_tensor(ins[2], data.device) if len(ins) > 2 else None
 
                 # ONNX Conv is typically NCHW. If caller passes NHWC by mistake and it
                 # is unambiguous (last dim matches Conv in-channels), transpose to NCHW.
@@ -702,7 +702,10 @@ class _ONNXGraphModule:
                 else:
                     conv_padding = int(pt)
 
-                out = data.conv2d(W, B, int(strides[0]), conv_padding)
+                if B is None:
+                    out = data.conv2d(W, stride=int(strides[0]), padding=conv_padding)
+                else:
+                    out = data.conv2d(W, B, int(strides[0]), conv_padding)
             elif op == "MaxPool":
                 data = self._as_tensor(ins[0])
                 ks = self._get_attr(node, "kernel_shape", [2, 2])

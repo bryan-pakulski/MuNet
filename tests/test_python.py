@@ -1341,6 +1341,35 @@ class TestBindings(unittest.TestCase):
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
 
+    def test_compile_onnx_conv_without_bias(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX conv-without-bias test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_no_bias.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 3, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 3, 3])
+
+            w_np = np.ones((1, 1, 1, 1), dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], pads=[0, 0, 0, 0], strides=[1, 1])
+
+            graph = helper.make_graph([conv], "conv_no_bias", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_no_bias_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(9, dtype=np.float32).reshape(1, 1, 3, 3)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            np.testing.assert_allclose(y_np, x_np, atol=1e-6)
+
     def test_compile_onnx_conv_accepts_nhwc_input(self):
         try:
             import onnx
