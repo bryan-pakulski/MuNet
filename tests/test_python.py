@@ -1461,6 +1461,36 @@ class TestBindings(unittest.TestCase):
             expected = x_np * scales
             np.testing.assert_allclose(y_np, expected, atol=1e-6)
 
+
+    def test_compile_onnx_mul_channel_with_spatial_mismatch_autocrop(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Mul spatial mismatch autocrop test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "mul_spatial_mismatch.onnx")
+
+            a_info = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 2, 5, 5])
+            b_info = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 2, 4, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2, 4, 3])
+
+            mul = helper.make_node("Mul", ["a", "b"], ["y"])
+            graph = helper.make_graph([mul], "mul_spatial_mismatch", [a_info, b_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_mul_spatial_mismatch_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            a_np = np.arange(1 * 2 * 5 * 5, dtype=np.float32).reshape(1, 2, 5, 5)
+            b_np = (np.arange(1 * 2 * 4 * 3, dtype=np.float32).reshape(1, 2, 4, 3) + 1.0)
+            y = module.forward(munet.from_numpy(a_np), munet.from_numpy(b_np))
+            y_np = np.array(y.detach(), copy=False)
+            expected = a_np[:, :, :4, :3] * b_np
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_concat_channel_with_spatial_mismatch_autocrop(self):
         try:
             import onnx

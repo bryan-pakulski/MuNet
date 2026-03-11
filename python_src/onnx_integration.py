@@ -659,7 +659,7 @@ class _ONNXGraphModule:
         return [pads[0], pads[2], pads[1], pads[3]]
 
 
-    def _align_add_pair_min(self, a, b):
+    def _align_binary_pair_min(self, a, b):
         if not (isinstance(a, self._m.Tensor) and isinstance(b, self._m.Tensor)):
             return a, b
 
@@ -977,7 +977,7 @@ class _ONNXGraphModule:
                     a = self._as_tensor(ins[0])
                     b = self._as_tensor(ins[1], a.device)
                     if len(a.shape) == len(b.shape) and len(a.shape) in (3, 4):
-                        a, b = self._align_add_pair_min(a, b)
+                        a, b = self._align_binary_pair_min(a, b)
                     out = a + b
                 else:
                     out = self._as_numpy(ins[0]) + self._as_numpy(ins[1])
@@ -985,6 +985,8 @@ class _ONNXGraphModule:
                 if isinstance(ins[0], self._m.Tensor) or isinstance(ins[1], self._m.Tensor):
                     a = self._as_tensor(ins[0])
                     b = self._as_tensor(ins[1], a.device)
+                    if len(a.shape) == len(b.shape) and len(a.shape) in (3, 4):
+                        a, b = self._align_binary_pair_min(a, b)
                     out = a * b
                 else:
                     out = self._as_numpy(ins[0]) * self._as_numpy(ins[1])
