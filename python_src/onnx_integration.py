@@ -445,9 +445,20 @@ class _ONNXGraphModule:
 
         src = self._np.asarray(arr)
         tgt = dtype_map[to]
-        if self._np.issubdtype(tgt, self._np.integer) and self._np.issubdtype(src.dtype, self._np.floating):
-            if not self._np.all(self._np.isfinite(src)):
-                raise ValueError(f"Cast received non-finite float values for integer target: {src}")
+
+        if self._np.issubdtype(tgt, self._np.integer):
+            srcf = self._np.asarray(src, dtype=self._np.float64)
+            if not self._np.all(self._np.isfinite(srcf)):
+                raise ValueError(f"Cast received non-finite values for integer target: {src}")
+            if not self._np.all(self._np.isclose(srcf, self._np.round(srcf), atol=1e-6)):
+                raise ValueError(f"Cast received non-integer values for integer target: {src}")
+            info = self._np.iinfo(tgt)
+            if not self._np.all((srcf >= info.min) & (srcf <= info.max)):
+                raise ValueError(f"Cast integer overflow: target={tgt}, values={src}")
+            return self._np.round(srcf).astype(tgt, copy=False)
+
+        if tgt == self._np.bool_:
+            return self._np.asarray(src).astype(self._np.bool_, copy=False)
 
         return src.astype(tgt, copy=False)
 
@@ -932,28 +943,47 @@ class _ONNXGraphModule:
                             f"Reshape: element count mismatch (input={input_elems}, target={known_product})"
                         )
 
-                out = data.reshape(resolved_shape)
+                if isinstance(ins[0], self._m.Tensor):
+                    out = data.reshape(resolved_shape)
+                else:
+                    out = self._as_numpy(ins[0]).reshape(resolved_shape)
             elif op == "Transpose":
                 data = self._as_tensor(ins[0])
                 perm = self._get_attr(node, "perm", list(range(len(data.shape) - 1, -1, -1)))
                 out = data.permute([int(v) for v in perm]).contiguous()
             elif op == "Unsqueeze":
-                data = self._as_tensor(ins[0])
+                base = ins[0]
                 axes = self._get_attr(node, "axes", None)
                 if axes is None and len(ins) > 1:
                     axes = [int(v) for v in self._as_numpy(ins[1]).reshape(-1).tolist()]
-                old_shape = list(data.shape)
-                rank = len(old_shape)
-                norm = sorted([a if a >= 0 else a + rank + len(axes) for a in axes])
-                for ax in norm:
-                    old_shape.insert(ax, 1)
-                out = data.reshape(old_shape)
+
+                if isinstance(base, self._m.Tensor):
+                    data = self._as_tensor(base)
+                    old_shape = list(data.shape)
+                    rank = len(old_shape)
+                    norm = sorted([a if a >= 0 else a + rank + len(axes) for a in axes])
+                    for ax in norm:
+                        old_shape.insert(ax, 1)
+                    out = data.reshape(old_shape)
+                else:
+                    arr = self._as_numpy(base)
+                    rank = arr.ndim
+                    norm = sorted([a if a >= 0 else a + rank + len(axes) for a in axes])
+                    new_shape = list(arr.shape)
+                    for ax in norm:
+                        new_shape.insert(ax, 1)
+                    out = arr.reshape(new_shape)
             elif op == "Squeeze":
-                data = self._as_tensor(ins[0])
+                base = ins[0]
                 axes = self._get_attr(node, "axes", None)
                 if axes is None and len(ins) > 1:
                     axes = [int(v) for v in self._as_numpy(ins[1]).reshape(-1).tolist()]
-                shape = list(data.shape)
+
+                if isinstance(base, self._m.Tensor):
+                    shape = list(self._as_tensor(base).shape)
+                else:
+                    shape = list(self._as_numpy(base).shape)
+
                 if axes is None:
                     new_shape = [d for d in shape if int(d) != 1]
                     if not new_shape:
@@ -966,7 +996,11 @@ class _ONNXGraphModule:
                             raise ValueError(f"Squeeze axis {ax} has dim {shape[ax]} != 1")
                         shape.pop(ax)
                     new_shape = shape if shape else [1]
-                out = data.reshape(new_shape)
+
+                if isinstance(base, self._m.Tensor):
+                    out = self._as_tensor(base).reshape(new_shape)
+                else:
+                    out = self._as_numpy(base).reshape(new_shape)
             elif op == "ConstantOfShape":
                 shp = self._as_numpy(ins[0]).astype(self._np.int64).reshape(-1).tolist()
                 value = 0.0
