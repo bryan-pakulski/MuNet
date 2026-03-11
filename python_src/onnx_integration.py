@@ -469,10 +469,13 @@ class _ONNXGraphModule:
         return self._np.asarray(v)
 
     def _from_numpy_like(self, arr, like=None):
-        t = self._m.from_numpy(self._np.asarray(arr, dtype=self._np.float32))
-        if like is not None and isinstance(like, self._m.Tensor):
-            if like.device.type != self._m.DeviceType.CPU:
-                t = t.to(like.device)
+        arr_np = self._np.asarray(arr)
+        if like is None or not isinstance(like, self._m.Tensor):
+            return arr_np
+
+        t = self._m.from_numpy(self._np.asarray(arr_np, dtype=self._np.float32))
+        if like.device.type != self._m.DeviceType.CPU:
+            t = t.to(like.device)
         return t
 
     def _pad_tensor_constant(self, data, pads_begin, pads_end, value=0.0):
@@ -641,12 +644,15 @@ class _ONNXGraphModule:
                 if to < 0:
                     raise ValueError("Cast requires 'to' attribute")
                 src = ins[0]
-                if isinstance(src, self._m.Tensor):
-                    arr = self._as_numpy(src)
-                    casted = self._cast_numpy(arr, to)
+                casted = self._cast_numpy(self._as_numpy(src), to)
+
+                # Keep integer/bool casts as numpy to preserve exact meta values.
+                if self._np.issubdtype(casted.dtype, self._np.integer) or casted.dtype == self._np.bool_:
+                    out = casted
+                elif isinstance(src, self._m.Tensor):
                     out = self._from_numpy_like(casted, src)
                 else:
-                    out = self._cast_numpy(src, to)
+                    out = casted
             elif op == "Conv":
                 data = self._as_tensor(ins[0])
                 W = self._as_tensor(ins[1], data.device)
