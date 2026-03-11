@@ -442,7 +442,14 @@ class _ONNXGraphModule:
         }
         if to not in dtype_map:
             raise ValueError(f"Cast target dtype not supported: {to}")
-        return self._np.asarray(arr).astype(dtype_map[to], copy=False)
+
+        src = self._np.asarray(arr)
+        tgt = dtype_map[to]
+        if self._np.issubdtype(tgt, self._np.integer) and self._np.issubdtype(src.dtype, self._np.floating):
+            if not self._np.all(self._np.isfinite(src)):
+                raise ValueError(f"Cast received non-finite float values for integer target: {src}")
+
+        return src.astype(tgt, copy=False)
 
     def _as_tensor(self, v, ref_device=None):
         if isinstance(v, self._m.Tensor):
@@ -456,7 +463,9 @@ class _ONNXGraphModule:
     def _as_numpy(self, v):
         if isinstance(v, self._m.Tensor):
             cpu = self._m.Device(self._m.DeviceType.CPU, 0)
-            return self._np.asarray(v.detach().to(cpu).numpy())
+            # `.numpy()` shares tensor storage; ensure returned array owns memory
+            # so callers never observe dangling/temporary tensor buffers.
+            return self._np.array(v.detach().to(cpu).numpy(), copy=True)
         return self._np.asarray(v)
 
     def _from_numpy_like(self, arr, like=None):

@@ -1385,6 +1385,43 @@ class TestBindings(unittest.TestCase):
             )
             np.testing.assert_allclose(y_np, expected, atol=1e-6)
 
+    def test_compile_onnx_pad_with_tensor_cast_pads_stable(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX pad tensor-cast stability test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pad_tensor_cast_stable.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 3])
+
+            shape8 = helper.make_tensor("shape8", TensorProto.INT64, [1], [8])
+            off = helper.make_tensor("off", TensorProto.FLOAT, [8], [0, 0, 0, 0, 0, 0, 0, 1])
+
+            cos = helper.make_node("ConstantOfShape", ["shape8"], ["zeros8"])
+            add = helper.make_node("Add", ["zeros8", "off"], ["pads_f"])
+            cast = helper.make_node("Cast", ["pads_f"], ["pads_i64"], to=TensorProto.INT64)
+            pad = helper.make_node("Pad", ["x", "pads_i64"], ["y"], mode="constant")
+
+            graph = helper.make_graph([cos, add, cast, pad], "pad_tensor_cast_stable", [x_info], [y_info], [shape8, off])
+            model = helper.make_model(graph, producer_name="munet_pad_tensor_cast_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(4, dtype=np.float32).reshape(1, 1, 2, 2)
+            x = munet.from_numpy(x_np)
+            expected = np.pad(x_np, ((0, 0), (0, 0), (0, 0), (0, 1)), mode="constant")
+
+            for _ in range(3):
+                y = module.forward(x)
+                y_np = np.array(y.detach(), copy=False)
+                np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_pad_with_concat_int64_pads(self):
         try:
             import onnx
