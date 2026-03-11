@@ -403,6 +403,9 @@ class _ONNXGraphModule:
         self._sanitize_tensor_inputs = str(
             os.getenv("MUNET_ONNX_SANITIZE_TENSOR_INPUTS", "1")
         ).strip().lower() in ("1", "true", "yes", "on")
+        self._global_finite_guard = str(
+            os.getenv("MUNET_ONNX_GLOBAL_FINITE_GUARD", "1")
+        ).strip().lower() in ("1", "true", "yes", "on")
 
         self._opset = 13
         for imp in model.opset_import:
@@ -467,6 +470,15 @@ class _ONNXGraphModule:
         if self._np.all(self._np.isfinite(arr)):
             return v
         return self._from_numpy_like(self._sanitize_finite_array(arr).astype(self._np.float32), v)
+
+    def _finalize_node_output(self, node, out_name, out, env=None):
+        if self._global_finite_guard and isinstance(out, self._m.Tensor):
+            arr = self._as_numpy(out)
+            if self._np.issubdtype(arr.dtype, self._np.floating) and not self._np.all(self._np.isfinite(arr)):
+                out = self._from_numpy_like(self._sanitize_finite_array(arr).astype(self._np.float32), out)
+
+        self._check_nonfinite_output(node, out, out_name, env)
+        return out
 
     def _get_attr(self, node, name, default=None):
         for a in node.attribute:
@@ -1167,8 +1179,6 @@ class _ONNXGraphModule:
                 if isinstance(ins[0], self._m.Tensor) or isinstance(ins[1], self._m.Tensor):
                     a = self._as_tensor(ins[0])
                     b = self._as_tensor(ins[1], a.device)
-                    a = self._sanitize_tensor_if_needed(a)
-                    b = self._sanitize_tensor_if_needed(b)
                     if len(a.shape) == len(b.shape) and len(a.shape) in (3, 4):
                         a, b = self._align_binary_pair_min(a, b)
                     out = self._binary_tensor_op("Add", a, b, lambda x, y: x + y, lambda x, y: x + y)
@@ -1599,8 +1609,8 @@ class _ONNXGraphModule:
                 values, indices = x.topk(k, axis, largest, sorted_flag)
                 if len(node.output) != 2:
                     raise ValueError(f"Unsupported output arity for TopK: {len(node.output)}")
-                self._check_nonfinite_output(node, values, node.output[0], env)
-                self._check_nonfinite_output(node, indices, node.output[1], env)
+                values = self._finalize_node_output(node, node.output[0], values, env)
+                indices = self._finalize_node_output(node, node.output[1], indices, env)
                 env[node.output[0]] = values
                 env[node.output[1]] = indices
                 continue
@@ -1665,7 +1675,7 @@ class _ONNXGraphModule:
 
             if len(node.output) != 1:
                 raise ValueError(f"Unsupported output arity for op {op}: {len(node.output)}")
-            self._check_nonfinite_output(node, out, node.output[0], env)
+            out = self._finalize_node_output(node, node.output[0], out, env)
             env[node.output[0]] = out
 
         outs = [env[o.name] for o in self._graph.output]
