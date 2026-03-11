@@ -1561,6 +1561,39 @@ class TestBindings(unittest.TestCase):
             )
             np.testing.assert_allclose(y_np, expected, atol=1e-6)
 
+    def test_compile_onnx_conv_crops_extra_input_channels(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Conv extra-channel crop test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_extra_channels.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 24, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 2])
+
+            w_np = np.ones((1, 24, 1, 1), dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], pads=[0, 0, 0, 0], strides=[1, 1])
+
+            graph = helper.make_graph([conv], "conv_extra_channels", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_extra_channels_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+
+            # Pass 25 channels while weights expect 24; runtime should crop to 24.
+            x_np = np.arange(1 * 25 * 2 * 2, dtype=np.float32).reshape(1, 25, 2, 2)
+            x = munet.from_numpy(x_np)
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            expected = x_np[:, :24, :, :].sum(axis=1, keepdims=True)
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_pad_with_tensor_cast_pads_stable(self):
         try:
             import onnx

@@ -810,6 +810,12 @@ class _ONNXGraphModule:
                     in_ch = int(W.shape[1])
                     if int(data.shape[1]) != in_ch and int(data.shape[3]) == in_ch:
                         data = data.permute([0, 3, 1, 2]).contiguous()
+                    elif int(data.shape[1]) > in_ch:
+                        # Some converted graphs may produce an extra channel from
+                        # dynamic shape/pad flows; align to expected Conv channels.
+                        arr = self._as_numpy(data)
+                        arr = arr[:, :in_ch, :, :]
+                        data = self._from_numpy_like(arr.astype(self._np.float32), data)
 
                 strides = [int(v) for v in self._get_attr(node, "strides", [1, 1])]
                 pads = [int(v) for v in self._get_attr(node, "pads", [0, 0, 0, 0])]
