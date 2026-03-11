@@ -387,6 +387,9 @@ class _ONNXGraphModule:
         self._trace_nonfinite_inputs = str(
             os.getenv("MUNET_ONNX_TRACE_NONFINITE_INPUTS", "1")
         ).strip().lower() in ("1", "true", "yes", "on")
+        self._pow_clamp_finite = str(
+            os.getenv("MUNET_ONNX_POW_CLAMP_FINITE", "1")
+        ).strip().lower() in ("1", "true", "yes", "on")
 
         self._opset = 13
         for imp in model.opset_import:
@@ -1553,9 +1556,17 @@ class _ONNXGraphModule:
                 pads_end = pads[rank:]
                 out = self._pad_tensor_constant(data, pads_begin, pads_end, value=value)
             elif op == "Pow":
-                a = self._as_numpy(ins[0]).astype(self._np.float32)
-                b = self._as_numpy(ins[1]).astype(self._np.float32)
-                out = self._from_numpy_like(self._np.power(a, b).astype(self._np.float32), ins[0])
+                a = self._as_numpy(ins[0]).astype(self._np.float64)
+                b = self._as_numpy(ins[1]).astype(self._np.float64)
+                with self._np.errstate(over="ignore", invalid="ignore"):
+                    y = self._np.power(a, b)
+
+                if self._pow_clamp_finite and self._np.issubdtype(y.dtype, self._np.floating):
+                    finfo = self._np.finfo(self._np.float32)
+                    y = self._np.nan_to_num(y, nan=0.0, posinf=finfo.max, neginf=-finfo.max)
+                    y = self._np.clip(y, -finfo.max, finfo.max)
+
+                out = self._from_numpy_like(y.astype(self._np.float32), ins[0])
             elif op == "Floor":
                 arr = self._as_numpy(ins[0]).astype(self._np.float32)
                 out = self._from_numpy_like(self._np.floor(arr).astype(self._np.float32), ins[0])

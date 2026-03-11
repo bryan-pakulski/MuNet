@@ -1462,6 +1462,37 @@ class TestBindings(unittest.TestCase):
             np.testing.assert_allclose(y_np, expected, atol=1e-6)
 
 
+
+    def test_compile_onnx_pow_overflow_clamps_finite(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Pow finite-clamp test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pow_clamp.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2])
+
+            exp_np = np.array([2.0], dtype=np.float32)
+            exp_init = helper.make_tensor("exp", TensorProto.FLOAT, [1], exp_np.tolist())
+            pow_node = helper.make_node("Pow", ["x", "exp"], ["y"])
+
+            graph = helper.make_graph([pow_node], "pow_clamp", [x_info], [y_info], [exp_init])
+            model = helper.make_model(graph, producer_name="munet_pow_clamp_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[1e20, -1e20]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            self.assertTrue(np.all(np.isfinite(y_np)))
+            self.assertTrue(np.all(y_np >= 0.0))
+
     def test_compile_onnx_mul_channel_with_spatial_mismatch_autocrop(self):
         try:
             import onnx

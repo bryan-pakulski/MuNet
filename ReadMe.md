@@ -60,6 +60,7 @@ MUNET_DEBUG=1 MUNET_ONNX_TRACE_NONFINITE=1 python demos/ort/convert.py
 - `MUNET_DEBUG=1` enables backend-side debug checks/logging.
 - `MUNET_ONNX_TRACE_NONFINITE=1` enables ONNX graph-runtime fail-fast checks.
 - `MUNET_ONNX_TRACE_NONFINITE_INPUTS=1` (default on) includes per-input stats in the error (shape/dtype/finite count/min/max/mean).
+- `MUNET_ONNX_POW_CLAMP_FINITE=1` (default on) clamps ONNX `Pow` overflow/NaN results into finite `float32` range to avoid cascade failures in normalization subgraphs.
 - If you typed `NOFINITE`, use `MUNET_ONNX_TRACE_NONFINITE` (with `NONFINITE`).
 
 The runtime will raise a descriptive error with op type, node name, output name, first bad index, bad-count summary, and (optionally) input/output stats so you can quickly locate the source op.
