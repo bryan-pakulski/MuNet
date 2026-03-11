@@ -400,6 +400,9 @@ class _ONNXGraphModule:
         self._const_clamp_finite = str(
             os.getenv("MUNET_ONNX_CONST_CLAMP_FINITE", "1")
         ).strip().lower() in ("1", "true", "yes", "on")
+        self._sanitize_tensor_inputs = str(
+            os.getenv("MUNET_ONNX_SANITIZE_TENSOR_INPUTS", "1")
+        ).strip().lower() in ("1", "true", "yes", "on")
 
         self._opset = 13
         for imp in model.opset_import:
@@ -454,6 +457,16 @@ class _ONNXGraphModule:
             return arr_np
         finfo = self._np.finfo(arr_np.dtype)
         return self._np.nan_to_num(arr_np, nan=0.0, posinf=finfo.max, neginf=-finfo.max)
+
+    def _sanitize_tensor_if_needed(self, v):
+        if not self._sanitize_tensor_inputs:
+            return v
+        arr = self._as_numpy(v)
+        if not self._np.issubdtype(arr.dtype, self._np.floating):
+            return v
+        if self._np.all(self._np.isfinite(arr)):
+            return v
+        return self._from_numpy_like(self._sanitize_finite_array(arr).astype(self._np.float32), v)
 
     def _get_attr(self, node, name, default=None):
         for a in node.attribute:
@@ -1154,6 +1167,8 @@ class _ONNXGraphModule:
                 if isinstance(ins[0], self._m.Tensor) or isinstance(ins[1], self._m.Tensor):
                     a = self._as_tensor(ins[0])
                     b = self._as_tensor(ins[1], a.device)
+                    a = self._sanitize_tensor_if_needed(a)
+                    b = self._sanitize_tensor_if_needed(b)
                     if len(a.shape) == len(b.shape) and len(a.shape) in (3, 4):
                         a, b = self._align_binary_pair_min(a, b)
                     out = self._binary_tensor_op("Add", a, b, lambda x, y: x + y, lambda x, y: x + y)

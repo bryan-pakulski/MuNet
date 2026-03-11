@@ -65,6 +65,7 @@ MUNET_DEBUG=1 MUNET_ONNX_TRACE_NONFINITE=1 python demos/ort/convert.py
 - `MUNET_ONNX_DIV_CLAMP_DENORM=1` (default on) clamps very small/zero divisors to `±MUNET_ONNX_DIV_EPS` before ONNX `Div` to avoid Inf/NaN cascades in normalization paths.
 - `MUNET_ONNX_DIV_EPS=1e-12` controls the divisor clamp epsilon used by `MUNET_ONNX_DIV_CLAMP_DENORM`.
 - `MUNET_ONNX_CONST_CLAMP_FINITE=1` (default on) sanitizes non-finite ONNX initializers/constants (`NaN -> 0`, `±Inf -> ±max`) at graph load time.
+- `MUNET_ONNX_SANITIZE_TENSOR_INPUTS=1` (default on) sanitizes non-finite tensor inputs at binary-op boundaries (e.g. `Add`) to prevent non-finite propagation from unstable upstream branches.
 - If you typed `NOFINITE`, use `MUNET_ONNX_TRACE_NONFINITE` (with `NONFINITE`).
 - `copy | 0 bytes` in debug logs is typically benign (empty optional ONNX tensors / zero-length intermediates), but if it appears immediately before a kernel crash, treat it as a symptom and inspect the previous binary op inputs with non-finite tracing enabled.
 
