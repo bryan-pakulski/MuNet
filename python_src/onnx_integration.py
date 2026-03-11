@@ -384,6 +384,9 @@ class _ONNXGraphModule:
         self._trace_nonfinite = str(os.getenv("MUNET_ONNX_TRACE_NONFINITE", "0")).strip().lower() in (
             "1", "true", "yes", "on"
         )
+        self._trace_nonfinite_inputs = str(
+            os.getenv("MUNET_ONNX_TRACE_NONFINITE_INPUTS", "1")
+        ).strip().lower() in ("1", "true", "yes", "on")
 
         self._opset = 13
         for imp in model.opset_import:
@@ -745,7 +748,32 @@ class _ONNXGraphModule:
                     ) from e
             return self._from_numpy_like(y_np.astype(self._np.float32), a)
 
-    def _check_nonfinite_output(self, node, value, output_name):
+    def _summarize_value(self, name, value):
+        arr = self._as_numpy(value)
+        shape = list(arr.shape)
+        dtype = str(arr.dtype)
+        if arr.size == 0:
+            return f"{name}: shape={shape}, dtype={dtype}, empty"
+
+        if not self._np.issubdtype(arr.dtype, self._np.number):
+            return f"{name}: shape={shape}, dtype={dtype}, non-numeric"
+
+        finite = self._np.isfinite(arr)
+        finite_count = int(finite.sum())
+        total = int(arr.size)
+        if finite_count == 0:
+            return f"{name}: shape={shape}, dtype={dtype}, finite=0/{total}"
+
+        vals = arr[finite]
+        min_v = float(vals.min())
+        max_v = float(vals.max())
+        mean_v = float(vals.mean())
+        return (
+            f"{name}: shape={shape}, dtype={dtype}, finite={finite_count}/{total}, "
+            f"min={min_v:.6g}, max={max_v:.6g}, mean={mean_v:.6g}"
+        )
+
+    def _check_nonfinite_output(self, node, value, output_name, env=None):
         if not self._trace_nonfinite:
             return
 
@@ -762,10 +790,23 @@ class _ONNXGraphModule:
         bad_count = int(bad.sum())
         total = int(arr.size)
         node_name = node.name if getattr(node, "name", "") else "<unnamed>"
+
+        details = []
+        if self._trace_nonfinite_inputs and env is not None:
+            for in_name in [n for n in node.input if n != ""]:
+                try:
+                    in_val = self._value(env, in_name)
+                    details.append(self._summarize_value(in_name, in_val))
+                except Exception:
+                    details.append(f"{in_name}: <unavailable>")
+
+        details.append(self._summarize_value(output_name, value))
+
         raise ValueError(
             "Non-finite detected in ONNX graph runtime output: "
             f"op={node.op_type}, node={node_name}, output={output_name}, "
-            f"first_bad_flat_index={first}, bad_count={bad_count}, total={total}"
+            f"first_bad_flat_index={first}, bad_count={bad_count}, total={total}; "
+            f"stats=[{' | '.join(details)}]"
         )
 
     def _scalar_tensor(self, value, ref):
@@ -1465,8 +1506,8 @@ class _ONNXGraphModule:
                 values, indices = x.topk(k, axis, largest, sorted_flag)
                 if len(node.output) != 2:
                     raise ValueError(f"Unsupported output arity for TopK: {len(node.output)}")
-                self._check_nonfinite_output(node, values, node.output[0])
-                self._check_nonfinite_output(node, indices, node.output[1])
+                self._check_nonfinite_output(node, values, node.output[0], env)
+                self._check_nonfinite_output(node, indices, node.output[1], env)
                 env[node.output[0]] = values
                 env[node.output[1]] = indices
                 continue
@@ -1523,7 +1564,7 @@ class _ONNXGraphModule:
 
             if len(node.output) != 1:
                 raise ValueError(f"Unsupported output arity for op {op}: {len(node.output)}")
-            self._check_nonfinite_output(node, out, node.output[0])
+            self._check_nonfinite_output(node, out, node.output[0], env)
             env[node.output[0]] = out
 
         outs = [env[o.name] for o in self._graph.output]
