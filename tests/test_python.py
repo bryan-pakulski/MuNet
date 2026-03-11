@@ -1464,6 +1464,38 @@ class TestBindings(unittest.TestCase):
 
 
 
+
+    def test_compile_onnx_div_zero_denominator_clamps_finite(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Div finite-clamp test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "div_clamp.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 3])
+
+            den_np = np.array([0.0, 1.0, -0.0], dtype=np.float32)
+            den_init = helper.make_tensor("den", TensorProto.FLOAT, [1, 3], den_np.tolist())
+            div_node = helper.make_node("Div", ["x", "den"], ["y"])
+
+            graph = helper.make_graph([div_node], "div_clamp", [x_info], [y_info], [den_init])
+            model = helper.make_model(graph, producer_name="munet_div_clamp_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[2.0, 3.0, -4.0]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            self.assertTrue(np.all(np.isfinite(y_np)))
+            # non-zero denominator path preserved
+            self.assertAlmostEqual(float(y_np[0, 1]), 3.0, places=6)
+
     def test_compile_onnx_sqrt_negative_input_clamps_finite(self):
         try:
             import onnx

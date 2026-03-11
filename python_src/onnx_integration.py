@@ -393,6 +393,10 @@ class _ONNXGraphModule:
         self._sqrt_clamp_nonneg = str(
             os.getenv("MUNET_ONNX_SQRT_CLAMP_NONNEG", "1")
         ).strip().lower() in ("1", "true", "yes", "on")
+        self._div_clamp_denorm = str(
+            os.getenv("MUNET_ONNX_DIV_CLAMP_DENORM", "1")
+        ).strip().lower() in ("1", "true", "yes", "on")
+        self._div_eps = float(os.getenv("MUNET_ONNX_DIV_EPS", "1e-12"))
 
         self._opset = 13
         for imp in model.opset_import:
@@ -783,6 +787,24 @@ class _ONNXGraphModule:
                 ) from e
             return _numpy_fallback(cause=str(e))
 
+    def _safe_div_tensor(self, a, b):
+        if not self._div_clamp_denorm:
+            return a / b
+
+        b_np = self._as_numpy(b).astype(self._np.float32)
+        eps = float(self._div_eps)
+        if eps <= 0.0:
+            eps = 1e-12
+
+        small = self._np.abs(b_np) < eps
+        if not small.any():
+            return a / b
+
+        a_np = self._as_numpy(a).astype(self._np.float32)
+        b_safe = self._np.where(small, self._np.where(b_np >= 0.0, eps, -eps), b_np)
+        y_np = a_np / b_safe
+        return self._from_numpy_like(y_np.astype(self._np.float32), a)
+
     def _summarize_value(self, name, value):
         arr = self._as_numpy(value)
         shape = list(arr.shape)
@@ -1139,7 +1161,7 @@ class _ONNXGraphModule:
                 if isinstance(ins[0], self._m.Tensor) or isinstance(ins[1], self._m.Tensor):
                     a = self._as_tensor(ins[0])
                     b = self._as_tensor(ins[1], a.device)
-                    out = a / b
+                    out = self._safe_div_tensor(a, b)
                 else:
                     out = self._as_numpy(ins[0]) / self._as_numpy(ins[1])
             elif op == "Softmax":
