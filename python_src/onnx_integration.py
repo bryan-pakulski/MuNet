@@ -1116,7 +1116,7 @@ class _ONNXGraphModule:
                     b = self._as_tensor(ins[1], a.device)
                     if len(a.shape) == len(b.shape) and len(a.shape) in (3, 4):
                         a, b = self._align_binary_pair_min(a, b)
-                    out = a + b
+                    out = self._binary_tensor_op("Add", a, b, lambda x, y: x + y, lambda x, y: x + y)
                 else:
                     out = self._as_numpy(ins[0]) + self._as_numpy(ins[1])
             elif op == "Mul":

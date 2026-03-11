@@ -63,6 +63,7 @@ MUNET_DEBUG=1 MUNET_ONNX_TRACE_NONFINITE=1 python demos/ort/convert.py
 - `MUNET_ONNX_POW_CLAMP_FINITE=1` (default on) clamps ONNX `Pow` overflow/NaN results into finite `float32` range to avoid cascade failures in normalization subgraphs.
 - `MUNET_ONNX_SQRT_CLAMP_NONNEG=1` (default on) clamps ONNX `Sqrt` inputs to `>=0` before kernel execution to prevent NaN cascades from tiny-negative/unstable variance paths.
 - If you typed `NOFINITE`, use `MUNET_ONNX_TRACE_NONFINITE` (with `NONFINITE`).
+- `copy | 0 bytes` in debug logs is typically benign (empty optional ONNX tensors / zero-length intermediates), but if it appears immediately before a kernel crash, treat it as a symptom and inspect the previous binary op inputs with non-finite tracing enabled.
 
 The runtime will raise a descriptive error with op type, node name, output name, first bad index, bad-count summary, and (optionally) input/output stats so you can quickly locate the source op.
 

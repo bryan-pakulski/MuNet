@@ -1522,6 +1522,36 @@ class TestBindings(unittest.TestCase):
             self.assertTrue(np.all(y_np >= 0.0))
 
 
+
+    def test_compile_onnx_add_sequence_mismatch_broadcast_autocrop(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Add sequence mismatch broadcast test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "add_sequence_mismatch.onnx")
+
+            a_info = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 10, 1])
+            b_info = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 6, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 6, 4])
+
+            add = helper.make_node("Add", ["a", "b"], ["y"])
+            graph = helper.make_graph([add], "add_sequence_mismatch", [a_info, b_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_add_sequence_mismatch_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            a_np = np.arange(10, dtype=np.float32).reshape(1, 10, 1)
+            b_np = (1.0 + np.arange(24, dtype=np.float32)).reshape(1, 6, 4)
+            y = module.forward(munet.from_numpy(a_np), munet.from_numpy(b_np))
+            y_np = np.array(y.detach(), copy=False)
+            expected = a_np[:, :6, :] + b_np
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_mul_sequence_mismatch_broadcast_autocrop(self):
         try:
             import onnx
