@@ -46,6 +46,12 @@ TEST_P(TensorTest, Addition) {
   EXPECT_FLOAT_EQ(((float *)res.data())[1], 6.0f);
 }
 
+TEST_P(TensorTest, AdditionRejectsZeroToOneBroadcast) {
+  Tensor a({1, 225, 0}, dev());
+  Tensor b({1, 225, 1}, dev());
+  EXPECT_THROW((void)(a + b), std::runtime_error);
+}
+
 TEST_P(TensorTest, ItemMethod) {
   Tensor t({1}, dev());
   Tensor val({1}, {DeviceType::CPU, 0});
@@ -343,4 +349,3 @@ TEST_P(TensorTest, MatmulBroadcastedLhsBatchOne) {
   for (int i = 0; i < 12; ++i)
     EXPECT_FLOAT_EQ(o[i], expected[i]);
 }
-

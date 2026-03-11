@@ -85,6 +85,14 @@ inline BroadcastInfo compute_broadcast(const Shape &a_shape,
     int dim_b = (idx_b >= 0) ? b_shape[idx_b] : 1;
 
     // Compatibility check
+    // NOTE: zero-sized dimensions are only compatible with another zero-sized
+    // dimension (not with 1). Treating 0 like a broadcastable value can
+    // produce out-of-bounds access in GPU broadcast kernels.
+    if ((dim_a == 0 || dim_b == 0) && dim_a != dim_b) {
+      info.can_broadcast = false;
+      return info;
+    }
+
     if (dim_a != dim_b && dim_a != 1 && dim_b != 1) {
       info.can_broadcast = false;
       return info;
