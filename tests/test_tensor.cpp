@@ -198,3 +198,48 @@ TEST_P(TensorTest, GridSampleNearestIdentity) {
   EXPECT_FLOAT_EQ(o[3], 4.0f);
 }
 
+TEST_P(TensorTest, MatmulLeftBatched) {
+  Tensor a({2, 3, 4}, dev());
+  Tensor b({4, 2}, dev());
+
+  Tensor a_cpu({2, 3, 4}, {DeviceType::CPU, 0});
+  Tensor b_cpu({4, 2}, {DeviceType::CPU, 0});
+  float *ad = (float *)a_cpu.data();
+  float *bd = (float *)b_cpu.data();
+
+  for (int i = 0; i < 24; ++i)
+    ad[i] = (float)(i + 1); // 1..24
+
+  // [ [1,2], [3,4], [5,6], [7,8] ]
+  bd[0] = 1.0f;
+  bd[1] = 2.0f;
+  bd[2] = 3.0f;
+  bd[3] = 4.0f;
+  bd[4] = 5.0f;
+  bd[5] = 6.0f;
+  bd[6] = 7.0f;
+  bd[7] = 8.0f;
+
+  a.impl_->backend().copy(a_cpu.data(), a.data(), a.bytes(), a_cpu.device(), dev());
+  b.impl_->backend().copy(b_cpu.data(), b.data(), b.bytes(), b_cpu.device(), dev());
+
+  Tensor y = a.matmul(b).to({DeviceType::CPU, 0});
+  ASSERT_EQ(y.shape().size(), 3);
+  EXPECT_EQ(y.shape()[0], 2);
+  EXPECT_EQ(y.shape()[1], 3);
+  EXPECT_EQ(y.shape()[2], 2);
+
+  const float *o = (const float *)y.data();
+  // Reference from numpy-style reshape-batched matmul.
+  const float expected[12] = {
+      50.0f, 60.0f, 114.0f, 140.0f, 178.0f, 220.0f,
+      242.0f, 300.0f, 306.0f, 380.0f, 370.0f, 460.0f};
+  for (int i = 0; i < 12; ++i)
+    EXPECT_FLOAT_EQ(o[i], expected[i]);
+}
+
+TEST_P(TensorTest, MatmulUnsupportedFullBatchedRhs) {
+  Tensor a({2, 3, 4}, dev());
+  Tensor b({2, 4, 5}, dev());
+  EXPECT_THROW(a.matmul(b), std::runtime_error);
+}
