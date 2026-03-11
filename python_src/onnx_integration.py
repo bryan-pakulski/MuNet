@@ -1324,12 +1324,22 @@ class _ONNXGraphModule:
                 if mode != "nearest":
                     raise ValueError("Resize only supports nearest mode")
 
+                def _optional_input(slot_idx):
+                    if slot_idx >= len(node.input):
+                        return None
+                    name = node.input[slot_idx]
+                    if name == "":
+                        return None
+                    return self._value(env, name)
+
                 scales = None
                 sizes = None
-                if len(ins) >= 3 and self._as_numpy(ins[2]).size > 0:
-                    scales = self._as_numpy(ins[2]).astype(self._np.float32).reshape(-1)
-                if len(ins) >= 4 and self._as_numpy(ins[3]).size > 0:
-                    sizes = self._as_numpy(ins[3]).astype(self._np.int64).reshape(-1)
+                scales_in = _optional_input(2)
+                sizes_in = _optional_input(3)
+                if scales_in is not None and self._as_numpy(scales_in).size > 0:
+                    scales = self._as_numpy(scales_in).astype(self._np.float32).reshape(-1)
+                if sizes_in is not None and self._as_numpy(sizes_in).size > 0:
+                    sizes = self._as_numpy(sizes_in).astype(self._np.int64).reshape(-1)
 
                 in_shape = [int(v) for v in data.shape]
                 if len(in_shape) != 4:
