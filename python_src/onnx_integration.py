@@ -721,11 +721,7 @@ class _ONNXGraphModule:
         return a, b
 
     def _binary_tensor_op(self, op_name, a, b, tensor_fn, numpy_fn):
-        try:
-            return tensor_fn(a, b)
-        except RuntimeError as e:
-            # Fall back to NumPy ONNX-style broadcasting when MuNet backend
-            # broadcast constraints are stricter than ONNX semantics.
+        def _numpy_fallback(cause=None):
             a_np = self._as_numpy(a).astype(self._np.float32)
             b_np = self._as_numpy(b).astype(self._np.float32)
             try:
@@ -763,10 +759,29 @@ class _ONNXGraphModule:
                     t = min(int(a_np.shape[1]), int(b_np.shape[1]))
                     y_np = numpy_fn(a_np[:, :t, :], b_np[:, :t, :])
                 else:
-                    raise RuntimeError(
-                        f"{op_name}: shape mismatch a_shape={list(a.shape)} b_shape={list(b.shape)}"
-                    ) from e
+                    msg = f"{op_name}: shape mismatch a_shape={list(a.shape)} b_shape={list(b.shape)}"
+                    if cause is not None:
+                        msg += f"; backend_error={cause}"
+                    raise RuntimeError(msg)
             return self._from_numpy_like(y_np.astype(self._np.float32), a)
+
+        # Avoid known GPU broadcast-kernel fragility by taking NumPy fallback
+        # first when shapes differ on non-CPU devices.
+        same_shape = [int(v) for v in a.shape] == [int(v) for v in b.shape]
+        if (a.device.type != self._m.DeviceType.CPU or b.device.type != self._m.DeviceType.CPU) and not same_shape:
+            return _numpy_fallback()
+
+        try:
+            return tensor_fn(a, b)
+        except RuntimeError as e:
+            emsg = str(e).lower()
+            if "illegal memory access" in emsg:
+                raise RuntimeError(
+                    f"{op_name}: backend kernel failure (illegal memory access) "
+                    f"for a_shape={list(a.shape)} b_shape={list(b.shape)}; "
+                    "try CPU execution for this node/path or keep fallback enabled"
+                ) from e
+            return _numpy_fallback(cause=str(e))
 
     def _summarize_value(self, name, value):
         arr = self._as_numpy(value)
