@@ -638,6 +638,33 @@ class _ONNXGraphModule:
             pads.extend([p0, p1])
         return [pads[0], pads[2], pads[1], pads[3]]
 
+
+    def _align_nchw_spatial_min(self, a, b):
+        if not (isinstance(a, self._m.Tensor) and isinstance(b, self._m.Tensor)):
+            return a, b
+        if len(a.shape) != 4 or len(b.shape) != 4:
+            return a, b
+        if int(a.shape[0]) != int(b.shape[0]) or int(a.shape[1]) != int(b.shape[1]):
+            return a, b
+
+        ah, aw = int(a.shape[2]), int(a.shape[3])
+        bh, bw = int(b.shape[2]), int(b.shape[3])
+        if ah == bh and aw == bw:
+            return a, b
+
+        th, tw = min(ah, bh), min(aw, bw)
+        if th <= 0 or tw <= 0:
+            return a, b
+
+        def _crop(x, th, tw):
+            if int(x.shape[2]) == th and int(x.shape[3]) == tw:
+                return x
+            arr = self._as_numpy(x).astype(self._np.float32)
+            arr = arr[:, :, :th, :tw]
+            return self._from_numpy_like(arr, x)
+
+        return _crop(a, th, tw), _crop(b, th, tw)
+
     def _scalar_tensor(self, value, ref):
         t = self._m.Tensor([1], ref.device, ref.dtype, False)
         t.uniform_(float(value), float(value))
@@ -901,6 +928,8 @@ class _ONNXGraphModule:
                 if isinstance(ins[0], self._m.Tensor) or isinstance(ins[1], self._m.Tensor):
                     a = self._as_tensor(ins[0])
                     b = self._as_tensor(ins[1], a.device)
+                    if len(a.shape) == len(b.shape) == 4 and (int(a.shape[2]) != int(b.shape[2]) or int(a.shape[3]) != int(b.shape[3])):
+                        a, b = self._align_nchw_spatial_min(a, b)
                     out = a + b
                 else:
                     out = self._as_numpy(ins[0]) + self._as_numpy(ins[1])
