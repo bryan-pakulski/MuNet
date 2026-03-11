@@ -1341,6 +1341,66 @@ class TestBindings(unittest.TestCase):
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
 
+    def test_compile_onnx_graph_module_to_device(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX graph-module to(device) test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "to_device_identity.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 2])
+            idn = helper.make_node("Identity", ["x"], ["y"])
+            graph = helper.make_graph([idn], "to_device_identity", [x_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_to_device_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            self.assertEqual(module.device.type, munet.DeviceType.CPU)
+            module = module.to(munet.Device(munet.DeviceType.CPU, 0))
+            self.assertEqual(module.device.type, munet.DeviceType.CPU)
+
+            x_np = np.arange(4, dtype=np.float32).reshape(1, 1, 2, 2)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            np.testing.assert_allclose(y_np, x_np, atol=1e-6)
+
+    def test_compile_onnx_conv_depthwise_grouped(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX grouped conv test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_grouped.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4, 3, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4, 3, 3])
+
+            w_np = np.array([[[[1.0]]], [[[2.0]]], [[[3.0]]], [[[4.0]]]], dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], group=4, pads=[0, 0, 0, 0], strides=[1, 1])
+
+            graph = helper.make_graph([conv], "conv_grouped", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_grouped_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(36, dtype=np.float32).reshape(1, 4, 3, 3)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+
+            scales = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32).reshape(1, 4, 1, 1)
+            expected = x_np * scales
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_conv_without_bias(self):
         try:
             import onnx

@@ -145,3 +145,22 @@ out = model.forward({
 ```
 
 Replace `"images"` / `"image_size"` with your actual ONNX input names.
+
+
+## Running compiled ONNX graph modules on GPU
+
+`compile_onnx(...)` returns a graph module object that can be moved to a preferred execution device:
+
+```python
+model = munet.inference.compile_onnx("model.onnx")
+model = model.to(munet.Device(munet.DeviceType.CUDA, 0))
+
+out = model.forward({
+    "images": image_tensor,
+    "orig_target_sizes": size_np,
+})
+```
+
+Notes:
+- Keep shape/meta inputs (sizes, axes, pads) as NumPy integer arrays where possible.
+- Tensor-valued inputs will be moved to the model execution device automatically.

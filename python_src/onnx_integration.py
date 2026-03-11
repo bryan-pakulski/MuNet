@@ -378,6 +378,7 @@ class _ONNXGraphModule:
         self._graph = model.graph
         self._m = munet_module
         self._np = np_module
+        self._execution_device = self._m.Device(self._m.DeviceType.CPU, 0)
 
         self._opset = 13
         for imp in model.opset_import:
@@ -409,6 +410,14 @@ class _ONNXGraphModule:
     def _onnx_numpy_helper(self):
         from onnx import numpy_helper
         return numpy_helper
+
+    @property
+    def device(self):
+        return self._execution_device
+
+    def to(self, device):
+        self._execution_device = device
+        return self
 
     def _get_attr(self, node, name, default=None):
         for a in node.attribute:
@@ -463,12 +472,17 @@ class _ONNXGraphModule:
         return src.astype(tgt, copy=False)
 
     def _as_tensor(self, v, ref_device=None):
+        target_device = ref_device if ref_device is not None else self._execution_device
+
         if isinstance(v, self._m.Tensor):
+            if target_device is not None and v.device != target_device:
+                return v.to(target_device)
             return v
+
         arr = self._np.asarray(v, dtype=self._np.float32)
         t = self._m.from_numpy(arr)
-        if ref_device is not None and ref_device.type != self._m.DeviceType.CPU:
-            t = t.to(ref_device)
+        if target_device is not None and target_device.type != self._m.DeviceType.CPU:
+            t = t.to(target_device)
         return t
 
     def _as_numpy(self, v):
