@@ -565,6 +565,52 @@ class _ONNXGraphModule:
 
         return cur
 
+    def _conv2d_numpy_grouped(self, x_np, w_np, b_np, stride, groups):
+        # x: [N,C,H,W], w: [OC, IC_per_group, KH, KW]
+        n, c, h, w = [int(v) for v in x_np.shape]
+        oc, icpg, kh, kw = [int(v) for v in w_np.shape]
+
+        if groups <= 0 or c % groups != 0 or oc % groups != 0:
+            raise ValueError(
+                f"Invalid grouped conv config: in_channels={c}, out_channels={oc}, groups={groups}"
+            )
+        icg = c // groups
+        ocg = oc // groups
+        if icpg != icg:
+            raise ValueError(
+                f"Grouped conv weight/input mismatch: weight_ic_per_group={icpg}, expected={icg}"
+            )
+
+        oh = (h - kh) // int(stride) + 1
+        ow = (w - kw) // int(stride) + 1
+        if oh <= 0 or ow <= 0:
+            raise ValueError(
+                f"Grouped conv invalid output shape for input={[n,c,h,w]}, kernel={[kh,kw]}, stride={stride}"
+            )
+
+        out = self._np.zeros((n, oc, oh, ow), dtype=self._np.float32)
+        for bn in range(n):
+            for g in range(groups):
+                in_base = g * icg
+                out_base = g * ocg
+                for oc_i in range(ocg):
+                    oc_idx = out_base + oc_i
+                    for oy in range(oh):
+                        iy = oy * int(stride)
+                        for ox in range(ow):
+                            ix = ox * int(stride)
+                            acc = 0.0
+                            for ic_i in range(icg):
+                                for ky in range(kh):
+                                    for kx in range(kw):
+                                        acc += float(x_np[bn, in_base + ic_i, iy + ky, ix + kx]) * float(
+                                            w_np[oc_idx, ic_i, ky, kx]
+                                        )
+                            if b_np is not None:
+                                acc += float(b_np[oc_idx])
+                            out[bn, oc_idx, oy, ox] = acc
+        return out
+
     def _scalar_tensor(self, value, ref):
         t = self._m.Tensor([1], ref.device, ref.dtype, False)
         t.uniform_(float(value), float(value))
@@ -701,8 +747,6 @@ class _ONNXGraphModule:
                     raise ValueError(f"Conv only supports 2D pads [t,l,b,r], got {pads}")
                 if len(dilations) != 2 or dilations != [1, 1]:
                     raise ValueError(f"Conv currently supports dilation=[1,1], got {dilations}")
-                if groups != 1:
-                    raise ValueError(f"Conv currently supports group=1, got {groups}")
                 if strides[0] != strides[1]:
                     raise ValueError(f"Conv currently supports equal spatial stride, got {strides}")
 
@@ -716,10 +760,17 @@ class _ONNXGraphModule:
                 else:
                     conv_padding = int(pt)
 
-                if B is None:
-                    out = data.conv2d(W, stride=int(strides[0]), padding=conv_padding)
+                if groups == 1:
+                    if B is None:
+                        out = data.conv2d(W, stride=int(strides[0]), padding=conv_padding)
+                    else:
+                        out = data.conv2d(W, B, int(strides[0]), conv_padding)
                 else:
-                    out = data.conv2d(W, B, int(strides[0]), conv_padding)
+                    x_np = self._as_numpy(data).astype(self._np.float32)
+                    w_np = self._as_numpy(W).astype(self._np.float32)
+                    b_np = None if B is None else self._as_numpy(B).reshape(-1).astype(self._np.float32)
+                    y_np = self._conv2d_numpy_grouped(x_np, w_np, b_np, int(strides[0]), groups)
+                    out = self._from_numpy_like(y_np, data)
             elif op == "MaxPool":
                 data = self._as_tensor(ins[0])
                 ks = self._get_attr(node, "kernel_shape", [2, 2])
