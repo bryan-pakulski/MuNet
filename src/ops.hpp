@@ -878,17 +878,46 @@ inline Tensor log_softmax(const Tensor &a, int dim) {
 // --- MATMUL ---
 inline Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA,
                               bool transB) {
-  if (a.shape().size() != 2 || b.shape().size() != 2)
-    throw std::runtime_error("Matmul currently requires 2D tensors");
+  const size_t a_rank = a.shape().size();
+  const size_t b_rank = b.shape().size();
 
-  int M = transA ? a.shape()[1] : a.shape()[0];
-  int K = transA ? a.shape()[0] : a.shape()[1];
-  int N = transB ? b.shape()[0] : b.shape()[1];
+  // Fast-path: standard 2D GEMM.
+  if (a_rank == 2 && b_rank == 2) {
+    int M = transA ? a.shape()[1] : a.shape()[0];
+    int K = transA ? a.shape()[0] : a.shape()[1];
+    int N = transB ? b.shape()[0] : b.shape()[1];
 
-  Tensor out({M, N}, a.device(), a.dtype());
-  a.impl_->backend().matmul(*a.impl_->storage, *b.impl_->storage,
-                            *out.impl_->storage, M, K, N, transA, transB);
-  return out;
+    Tensor out({M, N}, a.device(), a.dtype());
+    a.impl_->backend().matmul(*a.impl_->storage, *b.impl_->storage,
+                              *out.impl_->storage, M, K, N, transA, transB);
+    return out;
+  }
+
+  // Extended path: [..., K] @ [K, N] -> [..., N]
+  // Implemented by flattening leading dims and running one large GEMM.
+  if (!transA && !transB && a_rank >= 3 && b_rank == 2) {
+    int K = a.shape().back();
+    if (K != b.shape()[0])
+      throw std::runtime_error("Matmul: incompatible inner dimensions");
+
+    int leading = 1;
+    for (size_t i = 0; i + 1 < a_rank; ++i)
+      leading *= a.shape()[i];
+    int N = b.shape()[1];
+
+    Tensor a2 = a.reshape({leading, K});
+    Tensor out2({leading, N}, a.device(), a.dtype());
+    a.impl_->backend().matmul(*a2.impl_->storage, *b.impl_->storage,
+                              *out2.impl_->storage, leading, K, N, false,
+                              false);
+
+    Shape out_shape = a.shape();
+    out_shape.back() = N;
+    return out2.reshape(out_shape);
+  }
+
+  throw std::runtime_error(
+      "Matmul currently supports only 2Dx2D and [...,K]x[K,N]");
 }
 
 struct MatmulBackward : public Node {
@@ -899,6 +928,33 @@ struct MatmulBackward : public Node {
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
     Tensor grad_out = grads[0];
     Tensor grad_a, grad_b;
+
+    // Batched [...,K]x[K,N] path.
+    if (A.shape().size() >= 3 && B.shape().size() == 2) {
+      int K = A.shape().back();
+      int N = B.shape()[1];
+      int leading = 1;
+      for (size_t i = 0; i + 1 < A.shape().size(); ++i)
+        leading *= A.shape()[i];
+
+      Tensor grad_out_2d = grad_out.reshape({leading, N});
+
+      if (next_edges.size() > 0 && next_edges[0].node) {
+        Tensor grad_a_2d = matmul_internal(grad_out_2d, B, false, true);
+        grad_a = grad_a_2d.reshape(A.shape());
+      } else {
+        grad_a = Tensor();
+      }
+
+      if (next_edges.size() > 1 && next_edges[1].node) {
+        Tensor A2 = A.reshape({leading, K});
+        grad_b = matmul_internal(A2, grad_out_2d, true, false);
+      } else {
+        grad_b = Tensor();
+      }
+
+      return {grad_a, grad_b};
+    }
 
     // dA = dC @ B^T
     if (next_edges.size() > 0 && next_edges[0].node) {
