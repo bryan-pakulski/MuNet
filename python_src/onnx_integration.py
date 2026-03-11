@@ -397,6 +397,9 @@ class _ONNXGraphModule:
             os.getenv("MUNET_ONNX_DIV_CLAMP_DENORM", "1")
         ).strip().lower() in ("1", "true", "yes", "on")
         self._div_eps = float(os.getenv("MUNET_ONNX_DIV_EPS", "1e-12"))
+        self._const_clamp_finite = str(
+            os.getenv("MUNET_ONNX_CONST_CLAMP_FINITE", "1")
+        ).strip().lower() in ("1", "true", "yes", "on")
 
         self._opset = 13
         for imp in model.opset_import:
@@ -406,7 +409,10 @@ class _ONNXGraphModule:
 
         self._consts = {}
         for init in self._graph.initializer:
-            self._consts[init.name] = self._onnx_numpy_helper.to_array(init)
+            arr = self._onnx_numpy_helper.to_array(init)
+            if self._const_clamp_finite:
+                arr = self._sanitize_finite_array(arr)
+            self._consts[init.name] = arr
 
         self._input_names = [
             value.name for value in self._graph.input if value.name not in self._consts
@@ -416,7 +422,10 @@ class _ONNXGraphModule:
             if node.op_type == "Constant" and len(node.output) > 0:
                 for a in node.attribute:
                     if a.name == "value" and a.type == self._onnx.AttributeProto.TENSOR:
-                        self._consts[node.output[0]] = self._onnx_numpy_helper.to_array(a.t)
+                        arr = self._onnx_numpy_helper.to_array(a.t)
+                        if self._const_clamp_finite:
+                            arr = self._sanitize_finite_array(arr)
+                        self._consts[node.output[0]] = arr
                         break
 
     @property
@@ -436,6 +445,15 @@ class _ONNXGraphModule:
     def to(self, device):
         self._execution_device = device
         return self
+
+    def _sanitize_finite_array(self, arr):
+        arr_np = self._np.asarray(arr)
+        if not self._np.issubdtype(arr_np.dtype, self._np.floating):
+            return arr_np
+        if self._np.all(self._np.isfinite(arr_np)):
+            return arr_np
+        finfo = self._np.finfo(arr_np.dtype)
+        return self._np.nan_to_num(arr_np, nan=0.0, posinf=finfo.max, neginf=-finfo.max)
 
     def _get_attr(self, node, name, default=None):
         for a in node.attribute:

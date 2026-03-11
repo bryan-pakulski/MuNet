@@ -1465,6 +1465,35 @@ class TestBindings(unittest.TestCase):
 
 
 
+
+    def test_compile_onnx_constant_nonfinite_sanitized(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX constant non-finite sanitize test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "const_nonfinite.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2])
+
+            c_np = np.array([np.nan, np.inf], dtype=np.float32)
+            c_init = helper.make_tensor("c", TensorProto.FLOAT, [1, 2], c_np.tolist())
+            add = helper.make_node("Add", ["x", "c"], ["y"])
+            graph = helper.make_graph([add], "const_nonfinite", [x_info], [y_info], [c_init])
+            model = helper.make_model(graph, producer_name="munet_const_nonfinite_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[1.0, 2.0]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            self.assertTrue(np.all(np.isfinite(y_np)))
+
     def test_compile_onnx_div_zero_denominator_clamps_finite(self):
         try:
             import onnx
