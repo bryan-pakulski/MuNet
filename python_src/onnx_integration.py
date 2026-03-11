@@ -711,6 +711,40 @@ class _ONNXGraphModule:
 
         return a, b
 
+    def _binary_tensor_op(self, op_name, a, b, tensor_fn, numpy_fn):
+        try:
+            return tensor_fn(a, b)
+        except RuntimeError as e:
+            # Fall back to NumPy ONNX-style broadcasting when MuNet backend
+            # broadcast constraints are stricter than ONNX semantics.
+            a_np = self._as_numpy(a).astype(self._np.float32)
+            b_np = self._as_numpy(b).astype(self._np.float32)
+            try:
+                y_np = numpy_fn(a_np, b_np)
+            except ValueError:
+                # Last-resort alignment used elsewhere in this runtime for
+                # mismatched residual-style feature maps.
+                if (
+                    a_np.ndim == b_np.ndim == 4
+                    and int(a_np.shape[0]) == int(b_np.shape[0])
+                    and int(a_np.shape[1]) == int(b_np.shape[1])
+                ):
+                    h = min(int(a_np.shape[2]), int(b_np.shape[2]))
+                    w = min(int(a_np.shape[3]), int(b_np.shape[3]))
+                    y_np = numpy_fn(a_np[:, :, :h, :w], b_np[:, :, :h, :w])
+                elif (
+                    a_np.ndim == b_np.ndim == 3
+                    and int(a_np.shape[0]) == int(b_np.shape[0])
+                    and int(a_np.shape[2]) == int(b_np.shape[2])
+                ):
+                    t = min(int(a_np.shape[1]), int(b_np.shape[1]))
+                    y_np = numpy_fn(a_np[:, :t, :], b_np[:, :t, :])
+                else:
+                    raise RuntimeError(
+                        f"{op_name}: shape mismatch a_shape={list(a.shape)} b_shape={list(b.shape)}"
+                    ) from e
+            return self._from_numpy_like(y_np.astype(self._np.float32), a)
+
     def _check_nonfinite_output(self, node, value, output_name):
         if not self._trace_nonfinite:
             return
@@ -1015,7 +1049,7 @@ class _ONNXGraphModule:
                     b = self._as_tensor(ins[1], a.device)
                     if len(a.shape) == len(b.shape) and len(a.shape) in (3, 4):
                         a, b = self._align_binary_pair_min(a, b)
-                    out = a * b
+                    out = self._binary_tensor_op("Mul", a, b, lambda x, y: x * y, lambda x, y: x * y)
                 else:
                     out = self._as_numpy(ins[0]) * self._as_numpy(ins[1])
             elif op == "Sub":

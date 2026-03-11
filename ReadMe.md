@@ -49,6 +49,20 @@ Build static site:
 mkdocs build
 ```
 
+## ONNX non-finite tracing (debugging NaN/Inf)
+
+When running converted ONNX graphs, enable fail-fast non-finite tracing to stop at the **first** bad node output instead of seeing cascaded downstream failures.
+
+```bash
+MUNET_DEBUG=1 MUNET_ONNX_TRACE_NONFINITE=1 python demos/ort/convert.py
+```
+
+- `MUNET_DEBUG=1` enables backend-side debug checks/logging.
+- `MUNET_ONNX_TRACE_NONFINITE=1` enables ONNX graph-runtime fail-fast checks.
+- If you typed `NOFINITE`, use `MUNET_ONNX_TRACE_NONFINITE` (with `NONFINITE`).
+
+The runtime will raise a descriptive error with op type, node name, output name, first bad index, and bad-count summary so you can quickly locate the source op.
+
 ## Generated Python API docs (legacy helper)
 
 ```bash
