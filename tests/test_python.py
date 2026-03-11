@@ -915,6 +915,36 @@ class TestBindings(unittest.TestCase):
             expected = np.array([[[2.0, 4.0], [2.0, 4.0]], [[2.0, 4.0], [2.0, 4.0]]], dtype=np.float32)
             self.assertTrue(np.allclose(out, expected, atol=1e-6))
 
+    def test_compile_onnx_expand_preserves_non_singleton_dims(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX expand compatibility test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "expand_compat.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 300, 1])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 300, 1])
+
+            # Some exporter graphs provide singleton target dims where source dims are
+            # already concrete/non-singleton. Runtime should remain robust and preserve
+            # source shape instead of crashing.
+            target = helper.make_tensor("target", TensorProto.INT64, [3], [1, 1, 1])
+            expand = helper.make_node("Expand", ["x", "target"], ["y"])
+
+            graph = helper.make_graph([expand], "expand_compat_graph", [x_info], [y_info], [target])
+            model = helper.make_model(graph, producer_name="munet_expand_compat_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(300, dtype=np.float32).reshape(1, 300, 1)
+            out = np.array(module.forward(munet.from_numpy(x_np)).detach(), copy=False)
+            self.assertEqual(list(out.shape), [1, 300, 1])
+            self.assertTrue(np.allclose(out, x_np, atol=1e-6))
+
     def test_tensor_topk_basic(self):
         x_np = np.array([[1.0, 3.0, 2.0], [4.0, 0.0, 5.0]], dtype=np.float32)
         x = munet.from_numpy(x_np)

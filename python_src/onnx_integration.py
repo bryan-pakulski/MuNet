@@ -480,6 +480,38 @@ class _ONNXGraphModule:
         self._check_nonfinite_output(node, out, out_name, env)
         return out
 
+    def _expand_numpy(self, data_np, shape):
+        """ONNX Expand with a compatibility guard for non-expandable singleton targets.
+
+        A few exported graphs in the wild emit target shape dims of `1` where the source
+        already has a larger concrete dimension. Strict ONNX semantics treat that as
+        invalid (Expand cannot shrink), but raising here aborts the entire graph run.
+        For runtime robustness, we preserve the concrete source dimension in that case.
+        """
+        src = self._np.asarray(data_np)
+        tgt = [int(v) for v in shape]
+
+        if any(v <= 0 for v in tgt):
+            raise ValueError(f"Expand requires positive target dims, got {tgt}")
+
+        rank = max(src.ndim, len(tgt))
+        src_shape = [1] * (rank - src.ndim) + list(src.shape)
+        aligned_tgt = [1] * (rank - len(tgt)) + tgt
+
+        out_shape = []
+        for sdim, tdim in zip(src_shape, aligned_tgt):
+            if sdim == tdim or sdim == 1:
+                out_shape.append(tdim)
+            elif tdim == 1:
+                out_shape.append(sdim)
+            else:
+                raise ValueError(
+                    f"Expand broadcast failed for source shape {tuple(src.shape)} and target {tuple(tgt)}"
+                )
+
+        reshaped = src.reshape(src_shape)
+        return self._np.broadcast_to(reshaped, out_shape).copy()
+
     def _get_attr(self, node, name, default=None):
         for a in node.attribute:
             if a.name != name:
@@ -1482,7 +1514,7 @@ class _ONNXGraphModule:
             elif op == "Expand":
                 data_np = self._as_numpy(ins[0]).astype(self._np.float32)
                 shape = [int(v) for v in self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1).tolist()]
-                out = self._from_numpy_like(self._np.broadcast_to(data_np, shape).copy(), ins[0])
+                out = self._from_numpy_like(self._expand_numpy(data_np, shape), ins[0])
             elif op == "Tile":
                 data_np = self._as_numpy(ins[0]).astype(self._np.float32)
                 reps = [int(v) for v in self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1).tolist()]
