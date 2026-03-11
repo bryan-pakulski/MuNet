@@ -961,8 +961,18 @@ inline Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA,
       return matmul_internal(a, b2, false, false);
     }
 
+    if (BA == 1) {
+      std::vector<Tensor> a_reps(BB, a);
+      Tensor a_exp = cat(a_reps, 0);
+      Tensor out({BB, M, N}, a.device(), a.dtype());
+      a.impl_->backend().batched_matmul(*a_exp.impl_->storage, *b.impl_->storage,
+                                        *out.impl_->storage, BB, M, K, N,
+                                        false, false);
+      return out;
+    }
+
     throw std::runtime_error(
-        "Matmul: batched inputs require same batch or RHS batch=1");
+        "Matmul: batched inputs require same batch, lhs batch=1, or rhs batch=1");
   }
 
   throw std::runtime_error(
@@ -998,6 +1008,73 @@ struct MatmulBackward : public Node {
       if (next_edges.size() > 1 && next_edges[1].node) {
         Tensor A2 = A.reshape({leading, K});
         grad_b = matmul_internal(A2, grad_out_2d, true, false);
+      } else {
+        grad_b = Tensor();
+      }
+
+      return {grad_a, grad_b};
+    }
+
+    // Broadcasted full-batched path: [1,M,K]x[B,K,N] -> [B,M,N].
+    if (A.shape().size() == 3 && B.shape().size() == 3 &&
+        A.shape()[0] == 1 && B.shape()[0] > 1) {
+      int batch = B.shape()[0];
+      int M = A.shape()[1];
+      int K = A.shape()[2];
+      int N = B.shape()[2];
+
+      std::vector<Tensor> a_reps(batch, A);
+      Tensor Aexp = cat(a_reps, 0);
+
+      if (next_edges.size() > 0 && next_edges[0].node) {
+        Tensor Bt = B.permute({0, 2, 1}).contiguous();
+        Tensor grad_a_full({batch, M, K}, A.device(), A.dtype());
+        A.impl_->backend().batched_matmul(*grad_out.impl_->storage,
+                                          *Bt.impl_->storage,
+                                          *grad_a_full.impl_->storage, batch, M,
+                                          N, K, false, false);
+        grad_a = grad_a_full.sum_to_shape({1, M, K});
+      } else {
+        grad_a = Tensor();
+      }
+
+      if (next_edges.size() > 1 && next_edges[1].node) {
+        Tensor AexpT = Aexp.permute({0, 2, 1}).contiguous();
+        grad_b = Tensor({batch, K, N}, B.device(), B.dtype());
+        B.impl_->backend().batched_matmul(*AexpT.impl_->storage,
+                                          *grad_out.impl_->storage,
+                                          *grad_b.impl_->storage, batch, K, M,
+                                          N, false, false);
+      } else {
+        grad_b = Tensor();
+      }
+
+      return {grad_a, grad_b};
+    }
+
+    // Broadcasted full-batched path: [B,M,K]x[1,K,N] -> [B,M,N].
+    if (A.shape().size() == 3 && B.shape().size() == 3 &&
+        B.shape()[0] == 1 && A.shape()[0] > 1) {
+      int batch = A.shape()[0];
+      int M = A.shape()[1];
+      int K = A.shape()[2];
+      int N = B.shape()[2];
+      Tensor B2 = B.reshape({K, N});
+
+      if (next_edges.size() > 0 && next_edges[0].node) {
+        grad_a = matmul_internal(grad_out, B2, false, true);
+      } else {
+        grad_a = Tensor();
+      }
+
+      if (next_edges.size() > 1 && next_edges[1].node) {
+        Tensor At = A.permute({0, 2, 1}).contiguous();
+        Tensor grad_b_full({batch, K, N}, B.device(), B.dtype());
+        B.impl_->backend().batched_matmul(*At.impl_->storage,
+                                          *grad_out.impl_->storage,
+                                          *grad_b_full.impl_->storage, batch,
+                                          K, M, N, false, false);
+        grad_b = grad_b_full.sum_to_shape({1, K, N});
       } else {
         grad_b = Tensor();
       }
