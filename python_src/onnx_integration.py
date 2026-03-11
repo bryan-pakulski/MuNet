@@ -923,8 +923,8 @@ class _ONNXGraphModule:
                             final_shape = [1]
                         out = out.reshape(final_shape)
             elif op == "Concat":
-                all_numpy = not any(isinstance(v, self._m.Tensor) for v in ins)
                 axis = int(self._get_attr(node, "axis", 0))
+                all_numpy = not any(isinstance(v, self._m.Tensor) for v in ins)
 
                 if all_numpy:
                     arrs = [self._as_numpy(v) for v in ins]
@@ -932,6 +932,32 @@ class _ONNXGraphModule:
                     axis = axis if axis >= 0 else axis + rank
                     if axis < 0 or axis >= rank:
                         raise ValueError(f"Concat axis out of range: axis={axis}, rank={rank}")
+
+                    mismatch = False
+                    for d in range(rank):
+                        if d == axis:
+                            continue
+                        vals = {int(a.shape[d]) for a in arrs}
+                        if len(vals) > 1:
+                            mismatch = True
+                            break
+
+                    if mismatch and rank == 4 and axis == 1:
+                        target = [None] * rank
+                        for d in range(rank):
+                            if d == axis:
+                                continue
+                            target[d] = min(int(a.shape[d]) for a in arrs)
+                        cropped = []
+                        for a in arrs:
+                            sl = [slice(None)] * rank
+                            for d in range(rank):
+                                if d == axis:
+                                    continue
+                                sl[d] = slice(0, int(target[d]))
+                            cropped.append(a[tuple(sl)])
+                        arrs = cropped
+
                     out = self._np.concatenate(arrs, axis=axis)
                 else:
                     base = self._as_tensor(ins[0])
@@ -944,18 +970,40 @@ class _ONNXGraphModule:
                     if axis < 0 or axis >= rank:
                         raise ValueError(f"Concat axis out of range: axis={axis}, rank={rank}")
 
-                    base_shape = [int(d) for d in base.shape]
-                    for i, t in enumerate(ts[1:], start=1):
-                        tshape = [int(d) for d in t.shape]
-                        if len(tshape) != rank:
-                            raise ValueError(
-                                f"Concat input rank mismatch: input0_rank={rank}, input{i}_rank={len(tshape)}"
-                            )
-                        for dim in range(rank):
-                            if dim != axis and tshape[dim] != base_shape[dim]:
+                    shapes = [[int(d) for d in t.shape] for t in ts]
+                    mismatch = False
+                    for d in range(rank):
+                        if d == axis:
+                            continue
+                        vals = {shape[d] for shape in shapes}
+                        if len(vals) > 1:
+                            mismatch = True
+                            break
+
+                    if mismatch and rank == 4 and axis == 1:
+                        target = [None] * rank
+                        for d in range(rank):
+                            if d == axis:
+                                continue
+                            target[d] = min(shape[d] for shape in shapes)
+                        cropped = []
+                        for t in ts:
+                            arr = self._as_numpy(t)
+                            sl = [slice(None)] * rank
+                            for d in range(rank):
+                                if d == axis:
+                                    continue
+                                sl[d] = slice(0, int(target[d]))
+                            cropped.append(self._from_numpy_like(arr[tuple(sl)].astype(self._np.float32), t))
+                        ts = cropped
+                        shapes = [[int(d) for d in t.shape] for t in ts]
+
+                    for i, tshape in enumerate(shapes[1:], start=1):
+                        for d in range(rank):
+                            if d != axis and tshape[d] != shapes[0][d]:
                                 raise ValueError(
                                     "Concat shape mismatch: "
-                                    f"axis={axis}, input0_shape={base_shape}, input{i}_shape={tshape}"
+                                    f"axis={axis}, input0_shape={shapes[0]}, input{i}_shape={tshape}"
                                 )
 
                     out = self._m.Tensor.cat(ts, axis)

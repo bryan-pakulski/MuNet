@@ -1401,6 +1401,33 @@ class TestBindings(unittest.TestCase):
             expected = x_np * scales
             np.testing.assert_allclose(y_np, expected, atol=1e-6)
 
+    def test_compile_onnx_concat_channel_with_spatial_mismatch_autocrop(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX concat autocrop test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "concat_autocrop.onnx")
+            a_info = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 2, 5, 5])
+            b_info = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 3, 4, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 5, 4, 4])
+            cat = helper.make_node("Concat", ["a", "b"], ["y"], axis=1)
+            graph = helper.make_graph([cat], "concat_autocrop", [a_info, b_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_concat_autocrop_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            a_np = np.arange(50, dtype=np.float32).reshape(1, 2, 5, 5)
+            b_np = (100 + np.arange(48, dtype=np.float32)).reshape(1, 3, 4, 4)
+            y = module.forward({"a": munet.from_numpy(a_np), "b": munet.from_numpy(b_np)})
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.concatenate([a_np[:, :, :4, :4], b_np], axis=1)
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_conv_without_bias(self):
         try:
             import onnx
