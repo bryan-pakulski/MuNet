@@ -804,24 +804,25 @@ class _ONNXGraphModule:
                 W = self._as_tensor(ins[1], data.device)
                 B = self._as_tensor(ins[2], data.device) if len(ins) > 2 else None
 
+                groups = int(self._get_attr(node, "group", 1))
+
                 # ONNX Conv is typically NCHW. If caller passes NHWC by mistake and it
                 # is unambiguous (last dim matches Conv in-channels), transpose to NCHW.
                 if len(data.shape) == 4 and len(W.shape) == 4:
-                    in_ch = int(W.shape[1])
-                    if int(data.shape[1]) != in_ch and int(data.shape[3]) == in_ch:
+                    expected_in_ch = int(W.shape[1]) * groups
+                    if int(data.shape[1]) != expected_in_ch and int(data.shape[3]) == expected_in_ch:
                         data = data.permute([0, 3, 1, 2]).contiguous()
-                    elif int(data.shape[1]) > in_ch:
+                    elif int(data.shape[1]) > expected_in_ch:
                         # Some converted graphs may produce an extra channel from
                         # dynamic shape/pad flows; align to expected Conv channels.
                         arr = self._as_numpy(data)
-                        arr = arr[:, :in_ch, :, :]
+                        arr = arr[:, :expected_in_ch, :, :]
                         data = self._from_numpy_like(arr.astype(self._np.float32), data)
 
                 strides = [int(v) for v in self._get_attr(node, "strides", [1, 1])]
                 pads = [int(v) for v in self._get_attr(node, "pads", [0, 0, 0, 0])]
                 dilations = [int(v) for v in self._get_attr(node, "dilations", [1, 1])]
                 auto_pad = self._get_attr(node, "auto_pad", "NOTSET")
-                groups = int(self._get_attr(node, "group", 1))
 
                 if len(strides) != 2:
                     raise ValueError(f"Conv only supports 2D strides, got {strides}")

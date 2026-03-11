@@ -1594,6 +1594,39 @@ class TestBindings(unittest.TestCase):
             expected = x_np[:, :24, :, :].sum(axis=1, keepdims=True)
             np.testing.assert_allclose(y_np, expected, atol=1e-6)
 
+
+    def test_compile_onnx_conv_grouped_keeps_expected_channels(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX grouped Conv channel-alignment test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_grouped_channels.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4, 2, 2])
+
+            # Depthwise grouped conv: groups=4, each output channel reads one input channel.
+            w_np = np.ones((4, 1, 1, 1), dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], pads=[0, 0, 0, 0], strides=[1, 1], group=4)
+
+            graph = helper.make_graph([conv], "conv_grouped_channels", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_grouped_channels_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+
+            x_np = np.arange(1 * 4 * 2 * 2, dtype=np.float32).reshape(1, 4, 2, 2)
+            x = munet.from_numpy(x_np)
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            np.testing.assert_allclose(y_np, x_np, atol=1e-6)
+
     def test_compile_onnx_pad_with_tensor_cast_pads_stable(self):
         try:
             import onnx
