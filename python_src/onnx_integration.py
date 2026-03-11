@@ -745,6 +745,20 @@ class _ONNXGraphModule:
                 ):
                     t = min(int(a_np.shape[1]), int(b_np.shape[1]))
                     y_np = numpy_fn(a_np[:, :t, :], b_np[:, :t, :])
+                elif (
+                    a_np.ndim == b_np.ndim == 3
+                    and int(a_np.shape[0]) == int(b_np.shape[0])
+                    and (
+                        int(a_np.shape[2]) == int(b_np.shape[2])
+                        or int(a_np.shape[2]) == 1
+                        or int(b_np.shape[2]) == 1
+                    )
+                ):
+                    # Sequence-style fallback where token lengths diverge but
+                    # final dim is still broadcast-compatible (e.g. [B,T,1]
+                    # with [B,T2,C]). Align token axis to shared minimum.
+                    t = min(int(a_np.shape[1]), int(b_np.shape[1]))
+                    y_np = numpy_fn(a_np[:, :t, :], b_np[:, :t, :])
                 else:
                     raise RuntimeError(
                         f"{op_name}: shape mismatch a_shape={list(a.shape)} b_shape={list(b.shape)}"
