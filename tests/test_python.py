@@ -1463,6 +1463,34 @@ class TestBindings(unittest.TestCase):
 
 
 
+
+    def test_compile_onnx_sqrt_negative_input_clamps_finite(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Sqrt finite-clamp test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "sqrt_clamp.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 3])
+
+            sqrt_node = helper.make_node("Sqrt", ["x"], ["y"])
+            graph = helper.make_graph([sqrt_node], "sqrt_clamp", [x_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_sqrt_clamp_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[-4.0, 0.0, 9.0]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.array([[0.0, 0.0, 3.0]], dtype=np.float32)
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_pow_overflow_clamps_finite(self):
         try:
             import onnx

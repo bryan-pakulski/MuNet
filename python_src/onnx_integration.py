@@ -390,6 +390,9 @@ class _ONNXGraphModule:
         self._pow_clamp_finite = str(
             os.getenv("MUNET_ONNX_POW_CLAMP_FINITE", "1")
         ).strip().lower() in ("1", "true", "yes", "on")
+        self._sqrt_clamp_nonneg = str(
+            os.getenv("MUNET_ONNX_SQRT_CLAMP_NONNEG", "1")
+        ).strip().lower() in ("1", "true", "yes", "on")
 
         self._opset = 13
         for imp in model.opset_import:
@@ -1492,6 +1495,9 @@ class _ONNXGraphModule:
                 out = x.log()
             elif op == "Sqrt":
                 x = self._as_tensor(ins[0])
+                if self._sqrt_clamp_nonneg:
+                    max_f = self._np.finfo(self._np.float32).max
+                    x = x.clip(0.0, float(max_f))
                 out = x.sqrt()
             elif op == "Clip":
                 x = self._as_tensor(ins[0])
