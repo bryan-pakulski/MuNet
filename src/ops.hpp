@@ -893,6 +893,28 @@ inline Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA,
     return out;
   }
 
+  auto collapse_singleton_leading_to_2d = [](const Tensor &t, Shape &out2d) {
+    if (t.shape().size() < 2)
+      return false;
+    for (size_t i = 0; i + 2 < t.shape().size(); ++i) {
+      if (t.shape()[i] != 1)
+        return false;
+    }
+    out2d = {t.shape()[t.shape().size() - 2], t.shape()[t.shape().size() - 1]};
+    return true;
+  };
+
+  // Treat RHS with only singleton leading dims as plain 2D, e.g.
+  // [1, K, N] / [1, 1, K, N] -> [K, N]. This is common in exported ONNX
+  // graphs where constants are unsqueezed for broadcast convenience.
+  if (!transA && !transB && a_rank >= 3 && b_rank > 2) {
+    Shape b2_shape;
+    if (collapse_singleton_leading_to_2d(b, b2_shape)) {
+      Tensor b2 = b.reshape(b2_shape);
+      return matmul_internal(a, b2, false, false);
+    }
+  }
+
   // Extended path: [..., K] @ [K, N] -> [..., N]
   // Implemented by flattening leading dims and running one large GEMM.
   if (!transA && !transB && a_rank >= 3 && b_rank == 2) {

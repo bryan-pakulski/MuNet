@@ -243,3 +243,35 @@ TEST_P(TensorTest, MatmulUnsupportedFullBatchedRhs) {
   Tensor b({2, 4, 5}, dev());
   EXPECT_THROW(a.matmul(b), std::runtime_error);
 }
+
+TEST_P(TensorTest, MatmulRhsSingletonLeadingDims) {
+  Tensor a({1, 3, 4}, dev());
+  Tensor b({1, 4, 2}, dev());
+
+  Tensor a_cpu({1, 3, 4}, {DeviceType::CPU, 0});
+  Tensor b_cpu({1, 4, 2}, {DeviceType::CPU, 0});
+  float *ad = (float *)a_cpu.data();
+  float *bd = (float *)b_cpu.data();
+
+  for (int i = 0; i < 12; ++i)
+    ad[i] = (float)(i + 1);
+
+  bd[0] = 1.0f; bd[1] = 2.0f;
+  bd[2] = 3.0f; bd[3] = 4.0f;
+  bd[4] = 5.0f; bd[5] = 6.0f;
+  bd[6] = 7.0f; bd[7] = 8.0f;
+
+  a.impl_->backend().copy(a_cpu.data(), a.data(), a.bytes(), a_cpu.device(), dev());
+  b.impl_->backend().copy(b_cpu.data(), b.data(), b.bytes(), b_cpu.device(), dev());
+
+  Tensor y = a.matmul(b).to({DeviceType::CPU, 0});
+  ASSERT_EQ(y.shape().size(), 3);
+  EXPECT_EQ(y.shape()[0], 1);
+  EXPECT_EQ(y.shape()[1], 3);
+  EXPECT_EQ(y.shape()[2], 2);
+
+  const float *o = (const float *)y.data();
+  const float expected[6] = {50.0f, 60.0f, 114.0f, 140.0f, 178.0f, 220.0f};
+  for (int i = 0; i < 6; ++i)
+    EXPECT_FLOAT_EQ(o[i], expected[i]);
+}
