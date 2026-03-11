@@ -374,11 +374,16 @@ class _ONNXGraphModule:
     """General ONNX graph interpreter backed by MuNet tensor ops + safe numpy fallbacks."""
 
     def __init__(self, model, munet_module, np_module):
+        import os
+
         self._model = model
         self._graph = model.graph
         self._m = munet_module
         self._np = np_module
         self._execution_device = self._m.Device(self._m.DeviceType.CPU, 0)
+        self._trace_nonfinite = str(os.getenv("MUNET_ONNX_TRACE_NONFINITE", "0")).strip().lower() in (
+            "1", "true", "yes", "on"
+        )
 
         self._opset = 13
         for imp in model.opset_import:
@@ -394,7 +399,7 @@ class _ONNXGraphModule:
             value.name for value in self._graph.input if value.name not in self._consts
         ]
 
-        for node in self._graph.node:
+        for node_idx, node in enumerate(self._graph.node):
             if node.op_type == "Constant" and len(node.output) > 0:
                 for a in node.attribute:
                     if a.name == "value" and a.type == self._onnx.AttributeProto.TENSOR:
@@ -706,6 +711,29 @@ class _ONNXGraphModule:
 
         return a, b
 
+    def _check_nonfinite_output(self, node, value, output_name):
+        if not self._trace_nonfinite:
+            return
+
+        arr = self._as_numpy(value)
+        if not self._np.issubdtype(arr.dtype, self._np.floating):
+            return
+
+        bad = ~self._np.isfinite(arr)
+        if not bad.any():
+            return
+
+        flat = bad.reshape(-1)
+        first = int(self._np.argmax(flat))
+        bad_count = int(bad.sum())
+        total = int(arr.size)
+        node_name = node.name if getattr(node, "name", "") else "<unnamed>"
+        raise ValueError(
+            "Non-finite detected in ONNX graph runtime output: "
+            f"op={node.op_type}, node={node_name}, output={output_name}, "
+            f"first_bad_flat_index={first}, bad_count={bad_count}, total={total}"
+        )
+
     def _scalar_tensor(self, value, ref):
         t = self._m.Tensor([1], ref.device, ref.dtype, False)
         t.uniform_(float(value), float(value))
@@ -796,7 +824,7 @@ class _ONNXGraphModule:
     def forward(self, *inputs, **named_inputs):
         env = self._bind_inputs(inputs, named_inputs)
 
-        for node in self._graph.node:
+        for node_idx, node in enumerate(self._graph.node):
             op = node.op_type
             if op == "Constant":
                 continue
@@ -1403,6 +1431,8 @@ class _ONNXGraphModule:
                 values, indices = x.topk(k, axis, largest, sorted_flag)
                 if len(node.output) != 2:
                     raise ValueError(f"Unsupported output arity for TopK: {len(node.output)}")
+                self._check_nonfinite_output(node, values, node.output[0])
+                self._check_nonfinite_output(node, indices, node.output[1])
                 env[node.output[0]] = values
                 env[node.output[1]] = indices
                 continue
@@ -1459,6 +1489,7 @@ class _ONNXGraphModule:
 
             if len(node.output) != 1:
                 raise ValueError(f"Unsupported output arity for op {op}: {len(node.output)}")
+            self._check_nonfinite_output(node, out, node.output[0])
             env[node.output[0]] = out
 
         outs = [env[o.name] for o in self._graph.output]
