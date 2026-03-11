@@ -1561,6 +1561,44 @@ class TestBindings(unittest.TestCase):
             )
             np.testing.assert_allclose(y_np, expected, atol=1e-6)
 
+
+    def test_compile_onnx_resize_with_sizes_input(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Resize sizes-input test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "resize_sizes.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 3, 5])
+
+            empty_roi = helper.make_tensor("roi", TensorProto.FLOAT, [0], [])
+            sizes_np = np.array([1, 1, 3, 5], dtype=np.int64)
+            sizes_init = helper.make_tensor("sizes", TensorProto.INT64, sizes_np.shape, sizes_np.tolist())
+            resize = helper.make_node("Resize", ["x", "roi", "", "sizes"], ["y"], mode="nearest")
+
+            graph = helper.make_graph([resize], "resize_sizes", [x_info], [y_info], [empty_roi, sizes_init])
+            model = helper.make_model(graph, producer_name="munet_resize_sizes_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[[[1.0, 2.0], [3.0, 4.0]]]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+
+            expected = np.array(
+                [[[[1.0, 1.0, 1.0, 2.0, 2.0],
+                   [1.0, 1.0, 1.0, 2.0, 2.0],
+                   [3.0, 3.0, 3.0, 4.0, 4.0]]]],
+                dtype=np.float32,
+            )
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
     def test_compile_onnx_conv_crops_extra_input_channels(self):
         try:
             import onnx

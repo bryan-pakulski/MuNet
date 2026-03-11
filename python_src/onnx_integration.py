@@ -611,6 +611,26 @@ class _ONNXGraphModule:
                             out[bn, oc_idx, oy, ox] = acc
         return out
 
+    def _resize_nearest_numpy(self, x_np, out_h, out_w):
+        if x_np.ndim != 4:
+            raise ValueError(f"Resize currently supports only 4D tensors, got rank={x_np.ndim}")
+
+        n, c, in_h, in_w = x_np.shape
+        out_h = int(out_h)
+        out_w = int(out_w)
+        if out_h <= 0 or out_w <= 0:
+            raise ValueError(f"Resize target spatial size must be positive, got H={out_h}, W={out_w}")
+
+        if in_h == 0 or in_w == 0:
+            raise ValueError(f"Resize input has empty spatial dims: H={in_h}, W={in_w}")
+
+        ys = self._np.floor(self._np.arange(out_h, dtype=self._np.float64) * (float(in_h) / float(out_h))).astype(self._np.int64)
+        xs = self._np.floor(self._np.arange(out_w, dtype=self._np.float64) * (float(in_w) / float(out_w))).astype(self._np.int64)
+        ys = self._np.clip(ys, 0, in_h - 1)
+        xs = self._np.clip(xs, 0, in_w - 1)
+
+        return x_np[:, :, ys[:, None], xs[None, :]]
+
     def _resolve_2d_auto_pad(self, auto_pad, in_hw, kernel_hw, strides_hw, dilations_hw=(1, 1)):
         mode = str(auto_pad or "NOTSET").upper()
         if mode in ("", "NOTSET"):
@@ -1300,21 +1320,41 @@ class _ONNXGraphModule:
                 continue
             elif op == "Resize":
                 data = self._as_tensor(ins[0])
-                scales = None
-                if len(ins) >= 3 and self._as_numpy(ins[2]).size > 0:
-                    scales = self._as_numpy(ins[2]).astype(self._np.float32)
-                mode = self._get_attr(node, "mode", "nearest")
+                mode = str(self._get_attr(node, "mode", "nearest"))
                 if mode != "nearest":
                     raise ValueError("Resize only supports nearest mode")
-                if scales is not None and len(scales) >= 4:
-                    sf_h = int(round(float(scales[-2])))
-                    sf_w = int(round(float(scales[-1])))
-                    if sf_h == sf_w and sf_h >= 1:
-                        out = data.upsample2d(sf_h)
-                    else:
-                        raise ValueError("Resize only supports equal integer spatial scale")
+
+                scales = None
+                sizes = None
+                if len(ins) >= 3 and self._as_numpy(ins[2]).size > 0:
+                    scales = self._as_numpy(ins[2]).astype(self._np.float32).reshape(-1)
+                if len(ins) >= 4 and self._as_numpy(ins[3]).size > 0:
+                    sizes = self._as_numpy(ins[3]).astype(self._np.int64).reshape(-1)
+
+                in_shape = [int(v) for v in data.shape]
+                if len(in_shape) != 4:
+                    raise ValueError(f"Resize currently supports only 4D tensors, got shape={in_shape}")
+
+                if sizes is not None and len(sizes) >= 4:
+                    out_h = int(sizes[-2])
+                    out_w = int(sizes[-1])
+                elif scales is not None and len(scales) >= 4:
+                    out_h = int(round(float(in_shape[-2]) * float(scales[-2])))
+                    out_w = int(round(float(in_shape[-1]) * float(scales[-1])))
                 else:
-                    raise ValueError("Resize requires scales input")
+                    raise ValueError("Resize requires scales or sizes input")
+
+                if out_h <= 0 or out_w <= 0:
+                    raise ValueError(f"Resize target spatial size must be positive, got H={out_h}, W={out_w}")
+
+                sf_h = out_h / float(in_shape[-2])
+                sf_w = out_w / float(in_shape[-1])
+                if abs(sf_h - sf_w) < 1e-6 and sf_h >= 1.0 and abs(sf_h - round(sf_h)) < 1e-6:
+                    out = data.upsample2d(int(round(sf_h)))
+                else:
+                    x_np = self._as_numpy(data).astype(self._np.float32)
+                    y_np = self._resize_nearest_numpy(x_np, out_h, out_w)
+                    out = self._from_numpy_like(y_np.astype(self._np.float32), data)
             elif op == "Log":
                 x = self._as_tensor(ins[0])
                 out = x.log()
