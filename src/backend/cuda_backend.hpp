@@ -38,6 +38,9 @@ public:
            const BroadcastInfo &info) override;
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override;
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out, int B,
+                      int M, int K, int N, bool transA,
+                      bool transB) override;
   void relu(const Storage &in, Storage &out, size_t num_elements) override;
   void relu_backward(const Storage &grad_out, const Storage &input,
                      Storage &grad_in, size_t num_elements) override;
@@ -45,11 +48,18 @@ public:
   void sigmoid(const Storage &in, Storage &out, size_t num_elements) override;
   void sigmoid_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, size_t num_elements) override;
+  void log(const Storage &in, Storage &out, size_t num_elements) override;
+  void sqrt(const Storage &in, Storage &out, size_t num_elements) override;
+  void clip(const Storage &in, Storage &out, float min_value, float max_value,
+            size_t num_elements) override;
+  void erf(const Storage &in, Storage &out, size_t num_elements) override;
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override;
   void softmax_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, int batch_size,
                         int num_classes) override;
+  void topk(const Storage &in, Storage &out_values, Storage &out_indices,
+            int outer, int dim_size, int k, bool largest, bool sorted) override;
   void cross_entropy(const Storage &logits, const Storage &targets,
                      Storage &out_loss, int batch_size, int num_classes,
                      int spatial) override;
@@ -68,6 +78,8 @@ public:
 
   void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
               const std::vector<Shape> &shapes) override;
+  void gather_elements(const Storage &data, const Storage &indices,
+                       Storage &out, const Shape &shape, int axis) override;
   void concat_backward(const Storage &grad_out,
                        std::vector<Storage *> &grad_inputs, int dim,
                        const std::vector<Shape> &shapes) override;
@@ -88,6 +100,9 @@ public:
                   int scale) override;
   void upsample2d_backward(const Storage &grad_out, Storage &grad_in, int B,
                            int C, int iH, int iW, int scale) override;
+  void grid_sample(const Storage &in, const Storage &grid, Storage &out,
+                   int B, int C, int iH, int iW, int oH, int oW, int mode,
+                   bool align_corners) override;
 
   void batch_norm(const Storage &in, const Storage &scale, const Storage &bias,
                   Storage &running_mean, Storage &running_var,

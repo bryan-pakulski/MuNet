@@ -49,6 +49,28 @@ Build static site:
 mkdocs build
 ```
 
+## ONNX non-finite tracing (debugging NaN/Inf)
+
+When running converted ONNX graphs, enable fail-fast non-finite tracing to stop at the **first** bad node output instead of seeing cascaded downstream failures.
+
+```bash
+MUNET_DEBUG=1 MUNET_ONNX_TRACE_NONFINITE=1 python demos/ort/convert.py
+```
+
+- `MUNET_DEBUG=1` enables backend-side debug checks/logging.
+- `MUNET_ONNX_TRACE_NONFINITE=1` enables ONNX graph-runtime fail-fast checks.
+- `MUNET_ONNX_TRACE_NONFINITE_INPUTS=1` (default on) includes per-input stats in the error (shape/dtype/finite count/min/max/mean).
+- `MUNET_ONNX_POW_CLAMP_FINITE=1` (default on) clamps ONNX `Pow` overflow/NaN results into finite `float32` range to avoid cascade failures in normalization subgraphs.
+- `MUNET_ONNX_SQRT_CLAMP_NONNEG=1` (default on) clamps ONNX `Sqrt` inputs to `>=0` before kernel execution to prevent NaN cascades from tiny-negative/unstable variance paths.
+- `MUNET_ONNX_DIV_CLAMP_DENORM=1` (default on) clamps very small/zero divisors to `±MUNET_ONNX_DIV_EPS` before ONNX `Div` to avoid Inf/NaN cascades in normalization paths.
+- `MUNET_ONNX_DIV_EPS=1e-12` controls the divisor clamp epsilon used by `MUNET_ONNX_DIV_CLAMP_DENORM`.
+- `MUNET_ONNX_CONST_CLAMP_FINITE=1` (default on) sanitizes non-finite ONNX initializers/constants (`NaN -> 0`, `±Inf -> ±max`) at graph load time.
+- `MUNET_ONNX_SANITIZE_TENSOR_INPUTS=1` (default on) sanitizes non-finite tensor inputs at binary-op boundaries (e.g. `Add`) to prevent non-finite propagation from unstable upstream branches.
+- If you typed `NOFINITE`, use `MUNET_ONNX_TRACE_NONFINITE` (with `NONFINITE`).
+- `copy | 0 bytes` in debug logs is typically benign (empty optional ONNX tensors / zero-length intermediates), but if it appears immediately before a kernel crash, treat it as a symptom and inspect the previous binary op inputs with non-finite tracing enabled.
+
+The runtime will raise a descriptive error with op type, node name, output name, first bad index, bad-count summary, and (optionally) input/output stats so you can quickly locate the source op.
+
 ## Generated Python API docs (legacy helper)
 
 ```bash

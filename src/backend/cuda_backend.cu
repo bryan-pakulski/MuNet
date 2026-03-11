@@ -123,6 +123,104 @@ __global__ void sigmoid_backward_kernel(const float *go, const float *out,
   }
 }
 
+__global__ void log_kernel(const float *in, float *out, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N)
+    out[i] = logf(in[i]);
+}
+
+__global__ void sqrt_kernel(const float *in, float *out, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N)
+    out[i] = sqrtf(in[i]);
+}
+
+__global__ void clip_kernel(const float *in, float *out, float min_value,
+                            float max_value, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N) {
+    float v = in[i];
+    out[i] = fminf(max_value, fmaxf(min_value, v));
+  }
+}
+
+__device__ inline float erf_approx_cuda(float x) {
+  const float a = 0.147f;
+  float sign = x < 0.0f ? -1.0f : 1.0f;
+  float ax = fabsf(x);
+  float x2 = ax * ax;
+  float t = 1.0f + a * x2;
+  float inside = 1.0f - expf(-x2 * (4.0f / 3.14159265358979323846f + a * x2) / t);
+  return sign * sqrtf(fmaxf(0.0f, inside));
+}
+
+__global__ void erf_kernel(const float *in, float *out, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N)
+    out[i] = erf_approx_cuda(in[i]);
+}
+
+
+__global__ void topk_kernel(const float *in, float *outv, float *outi,
+                           int outer, int dim_size, int k, int largest,
+                           int sorted_flag) {
+  const int MAXK = 64;
+  int row = blockIdx.x * blockDim.x + threadIdx.x;
+  if (row >= outer)
+    return;
+  if (k > MAXK) {
+    for (int j = 0; j < k; ++j) {
+      outv[row * k + j] = 0.0f;
+      outi[row * k + j] = 0.0f;
+    }
+    return;
+  }
+
+  int sel[MAXK];
+  float sel_v[MAXK];
+  for (int j = 0; j < k; ++j) {
+    sel[j] = -1;
+    sel_v[j] = 0.0f;
+  }
+
+  const float *r = in + row * dim_size;
+  for (int j = 0; j < k; ++j) {
+    int best_i = -1;
+    float best_v = largest ? -3.402823e38f : 3.402823e38f;
+    for (int i = 0; i < dim_size; ++i) {
+      bool used = false;
+      for (int p = 0; p < j; ++p)
+        if (sel[p] == i)
+          used = true;
+      if (used)
+        continue;
+      float v = r[i];
+      if (largest) {
+        if (v > best_v || (v == best_v && i < best_i)) {
+          best_v = v;
+          best_i = i;
+        }
+      } else {
+        if (v < best_v || (v == best_v && i < best_i)) {
+          best_v = v;
+          best_i = i;
+        }
+      }
+    }
+    sel[j] = best_i;
+    sel_v[j] = best_v;
+  }
+
+  if (!sorted_flag) {
+    // already in selection order
+  }
+
+  for (int j = 0; j < k; ++j) {
+    outv[row * k + j] = sel_v[j];
+    outi[row * k + j] = (float)sel[j];
+  }
+}
+
 __global__ void softmax_forward_kernel(const float *in, float *out,
                                        int batch_size, int num_classes) {
   int b = blockIdx.x * blockDim.x + threadIdx.x;
@@ -489,6 +587,68 @@ __global__ void maxpool2d_backward_kernel(const float *__restrict__ grad_out,
   }
 }
 
+
+__device__ inline float grid_src_coord(float g, int size, int align_corners) {
+  if (align_corners) {
+    if (size <= 1)
+      return 0.0f;
+    return ((g + 1.0f) * 0.5f) * (float)(size - 1);
+  }
+  return ((g + 1.0f) * (float)size - 1.0f) * 0.5f;
+}
+
+__device__ inline float sample_zero(const float *in, int B, int C, int H,
+                                    int W, int b, int c, int y, int x) {
+  if (x < 0 || x >= W || y < 0 || y >= H)
+    return 0.0f;
+  size_t off = (((size_t)b * C + c) * H + y) * W + x;
+  return in[off];
+}
+
+__global__ void grid_sample_kernel(const float *in, const float *grid,
+                                   float *out, int B, int C, int iH, int iW,
+                                   int oH, int oW, int mode,
+                                   int align_corners) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t N = (size_t)B * C * oH * oW;
+  if (idx >= N)
+    return;
+
+  int ox = idx % oW;
+  size_t t = idx / oW;
+  int oy = t % oH;
+  t /= oH;
+  int c = t % C;
+  int b = t / C;
+
+  size_t goff = (((size_t)b * oH + oy) * oW + ox) * 2;
+  float gx = grid[goff + 0];
+  float gy = grid[goff + 1];
+  float sx = grid_src_coord(gx, iW, align_corners);
+  float sy = grid_src_coord(gy, iH, align_corners);
+
+  float outv = 0.0f;
+  if (mode == 1) {
+    int nx = (int)nearbyintf(sx);
+    int ny = (int)nearbyintf(sy);
+    outv = sample_zero(in, B, C, iH, iW, b, c, ny, nx);
+  } else {
+    int x0 = (int)floorf(sx);
+    int y0 = (int)floorf(sy);
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+    float wx1 = sx - (float)x0;
+    float wy1 = sy - (float)y0;
+    float wx0 = 1.0f - wx1;
+    float wy0 = 1.0f - wy1;
+    outv = sample_zero(in, B, C, iH, iW, b, c, y0, x0) * wx0 * wy0 +
+           sample_zero(in, B, C, iH, iW, b, c, y0, x1) * wx1 * wy0 +
+           sample_zero(in, B, C, iH, iW, b, c, y1, x0) * wx0 * wy1 +
+           sample_zero(in, B, C, iH, iW, b, c, y1, x1) * wx1 * wy1;
+  }
+  out[idx] = outv;
+}
+
 __global__ void upsample2d_kernel(const float *__restrict__ in,
                                   float *__restrict__ out, int B, int C, int iH,
                                   int iW, int scale) {
@@ -745,6 +905,37 @@ __global__ void sum_to_shape_kernel(const float *in, float *out, int ndim,
   atomicAdd(&out[out_off], in[i]);
 }
 
+
+__global__ void gather_elements_kernel(const float *data, const float *indices,
+                                       float *out, int ndim, const int *shape,
+                                       const int *strides, int axis, size_t N) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N)
+    return;
+
+  int coord[6] = {0, 0, 0, 0, 0, 0};
+  size_t t = i;
+  for (int d = 0; d < ndim; ++d) {
+    coord[d] = (int)(t / (size_t)strides[d]);
+    t %= (size_t)strides[d];
+  }
+
+  int g = (int)llrintf(indices[i]);
+  int dim = shape[axis];
+  if (g < 0)
+    g += dim;
+  if (g < 0 || g >= dim) {
+    out[i] = 0.0f;
+    return;
+  }
+
+  coord[axis] = g;
+  size_t src = 0;
+  for (int d = 0; d < ndim; ++d)
+    src += (size_t)coord[d] * (size_t)strides[d];
+  out[i] = data[src];
+}
+
 void *CUDABackend::allocate(size_t bytes) {
   cudaSetDevice(device_index_);
   cudaEventRecord((cudaEvent_t)start_event_);
@@ -956,6 +1147,33 @@ void CUDABackend::matmul(const Storage &a, const Storage &b, Storage &out,
   }
 }
 
+
+void CUDABackend::batched_matmul(const Storage &a, const Storage &b, Storage &out,
+                                 int B, int M, int K, int N, bool transA,
+                                 bool transB) {
+  cudaSetDevice(device_index_);
+  float alpha = 1.0f;
+  float beta = 0.0f;
+  cublasOperation_t cuTransA = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
+  cublasOperation_t cuTransB = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
+  int lda = transB ? K : N;
+  int ldb = transA ? M : K;
+  int ldc = N;
+  long long strideB = (long long)K * (long long)N;
+  long long strideA = (long long)M * (long long)K;
+  long long strideC = (long long)M * (long long)N;
+
+  cudaEventRecord((cudaEvent_t)start_event_);
+  cublasStatus_t status = cublasSgemmStridedBatched(
+      cublas_handle_, cuTransA, cuTransB, N, M, K, &alpha,
+      (const float *)b.data(), lda, strideB, (const float *)a.data(), ldb,
+      strideA, &beta, (float *)out.data(), ldc, strideC, B);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    throw std::runtime_error("cuBLAS SGEMM strided batched failed");
+  }
+}
+
 void CUDABackend::relu(const Storage &in, Storage &out, size_t num_elements) {
   cudaSetDevice(device_index_);
   int threads = 256;
@@ -976,6 +1194,23 @@ void CUDABackend::relu_backward(const Storage &grad_out, const Storage &input,
   relu_backward_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)input.data(),
       (float *)grad_in.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+
+void CUDABackend::grid_sample(const Storage &in, const Storage &grid,
+                              Storage &out, int B, int C, int iH, int iW,
+                              int oH, int oW, int mode,
+                              bool align_corners) {
+  cudaSetDevice(device_index_);
+  size_t total = (size_t)B * C * oH * oW;
+  int blocks = (total + 255) / 256;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  grid_sample_kernel<<<blocks, 256>>>((const float *)in.data(),
+                                      (const float *)grid.data(),
+                                      (float *)out.data(), B, C, iH, iW, oH,
+                                      oW, mode, align_corners ? 1 : 0);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
@@ -1187,6 +1422,51 @@ void CUDABackend::sigmoid_backward(const Storage &grad_out, const Storage &out,
   CUDA_CHECK(cudaGetLastError());
 }
 
+void CUDABackend::log(const Storage &in, Storage &out, size_t num_elements) {
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  log_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
+                                  num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::sqrt(const Storage &in, Storage &out, size_t num_elements) {
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  sqrt_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                   (float *)out.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::clip(const Storage &in, Storage &out, float min_value,
+                       float max_value, size_t num_elements) {
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  clip_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
+                                   min_value, max_value, num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::erf(const Storage &in, Storage &out, size_t num_elements) {
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  erf_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
+                                  num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
 void CUDABackend::softmax(const Storage &in, Storage &out, int batch_size,
                           int num_classes) {
   cudaSetDevice(device_index_);
@@ -1237,6 +1517,27 @@ void CUDABackend::mse_loss_backward(const Storage &grad_out,
   mse_loss_backward_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)pred.data(),
       (const float *)target.data(), (float *)grad_in.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+
+void CUDABackend::topk(const Storage &in, Storage &out_values,
+                       Storage &out_indices, int outer, int dim_size, int k,
+                       bool largest, bool sorted_flag) {
+  cudaSetDevice(device_index_);
+  if (k <= 0 || k > dim_size)
+    throw std::runtime_error("topk: invalid k");
+  if (k > 64)
+    throw std::runtime_error("topk: k>64 not supported yet on CUDA");
+  int threads = 256;
+  int blocks = (outer + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  topk_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                   (float *)out_values.data(),
+                                   (float *)out_indices.data(), outer,
+                                   dim_size, k, largest ? 1 : 0,
+                                   sorted_flag ? 1 : 0);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
@@ -1313,6 +1614,46 @@ void CUDABackend::concat(const std::vector<Storage *> &inputs, Storage &out,
 
   // Check for errors after kernel execution
   CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::gather_elements(const Storage &data, const Storage &indices,
+                                  Storage &out, const Shape &shape, int axis) {
+  cudaSetDevice(device_index_);
+  int ndim = (int)shape.size();
+  if (ndim <= 0 || ndim > 6)
+    throw std::runtime_error("gather_elements: ndim must be in [1,6]");
+  int ax = axis < 0 ? axis + ndim : axis;
+  if (ax < 0 || ax >= ndim)
+    throw std::runtime_error("gather_elements: axis out of range");
+
+  int h_shape[6] = {1, 1, 1, 1, 1, 1};
+  int h_strides[6] = {0, 0, 0, 0, 0, 0};
+  Strides st = default_strides(shape);
+  for (int i = 0; i < ndim; ++i) {
+    h_shape[i] = shape[i];
+    h_strides[i] = st[i];
+  }
+
+  int *d_shape = nullptr;
+  int *d_strides = nullptr;
+  CUDA_CHECK(cudaMalloc(&d_shape, 6 * sizeof(int)));
+  CUDA_CHECK(cudaMalloc(&d_strides, 6 * sizeof(int)));
+  CUDA_CHECK(cudaMemcpy(d_shape, h_shape, 6 * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_strides, h_strides, 6 * sizeof(int), cudaMemcpyHostToDevice));
+
+  size_t N = numel(shape);
+  int threads = 256;
+  int blocks = (N + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  gather_elements_kernel<<<blocks, threads>>>((const float *)data.data(),
+                                              (const float *)indices.data(),
+                                              (float *)out.data(), ndim,
+                                              d_shape, d_strides, ax, N);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+
+  cudaFree(d_shape);
+  cudaFree(d_strides);
 }
 
 void CUDABackend::concat_backward(const Storage &grad_out,

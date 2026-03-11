@@ -22,6 +22,7 @@ nav:
       - C++ API: documentation/api/cpp.md
   - Guides:
       - Inference Engine: documentation/guides/inference_engine.md
+      - Tensor Workflow: documentation/guides/tensor_workflow.md
       - Serialization & Model Loading: documentation/guides/serialization.md
       - Common Design Patterns: documentation/guides/design_patterns.md
   - Tutorials:

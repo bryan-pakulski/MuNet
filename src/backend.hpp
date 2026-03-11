@@ -38,6 +38,9 @@ public:
 
   virtual void matmul(const Storage &a, const Storage &b, Storage &out, int M,
                       int K, int N, bool transA, bool transB) = 0;
+  virtual void batched_matmul(const Storage &a, const Storage &b, Storage &out,
+                              int B, int M, int K, int N, bool transA,
+                              bool transB) = 0;
 
   virtual void relu(const Storage &in, Storage &out, size_t num_elements) = 0;
   virtual void relu_backward(const Storage &grad_out, const Storage &input,
@@ -48,14 +51,29 @@ public:
   virtual void sigmoid_backward(const Storage &grad_out, const Storage &out,
                                 Storage &grad_in, size_t num_elements) = 0;
 
+  virtual void log(const Storage &in, Storage &out, size_t num_elements) = 0;
+  virtual void sqrt(const Storage &in, Storage &out, size_t num_elements) = 0;
+  virtual void clip(const Storage &in, Storage &out, float min_value,
+                    float max_value, size_t num_elements) = 0;
+  virtual void erf(const Storage &in, Storage &out, size_t num_elements) = 0;
+
   virtual void softmax(const Storage &in, Storage &out, int batch_size,
                        int num_classes) = 0;
   virtual void softmax_backward(const Storage &grad_out, const Storage &out,
                                 Storage &grad_in, int batch_size,
                                 int num_classes) = 0;
 
+  virtual void topk(const Storage &in, Storage &out_values,
+                    Storage &out_indices, int outer, int dim_size, int k,
+                    bool largest, bool sorted) = 0;
+
   virtual void concat(const std::vector<Storage *> &inputs, Storage &out,
                       int dim, const std::vector<Shape> &shapes) = 0;
+
+  virtual void gather_elements(const Storage &data, const Storage &indices,
+                               Storage &out, const Shape &shape,
+                               int axis) = 0;
+
   virtual void concat_backward(const Storage &grad_out,
                                std::vector<Storage *> &grad_inputs, int dim,
                                const std::vector<Shape> &shapes) = 0;
@@ -95,6 +113,10 @@ public:
                           int iW, int scale) = 0;
   virtual void upsample2d_backward(const Storage &grad_out, Storage &grad_in,
                                    int B, int C, int iH, int iW, int scale) = 0;
+
+  virtual void grid_sample(const Storage &in, const Storage &grid, Storage &out,
+                           int B, int C, int iH, int iW, int oH, int oW,
+                           int mode, bool align_corners) = 0;
 
   // --- Normalization ---
   virtual void batch_norm(const Storage &in, const Storage &scale,

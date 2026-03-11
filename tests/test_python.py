@@ -1,4 +1,5 @@
 import sys
+import math
 import os
 import unittest
 import numpy as np
@@ -698,6 +699,57 @@ class TestBindings(unittest.TestCase):
             expected = np.maximum(x.numpy() @ W + B, 0.0)
             self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
 
+    def test_compile_onnx_export_npz(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX export NPZ test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            onnx_path = os.path.join(d, "linear_relu.onnx")
+            npz_path = os.path.join(d, "linear_relu_export.npz")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
+
+            W = np.array([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=np.float32)
+            B = np.array([0.5, -1.0], dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
+            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
+
+            gemm = helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0)
+            relu = helper.make_node("Relu", ["z"], ["y"])
+            graph = helper.make_graph([gemm, relu], "linear_relu_graph", [x_info], [y_info], [w_init, b_init])
+            model = helper.make_model(graph, producer_name="munet_export_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, onnx_path)
+
+            module = munet.inference.compile_onnx(onnx_path, output_path=npz_path)
+            self.assertTrue(os.path.exists(npz_path))
+
+            state = np.load(npz_path, allow_pickle=True)
+            self.assertIn("__format__", state.files)
+            self.assertIn("__input_names__", state.files)
+            self.assertIn("__output_names__", state.files)
+            self.assertIn("tensor/W", state.files)
+            self.assertIn("tensor/B", state.files)
+            self.assertEqual(str(state["__format__"][0]), "munet.onnx_graph_module.npz.v1")
+            self.assertTrue(np.allclose(state["tensor/W"], W))
+            self.assertTrue(np.allclose(state["tensor/B"], B))
+
+            out_path2 = os.path.join(d, "linear_relu_export2.npz")
+            out_ret = munet.inference.export_onnx_npz(onnx_path, out_path2)
+            self.assertEqual(out_ret, out_path2)
+            self.assertTrue(os.path.exists(out_path2))
+
+            x = munet.from_numpy(np.array([[1.0, 2.0, 3.0]], dtype=np.float32))
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.maximum(x.numpy() @ W + B, 0.0)
+            self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
+
     def test_compile_onnx_report_unsupported_ops(self):
         try:
             import onnx
@@ -710,14 +762,14 @@ class TestBindings(unittest.TestCase):
             onnx_path = os.path.join(d, "unsupported.onnx")
             x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
             y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
-            node = helper.make_node("Erf", ["x"], ["y"])
+            node = helper.make_node("Sin", ["x"], ["y"])
             graph = helper.make_graph([node], "unsupported_graph", [x_info], [y_info])
             model = helper.make_model(graph, producer_name="munet_compile_report_test", opset_imports=[helper.make_opsetid("", 11)])
             model.ir_version = 7
             onnx.save(model, onnx_path)
 
             missing = munet.inference.report_onnx_unsupported_ops(onnx_path)
-            self.assertIn("Erf", missing)
+            self.assertIn("Sin", missing)
 
             with self.assertRaises(ValueError) as ctx:
                 munet.inference.compile_onnx(onnx_path)
@@ -725,7 +777,7 @@ class TestBindings(unittest.TestCase):
             msg = str(ctx.exception)
             self.assertIn("unsupported_unique", msg)
             self.assertIn("unsupported_total", msg)
-            self.assertIn("Erf", msg)
+            self.assertIn("Sin", msg)
 
     def test_onnx_native_conversion_map_api(self):
         mp = munet.inference.onnx_native_conversion_map()
@@ -863,6 +915,386 @@ class TestBindings(unittest.TestCase):
             expected = np.array([[[2.0, 4.0], [2.0, 4.0]], [[2.0, 4.0], [2.0, 4.0]]], dtype=np.float32)
             self.assertTrue(np.allclose(out, expected, atol=1e-6))
 
+    def test_compile_onnx_expand_preserves_non_singleton_dims(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX expand compatibility test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "expand_compat.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 300, 1])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 300, 1])
+
+            # Some exporter graphs provide singleton target dims where source dims are
+            # already concrete/non-singleton. Runtime should remain robust and preserve
+            # source shape instead of crashing.
+            target = helper.make_tensor("target", TensorProto.INT64, [3], [1, 1, 1])
+            expand = helper.make_node("Expand", ["x", "target"], ["y"])
+
+            graph = helper.make_graph([expand], "expand_compat_graph", [x_info], [y_info], [target])
+            model = helper.make_model(graph, producer_name="munet_expand_compat_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(300, dtype=np.float32).reshape(1, 300, 1)
+            out = np.array(module.forward(munet.from_numpy(x_np)).detach(), copy=False)
+            self.assertEqual(list(out.shape), [1, 300, 1])
+            self.assertTrue(np.allclose(out, x_np, atol=1e-6))
+
+    def test_tensor_topk_basic(self):
+        x_np = np.array([[1.0, 3.0, 2.0], [4.0, 0.0, 5.0]], dtype=np.float32)
+        x = munet.from_numpy(x_np)
+        vals, idx = x.topk(2, dim=1, largest=True, sorted=True)
+        vals_np = np.array(vals.detach(), copy=False)
+        idx_np = np.array(idx.detach(), copy=False)
+        self.assertTrue(np.allclose(vals_np, np.array([[3.0, 2.0], [5.0, 4.0]], dtype=np.float32), atol=1e-6))
+        self.assertTrue(np.allclose(idx_np, np.array([[1.0, 2.0], [2.0, 0.0]], dtype=np.float32), atol=1e-6))
+
+    def test_tensor_matmul_left_batched(self):
+        a_np = np.arange(1, 25, dtype=np.float32).reshape(2, 3, 4)
+        b_np = np.array(
+            [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
+            dtype=np.float32,
+        )
+        a = munet.from_numpy(a_np)
+        b = munet.from_numpy(b_np)
+        out = a @ b
+        y = np.array(out.detach(), copy=False)
+        expected = np.matmul(a_np, b_np)
+        self.assertEqual(list(y.shape), [2, 3, 2])
+        self.assertTrue(np.allclose(y, expected, atol=1e-6))
+
+    def test_tensor_matmul_rhs_full_batched(self):
+        a_np = np.arange(1, 25, dtype=np.float32).reshape(2, 3, 4)
+        b_np = np.array(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
+                [[2.0, 1.0], [4.0, 3.0], [6.0, 5.0], [8.0, 7.0]],
+            ],
+            dtype=np.float32,
+        )
+        a = munet.from_numpy(a_np)
+        b = munet.from_numpy(b_np)
+        y = np.array((a @ b).detach(), copy=False)
+        expected = np.matmul(a_np, b_np)
+        self.assertEqual(list(y.shape), [2, 3, 2])
+        self.assertTrue(np.allclose(y, expected, atol=1e-6))
+
+
+    def test_tensor_matmul_broadcasted_lhs_batch_one(self):
+        a_np = np.arange(1, 13, dtype=np.float32).reshape(1, 3, 4)
+        b_np = np.array(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
+                [[2.0, 1.0], [4.0, 3.0], [6.0, 5.0], [8.0, 7.0]],
+            ],
+            dtype=np.float32,
+        )
+        a = munet.from_numpy(a_np)
+        b = munet.from_numpy(b_np)
+        y = np.array((a @ b).detach(), copy=False)
+        expected = np.matmul(a_np, b_np)
+        self.assertEqual(list(y.shape), [2, 3, 2])
+        self.assertTrue(np.allclose(y, expected, atol=1e-6))
+
+    def test_tensor_matmul_rhs_singleton_leading_dims(self):
+        a_np = np.arange(1, 13, dtype=np.float32).reshape(1, 3, 4)
+        b_np = np.array(
+            [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]]],
+            dtype=np.float32,
+        )
+        a = munet.from_numpy(a_np)
+        b = munet.from_numpy(b_np)
+        y = np.array((a @ b).detach(), copy=False)
+        expected = np.matmul(a_np, b_np.reshape(4, 2))
+        self.assertEqual(list(y.shape), [1, 3, 2])
+        self.assertTrue(np.allclose(y, expected, atol=1e-6))
+
+    def test_compile_onnx_gridsample_nearest(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX GridSample test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "gridsample.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 2])
+            g_np = np.array([[[[-1.0, -1.0], [1.0, -1.0]], [[-1.0, 1.0], [1.0, 1.0]]]], dtype=np.float32)
+            g_init = helper.make_tensor("g", TensorProto.FLOAT, g_np.shape, g_np.flatten().tolist())
+            node = helper.make_node("GridSample", ["x", "g"], ["y"], mode="nearest", padding_mode="zeros", align_corners=1)
+            graph = helper.make_graph([node], "gridsample_graph", [x_info], [y_info], [g_init])
+            model = helper.make_model(graph, producer_name="munet_gridsample_test", opset_imports=[helper.make_opsetid("", 16)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[[[1.0, 2.0], [3.0, 4.0]]]], dtype=np.float32)
+            out = module.forward(munet.from_numpy(x_np))
+            y = np.array(out.detach(), copy=False)
+            self.assertTrue(np.allclose(y, x_np, atol=1e-6))
+
+    def test_compile_onnx_topk(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX TopK test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "topk.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 4])
+            v_info = helper.make_tensor_value_info("v", TensorProto.FLOAT, [2, 2])
+            i_info = helper.make_tensor_value_info("i", TensorProto.INT64, [2, 2])
+            k_init = helper.make_tensor("k", TensorProto.INT64, [1], [2])
+            topk = helper.make_node("TopK", ["x", "k"], ["v", "i"], axis=1, largest=1, sorted=1)
+            graph = helper.make_graph([topk], "topk_graph", [x_info], [v_info, i_info], [k_init])
+            model = helper.make_model(graph, producer_name="munet_topk_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[1.0, 4.0, 3.0, 2.0], [8.0, 5.0, 6.0, 7.0]], dtype=np.float32)
+            x = munet.from_numpy(x_np)
+            out = module.forward(x)
+            vals = np.array(out[0].detach(), copy=False)
+            idx = np.array(out[1].detach(), copy=False)
+            self.assertTrue(np.allclose(vals, np.array([[4.0, 3.0], [8.0, 7.0]], dtype=np.float32), atol=1e-6))
+            self.assertTrue(np.allclose(idx, np.array([[1.0, 2.0], [0.0, 3.0]], dtype=np.float32), atol=1e-6))
+
+    def test_compile_onnx_gather_elements(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX gather_elements test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "gather_elements.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 3])
+            idx = helper.make_tensor("idx", TensorProto.INT64, [2, 3], [0, 2, 1, -1, 1, 0])
+            node = helper.make_node("GatherElements", ["x", "idx"], ["y"], axis=1)
+            graph = helper.make_graph([node], "gather_elements_graph", [x_info], [y_info], [idx])
+            model = helper.make_model(graph, producer_name="munet_gather_elements_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]], dtype=np.float32)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.array([[10.0, 30.0, 20.0], [60.0, 50.0, 40.0]], dtype=np.float32)
+            self.assertTrue(np.allclose(out, expected, atol=1e-6))
+
+    def test_compile_onnx_pad_constant(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX pad test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pad_constant.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 4, 6])
+
+            pads = helper.make_tensor("pads", TensorProto.INT64, [8], [0, 0, 1, 2, 0, 0, 1, 2])
+            val = helper.make_tensor("val", TensorProto.FLOAT, [1], [3.0])
+            pad = helper.make_node("Pad", ["x", "pads", "val"], ["y"], mode="constant")
+            graph = helper.make_graph([pad], "pad_graph", [x_info], [y_info], [pads, val])
+            model = helper.make_model(graph, producer_name="munet_pad_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[[[1.0, 2.0], [3.0, 4.0]]]], dtype=np.float32)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.pad(x_np, ((0,0),(0,0),(1,1),(2,2)), mode="constant", constant_values=3.0)
+            self.assertTrue(np.allclose(out, expected, atol=1e-6))
+
+    def test_compile_onnx_erf(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX erf test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "erf.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 2])
+            n = helper.make_node("Erf", ["x"], ["y"])
+            graph = helper.make_graph([n], "erf_graph", [x_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_erf_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[-1.0, -0.5], [0.5, 1.0]], dtype=np.float32)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.vectorize(math.erf)(x_np).astype(np.float32)
+            self.assertTrue(np.allclose(out, expected, atol=2e-3))
+
+    def test_compile_onnx_log_sqrt_clip(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX log/sqrt/clip test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "log_sqrt_clip.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 2])
+
+            clip_min = helper.make_tensor("clip_min", TensorProto.FLOAT, [1], [1.5])
+            clip_max = helper.make_tensor("clip_max", TensorProto.FLOAT, [1], [2.0])
+            n1 = helper.make_node("Log", ["x"], ["l"])
+            n2 = helper.make_node("Sqrt", ["l"], ["s"])
+            n3 = helper.make_node("Clip", ["s", "clip_min", "clip_max"], ["y"])
+
+            graph = helper.make_graph([n1, n2, n3], "log_sqrt_clip_graph", [x_info], [y_info], [clip_min, clip_max])
+            model = helper.make_model(graph, producer_name="munet_unary_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[math.e, math.e**4], [math.e**9, math.e**16]], dtype=np.float32)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.clip(np.sqrt(np.log(x_np)), 1.5, 2.0)
+            self.assertTrue(np.allclose(out, expected, atol=1e-5))
+
+    def test_compile_onnx_flatten_matmul(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Flatten/MatMul test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "flatten_matmul.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])
+
+            W = np.arange(24, dtype=np.float32).reshape(6, 4)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
+            flat = helper.make_node("Flatten", ["x"], ["xf"], axis=1)
+            mm = helper.make_node("MatMul", ["xf", "W"], ["y"])
+            graph = helper.make_graph([flat, mm], "flatten_matmul_graph", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_flatten_matmul_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(6, dtype=np.float32).reshape(1, 2, 3)
+            out = np.array(module.forward(munet.from_numpy(x_np)).detach(), copy=False)
+            expected = x_np.reshape(1, 6) @ W
+            self.assertTrue(np.allclose(out, expected, atol=1e-6))
+
+    def test_compile_onnx_reduce_max_partial_axes(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX ReduceMax test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "reduce_max_partial.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 4])
+            axes = helper.make_tensor("axes", TensorProto.INT64, [1], [1])
+            rmax = helper.make_node("ReduceMax", ["x", "axes"], ["y"], keepdims=0)
+            graph = helper.make_graph([rmax], "reduce_max_graph", [x_info], [y_info], [axes])
+            model = helper.make_model(graph, producer_name="munet_reduce_max_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.max(x_np, axis=1)
+            self.assertTrue(np.allclose(out, expected, atol=1e-6))
+
+    def test_compile_onnx_reduce_sum_mean_partial_axes(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX partial reduce test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "reduce_partial.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 4])
+
+            axes = helper.make_tensor("axes", TensorProto.INT64, [1], [1])
+            rsum = helper.make_node("ReduceSum", ["x", "axes"], ["s"], keepdims=0)
+            rmean = helper.make_node("ReduceMean", ["s"], ["y"], axes=[0], keepdims=0)
+
+            graph = helper.make_graph([rsum, rmean], "reduce_partial_graph", [x_info], [y_info], [axes])
+            model = helper.make_model(graph, producer_name="munet_reduce_partial_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+            x = munet.from_numpy(x_np)
+            out = np.array(module.forward(x).detach(), copy=False)
+            expected = np.mean(np.sum(x_np, axis=1), axis=0)
+            self.assertTrue(np.allclose(out, expected, atol=1e-6))
+
+    def test_compile_onnx_reduce_sum_mean_full_tensor(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX reduce-sum/mean test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "reduce_sum_mean.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1])
+
+            axes = helper.make_tensor("axes", TensorProto.INT64, [2], [0, 1])
+            rsum = helper.make_node("ReduceSum", ["x", "axes"], ["s"], keepdims=1)
+            rmean = helper.make_node("ReduceMean", ["s"], ["y"], keepdims=1)
+
+            graph = helper.make_graph(
+                [rsum, rmean],
+                "reduce_sum_mean_graph",
+                [x_info],
+                [y_info],
+                [axes],
+            )
+            model = helper.make_model(graph, producer_name="munet_reduce_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x = munet.from_numpy(np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32))
+            out = np.array(module.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(out, np.array([[21.0]], dtype=np.float32), atol=1e-6))
+
     def test_compile_onnx_strict_failure_reports_counts(self):
         try:
             import onnx
@@ -876,8 +1308,8 @@ class TestBindings(unittest.TestCase):
             x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
             y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
             soft = helper.make_node("Softmax", ["x"], ["z1"])
-            erf = helper.make_node("Erf", ["z1"], ["y"])
-            graph = helper.make_graph([soft, erf], "strict_fail_graph", [x_info], [y_info])
+            sin = helper.make_node("Sin", ["z1"], ["y"])
+            graph = helper.make_graph([soft, sin], "strict_fail_graph", [x_info], [y_info])
             model = helper.make_model(graph, producer_name="munet_strict_fail_test", opset_imports=[helper.make_opsetid("", 11)])
             model.ir_version = 7
             onnx.save(model, path)
@@ -886,9 +1318,9 @@ class TestBindings(unittest.TestCase):
                 munet.inference.compile_onnx(path)
 
             msg = str(ctx.exception)
-            self.assertIn("unsupported_total=2", msg)
-            self.assertIn("Erf", msg)
-            self.assertIn("Softmax", msg)
+            self.assertIn("unsupported_total=1", msg)
+            self.assertIn("Sin", msg)
+            self.assertNotIn("Softmax", msg)
 
     def test_onnx_conversion_coverage_report_generated_graph(self):
         try:
@@ -998,6 +1430,738 @@ class TestBindings(unittest.TestCase):
             y = module.forward(x)
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
+
+    def test_compile_onnx_graph_module_to_device(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX graph-module to(device) test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "to_device_identity.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 2])
+            idn = helper.make_node("Identity", ["x"], ["y"])
+            graph = helper.make_graph([idn], "to_device_identity", [x_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_to_device_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            self.assertEqual(module.device.type, munet.DeviceType.CPU)
+            module = module.to(munet.Device(munet.DeviceType.CPU, 0))
+            self.assertEqual(module.device.type, munet.DeviceType.CPU)
+
+            x_np = np.arange(4, dtype=np.float32).reshape(1, 1, 2, 2)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            np.testing.assert_allclose(y_np, x_np, atol=1e-6)
+
+    def test_compile_onnx_conv_depthwise_grouped(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX grouped conv test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_grouped.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4, 3, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4, 3, 3])
+
+            w_np = np.array([[[[1.0]]], [[[2.0]]], [[[3.0]]], [[[4.0]]]], dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], group=4, pads=[0, 0, 0, 0], strides=[1, 1])
+
+            graph = helper.make_graph([conv], "conv_grouped", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_grouped_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(36, dtype=np.float32).reshape(1, 4, 3, 3)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+
+            scales = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32).reshape(1, 4, 1, 1)
+            expected = x_np * scales
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+
+
+
+
+
+    def test_compile_onnx_constant_nonfinite_sanitized(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX constant non-finite sanitize test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "const_nonfinite.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2])
+
+            c_np = np.array([np.nan, np.inf], dtype=np.float32)
+            c_init = helper.make_tensor("c", TensorProto.FLOAT, [1, 2], c_np.tolist())
+            add = helper.make_node("Add", ["x", "c"], ["y"])
+            graph = helper.make_graph([add], "const_nonfinite", [x_info], [y_info], [c_init])
+            model = helper.make_model(graph, producer_name="munet_const_nonfinite_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[1.0, 2.0]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            self.assertTrue(np.all(np.isfinite(y_np)))
+
+    def test_compile_onnx_add_tensor_input_nonfinite_sanitized(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX tensor-input non-finite sanitize test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "add_input_nonfinite.onnx")
+
+            a_info = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 2])
+            b_info = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2])
+
+            add = helper.make_node("Add", ["a", "b"], ["y"])
+            graph = helper.make_graph([add], "add_input_nonfinite", [a_info, b_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_add_input_nonfinite_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            a_np = np.array([[np.nan, 2.0]], dtype=np.float32)
+            b_np = np.array([[3.0, 4.0]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(a_np), munet.from_numpy(b_np))
+            y_np = np.array(y.detach(), copy=False)
+            self.assertTrue(np.all(np.isfinite(y_np)))
+
+    def test_compile_onnx_div_zero_denominator_clamps_finite(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Div finite-clamp test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "div_clamp.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 3])
+
+            den_np = np.array([0.0, 1.0, -0.0], dtype=np.float32)
+            den_init = helper.make_tensor("den", TensorProto.FLOAT, [1, 3], den_np.tolist())
+            div_node = helper.make_node("Div", ["x", "den"], ["y"])
+
+            graph = helper.make_graph([div_node], "div_clamp", [x_info], [y_info], [den_init])
+            model = helper.make_model(graph, producer_name="munet_div_clamp_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[2.0, 3.0, -4.0]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            self.assertTrue(np.all(np.isfinite(y_np)))
+            # non-zero denominator path preserved
+            self.assertAlmostEqual(float(y_np[0, 1]), 3.0, places=6)
+
+    def test_compile_onnx_sqrt_negative_input_clamps_finite(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Sqrt finite-clamp test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "sqrt_clamp.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 3])
+
+            sqrt_node = helper.make_node("Sqrt", ["x"], ["y"])
+            graph = helper.make_graph([sqrt_node], "sqrt_clamp", [x_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_sqrt_clamp_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[-4.0, 0.0, 9.0]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.array([[0.0, 0.0, 3.0]], dtype=np.float32)
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_pow_overflow_clamps_finite(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Pow finite-clamp test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pow_clamp.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2])
+
+            exp_np = np.array([2.0], dtype=np.float32)
+            exp_init = helper.make_tensor("exp", TensorProto.FLOAT, [1], exp_np.tolist())
+            pow_node = helper.make_node("Pow", ["x", "exp"], ["y"])
+
+            graph = helper.make_graph([pow_node], "pow_clamp", [x_info], [y_info], [exp_init])
+            model = helper.make_model(graph, producer_name="munet_pow_clamp_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[1e20, -1e20]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            self.assertTrue(np.all(np.isfinite(y_np)))
+            self.assertTrue(np.all(y_np >= 0.0))
+
+
+
+    def test_compile_onnx_add_sequence_mismatch_broadcast_autocrop(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Add sequence mismatch broadcast test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "add_sequence_mismatch.onnx")
+
+            a_info = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 10, 1])
+            b_info = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 6, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 6, 4])
+
+            add = helper.make_node("Add", ["a", "b"], ["y"])
+            graph = helper.make_graph([add], "add_sequence_mismatch", [a_info, b_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_add_sequence_mismatch_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            a_np = np.arange(10, dtype=np.float32).reshape(1, 10, 1)
+            b_np = (1.0 + np.arange(24, dtype=np.float32)).reshape(1, 6, 4)
+            y = module.forward(munet.from_numpy(a_np), munet.from_numpy(b_np))
+            y_np = np.array(y.detach(), copy=False)
+            expected = a_np[:, :6, :] + b_np
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_mul_sequence_mismatch_broadcast_autocrop(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Mul sequence mismatch broadcast test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "mul_sequence_mismatch.onnx")
+
+            a_info = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 10, 1])
+            b_info = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 6, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 6, 4])
+
+            mul = helper.make_node("Mul", ["a", "b"], ["y"])
+            graph = helper.make_graph([mul], "mul_sequence_mismatch", [a_info, b_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_mul_sequence_mismatch_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            a_np = np.arange(10, dtype=np.float32).reshape(1, 10, 1)
+            b_np = (1.0 + np.arange(24, dtype=np.float32)).reshape(1, 6, 4)
+            y = module.forward(munet.from_numpy(a_np), munet.from_numpy(b_np))
+            y_np = np.array(y.detach(), copy=False)
+            expected = a_np[:, :6, :] * b_np
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_mul_channel_with_spatial_mismatch_autocrop(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Mul spatial mismatch autocrop test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "mul_spatial_mismatch.onnx")
+
+            a_info = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 2, 5, 5])
+            b_info = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 2, 4, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2, 4, 3])
+
+            mul = helper.make_node("Mul", ["a", "b"], ["y"])
+            graph = helper.make_graph([mul], "mul_spatial_mismatch", [a_info, b_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_mul_spatial_mismatch_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            a_np = np.arange(1 * 2 * 5 * 5, dtype=np.float32).reshape(1, 2, 5, 5)
+            b_np = (np.arange(1 * 2 * 4 * 3, dtype=np.float32).reshape(1, 2, 4, 3) + 1.0)
+            y = module.forward(munet.from_numpy(a_np), munet.from_numpy(b_np))
+            y_np = np.array(y.detach(), copy=False)
+            expected = a_np[:, :, :4, :3] * b_np
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_concat_channel_with_spatial_mismatch_autocrop(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX concat autocrop test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "concat_autocrop.onnx")
+            a_info = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 2, 5, 5])
+            b_info = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 3, 4, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 5, 4, 4])
+            cat = helper.make_node("Concat", ["a", "b"], ["y"], axis=1)
+            graph = helper.make_graph([cat], "concat_autocrop", [a_info, b_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_concat_autocrop_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            a_np = np.arange(50, dtype=np.float32).reshape(1, 2, 5, 5)
+            b_np = (100 + np.arange(48, dtype=np.float32)).reshape(1, 3, 4, 4)
+            y = module.forward({"a": munet.from_numpy(a_np), "b": munet.from_numpy(b_np)})
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.concatenate([a_np[:, :, :4, :4], b_np], axis=1)
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_conv_without_bias(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX conv-without-bias test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_no_bias.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 3, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 3, 3])
+
+            w_np = np.ones((1, 1, 1, 1), dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], pads=[0, 0, 0, 0], strides=[1, 1])
+
+            graph = helper.make_graph([conv], "conv_no_bias", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_no_bias_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(9, dtype=np.float32).reshape(1, 1, 3, 3)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            np.testing.assert_allclose(y_np, x_np, atol=1e-6)
+
+    def test_compile_onnx_conv_accepts_nhwc_input(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX NHWC input auto-transpose test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_nhwc_input.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 2])
+
+            # 1 output channel, 3 input channels, 1x1 kernel
+            w_np = np.array([[[[1.0]], [[2.0]], [[3.0]]]], dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], pads=[0, 0, 0, 0], strides=[1, 1])
+
+            graph = helper.make_graph([conv], "conv_nhwc_input", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_nhwc_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+
+            # Intentionally pass NHWC data [N,H,W,C]. Runtime should auto-transpose.
+            x_nhwc = np.array(
+                [[[[1.0, 10.0, 100.0], [2.0, 20.0, 200.0]],
+                  [[3.0, 30.0, 300.0], [4.0, 40.0, 400.0]]]],
+                dtype=np.float32,
+            )
+            x = munet.from_numpy(x_nhwc)
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+
+            x_nchw = np.transpose(x_nhwc, (0, 3, 1, 2))
+            expected = (
+                x_nchw[:, 0:1, :, :] * 1.0
+                + x_nchw[:, 1:2, :, :] * 2.0
+                + x_nchw[:, 2:3, :, :] * 3.0
+            )
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+
+    def test_compile_onnx_resize_with_sizes_input(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Resize sizes-input test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "resize_sizes.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 3, 5])
+
+            empty_roi = helper.make_tensor("roi", TensorProto.FLOAT, [0], [])
+            sizes_np = np.array([1, 1, 3, 5], dtype=np.int64)
+            sizes_init = helper.make_tensor("sizes", TensorProto.INT64, sizes_np.shape, sizes_np.tolist())
+            resize = helper.make_node("Resize", ["x", "roi", "", "sizes"], ["y"], mode="nearest")
+
+            graph = helper.make_graph([resize], "resize_sizes", [x_info], [y_info], [empty_roi, sizes_init])
+            model = helper.make_model(graph, producer_name="munet_resize_sizes_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.array([[[[1.0, 2.0], [3.0, 4.0]]]], dtype=np.float32)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+
+            expected = np.array(
+                [[[[1.0, 1.0, 1.0, 2.0, 2.0],
+                   [1.0, 1.0, 1.0, 2.0, 2.0],
+                   [3.0, 3.0, 3.0, 4.0, 4.0]]]],
+                dtype=np.float32,
+            )
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_conv_crops_extra_input_channels(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX Conv extra-channel crop test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_extra_channels.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 24, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 2])
+
+            w_np = np.ones((1, 24, 1, 1), dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], pads=[0, 0, 0, 0], strides=[1, 1])
+
+            graph = helper.make_graph([conv], "conv_extra_channels", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_extra_channels_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+
+            # Pass 25 channels while weights expect 24; runtime should crop to 24.
+            x_np = np.arange(1 * 25 * 2 * 2, dtype=np.float32).reshape(1, 25, 2, 2)
+            x = munet.from_numpy(x_np)
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            expected = x_np[:, :24, :, :].sum(axis=1, keepdims=True)
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+
+    def test_compile_onnx_conv_grouped_keeps_expected_channels(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX grouped Conv channel-alignment test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_grouped_channels.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4, 2, 2])
+
+            # Depthwise grouped conv: groups=4, each output channel reads one input channel.
+            w_np = np.ones((4, 1, 1, 1), dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], pads=[0, 0, 0, 0], strides=[1, 1], group=4)
+
+            graph = helper.make_graph([conv], "conv_grouped_channels", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_grouped_channels_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+
+            x_np = np.arange(1 * 4 * 2 * 2, dtype=np.float32).reshape(1, 4, 2, 2)
+            x = munet.from_numpy(x_np)
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            np.testing.assert_allclose(y_np, x_np, atol=1e-6)
+
+    def test_compile_onnx_pad_with_tensor_cast_pads_stable(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX pad tensor-cast stability test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pad_tensor_cast_stable.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 3])
+
+            shape8 = helper.make_tensor("shape8", TensorProto.INT64, [1], [8])
+            off = helper.make_tensor("off", TensorProto.FLOAT, [8], [0, 0, 0, 0, 0, 0, 0, 1])
+
+            cos = helper.make_node("ConstantOfShape", ["shape8"], ["zeros8"])
+            add = helper.make_node("Add", ["zeros8", "off"], ["pads_f"])
+            cast = helper.make_node("Cast", ["pads_f"], ["pads_i64"], to=TensorProto.INT64)
+            pad = helper.make_node("Pad", ["x", "pads_i64"], ["y"], mode="constant")
+
+            graph = helper.make_graph([cos, add, cast, pad], "pad_tensor_cast_stable", [x_info], [y_info], [shape8, off])
+            model = helper.make_model(graph, producer_name="munet_pad_tensor_cast_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(4, dtype=np.float32).reshape(1, 1, 2, 2)
+            x = munet.from_numpy(x_np)
+            expected = np.pad(x_np, ((0, 0), (0, 0), (0, 0), (0, 1)), mode="constant")
+
+            for _ in range(3):
+                y = module.forward(x)
+                y_np = np.array(y.detach(), copy=False)
+                np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_pad_with_concat_int64_pads(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX pad int64-concat pads test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pad_concat_int64.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 4])
+
+            z0 = helper.make_tensor("z0", TensorProto.INT64, [1], [0])
+            z2 = helper.make_tensor("z2", TensorProto.INT64, [1], [2])
+            pads = helper.make_node("Concat", ["z0", "z0", "z0", "z0", "z0", "z0", "z0", "z2"], ["pads"], axis=0)
+            pad = helper.make_node("Pad", ["x", "pads"], ["y"], mode="constant")
+
+            graph = helper.make_graph([pads, pad], "pad_concat_int64", [x_info], [y_info], [z0, z2])
+            model = helper.make_model(graph, producer_name="munet_pad_concat_int64_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(4, dtype=np.float32).reshape(1, 1, 2, 2)
+            y = module.forward(munet.from_numpy(x_np))
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.pad(x_np, ((0, 0), (0, 0), (0, 0), (0, 2)), mode="constant")
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_pad_negative_cropping(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX negative-pad cropping test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pad_negative_crop.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 4, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 2, 2])
+            pads_init = helper.make_tensor(
+                "pads", TensorProto.INT64, [8], [0, 0, -1, -1, 0, 0, -1, -1]
+            )
+            pad = helper.make_node("Pad", ["x", "pads"], ["y"], mode="constant")
+
+            graph = helper.make_graph([pad], "pad_negative_crop", [x_info], [y_info], [pads_init])
+            model = helper.make_model(graph, producer_name="munet_pad_crop_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4)
+            x = munet.from_numpy(x_np)
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            expected = x_np[:, :, 1:3, 1:3]
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_conv_asymmetric_padding(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX conv asymmetric padding test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "conv_asym_pad.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 4, 4])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 4, 7])
+
+            w_np = np.ones((1, 1, 1, 1), dtype=np.float32)
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, w_np.shape, w_np.flatten().tolist())
+            conv = helper.make_node("Conv", ["x", "W"], ["y"], pads=[0, 1, 0, 2], strides=[1, 1])
+
+            graph = helper.make_graph([conv], "conv_asym_pad", [x_info], [y_info], [w_init])
+            model = helper.make_model(graph, producer_name="munet_conv_asym_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x_np = np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4)
+            x = munet.from_numpy(x_np)
+
+            y = module.forward(x)
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.pad(x_np, ((0, 0), (0, 0), (0, 0), (1, 2)), mode="constant")
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_concat_negative_axis(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX concat negative-axis test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "concat_negative_axis.onnx")
+
+            a_info = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 2, 3])
+            b_info = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 2, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2, 6])
+            cat = helper.make_node("Concat", ["a", "b"], ["y"], axis=-1)
+
+            graph = helper.make_graph([cat], "concat_negative_axis", [a_info, b_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_concat_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            a_np = np.arange(6, dtype=np.float32).reshape(1, 2, 3)
+            b_np = (100 + np.arange(6, dtype=np.float32)).reshape(1, 2, 3)
+            a = munet.from_numpy(a_np)
+            b = munet.from_numpy(b_np)
+
+            y = module.forward({"a": a, "b": b})
+            y_np = np.array(y.detach(), copy=False)
+            expected = np.concatenate([a_np, b_np], axis=-1)
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_reshape_with_zero_and_negative_one(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX reshape zero/-1 test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "reshape_zero_minus_one.onnx")
+
+            x_info = helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 2, 3, 4])
+            shape_info = helper.make_tensor_value_info("orig_target_sizes", TensorProto.INT64, [3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2, 12])
+            reshape = helper.make_node("Reshape", ["images", "orig_target_sizes"], ["y"])
+
+            graph = helper.make_graph([reshape], "reshape_zero_minus_one", [x_info, shape_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_reshape_test", opset_imports=[helper.make_opsetid("", 13)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+
+            x_np = np.arange(24, dtype=np.float32).reshape(1, 2, 3, 4)
+            x = munet.from_numpy(x_np)
+            target_shape = np.array([1, 0, -1], dtype=np.int64)
+
+            y = module.forward({"images": x, "orig_target_sizes": target_shape})
+            y_np = np.array(y.detach(), copy=False)
+            expected = x_np.reshape(1, 2, 12)
+            np.testing.assert_allclose(y_np, expected, atol=1e-6)
+
+    def test_compile_onnx_graph_runtime_multi_input_forward(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX graph-runtime multi-input test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "multi_input_reshape.onnx")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2, 3])
+            shape_info = helper.make_tensor_value_info("shape", TensorProto.INT64, [2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 6])
+            reshape = helper.make_node("Reshape", ["x", "shape"], ["y"])
+
+            graph = helper.make_graph([reshape], "multi_input_reshape", [x_info, shape_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_multi_input_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x = munet.from_numpy(np.arange(6, dtype=np.float32).reshape(1, 2, 3))
+            shape = np.array([1, 6], dtype=np.int64)
+
+            y_pos = module.forward(x, shape)
+            y_dict = module.forward({"x": x, "shape": shape})
+
+            y_pos_np = np.array(y_pos.detach(), copy=False)
+            y_dict_np = np.array(y_dict.detach(), copy=False)
+            expect = np.arange(6, dtype=np.float32).reshape(1, 6)
+
+            np.testing.assert_allclose(y_pos_np, expect, atol=1e-6)
+            np.testing.assert_allclose(y_dict_np, expect, atol=1e-6)
 
     def test_onnx_inference_wrapper(self):
         try:

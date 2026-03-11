@@ -191,11 +191,26 @@ PYBIND11_MODULE(munet, m) {
            [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
       .def("sum", &Tensor::sum,
            "Returns the sum of all elements in the tensor.")
+      .def("sum_to_shape", &Tensor::sum_to_shape, py::arg("target_shape"),
+           "Reduces this tensor by summing broadcasted dimensions into target_shape.")
       .def("reshape", &Tensor::reshape, py::arg("shape"),
            "Returns a tensor with the same data and number of elements, but "
            "with the specified shape.")
       .def("masked_fill", &Tensor::masked_fill, py::arg("mask"), py::arg("value"),
            "Fills entries where mask is 1 with the given value.")
+      .def("gather_elements", &Tensor::gather_elements, py::arg("indices"), py::arg("axis"),
+           "Gathers values along an axis using per-element indices tensor.")
+      .def("grid_sample", &Tensor::grid_sample, py::arg("grid"),
+           py::arg("mode") = "bilinear", py::arg("align_corners") = false,
+           "Samples input tensor using normalized grid coordinates.")
+      .def("topk",
+           [](const Tensor &t, int k, int dim, bool largest, bool sorted) {
+             auto out = t.topk(k, dim, largest, sorted);
+             return py::make_tuple(out.first, out.second);
+           },
+           py::arg("k"), py::arg("dim") = -1, py::arg("largest") = true,
+           py::arg("sorted") = true,
+           "Returns (values, indices) for TopK along a dimension.")
       .def_static("cat", &Tensor::cat, py::arg("inputs"), py::arg("dim") = 1,
                   "Concatenates tensors along a given dimension.")
       .def(
@@ -216,6 +231,11 @@ PYBIND11_MODULE(munet, m) {
            "Applies the Rectified Linear Unit function element-wise.")
       .def("sigmoid", &Tensor::sigmoid,
            "Applies the Sigmoid function element-wise.")
+      .def("log", &Tensor::log, "Applies natural logarithm element-wise.")
+      .def("sqrt", &Tensor::sqrt, "Applies square-root element-wise.")
+      .def("clip", &Tensor::clip, py::arg("min_value"), py::arg("max_value"),
+           "Clamps values element-wise to [min_value, max_value].")
+      .def("erf", &Tensor::erf, "Applies Gauss error function element-wise.")
       .def("softmax", &Tensor::softmax, py::arg("dim") = -1, "Applies softmax along a dimension.")
       .def("log_softmax", &Tensor::log_softmax, py::arg("dim") = -1,
            "Applies log-softmax along a dimension.")

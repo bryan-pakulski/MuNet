@@ -3,6 +3,7 @@
 #include "types.hpp"
 #include <memory>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -115,11 +116,21 @@ public:
   Tensor matmul(const Tensor &other) const;
   Tensor relu() const;
   Tensor sigmoid() const;
+  Tensor log() const;
+  Tensor sqrt() const;
+  Tensor clip(float min_value, float max_value) const;
+  Tensor erf() const;
   Tensor softmax(int dim = -1) const;
   Tensor log_softmax(int dim = -1) const;
   Tensor sum() const;
+  Tensor sum_to_shape(Shape target_shape) const;
   Tensor reshape(Shape new_shape) const;
   Tensor masked_fill(const Tensor &mask, float value) const;
+  Tensor gather_elements(const Tensor &indices, int axis) const;
+  std::pair<Tensor, Tensor> topk(int k, int dim = -1, bool largest = true,
+                                 bool sorted = true) const;
+  Tensor grid_sample(const Tensor &grid, const std::string &mode = "bilinear",
+                     bool align_corners = false) const;
   float item() const;
 
   Tensor conv2d(const Tensor &weight, const Tensor &bias, int stride = 1,

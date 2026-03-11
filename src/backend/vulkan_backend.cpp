@@ -71,12 +71,14 @@ static VkCommandBuffer immediateCmdBuffer = VK_NULL_HANDLE;
 
 static VkPipelineLayout pipelineLayout;
 static VkPipeline addPipeline, mulPipeline, subPipeline, divPipeline,
-    matmulPipeline;
+    matmulPipeline, batchedMatmulPipeline, gatherElementsPipeline;
 static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
     sumToShapePipeline;
 static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
 static VkPipeline sigmoidPipeline, sigmoidBackwardPipeline;
-static VkPipeline softmaxPipeline, softmaxBackwardPipeline;
+static VkPipeline logPipeline, sqrtPipeline, clipPipeline, erfPipeline;
+static VkPipeline softmaxPipeline, softmaxBackwardPipeline, topkPipeline,
+    gridSamplePipeline;
 static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
 static VkPipeline crossEntropyPipeline, crossEntropyBackwardPipeline;
 
@@ -501,6 +503,50 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 				}
 				)");
 
+
+  gatherElementsPipeline = createComputePipeline("gather_elements", R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer D { float d[]; };
+        layout(binding = 1) readonly buffer I { float idx[]; };
+        layout(binding = 2) writeonly buffer O { float o[]; };
+
+        layout(push_constant) uniform Push {
+            int ndim;
+            int axis;
+            int shape[6];
+            int strides[6];
+            uint N;
+        } p;
+
+        void main() {
+            uint id = gl_GlobalInvocationID.x;
+            if (id >= p.N) return;
+
+            int coord[6];
+            uint t = id;
+            for (int k = 0; k < 6; ++k) coord[k] = 0;
+            for (int d0 = 0; d0 < p.ndim; ++d0) {
+                int st = p.strides[d0];
+                coord[d0] = int(t / uint(st));
+                t = t % uint(st);
+            }
+
+            int g = int(round(idx[id]));
+            int dim = p.shape[p.axis];
+            if (g < 0) g += dim;
+            if (g < 0 || g >= dim) {
+                o[id] = 0.0;
+                return;
+            }
+            coord[p.axis] = g;
+            int src = 0;
+            for (int d0 = 0; d0 < p.ndim; ++d0) src += coord[d0] * p.strides[d0];
+            o[id] = d[src];
+        }
+    )");
+
   sumToShapePipeline = createComputePipeline("sum_to_shape", R"(
         #version 450
 
@@ -676,6 +722,143 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
             if (i < p.N) {
                 float s = out_d[i];
                 gi[i] = go[i] * s * (1.0 - s);
+            }
+        }
+    )");
+
+
+  logPipeline = createComputePipeline("log",
+                                      R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer A { float a[]; };
+        layout(binding = 1) writeonly buffer C { float c[]; };
+
+        layout(push_constant) uniform Push { uint N; } p;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                c[i] = log(a[i]);
+        }
+    )");
+
+  sqrtPipeline = createComputePipeline("sqrt",
+                                       R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer A { float a[]; };
+        layout(binding = 1) writeonly buffer C { float c[]; };
+
+        layout(push_constant) uniform Push { uint N; } p;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                c[i] = sqrt(a[i]);
+        }
+    )");
+
+  clipPipeline = createComputePipeline("clip",
+                                       R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer A { float a[]; };
+        layout(binding = 1) writeonly buffer C { float c[]; };
+
+        layout(push_constant) uniform Push {
+            uint N;
+            float min_v;
+            float max_v;
+        } p;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                c[i] = clamp(a[i], p.min_v, p.max_v);
+        }
+    )");
+
+
+  erfPipeline = createComputePipeline("erf",
+                                      R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer A { float a[]; };
+        layout(binding = 1) writeonly buffer C { float c[]; };
+
+        layout(push_constant) uniform Push { uint N; } p;
+
+        float erf_approx(float x) {
+            float s = (x < 0.0) ? -1.0 : 1.0;
+            float ax = abs(x);
+            float x2 = ax * ax;
+            float aa = 0.147;
+            float t = 1.0 + aa * x2;
+            float inside = 1.0 - exp(-x2 * (4.0 / 3.14159265358979323846 + aa * x2) / t);
+            return s * sqrt(max(inside, 0.0));
+        }
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                c[i] = erf_approx(a[i]);
+        }
+    )");
+
+
+  topkPipeline = createComputePipeline("topk", R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer I { float in_d[]; };
+        layout(binding = 1) writeonly buffer OV { float out_v[]; };
+        layout(binding = 2) writeonly buffer OI { float out_i[]; };
+
+        layout(push_constant) uniform Push {
+            int outer;
+            int dim_size;
+            int k;
+            int largest;
+            int sorted_flag;
+        } p;
+
+        void main() {
+            const int MAXK = 64;
+            uint row = gl_GlobalInvocationID.x;
+            if (int(row) >= p.outer) return;
+            if (p.k > MAXK) return;
+
+            int sel[MAXK];
+            float sel_v[MAXK];
+            for (int j=0;j<p.k;++j){ sel[j]=-1; sel_v[j]=0.0; }
+
+            int base = int(row) * p.dim_size;
+            for (int j=0;j<p.k;++j) {
+                int best_i = -1;
+                float best_v = (p.largest!=0) ? -3.402823e38 : 3.402823e38;
+                for (int i=0;i<p.dim_size;++i) {
+                    bool used=false;
+                    for (int q=0;q<j;++q) if (sel[q]==i) used=true;
+                    if (used) continue;
+                    float v = in_d[base + i];
+                    if (p.largest!=0) {
+                        if (v > best_v || (v == best_v && i < best_i)) { best_v=v; best_i=i; }
+                    } else {
+                        if (v < best_v || (v == best_v && i < best_i)) { best_v=v; best_i=i; }
+                    }
+                }
+                sel[j]=best_i;
+                sel_v[j]=best_v;
+            }
+
+            for (int j=0;j<p.k;++j) {
+                out_v[int(row)*p.k + j] = sel_v[j];
+                out_i[int(row)*p.k + j] = float(sel[j]);
             }
         }
     )");
@@ -1024,6 +1207,53 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 						if (out_valid)
 								c[row * p.N + col] = sum;
 				}
+	    )");
+
+  batchedMatmulPipeline = createComputePipeline("batched_matmul",
+                                                R"(
+        #version 450
+        layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+        layout(binding = 0) readonly buffer A { float a[]; };
+        layout(binding = 1) readonly buffer B { float b[]; };
+        layout(binding = 2) writeonly buffer C { float c[]; };
+
+        layout(push_constant) uniform Push {
+            int B;
+            int M;
+            int K;
+            int N;
+            int tA;
+            int tB;
+        } p;
+
+        void main() {
+            int batch = int(gl_GlobalInvocationID.z);
+            int row = int(gl_GlobalInvocationID.y);
+            int col = int(gl_GlobalInvocationID.x);
+            if (batch >= p.B || row >= p.M || col >= p.N) return;
+
+            int a_base = batch * p.M * p.K;
+            int b_base = batch * p.K * p.N;
+            int c_base = batch * p.M * p.N;
+
+            float sum = 0.0;
+            if (p.tA == 0 && p.tB == 0) {
+                for (int k = 0; k < p.K; ++k)
+                    sum += a[a_base + row * p.K + k] * b[b_base + k * p.N + col];
+            } else if (p.tA == 1 && p.tB == 0) {
+                for (int k = 0; k < p.K; ++k)
+                    sum += a[a_base + k * p.M + row] * b[b_base + k * p.N + col];
+            } else if (p.tA == 0 && p.tB == 1) {
+                for (int k = 0; k < p.K; ++k)
+                    sum += a[a_base + row * p.K + k] * b[b_base + col * p.K + k];
+            } else {
+                for (int k = 0; k < p.K; ++k)
+                    sum += a[a_base + k * p.M + row] * b[b_base + col * p.K + k];
+            }
+
+            c[c_base + row * p.N + col] = sum;
+        }
     )");
 
   conv2dPipeline = createComputePipeline("conv2d",
@@ -1448,6 +1678,77 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
          }
      )");
 
+
+  gridSamplePipeline = createComputePipeline("grid_sample", R"(
+        #version 450
+        layout(local_size_x=256) in;
+
+        layout(binding=0) readonly buffer I { float in_d[]; };
+        layout(binding=1) readonly buffer G { float grid_d[]; };
+        layout(binding=2) writeonly buffer O { float out_d[]; };
+
+        layout(push_constant) uniform P {
+            int B, C, iH, iW, oH, oW;
+            int mode;
+            int align;
+        } u;
+
+        float src_coord(float g, int size, int align_corners) {
+            if (align_corners != 0) {
+                if (size <= 1) return 0.0;
+                return ((g + 1.0) * 0.5) * float(size - 1);
+            }
+            return ((g + 1.0) * float(size) - 1.0) * 0.5;
+        }
+
+        float sample_zero(int b, int c, int y, int x) {
+            if (x < 0 || x >= u.iW || y < 0 || y >= u.iH) return 0.0;
+            int off = ((b*u.C + c)*u.iH + y)*u.iW + x;
+            return in_d[off];
+        }
+
+        void main() {
+            uint idx = gl_GlobalInvocationID.x;
+            uint N = uint(u.B*u.C*u.oH*u.oW);
+            if (idx >= N) return;
+
+            int ox = int(idx % uint(u.oW));
+            uint t = idx / uint(u.oW);
+            int oy = int(t % uint(u.oH));
+            t = t / uint(u.oH);
+            int c = int(t % uint(u.C));
+            int b = int(t / uint(u.C));
+
+            int goff = ((b*u.oH + oy)*u.oW + ox)*2;
+            float gx = grid_d[goff + 0];
+            float gy = grid_d[goff + 1];
+            float sx = src_coord(gx, u.iW, u.align);
+            float sy = src_coord(gy, u.iH, u.align);
+
+            float outv = 0.0;
+            if (u.mode == 1) {
+                int nx = int(round(sx));
+                int ny = int(round(sy));
+                outv = sample_zero(b, c, ny, nx);
+            } else {
+                int x0 = int(floor(sx));
+                int y0 = int(floor(sy));
+                int x1 = x0 + 1;
+                int y1 = y0 + 1;
+                float wx1 = sx - float(x0);
+                float wy1 = sy - float(y0);
+                float wx0 = 1.0 - wx1;
+                float wy0 = 1.0 - wy1;
+                outv = sample_zero(b, c, y0, x0) * wx0 * wy0 +
+                       sample_zero(b, c, y0, x1) * wx1 * wy0 +
+                       sample_zero(b, c, y1, x0) * wx0 * wy1 +
+                       sample_zero(b, c, y1, x1) * wx1 * wy1;
+            }
+
+            out_d[idx] = outv;
+        }
+    )");
+
   concatPipeline = createComputePipeline("concat", R"(
       #version 450
       layout(local_size_x = 256) in;
@@ -1786,6 +2087,7 @@ VulkanBackend::~VulkanBackend() {
 
   vkDestroyPipeline(device, upsamplePipeline, nullptr);
   vkDestroyPipeline(device, upsampleBackPipeline, nullptr);
+  vkDestroyPipeline(device, gridSamplePipeline, nullptr);
 
   vkDestroyPipeline(device, uniformPipeline, nullptr);
   vkDestroyPipeline(device, sumPipeline, nullptr);
@@ -1813,15 +2115,22 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyPipeline(device, reluBackwardPipeline, nullptr);
   vkDestroyPipeline(device, sigmoidPipeline, nullptr);
   vkDestroyPipeline(device, sigmoidBackwardPipeline, nullptr);
+  vkDestroyPipeline(device, logPipeline, nullptr);
+  vkDestroyPipeline(device, sqrtPipeline, nullptr);
+  vkDestroyPipeline(device, clipPipeline, nullptr);
+  vkDestroyPipeline(device, erfPipeline, nullptr);
 
   vkDestroyPipeline(device, softmaxPipeline, nullptr);
   vkDestroyPipeline(device, softmaxBackwardPipeline, nullptr);
+  vkDestroyPipeline(device, topkPipeline, nullptr);
   vkDestroyPipeline(device, mseLossPipeline, nullptr);
   vkDestroyPipeline(device, mseLossBackwardPipeline, nullptr);
   vkDestroyPipeline(device, crossEntropyPipeline, nullptr);
   vkDestroyPipeline(device, crossEntropyBackwardPipeline, nullptr);
 
   vkDestroyPipeline(device, matmulPipeline, nullptr);
+  vkDestroyPipeline(device, batchedMatmulPipeline, nullptr);
+  vkDestroyPipeline(device, gatherElementsPipeline, nullptr);
 
   vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
   vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
@@ -2296,6 +2605,36 @@ void VulkanBackend::sigmoid_backward(const Storage &grad_out,
                   {grad_out.data(), out.data(), grad_in.data()}, &N, sizeof(N),
                   (N + 255) / 256, 1, 1);
 }
+
+void VulkanBackend::log(const Storage &in, Storage &out, size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(logPipeline, {in.data(), out.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::sqrt(const Storage &in, Storage &out, size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(sqrtPipeline, {in.data(), out.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::clip(const Storage &in, Storage &out, float min_value,
+                         float max_value, size_t num_elements) {
+  struct {
+    uint32_t N;
+    float min_v;
+    float max_v;
+  } pc = {(uint32_t)num_elements, min_value, max_value};
+  dispatch_kernel(clipPipeline, {in.data(), out.data()}, &pc, sizeof(pc),
+                  (pc.N + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::erf(const Storage &in, Storage &out, size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(erfPipeline, {in.data(), out.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+
 void VulkanBackend::softmax(const Storage &in, Storage &out, int batch_size,
                             int num_classes) {
   struct {
@@ -2332,6 +2671,25 @@ void VulkanBackend::mse_loss_backward(const Storage &grad_out,
   dispatch_kernel(mseLossBackwardPipeline,
                   {grad_out.data(), pred.data(), target.data(), grad_in.data()},
                   &N, sizeof(N), (N + 255) / 256, 1, 1);
+}
+
+
+void VulkanBackend::topk(const Storage &in, Storage &out_values,
+                         Storage &out_indices, int outer, int dim_size, int k,
+                         bool largest, bool sorted_flag) {
+  if (k <= 0 || k > dim_size)
+    throw std::runtime_error("topk: invalid k");
+  if (k > 64)
+    throw std::runtime_error("topk: k>64 not supported yet on Vulkan");
+  struct {
+    int outer;
+    int dim_size;
+    int k;
+    int largest;
+    int sorted_flag;
+  } pc = {outer, dim_size, k, largest ? 1 : 0, sorted_flag ? 1 : 0};
+  dispatch_kernel(topkPipeline, {in.data(), out_values.data(), out_indices.data()},
+                  &pc, sizeof(pc), (outer + 255) / 256, 1, 1);
 }
 
 void VulkanBackend::cross_entropy(const Storage &logits, const Storage &targets,
@@ -2380,6 +2738,17 @@ void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
   // Dispatch x maps to N (cols), y maps to M (rows)
   dispatch_kernel(matmulPipeline, {a.data(), b.data(), out.data()}, &pc,
                   sizeof(pc), (N + 31) / 32, (M + 7) / 8, 1);
+}
+
+
+void VulkanBackend::batched_matmul(const Storage &a, const Storage &b,
+                                   Storage &out, int B, int M, int K, int N,
+                                   bool transA, bool transB) {
+  struct {
+    int B, M, K, N, tA, tB;
+  } pc = {B, M, K, N, transA, transB};
+  dispatch_kernel(batchedMatmulPipeline, {a.data(), b.data(), out.data()}, &pc,
+                  sizeof(pc), (N + 15) / 16, (M + 15) / 16, B);
 }
 
 // --- Spatial Stubs ---
@@ -2472,6 +2841,20 @@ void VulkanBackend::upsample2d_backward(const Storage &grad_out,
   } pc = {B, C, iH, iW, scale};
   dispatch_kernel(upsampleBackPipeline, {grad_out.data(), grad_in.data()}, &pc,
                   sizeof(pc), (B * C * iH * iW + 255) / 256, 1, 1);
+}
+
+
+void VulkanBackend::grid_sample(const Storage &in, const Storage &grid,
+                                Storage &out, int B, int C, int iH, int iW,
+                                int oH, int oW, int mode,
+                                bool align_corners) {
+  struct {
+    int B, C, iH, iW, oH, oW;
+    int mode;
+    int align;
+  } pc = {B, C, iH, iW, oH, oW, mode, align_corners ? 1 : 0};
+  dispatch_kernel(gridSamplePipeline, {in.data(), grid.data(), out.data()}, &pc,
+                  sizeof(pc), (B * C * oH * oW + 255) / 256, 1, 1);
 }
 
 void VulkanBackend::batch_norm(const Storage &in, const Storage &scale,
@@ -2571,6 +2954,37 @@ void VulkanBackend::sum(const Storage &in, Storage &out, size_t num_elements) {
   uint32_t N = num_elements;
   dispatch_kernel(sumPipeline, {in.data(), out.data()}, &N, sizeof(N),
                   (num_elements + 255) / 256, 1, 1);
+}
+
+
+void VulkanBackend::gather_elements(const Storage &data, const Storage &indices,
+                                    Storage &out, const Shape &shape,
+                                    int axis) {
+  struct {
+    int ndim;
+    int axis;
+    int shape[6];
+    int strides[6];
+    uint32_t N;
+  } pc{};
+
+  pc.ndim = (int)shape.size();
+  if (pc.ndim <= 0 || pc.ndim > 6)
+    throw std::runtime_error("gather_elements: ndim must be in [1,6]");
+  pc.axis = axis < 0 ? axis + pc.ndim : axis;
+  if (pc.axis < 0 || pc.axis >= pc.ndim)
+    throw std::runtime_error("gather_elements: axis out of range");
+  pc.N = (uint32_t)numel(shape);
+
+  auto st = default_strides(shape);
+  for (int i = 0; i < 6; ++i) {
+    pc.shape[i] = i < pc.ndim ? shape[i] : 1;
+    pc.strides[i] = i < pc.ndim ? st[i] : 0;
+  }
+
+  dispatch_kernel(gatherElementsPipeline,
+                  {data.data(), indices.data(), out.data()}, &pc, sizeof(pc),
+                  (pc.N + 255) / 256, 1, 1);
 }
 
 void VulkanBackend::concat(const std::vector<Storage *> &inputs, Storage &out,

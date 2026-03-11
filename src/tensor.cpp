@@ -58,6 +58,12 @@ Tensor Tensor::matmul(const Tensor &other) const {
 
 Tensor Tensor::relu() const { return ops::relu(*this); }
 Tensor Tensor::sigmoid() const { return ops::sigmoid(*this); }
+Tensor Tensor::log() const { return ops::log(*this); }
+Tensor Tensor::sqrt() const { return ops::sqrt(*this); }
+Tensor Tensor::clip(float min_value, float max_value) const {
+  return ops::clip(*this, min_value, max_value);
+}
+Tensor Tensor::erf() const { return ops::erf(*this); }
 Tensor Tensor::softmax(int dim) const { return ops::softmax(*this, dim); }
 Tensor Tensor::log_softmax(int dim) const { return ops::log_softmax(*this, dim); }
 
@@ -165,6 +171,9 @@ Tensor Tensor::cat(const std::vector<Tensor> &inputs, int dim) {
 }
 
 Tensor Tensor::sum() const { return ops::sum(*this); }
+Tensor Tensor::sum_to_shape(Shape target_shape) const {
+  return ops::sum_to_shape(*this, target_shape);
+}
 
 Tensor Tensor::reshape(Shape new_shape) const {
   return ops::reshape(*this, new_shape);
@@ -172,6 +181,20 @@ Tensor Tensor::reshape(Shape new_shape) const {
 
 Tensor Tensor::masked_fill(const Tensor &mask, float value) const {
   return ops::masked_fill(*this, mask, value);
+}
+
+Tensor Tensor::gather_elements(const Tensor &indices, int axis) const {
+  return ops::gather_elements(*this, indices, axis);
+}
+
+std::pair<Tensor, Tensor> Tensor::topk(int k, int dim, bool largest,
+                                       bool sorted) const {
+  return ops::topk(*this, k, dim, largest, sorted);
+}
+
+Tensor Tensor::grid_sample(const Tensor &grid, const std::string &mode,
+                           bool align_corners) const {
+  return ops::grid_sample(*this, grid, mode, align_corners);
 }
 
 float Tensor::item() const {

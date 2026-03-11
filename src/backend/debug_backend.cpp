@@ -148,6 +148,18 @@ public:
     check("matmul", t.elapsed_us(), &out);
   }
 
+
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out, int B,
+                      int M, int K, int N, bool transA,
+                      bool transB) override {
+    MUNET_DEBUG << "batched_matmul | B=" << B << " " << M << "x" << K
+                << "x" << N << (transA ? " (transposed A)" : "")
+                << (transB ? " (transposed B)" : "") << std::endl;
+    Timer t;
+    base_->batched_matmul(a, b, out, B, M, K, N, transA, transB);
+    check("batched_matmul", t.elapsed_us(), &out);
+  }
+
   void adam_step(Storage &params, const Storage &grads, Storage &exp_avg,
                  Storage &exp_avg_sq, float lr, float beta1, float beta2,
                  float eps, int step, size_t num_elements) override {
@@ -182,6 +194,14 @@ public:
     base_->concat_backward(grad_out, grad_inputs, dim, shapes);
     check("concat_backward", t.elapsed_us(), &grad_out);
   }
+  void gather_elements(const Storage &data, const Storage &indices,
+                       Storage &out, const Shape &shape, int axis) override {
+    MUNET_DEBUG << "gather_elements | axis=" << axis << " shape="
+                << to_string(shape) << std::endl;
+    Timer t;
+    base_->gather_elements(data, indices, out, shape, axis);
+    check("gather_elements", t.elapsed_us(), &out);
+  }
   void relu(const Storage &in, Storage &out, size_t num_elements) override {
     MUNET_DEBUG << "relu | " << num_elements << " elements" << std::endl;
     Timer t;
@@ -210,6 +230,31 @@ public:
     base_->sigmoid_backward(grad_out, out, grad_in, num_elements);
     check("sigmoid_backward", t.elapsed_us(), &grad_in);
   }
+  void log(const Storage &in, Storage &out, size_t num_elements) override {
+    MUNET_DEBUG << "log | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->log(in, out, num_elements);
+    check("log", t.elapsed_us(), &out);
+  }
+  void sqrt(const Storage &in, Storage &out, size_t num_elements) override {
+    MUNET_DEBUG << "sqrt | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->sqrt(in, out, num_elements);
+    check("sqrt", t.elapsed_us(), &out);
+  }
+  void clip(const Storage &in, Storage &out, float min_value, float max_value,
+            size_t num_elements) override {
+    MUNET_DEBUG << "clip | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->clip(in, out, min_value, max_value, num_elements);
+    check("clip", t.elapsed_us(), &out);
+  }
+  void erf(const Storage &in, Storage &out, size_t num_elements) override {
+    MUNET_DEBUG << "erf | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->erf(in, out, num_elements);
+    check("erf", t.elapsed_us(), &out);
+  }
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
     MUNET_DEBUG << "softmax | " << batch_size << " batches, " << num_classes
@@ -226,6 +271,16 @@ public:
     Timer t;
     base_->softmax_backward(grad_out, out, grad_in, batch_size, num_classes);
     check("softmax_backward", t.elapsed_us(), &grad_in);
+  }
+  void topk(const Storage &in, Storage &out_values, Storage &out_indices,
+            int outer, int dim_size, int k, bool largest,
+            bool sorted_flag) override {
+    MUNET_DEBUG << "topk | outer=" << outer << " dim=" << dim_size
+                << " k=" << k << std::endl;
+    Timer t;
+    base_->topk(in, out_values, out_indices, outer, dim_size, k, largest,
+                sorted_flag);
+    check("topk_values", t.elapsed_us(), &out_values);
   }
   void cross_entropy(const Storage &logits, const Storage &targets,
                      Storage &out_loss, int batch_size, int num_classes,
@@ -328,6 +383,16 @@ public:
     Timer t;
     base_->upsample2d_backward(grad_out, grad_in, B, C, iH, iW, scale);
     check("upsample2d_backward", t.elapsed_us(), &grad_in);
+  }
+  void grid_sample(const Storage &in, const Storage &grid, Storage &out,
+                   int B, int C, int iH, int iW, int oH, int oW, int mode,
+                   bool align_corners) override {
+    MUNET_DEBUG << "grid_sample | " << B << "x" << C << " " << iH << "x"
+                << iW << " -> " << oH << "x" << oW << std::endl;
+    Timer t;
+    base_->grid_sample(in, grid, out, B, C, iH, iW, oH, oW, mode,
+                       align_corners);
+    check("grid_sample", t.elapsed_us(), &out);
   }
   void batch_norm(const Storage &in, const Storage &scale, const Storage &bias,
                   Storage &running_mean, Storage &running_var,

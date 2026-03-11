@@ -274,6 +274,129 @@ public:
     });
   }
 
+
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out, int B,
+                      int M, int K, int N, bool transA,
+                      bool transB) override {
+    const float *ap = (const float *)a.data();
+    const float *bp = (const float *)b.data();
+    float *cp = (float *)out.data();
+    size_t a_batch_stride = (size_t)M * (size_t)K;
+    size_t b_batch_stride = (size_t)K * (size_t)N;
+    size_t c_batch_stride = (size_t)M * (size_t)N;
+
+    parallel_for(0, (size_t)B, [&](size_t bs, size_t be) {
+      for (size_t bi = bs; bi < be; ++bi) {
+        const float *a_ptr = ap + bi * a_batch_stride;
+        const float *b_ptr = bp + bi * b_batch_stride;
+        float *c_ptr = cp + bi * c_batch_stride;
+        for (int m = 0; m < M; ++m) {
+          for (int n = 0; n < N; ++n) {
+            float sum = 0.0f;
+            for (int k = 0; k < K; ++k) {
+              float a_val = transA ? a_ptr[k * M + m] : a_ptr[m * K + k];
+              float b_val = transB ? b_ptr[n * K + k] : b_ptr[k * N + n];
+              sum += a_val * b_val;
+            }
+            c_ptr[m * N + n] = sum;
+          }
+        }
+      }
+    });
+  }
+
+  void gather_elements(const Storage &data, const Storage &indices,
+                       Storage &out, const Shape &shape, int axis) override {
+    const float *dp = (const float *)data.data();
+    const float *ip = (const float *)indices.data();
+    float *op = (float *)out.data();
+
+    int ndim = (int)shape.size();
+    if (ndim <= 0)
+      return;
+    int ax = axis < 0 ? axis + ndim : axis;
+    if (ax < 0 || ax >= ndim)
+      throw std::runtime_error("gather_elements: axis out of range");
+
+    Strides strides = default_strides(shape);
+    size_t N = numel(shape);
+
+    parallel_for(0, N, [&](size_t s, size_t e) {
+      std::vector<int> coord(ndim, 0);
+      for (size_t idx = s; idx < e; ++idx) {
+        size_t t = idx;
+        for (int d = 0; d < ndim; ++d) {
+          coord[d] = (int)(t / (size_t)strides[d]);
+          t %= (size_t)strides[d];
+        }
+
+        int gather_idx = (int)std::llround((double)ip[idx]);
+        int dim_size = shape[ax];
+        if (gather_idx < 0)
+          gather_idx += dim_size;
+        if (gather_idx < 0 || gather_idx >= dim_size)
+          throw std::runtime_error("gather_elements: index out of range");
+
+        coord[ax] = gather_idx;
+        size_t src_off = 0;
+        for (int d = 0; d < ndim; ++d)
+          src_off += (size_t)coord[d] * (size_t)strides[d];
+
+        op[idx] = dp[src_off];
+      }
+    });
+  }
+
+
+  void topk(const Storage &in, Storage &out_values, Storage &out_indices,
+            int outer, int dim_size, int k, bool largest,
+            bool sorted_flag) override {
+    const float *ip = (const float *)in.data();
+    float *ov = (float *)out_values.data();
+    float *oi = (float *)out_indices.data();
+
+    if (k <= 0 || k > dim_size)
+      throw std::runtime_error("topk: invalid k");
+
+    parallel_for(0, outer, [&](size_t s, size_t e) {
+      for (size_t row = s; row < e; ++row) {
+        std::vector<std::pair<float, int>> v;
+        v.reserve(dim_size);
+        const float *r = ip + row * dim_size;
+        for (int i = 0; i < dim_size; ++i)
+          v.push_back({r[i], i});
+
+        auto cmp_l = [](const auto &a, const auto &b) {
+          if (a.first != b.first)
+            return a.first > b.first;
+          return a.second < b.second;
+        };
+        auto cmp_s = [](const auto &a, const auto &b) {
+          if (a.first != b.first)
+            return a.first < b.first;
+          return a.second < b.second;
+        };
+
+        if (largest) {
+          std::nth_element(v.begin(), v.begin() + k, v.end(), cmp_l);
+          v.resize(k);
+          if (sorted_flag)
+            std::sort(v.begin(), v.end(), cmp_l);
+        } else {
+          std::nth_element(v.begin(), v.begin() + k, v.end(), cmp_s);
+          v.resize(k);
+          if (sorted_flag)
+            std::sort(v.begin(), v.end(), cmp_s);
+        }
+
+        for (int j = 0; j < k; ++j) {
+          ov[row * k + j] = v[j].first;
+          oi[row * k + j] = (float)v[j].second;
+        }
+      }
+    });
+  }
+
   void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
               const std::vector<Shape> &shapes) override {
     float *out_ptr = (float *)out.data();
@@ -388,6 +511,45 @@ public:
     parallel_for(0, num_elements, [&](size_t s, size_t e) {
       for (size_t i = s; i < e; ++i)
         gi[i] = go[i] * o[i] * (1.0f - o[i]);
+    });
+  }
+
+
+  void log(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::log(ip[i]);
+    });
+  }
+
+  void sqrt(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::sqrt(ip[i]);
+    });
+  }
+
+  void clip(const Storage &in, Storage &out, float min_value, float max_value,
+            size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::min(max_value, std::max(min_value, ip[i]));
+    });
+  }
+
+
+  void erf(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::erf(ip[i]);
     });
   }
 
@@ -722,6 +884,70 @@ public:
         }
       }
     }
+  }
+
+
+  void grid_sample(const Storage &in, const Storage &grid, Storage &out, int B,
+                   int C, int iH, int iW, int oH, int oW, int mode,
+                   bool align_corners) override {
+    const float *ip = (const float *)in.data();
+    const float *gp = (const float *)grid.data();
+    float *op = (float *)out.data();
+
+    auto compute_src = [&](float g, int size) {
+      if (align_corners) {
+        if (size <= 1)
+          return 0.0f;
+        return ((g + 1.0f) * 0.5f) * (float)(size - 1);
+      }
+      return ((g + 1.0f) * (float)size - 1.0f) * 0.5f;
+    };
+
+    auto sample = [&](int b, int c, int y, int x) {
+      if (x < 0 || x >= iW || y < 0 || y >= iH)
+        return 0.0f;
+      size_t off = (((size_t)b * C + c) * iH + y) * iW + x;
+      return ip[off];
+    };
+
+    parallel_for(0, (size_t)B, [&](size_t bs, size_t be) {
+      for (size_t bb = bs; bb < be; ++bb) {
+        int b = (int)bb;
+        for (int oy = 0; oy < oH; ++oy) {
+          for (int ox = 0; ox < oW; ++ox) {
+            size_t goff = (((size_t)b * oH + oy) * oW + ox) * 2;
+            float gx = gp[goff + 0];
+            float gy = gp[goff + 1];
+            float sx = compute_src(gx, iW);
+            float sy = compute_src(gy, iH);
+
+            for (int c = 0; c < C; ++c) {
+              float outv = 0.0f;
+              if (mode == 1) {
+                int nx = (int)std::nearbyint(sx);
+                int ny = (int)std::nearbyint(sy);
+                outv = sample(b, c, ny, nx);
+              } else {
+                int x0 = (int)std::floor(sx);
+                int y0 = (int)std::floor(sy);
+                int x1 = x0 + 1;
+                int y1 = y0 + 1;
+                float wx1 = sx - (float)x0;
+                float wy1 = sy - (float)y0;
+                float wx0 = 1.0f - wx1;
+                float wy0 = 1.0f - wy1;
+                outv = sample(b, c, y0, x0) * wx0 * wy0 +
+                       sample(b, c, y0, x1) * wx1 * wy0 +
+                       sample(b, c, y1, x0) * wx0 * wy1 +
+                       sample(b, c, y1, x1) * wx1 * wy1;
+              }
+              size_t ooff = (((size_t)b * C + c) * oH + oy) * oW + ox;
+              op[ooff] = outv;
+            }
+          }
+        }
+      }
+    });
   }
 
   void batch_norm(const Storage &in, const Storage &scale, const Storage &bias,

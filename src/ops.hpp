@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <utility>
 #include <stdexcept>
 
 namespace munet {
@@ -18,6 +19,16 @@ inline Tensor div(const Tensor &a, const Tensor &b);
 inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
                          const Tensor &bias, float eps = 1e-5f);
 inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value);
+inline Tensor log(const Tensor &a);
+inline Tensor sqrt(const Tensor &a);
+inline Tensor clip(const Tensor &a, float min_value, float max_value);
+inline Tensor erf(const Tensor &a);
+inline Tensor gather_elements(const Tensor &data, const Tensor &indices, int axis);
+inline std::pair<Tensor, Tensor> topk(const Tensor &a, int k, int dim = -1,
+                                      bool largest = true, bool sorted = true);
+inline Tensor grid_sample(const Tensor &input, const Tensor &grid,
+                          const std::string &mode = "bilinear",
+                          bool align_corners = false);
 inline Tensor log_softmax(const Tensor &a, int dim = -1);
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
@@ -560,6 +571,162 @@ inline Tensor sigmoid(const Tensor &a) {
   return out;
 }
 
+
+inline Tensor log(const Tensor &a) {
+  Tensor out(a.shape(), a.device(), a.dtype());
+  a.impl_->backend().log(*a.impl_->storage, *out.impl_->storage, a.size());
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    throw std::runtime_error("Log backward is not implemented yet");
+  }
+  record_trace(out, "Log", {a});
+  return out;
+}
+
+inline Tensor sqrt(const Tensor &a) {
+  Tensor out(a.shape(), a.device(), a.dtype());
+  a.impl_->backend().sqrt(*a.impl_->storage, *out.impl_->storage, a.size());
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    throw std::runtime_error("Sqrt backward is not implemented yet");
+  }
+  record_trace(out, "Sqrt", {a});
+  return out;
+}
+
+inline Tensor clip(const Tensor &a, float min_value, float max_value) {
+  Tensor out(a.shape(), a.device(), a.dtype());
+  a.impl_->backend().clip(*a.impl_->storage, *out.impl_->storage, min_value,
+                          max_value, a.size());
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    throw std::runtime_error("Clip backward is not implemented yet");
+  }
+  record_trace(out, "Clip", {a}, {}, {{"min", min_value}, {"max", max_value}});
+  return out;
+}
+
+inline Tensor erf(const Tensor &a) {
+  Tensor out(a.shape(), a.device(), a.dtype());
+  a.impl_->backend().erf(*a.impl_->storage, *out.impl_->storage, a.size());
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    throw std::runtime_error("Erf backward is not implemented yet");
+  }
+  record_trace(out, "Erf", {a});
+  return out;
+}
+
+
+inline Tensor gather_elements(const Tensor &data, const Tensor &indices,
+                              int axis) {
+  if (data.shape() != indices.shape())
+    throw std::runtime_error("gather_elements: data/indices shape mismatch");
+  if (data.device() != indices.device())
+    throw std::runtime_error("gather_elements: data/indices device mismatch");
+
+  Tensor out(data.shape(), data.device(), data.dtype());
+  data.impl_->backend().gather_elements(*data.impl_->storage,
+                                        *indices.impl_->storage,
+                                        *out.impl_->storage, data.shape(),
+                                        axis);
+  if (GradMode::is_enabled() && (data.requires_grad() || indices.requires_grad())) {
+    throw std::runtime_error("GatherElements backward is not implemented yet");
+  }
+  record_trace(out, "GatherElements", {data, indices}, {{"axis", {axis}}});
+  return out;
+}
+
+
+inline std::pair<Tensor, Tensor> topk(const Tensor &a, int k, int dim,
+                                      bool largest, bool sorted_flag) {
+  auto shp = a.shape();
+  int rank = (int)shp.size();
+  if (rank == 0)
+    throw std::runtime_error("topk: rank must be >= 1");
+  int d = dim < 0 ? dim + rank : dim;
+  if (d < 0 || d >= rank)
+    throw std::runtime_error("topk: dim out of range");
+  if (k <= 0 || k > shp[d])
+    throw std::runtime_error("topk: invalid k");
+
+  Tensor work = a;
+  std::vector<int> perm;
+  std::vector<int> inv_perm;
+  bool need_permute = (d != rank - 1);
+  if (need_permute) {
+    perm.reserve(rank);
+    for (int i = 0; i < rank; ++i)
+      if (i != d)
+        perm.push_back(i);
+    perm.push_back(d);
+    inv_perm.assign(rank, 0);
+    for (int i = 0; i < rank; ++i)
+      inv_perm[perm[i]] = i;
+    work = a.permute(perm).contiguous();
+  }
+
+  auto ws = work.shape();
+  int dim_size = ws.back();
+  int outer = 1;
+  for (int i = 0; i < (int)ws.size() - 1; ++i)
+    outer *= ws[i];
+
+  Shape out_shape = ws;
+  out_shape.back() = k;
+  Tensor v(out_shape, work.device(), work.dtype());
+  Tensor i(out_shape, work.device(), work.dtype());
+  work.impl_->backend().topk(*work.impl_->storage, *v.impl_->storage,
+                             *i.impl_->storage, outer, dim_size, k, largest,
+                             sorted_flag);
+
+  if (need_permute) {
+    v = v.permute(inv_perm).contiguous();
+    i = i.permute(inv_perm).contiguous();
+  }
+
+  if (GradMode::is_enabled() && a.requires_grad())
+    throw std::runtime_error("TopK backward is not implemented yet");
+
+  record_trace(v, "TopKValues", {a}, {{"k", {k}}, {"dim", {d}}, {"largest", {largest ? 1 : 0}}, {"sorted", {sorted_flag ? 1 : 0}}});
+  record_trace(i, "TopKIndices", {a}, {{"k", {k}}, {"dim", {d}}, {"largest", {largest ? 1 : 0}}, {"sorted", {sorted_flag ? 1 : 0}}});
+  return {v, i};
+}
+
+
+inline Tensor grid_sample(const Tensor &input, const Tensor &grid,
+                          const std::string &mode, bool align_corners) {
+  auto xs = input.shape();
+  auto gs = grid.shape();
+  if (xs.size() != 4)
+    throw std::runtime_error("grid_sample: input must be rank-4 NCHW");
+  if (gs.size() != 4 || gs[3] != 2)
+    throw std::runtime_error("grid_sample: grid must be rank-4 [N,H,W,2]");
+  if (xs[0] != gs[0])
+    throw std::runtime_error("grid_sample: batch mismatch");
+  if (input.device() != grid.device())
+    throw std::runtime_error("grid_sample: device mismatch");
+
+  int mode_id = 0;
+  if (mode == "bilinear")
+    mode_id = 0;
+  else if (mode == "nearest")
+    mode_id = 1;
+  else
+    throw std::runtime_error("grid_sample: supported modes are bilinear/nearest");
+
+  int B = xs[0], C = xs[1], iH = xs[2], iW = xs[3];
+  int oH = gs[1], oW = gs[2];
+  Tensor out({B, C, oH, oW}, input.device(), input.dtype());
+
+  input.impl_->backend().grid_sample(*input.impl_->storage, *grid.impl_->storage,
+                                     *out.impl_->storage, B, C, iH, iW, oH,
+                                     oW, mode_id, align_corners);
+  if (GradMode::is_enabled() && (input.requires_grad() || grid.requires_grad()))
+    throw std::runtime_error("GridSample backward is not implemented yet");
+
+  record_trace(out, "GridSample", {input, grid},
+               {{"mode", {mode_id}},
+                {"align_corners", {align_corners ? 1 : 0}}});
+  return out;
+}
+
 // --- SOFTMAX ---
 struct SoftmaxBackward : public Node {
   Tensor saved_out;
@@ -711,17 +878,105 @@ inline Tensor log_softmax(const Tensor &a, int dim) {
 // --- MATMUL ---
 inline Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA,
                               bool transB) {
-  if (a.shape().size() != 2 || b.shape().size() != 2)
-    throw std::runtime_error("Matmul currently requires 2D tensors");
+  const size_t a_rank = a.shape().size();
+  const size_t b_rank = b.shape().size();
 
-  int M = transA ? a.shape()[1] : a.shape()[0];
-  int K = transA ? a.shape()[0] : a.shape()[1];
-  int N = transB ? b.shape()[0] : b.shape()[1];
+  // Fast-path: standard 2D GEMM.
+  if (a_rank == 2 && b_rank == 2) {
+    int M = transA ? a.shape()[1] : a.shape()[0];
+    int K = transA ? a.shape()[0] : a.shape()[1];
+    int N = transB ? b.shape()[0] : b.shape()[1];
 
-  Tensor out({M, N}, a.device(), a.dtype());
-  a.impl_->backend().matmul(*a.impl_->storage, *b.impl_->storage,
-                            *out.impl_->storage, M, K, N, transA, transB);
-  return out;
+    Tensor out({M, N}, a.device(), a.dtype());
+    a.impl_->backend().matmul(*a.impl_->storage, *b.impl_->storage,
+                              *out.impl_->storage, M, K, N, transA, transB);
+    return out;
+  }
+
+  auto collapse_singleton_leading_to_2d = [](const Tensor &t, Shape &out2d) {
+    if (t.shape().size() < 2)
+      return false;
+    for (size_t i = 0; i + 2 < t.shape().size(); ++i) {
+      if (t.shape()[i] != 1)
+        return false;
+    }
+    out2d = {t.shape()[t.shape().size() - 2], t.shape()[t.shape().size() - 1]};
+    return true;
+  };
+
+  // Treat RHS with only singleton leading dims as plain 2D, e.g.
+  // [1, K, N] / [1, 1, K, N] -> [K, N]. This is common in exported ONNX
+  // graphs where constants are unsqueezed for broadcast convenience.
+  if (!transA && !transB && a_rank >= 3 && b_rank > 2) {
+    Shape b2_shape;
+    if (collapse_singleton_leading_to_2d(b, b2_shape)) {
+      Tensor b2 = b.reshape(b2_shape);
+      return matmul_internal(a, b2, false, false);
+    }
+  }
+
+  // Extended path: [..., K] @ [K, N] -> [..., N]
+  // Implemented by flattening leading dims and running one large GEMM.
+  if (!transA && !transB && a_rank >= 3 && b_rank == 2) {
+    int K = a.shape().back();
+    if (K != b.shape()[0])
+      throw std::runtime_error("Matmul: incompatible inner dimensions");
+
+    int leading = 1;
+    for (size_t i = 0; i + 1 < a_rank; ++i)
+      leading *= a.shape()[i];
+    int N = b.shape()[1];
+
+    Tensor a2 = a.reshape({leading, K});
+    Tensor out2({leading, N}, a.device(), a.dtype());
+    a.impl_->backend().matmul(*a2.impl_->storage, *b.impl_->storage,
+                              *out2.impl_->storage, leading, K, N, false,
+                              false);
+
+    Shape out_shape = a.shape();
+    out_shape.back() = N;
+    return out2.reshape(out_shape);
+  }
+
+  // Full batched path: [B, M, K] @ [B, K, N] -> [B, M, N]
+  if (!transA && !transB && a_rank == 3 && b_rank == 3) {
+    int BA = a.shape()[0];
+    int BB = b.shape()[0];
+    int M = a.shape()[1];
+    int K = a.shape()[2];
+    if (K != b.shape()[1])
+      throw std::runtime_error("Matmul: incompatible inner dimensions");
+    int N = b.shape()[2];
+
+    if (BA == BB) {
+      Tensor out({BA, M, N}, a.device(), a.dtype());
+      a.impl_->backend().batched_matmul(*a.impl_->storage, *b.impl_->storage,
+                                        *out.impl_->storage, BA, M, K, N,
+                                        false, false);
+      return out;
+    }
+
+    if (BB == 1) {
+      Tensor b2 = b.reshape({b.shape()[1], b.shape()[2]});
+      return matmul_internal(a, b2, false, false);
+    }
+
+    if (BA == 1) {
+      std::vector<Tensor> a_reps(BB, a);
+      Tensor a_exp = cat(a_reps, 0);
+      Tensor out({BB, M, N}, a.device(), a.dtype());
+      a.impl_->backend().batched_matmul(*a_exp.impl_->storage, *b.impl_->storage,
+                                        *out.impl_->storage, BB, M, K, N,
+                                        false, false);
+      return out;
+    }
+
+    throw std::runtime_error(
+        "Matmul: batched inputs require same batch, lhs batch=1, or rhs batch=1");
+  }
+
+  throw std::runtime_error(
+      "Matmul currently supports 2Dx2D, [...,K]x[K,N], and [B,M,K]x[B,K,N]");
 }
 
 struct MatmulBackward : public Node {
@@ -732,6 +987,133 @@ struct MatmulBackward : public Node {
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
     Tensor grad_out = grads[0];
     Tensor grad_a, grad_b;
+
+    // Batched [...,K]x[K,N] path.
+    if (A.shape().size() >= 3 && B.shape().size() == 2) {
+      int K = A.shape().back();
+      int N = B.shape()[1];
+      int leading = 1;
+      for (size_t i = 0; i + 1 < A.shape().size(); ++i)
+        leading *= A.shape()[i];
+
+      Tensor grad_out_2d = grad_out.reshape({leading, N});
+
+      if (next_edges.size() > 0 && next_edges[0].node) {
+        Tensor grad_a_2d = matmul_internal(grad_out_2d, B, false, true);
+        grad_a = grad_a_2d.reshape(A.shape());
+      } else {
+        grad_a = Tensor();
+      }
+
+      if (next_edges.size() > 1 && next_edges[1].node) {
+        Tensor A2 = A.reshape({leading, K});
+        grad_b = matmul_internal(A2, grad_out_2d, true, false);
+      } else {
+        grad_b = Tensor();
+      }
+
+      return {grad_a, grad_b};
+    }
+
+    // Broadcasted full-batched path: [1,M,K]x[B,K,N] -> [B,M,N].
+    if (A.shape().size() == 3 && B.shape().size() == 3 &&
+        A.shape()[0] == 1 && B.shape()[0] > 1) {
+      int batch = B.shape()[0];
+      int M = A.shape()[1];
+      int K = A.shape()[2];
+      int N = B.shape()[2];
+
+      std::vector<Tensor> a_reps(batch, A);
+      Tensor Aexp = cat(a_reps, 0);
+
+      if (next_edges.size() > 0 && next_edges[0].node) {
+        Tensor Bt = B.permute({0, 2, 1}).contiguous();
+        Tensor grad_a_full({batch, M, K}, A.device(), A.dtype());
+        A.impl_->backend().batched_matmul(*grad_out.impl_->storage,
+                                          *Bt.impl_->storage,
+                                          *grad_a_full.impl_->storage, batch, M,
+                                          N, K, false, false);
+        grad_a = grad_a_full.sum_to_shape({1, M, K});
+      } else {
+        grad_a = Tensor();
+      }
+
+      if (next_edges.size() > 1 && next_edges[1].node) {
+        Tensor AexpT = Aexp.permute({0, 2, 1}).contiguous();
+        grad_b = Tensor({batch, K, N}, B.device(), B.dtype());
+        B.impl_->backend().batched_matmul(*AexpT.impl_->storage,
+                                          *grad_out.impl_->storage,
+                                          *grad_b.impl_->storage, batch, K, M,
+                                          N, false, false);
+      } else {
+        grad_b = Tensor();
+      }
+
+      return {grad_a, grad_b};
+    }
+
+    // Broadcasted full-batched path: [B,M,K]x[1,K,N] -> [B,M,N].
+    if (A.shape().size() == 3 && B.shape().size() == 3 &&
+        B.shape()[0] == 1 && A.shape()[0] > 1) {
+      int batch = A.shape()[0];
+      int M = A.shape()[1];
+      int K = A.shape()[2];
+      int N = B.shape()[2];
+      Tensor B2 = B.reshape({K, N});
+
+      if (next_edges.size() > 0 && next_edges[0].node) {
+        grad_a = matmul_internal(grad_out, B2, false, true);
+      } else {
+        grad_a = Tensor();
+      }
+
+      if (next_edges.size() > 1 && next_edges[1].node) {
+        Tensor At = A.permute({0, 2, 1}).contiguous();
+        Tensor grad_b_full({batch, K, N}, B.device(), B.dtype());
+        B.impl_->backend().batched_matmul(*At.impl_->storage,
+                                          *grad_out.impl_->storage,
+                                          *grad_b_full.impl_->storage, batch,
+                                          K, M, N, false, false);
+        grad_b = grad_b_full.sum_to_shape({1, K, N});
+      } else {
+        grad_b = Tensor();
+      }
+
+      return {grad_a, grad_b};
+    }
+
+    // Full batched [B,M,K]x[B,K,N] path.
+    if (A.shape().size() == 3 && B.shape().size() == 3 &&
+        A.shape()[0] == B.shape()[0]) {
+      int batch = A.shape()[0];
+      int M = A.shape()[1];
+      int K = A.shape()[2];
+      int N = B.shape()[2];
+
+      if (next_edges.size() > 0 && next_edges[0].node) {
+        Tensor Bt = B.permute({0, 2, 1}).contiguous();
+        grad_a = Tensor({batch, M, K}, A.device(), A.dtype());
+        A.impl_->backend().batched_matmul(*grad_out.impl_->storage,
+                                          *Bt.impl_->storage,
+                                          *grad_a.impl_->storage, batch, M, N,
+                                          K, false, false);
+      } else {
+        grad_a = Tensor();
+      }
+
+      if (next_edges.size() > 1 && next_edges[1].node) {
+        Tensor At = A.permute({0, 2, 1}).contiguous();
+        grad_b = Tensor({batch, K, N}, B.device(), B.dtype());
+        B.impl_->backend().batched_matmul(*At.impl_->storage,
+                                          *grad_out.impl_->storage,
+                                          *grad_b.impl_->storage, batch, K, M,
+                                          N, false, false);
+      } else {
+        grad_b = Tensor();
+      }
+
+      return {grad_a, grad_b};
+    }
 
     // dA = dC @ B^T
     if (next_edges.size() > 0 && next_edges[0].node) {
