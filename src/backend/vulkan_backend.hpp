@@ -39,6 +39,9 @@ public:
            const BroadcastInfo &info) override;
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override;
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out, int B,
+                      int M, int K, int N, bool transA,
+                      bool transB) override;
 
   void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
               const std::vector<Shape> &shapes) override;

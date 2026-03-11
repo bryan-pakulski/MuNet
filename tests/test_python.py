@@ -938,11 +938,21 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(list(y.shape), [2, 3, 2])
         self.assertTrue(np.allclose(y, expected, atol=1e-6))
 
-    def test_tensor_matmul_rhs_full_batched_unsupported(self):
-        a = munet.from_numpy(np.ones((2, 3, 4), dtype=np.float32))
-        b = munet.from_numpy(np.ones((2, 4, 5), dtype=np.float32))
-        with self.assertRaises(RuntimeError):
-            _ = a @ b
+    def test_tensor_matmul_rhs_full_batched(self):
+        a_np = np.arange(1, 25, dtype=np.float32).reshape(2, 3, 4)
+        b_np = np.array(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
+                [[2.0, 1.0], [4.0, 3.0], [6.0, 5.0], [8.0, 7.0]],
+            ],
+            dtype=np.float32,
+        )
+        a = munet.from_numpy(a_np)
+        b = munet.from_numpy(b_np)
+        y = np.array((a @ b).detach(), copy=False)
+        expected = np.matmul(a_np, b_np)
+        self.assertEqual(list(y.shape), [2, 3, 2])
+        self.assertTrue(np.allclose(y, expected, atol=1e-6))
 
     def test_tensor_matmul_rhs_singleton_leading_dims(self):
         a_np = np.arange(1, 13, dtype=np.float32).reshape(1, 3, 4)

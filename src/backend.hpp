@@ -38,6 +38,9 @@ public:
 
   virtual void matmul(const Storage &a, const Storage &b, Storage &out, int M,
                       int K, int N, bool transA, bool transB) = 0;
+  virtual void batched_matmul(const Storage &a, const Storage &b, Storage &out,
+                              int B, int M, int K, int N, bool transA,
+                              bool transB) = 0;
 
   virtual void relu(const Storage &in, Storage &out, size_t num_elements) = 0;
   virtual void relu_backward(const Storage &grad_out, const Storage &input,

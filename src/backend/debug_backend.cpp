@@ -148,6 +148,18 @@ public:
     check("matmul", t.elapsed_us(), &out);
   }
 
+
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out, int B,
+                      int M, int K, int N, bool transA,
+                      bool transB) override {
+    MUNET_DEBUG << "batched_matmul | B=" << B << " " << M << "x" << K
+                << "x" << N << (transA ? " (transposed A)" : "")
+                << (transB ? " (transposed B)" : "") << std::endl;
+    Timer t;
+    base_->batched_matmul(a, b, out, B, M, K, N, transA, transB);
+    check("batched_matmul", t.elapsed_us(), &out);
+  }
+
   void adam_step(Storage &params, const Storage &grads, Storage &exp_avg,
                  Storage &exp_avg_sq, float lr, float beta1, float beta2,
                  float eps, int step, size_t num_elements) override {

@@ -938,8 +938,35 @@ inline Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA,
     return out2.reshape(out_shape);
   }
 
+  // Full batched path: [B, M, K] @ [B, K, N] -> [B, M, N]
+  if (!transA && !transB && a_rank == 3 && b_rank == 3) {
+    int BA = a.shape()[0];
+    int BB = b.shape()[0];
+    int M = a.shape()[1];
+    int K = a.shape()[2];
+    if (K != b.shape()[1])
+      throw std::runtime_error("Matmul: incompatible inner dimensions");
+    int N = b.shape()[2];
+
+    if (BA == BB) {
+      Tensor out({BA, M, N}, a.device(), a.dtype());
+      a.impl_->backend().batched_matmul(*a.impl_->storage, *b.impl_->storage,
+                                        *out.impl_->storage, BA, M, K, N,
+                                        false, false);
+      return out;
+    }
+
+    if (BB == 1) {
+      Tensor b2 = b.reshape({b.shape()[1], b.shape()[2]});
+      return matmul_internal(a, b2, false, false);
+    }
+
+    throw std::runtime_error(
+        "Matmul: batched inputs require same batch or RHS batch=1");
+  }
+
   throw std::runtime_error(
-      "Matmul currently supports only 2Dx2D and [...,K]x[K,N]");
+      "Matmul currently supports 2Dx2D, [...,K]x[K,N], and [B,M,K]x[B,K,N]");
 }
 
 struct MatmulBackward : public Node {
@@ -971,6 +998,39 @@ struct MatmulBackward : public Node {
       if (next_edges.size() > 1 && next_edges[1].node) {
         Tensor A2 = A.reshape({leading, K});
         grad_b = matmul_internal(A2, grad_out_2d, true, false);
+      } else {
+        grad_b = Tensor();
+      }
+
+      return {grad_a, grad_b};
+    }
+
+    // Full batched [B,M,K]x[B,K,N] path.
+    if (A.shape().size() == 3 && B.shape().size() == 3 &&
+        A.shape()[0] == B.shape()[0]) {
+      int batch = A.shape()[0];
+      int M = A.shape()[1];
+      int K = A.shape()[2];
+      int N = B.shape()[2];
+
+      if (next_edges.size() > 0 && next_edges[0].node) {
+        Tensor Bt = B.permute({0, 2, 1}).contiguous();
+        grad_a = Tensor({batch, M, K}, A.device(), A.dtype());
+        A.impl_->backend().batched_matmul(*grad_out.impl_->storage,
+                                          *Bt.impl_->storage,
+                                          *grad_a.impl_->storage, batch, M, N,
+                                          K, false, false);
+      } else {
+        grad_a = Tensor();
+      }
+
+      if (next_edges.size() > 1 && next_edges[1].node) {
+        Tensor At = A.permute({0, 2, 1}).contiguous();
+        grad_b = Tensor({batch, K, N}, B.device(), B.dtype());
+        B.impl_->backend().batched_matmul(*At.impl_->storage,
+                                          *grad_out.impl_->storage,
+                                          *grad_b.impl_->storage, batch, K, M,
+                                          N, false, false);
       } else {
         grad_b = Tensor();
       }

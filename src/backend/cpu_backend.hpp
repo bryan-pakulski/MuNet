@@ -275,6 +275,36 @@ public:
   }
 
 
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out, int B,
+                      int M, int K, int N, bool transA,
+                      bool transB) override {
+    const float *ap = (const float *)a.data();
+    const float *bp = (const float *)b.data();
+    float *cp = (float *)out.data();
+    size_t a_batch_stride = (size_t)M * (size_t)K;
+    size_t b_batch_stride = (size_t)K * (size_t)N;
+    size_t c_batch_stride = (size_t)M * (size_t)N;
+
+    parallel_for(0, (size_t)B, [&](size_t bs, size_t be) {
+      for (size_t bi = bs; bi < be; ++bi) {
+        const float *a_ptr = ap + bi * a_batch_stride;
+        const float *b_ptr = bp + bi * b_batch_stride;
+        float *c_ptr = cp + bi * c_batch_stride;
+        for (int m = 0; m < M; ++m) {
+          for (int n = 0; n < N; ++n) {
+            float sum = 0.0f;
+            for (int k = 0; k < K; ++k) {
+              float a_val = transA ? a_ptr[k * M + m] : a_ptr[m * K + k];
+              float b_val = transB ? b_ptr[n * K + k] : b_ptr[k * N + n];
+              sum += a_val * b_val;
+            }
+            c_ptr[m * N + n] = sum;
+          }
+        }
+      }
+    });
+  }
+
   void gather_elements(const Storage &data, const Storage &indices,
                        Storage &out, const Shape &shape, int axis) override {
     const float *dp = (const float *)data.data();

@@ -71,7 +71,7 @@ static VkCommandBuffer immediateCmdBuffer = VK_NULL_HANDLE;
 
 static VkPipelineLayout pipelineLayout;
 static VkPipeline addPipeline, mulPipeline, subPipeline, divPipeline,
-    matmulPipeline, gatherElementsPipeline;
+    matmulPipeline, batchedMatmulPipeline, gatherElementsPipeline;
 static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
     sumToShapePipeline;
 static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
@@ -1207,6 +1207,53 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 						if (out_valid)
 								c[row * p.N + col] = sum;
 				}
+	    )");
+
+  batchedMatmulPipeline = createComputePipeline("batched_matmul",
+                                                R"(
+        #version 450
+        layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+        layout(binding = 0) readonly buffer A { float a[]; };
+        layout(binding = 1) readonly buffer B { float b[]; };
+        layout(binding = 2) writeonly buffer C { float c[]; };
+
+        layout(push_constant) uniform Push {
+            int B;
+            int M;
+            int K;
+            int N;
+            int tA;
+            int tB;
+        } p;
+
+        void main() {
+            int batch = int(gl_GlobalInvocationID.z);
+            int row = int(gl_GlobalInvocationID.y);
+            int col = int(gl_GlobalInvocationID.x);
+            if (batch >= p.B || row >= p.M || col >= p.N) return;
+
+            int a_base = batch * p.M * p.K;
+            int b_base = batch * p.K * p.N;
+            int c_base = batch * p.M * p.N;
+
+            float sum = 0.0;
+            if (p.tA == 0 && p.tB == 0) {
+                for (int k = 0; k < p.K; ++k)
+                    sum += a[a_base + row * p.K + k] * b[b_base + k * p.N + col];
+            } else if (p.tA == 1 && p.tB == 0) {
+                for (int k = 0; k < p.K; ++k)
+                    sum += a[a_base + k * p.M + row] * b[b_base + k * p.N + col];
+            } else if (p.tA == 0 && p.tB == 1) {
+                for (int k = 0; k < p.K; ++k)
+                    sum += a[a_base + row * p.K + k] * b[b_base + col * p.K + k];
+            } else {
+                for (int k = 0; k < p.K; ++k)
+                    sum += a[a_base + k * p.M + row] * b[b_base + col * p.K + k];
+            }
+
+            c[c_base + row * p.N + col] = sum;
+        }
     )");
 
   conv2dPipeline = createComputePipeline("conv2d",
@@ -2082,6 +2129,7 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyPipeline(device, crossEntropyBackwardPipeline, nullptr);
 
   vkDestroyPipeline(device, matmulPipeline, nullptr);
+  vkDestroyPipeline(device, batchedMatmulPipeline, nullptr);
   vkDestroyPipeline(device, gatherElementsPipeline, nullptr);
 
   vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -2690,6 +2738,17 @@ void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
   // Dispatch x maps to N (cols), y maps to M (rows)
   dispatch_kernel(matmulPipeline, {a.data(), b.data(), out.data()}, &pc,
                   sizeof(pc), (N + 31) / 32, (M + 7) / 8, 1);
+}
+
+
+void VulkanBackend::batched_matmul(const Storage &a, const Storage &b,
+                                   Storage &out, int B, int M, int K, int N,
+                                   bool transA, bool transB) {
+  struct {
+    int B, M, K, N, tA, tB;
+  } pc = {B, M, K, N, transA, transB};
+  dispatch_kernel(batchedMatmulPipeline, {a.data(), b.data(), out.data()}, &pc,
+                  sizeof(pc), (N + 15) / 16, (M + 15) / 16, B);
 }
 
 // --- Spatial Stubs ---
