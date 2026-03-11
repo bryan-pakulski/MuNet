@@ -611,6 +611,33 @@ class _ONNXGraphModule:
                             out[bn, oc_idx, oy, ox] = acc
         return out
 
+    def _resolve_2d_auto_pad(self, auto_pad, in_hw, kernel_hw, strides_hw, dilations_hw=(1, 1)):
+        mode = str(auto_pad or "NOTSET").upper()
+        if mode in ("", "NOTSET"):
+            return [0, 0, 0, 0]
+        if mode == "VALID":
+            return [0, 0, 0, 0]
+        if mode not in ("SAME_UPPER", "SAME_LOWER"):
+            raise ValueError(f"Unsupported auto_pad mode: {auto_pad}")
+
+        pads = []
+        for i in range(2):
+            in_dim = int(in_hw[i])
+            k = int(kernel_hw[i])
+            s = int(strides_hw[i])
+            d = int(dilations_hw[i])
+            eff_k = (k - 1) * d + 1
+            out_dim = int(self._np.ceil(float(in_dim) / float(s)))
+            total = max((out_dim - 1) * s + eff_k - in_dim, 0)
+            if mode == "SAME_UPPER":
+                p0 = total // 2
+                p1 = total - p0
+            else:
+                p1 = total // 2
+                p0 = total - p1
+            pads.extend([p0, p1])
+        return [pads[0], pads[2], pads[1], pads[3]]
+
     def _scalar_tensor(self, value, ref):
         t = self._m.Tensor([1], ref.device, ref.dtype, False)
         t.uniform_(float(value), float(value))
@@ -739,6 +766,7 @@ class _ONNXGraphModule:
                 strides = [int(v) for v in self._get_attr(node, "strides", [1, 1])]
                 pads = [int(v) for v in self._get_attr(node, "pads", [0, 0, 0, 0])]
                 dilations = [int(v) for v in self._get_attr(node, "dilations", [1, 1])]
+                auto_pad = self._get_attr(node, "auto_pad", "NOTSET")
                 groups = int(self._get_attr(node, "group", 1))
 
                 if len(strides) != 2:
@@ -749,6 +777,9 @@ class _ONNXGraphModule:
                     raise ValueError(f"Conv currently supports dilation=[1,1], got {dilations}")
                 if strides[0] != strides[1]:
                     raise ValueError(f"Conv currently supports equal spatial stride, got {strides}")
+
+                if str(auto_pad).upper() != "NOTSET":
+                    pads = self._resolve_2d_auto_pad(auto_pad, [int(data.shape[2]), int(data.shape[3])], [int(W.shape[2]), int(W.shape[3])], strides, dilations)
 
                 pt, pl, pb, pr = pads
                 if any(v < 0 for v in (pt, pl, pb, pr)):
@@ -776,7 +807,48 @@ class _ONNXGraphModule:
                 ks = self._get_attr(node, "kernel_shape", [2, 2])
                 st = self._get_attr(node, "strides", ks)
                 pd = self._get_attr(node, "pads", [0, 0, 0, 0])
-                out = data.max_pool2d(int(ks[0]), int(st[0]), int(pd[0]))
+                auto_pad = self._get_attr(node, "auto_pad", "NOTSET")
+                ceil_mode = int(self._get_attr(node, "ceil_mode", 0))
+                ks = [int(ks[0]), int(ks[1])]
+                st = [int(st[0]), int(st[1])]
+                pd = [int(v) for v in pd]
+
+                if str(auto_pad).upper() != "NOTSET":
+                    pd = self._resolve_2d_auto_pad(auto_pad, [int(data.shape[2]), int(data.shape[3])], ks, st)
+
+                if (
+                    st[0] == st[1]
+                    and ks[0] == ks[1]
+                    and pd[0] == pd[1] == pd[2] == pd[3]
+                    and ceil_mode == 0
+                ):
+                    out = data.max_pool2d(int(ks[0]), int(st[0]), int(pd[0]))
+                else:
+                    x = self._as_numpy(data).astype(self._np.float32)
+                    n, c, h, w = x.shape
+                    pt, pl, pb, pr = pd
+                    x = self._np.pad(
+                        x,
+                        ((0, 0), (0, 0), (pt, pb), (pl, pr)),
+                        mode="constant",
+                        constant_values=-self._np.inf,
+                    )
+                    out_h_nom = (h + pt + pb - ks[0]) / float(st[0]) + 1.0
+                    out_w_nom = (w + pl + pr - ks[1]) / float(st[1]) + 1.0
+                    out_h = int(self._np.ceil(out_h_nom) if ceil_mode else self._np.floor(out_h_nom))
+                    out_w = int(self._np.ceil(out_w_nom) if ceil_mode else self._np.floor(out_w_nom))
+                    out_h = max(out_h, 0)
+                    out_w = max(out_w, 0)
+                    y = self._np.empty((n, c, out_h, out_w), dtype=self._np.float32)
+                    for oy in range(out_h):
+                        sy = oy * st[0]
+                        ey = sy + ks[0]
+                        for ox in range(out_w):
+                            sx = ox * st[1]
+                            ex = sx + ks[1]
+                            window = x[:, :, sy:ey, sx:ex]
+                            y[:, :, oy, ox] = window.max(axis=(2, 3))
+                    out = self._from_numpy_like(y, data)
             elif op == "Sigmoid":
                 out = self._as_tensor(ins[0]).sigmoid()
             elif op == "Relu":
