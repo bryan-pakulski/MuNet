@@ -1,4 +1,5 @@
 #include "tensor.hpp"
+#include "amp.hpp"
 #include "autograd/autograd.hpp"
 #include "ops.hpp"
 #include "util.hpp"
@@ -12,6 +13,25 @@
 
 namespace munet {
 
+namespace {
+inline Tensor maybe_autocast_tensor(const Tensor &t, amp::AutocastOp op) {
+  if (!amp::AutocastMode::is_enabled() || !amp::should_autocast(op))
+    return t;
+  DataType target = amp::AutocastMode::dtype();
+  if (!is_float_dtype(t.dtype()) || t.dtype() == target)
+    return t;
+  if (is_dtype_trace_enabled()) {
+    MUNET_DTYPE_LOG << "autocast tensor op=" << static_cast<int>(op) << " "
+                    << dtype_name(t.dtype()) << " -> "
+                    << dtype_name(target) << " shape=" << to_string(t.shape())
+                    << std::endl;
+    Profiler::get().record_dtype_event(
+        std::string("autocast.tensor.") + dtype_name(t.dtype()) + "->" +
+        dtype_name(target));
+  }
+  return t.to_dtype(target);
+}
+} // namespace
 
 // --- Autograd ---
 void Tensor::backward(const Tensor &grad) {
@@ -49,27 +69,48 @@ Tensor Tensor::detach() const {
 
 // --- Ops ---
 Tensor Tensor::operator+(const Tensor &other) const {
-  return ops::add(*this, other);
+  Tensor lhs = maybe_autocast_tensor(*this, amp::AutocastOp::Add);
+  Tensor rhs = maybe_autocast_tensor(other, amp::AutocastOp::Add);
+  return ops::add(lhs, rhs);
 }
 
 Tensor Tensor::matmul(const Tensor &other) const {
-  return ops::matmul(*this, other);
+  Tensor lhs = maybe_autocast_tensor(*this, amp::AutocastOp::Matmul);
+  Tensor rhs = maybe_autocast_tensor(other, amp::AutocastOp::Matmul);
+  return ops::matmul(lhs, rhs);
 }
 
-Tensor Tensor::relu() const { return ops::relu(*this); }
-Tensor Tensor::sigmoid() const { return ops::sigmoid(*this); }
-Tensor Tensor::softmax(int dim) const { return ops::softmax(*this, dim); }
-Tensor Tensor::log_softmax(int dim) const { return ops::log_softmax(*this, dim); }
+Tensor Tensor::relu() const {
+  Tensor x = maybe_autocast_tensor(*this, amp::AutocastOp::Relu);
+  return ops::relu(x);
+}
+Tensor Tensor::sigmoid() const {
+  Tensor x = maybe_autocast_tensor(*this, amp::AutocastOp::Sigmoid);
+  return ops::sigmoid(x);
+}
+Tensor Tensor::softmax(int dim) const {
+  Tensor x = maybe_autocast_tensor(*this, amp::AutocastOp::Softmax);
+  return ops::softmax(x, dim);
+}
+Tensor Tensor::log_softmax(int dim) const {
+  Tensor x = maybe_autocast_tensor(*this, amp::AutocastOp::LogSoftmax);
+  return ops::log_softmax(x, dim);
+}
 
 Tensor Tensor::conv2d(const Tensor &weight, const Tensor &bias, int stride,
                       int padding) const {
-  return ops::conv2d(*this, weight, bias, stride, padding);
+  Tensor in = maybe_autocast_tensor(*this, amp::AutocastOp::Conv2D);
+  Tensor w = maybe_autocast_tensor(weight, amp::AutocastOp::Conv2D);
+  Tensor b = maybe_autocast_tensor(bias, amp::AutocastOp::Conv2D);
+  return ops::conv2d(in, w, b, stride, padding);
 }
 Tensor Tensor::max_pool2d(int kernel_size, int stride, int padding) const {
-  return ops::max_pool2d(*this, kernel_size, stride, padding);
+  Tensor in = maybe_autocast_tensor(*this, amp::AutocastOp::MaxPool2D);
+  return ops::max_pool2d(in, kernel_size, stride, padding);
 }
 Tensor Tensor::upsample2d(int scale_factor) const {
-  return ops::upsample2d(*this, scale_factor);
+  Tensor in = maybe_autocast_tensor(*this, amp::AutocastOp::Upsample2D);
+  return ops::upsample2d(in, scale_factor);
 }
 
 // --- Utilities ---
@@ -79,6 +120,16 @@ struct ToBackward : public Node {
   std::string name() const override { return "ToBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
     return {grads[0].to(src_device)};
+  }
+};
+
+
+struct ToDTypeBackward : public Node {
+  DataType src_dtype;
+  explicit ToDTypeBackward(DataType dt) : src_dtype(dt) {}
+  std::string name() const override { return "ToDTypeBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    return {grads[0].to_dtype(src_dtype)};
   }
 };
 
@@ -149,15 +200,65 @@ Tensor Tensor::to(Device dev) const {
   return out;
 }
 
+
+Tensor Tensor::to_dtype(DataType target_dtype) const {
+  if (dtype() == target_dtype)
+    return *this;
+
+  if (is_dtype_trace_enabled()) {
+    MUNET_DTYPE_LOG << "to_dtype " << dtype_name(dtype()) << " -> "
+                    << dtype_name(target_dtype) << " device="
+                    << device().to_string() << " shape=" << to_string(shape())
+                    << std::endl;
+    Profiler::get().record_dtype_event(
+        std::string("to_dtype.") + dtype_name(dtype()) + "->" +
+        dtype_name(target_dtype));
+  }
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor src_cpu = (device().type == DeviceType::CPU) ? *this : to(cpu);
+  Tensor out_cpu(shape(), cpu, target_dtype, requires_grad());
+
+  for (size_t i = 0; i < src_cpu.size(); ++i) {
+    double v = load_scalar_as_double(src_cpu.data(), src_cpu.dtype(), i);
+    store_scalar_from_double(out_cpu.data(), target_dtype, i, v);
+  }
+
+  Tensor out = (device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(device());
+
+  if (GradMode::is_enabled() && requires_grad()) {
+    if (impl_->grad_fn) {
+      auto fn = std::make_shared<ToDTypeBackward>(dtype());
+      ops::link_backward_edges(fn.get(), {*this});
+      out.set_requires_grad(true);
+      out.impl_->grad_fn = fn;
+    } else {
+      out.set_requires_grad(true);
+    }
+  }
+
+  if (impl_->grad_fn) {
+    ops::record_trace(out, "ToDType", {*this});
+  }
+
+  return out;
+}
+
 Tensor Tensor::operator-(const Tensor &other) const {
-  return ops::sub(*this, other);
+  Tensor lhs = maybe_autocast_tensor(*this, amp::AutocastOp::Sub);
+  Tensor rhs = maybe_autocast_tensor(other, amp::AutocastOp::Sub);
+  return ops::sub(lhs, rhs);
 }
 Tensor Tensor::operator*(const Tensor &other) const {
-  return ops::mul(*this, other);
+  Tensor lhs = maybe_autocast_tensor(*this, amp::AutocastOp::Mul);
+  Tensor rhs = maybe_autocast_tensor(other, amp::AutocastOp::Mul);
+  return ops::mul(lhs, rhs);
 }
 
 Tensor Tensor::operator/(const Tensor &other) const {
-  return ops::div(*this, other);
+  Tensor lhs = maybe_autocast_tensor(*this, amp::AutocastOp::Div);
+  Tensor rhs = maybe_autocast_tensor(other, amp::AutocastOp::Div);
+  return ops::div(lhs, rhs);
 }
 
 Tensor Tensor::cat(const std::vector<Tensor> &inputs, int dim) {
@@ -200,21 +301,31 @@ void Tensor::step(float lr) {
 Tensor Tensor::batch_norm(Tensor &running_mean, Tensor &running_var,
                           const Tensor &weight, const Tensor &bias,
                           bool training, float momentum, float eps) const {
-  return ops::batch_norm(*this, running_mean, running_var, weight, bias,
-                         training, momentum, eps);
+  Tensor in = maybe_autocast_tensor(*this, amp::AutocastOp::BatchNorm);
+  Tensor w = maybe_autocast_tensor(weight, amp::AutocastOp::BatchNorm);
+  Tensor b = maybe_autocast_tensor(bias, amp::AutocastOp::BatchNorm);
+  return ops::batch_norm(in, running_mean, running_var, w, b, training,
+                         momentum, eps);
 }
 
 Tensor Tensor::layer_norm(const Tensor &weight, const Tensor &bias,
                           float eps) const {
-  return ops::layer_norm(*this, weight, bias, eps);
+  Tensor in = maybe_autocast_tensor(*this, amp::AutocastOp::LayerNorm);
+  Tensor w = maybe_autocast_tensor(weight, amp::AutocastOp::LayerNorm);
+  Tensor b = maybe_autocast_tensor(bias, amp::AutocastOp::LayerNorm);
+  return ops::layer_norm(in, w, b, eps);
 }
 
 Tensor Tensor::mse_loss(const Tensor &target) const {
-  return ops::mse_loss(*this, target);
+  Tensor pred = maybe_autocast_tensor(*this, amp::AutocastOp::MSELoss);
+  Tensor tgt = maybe_autocast_tensor(target, amp::AutocastOp::MSELoss);
+  return ops::mse_loss(pred, tgt);
 }
 
 Tensor Tensor::cross_entropy(const Tensor &target) const {
-  return ops::cross_entropy(*this, target);
+  Tensor logits = maybe_autocast_tensor(*this, amp::AutocastOp::CrossEntropy);
+  Tensor tgt = maybe_autocast_tensor(target, amp::AutocastOp::CrossEntropy);
+  return ops::cross_entropy(logits, tgt);
 }
 
 void Tensor::uniform_(float low, float high) {

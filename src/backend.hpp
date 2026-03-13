@@ -127,6 +127,12 @@ public:
   virtual void sum_to_shape(const Storage &in, Storage &out,
                             const Shape &in_shape, const Shape &out_shape) = 0;
   virtual void sum(const Storage &in, Storage &out, size_t num_elements) = 0;
+
+  // Optional overflow/non-finite check hook for AMP GradScaler.
+  // Backends that can inspect their local memory efficiently should override
+  // both methods. Callers must fallback when this returns false.
+  virtual bool supports_non_finite_check() const { return false; }
+  virtual bool has_non_finite(const Storage &, size_t) const { return false; }
 };
 
 class BackendManager {

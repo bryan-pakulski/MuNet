@@ -20,12 +20,24 @@ public:
   }
 };
 
+enum class LossScaleMode { None, Dynamic, Static };
+enum class PrecisionFallbackMode { Error, WarnAndUpcast };
 
+struct PrecisionPolicy {
+  DataType param_dtype = DataType::Float32;
+  DataType activation_dtype = DataType::Float32;
+  DataType gradient_dtype = DataType::Float32;
+  DataType optimizer_state_dtype = DataType::Float32;
+  DataType accumulation_dtype = DataType::Float32;
+  LossScaleMode loss_scale_mode = LossScaleMode::None;
+  PrecisionFallbackMode fallback_mode = PrecisionFallbackMode::WarnAndUpcast;
+};
 
 struct EngineConfig {
   Device device{DeviceType::CPU, 0};
   int warmup_runs = 0;
   bool strict_shape_check = true;
+  PrecisionPolicy precision_policy{};
 };
 
 struct EngineStats {
@@ -54,6 +66,14 @@ public:
   }
 
   void set_strict_shape_check(bool enabled) { config_.strict_shape_check = enabled; }
+
+  void set_precision_policy(const PrecisionPolicy &policy) {
+    config_.precision_policy = policy;
+  }
+
+  const PrecisionPolicy &precision_policy() const {
+    return config_.precision_policy;
+  }
 
   void load(const std::shared_ptr<core::Module> &module) {
     if (!module)

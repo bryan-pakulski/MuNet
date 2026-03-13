@@ -106,6 +106,7 @@ public:
   }
 
   Tensor to(Device dev) const;
+  Tensor to_dtype(DataType dtype) const;
 
   static Tensor cat(const std::vector<Tensor> &inputs, int dim = 1);
   Tensor operator+(const Tensor &other) const;

@@ -29,6 +29,11 @@ inline bool is_profile_enabled() {
   return profile;
 }
 
+inline bool is_dtype_trace_enabled() {
+  static const bool trace = (std::getenv("MUNET_DTYPE_TRACE") != nullptr);
+  return trace;
+}
+
 inline int log_level() {
   // 0=ERROR, 1=WARN, 2=INFO, 3=DEBUG
   static int level = []() {
@@ -60,6 +65,11 @@ inline std::ostream &log_stream(const char *label, const char *color,
   } else                                                                       \
     std::cerr << MUNET_C_ORANGE "[PROFILE] " MUNET_C_RESET
 
+#define MUNET_DTYPE_LOG                                                        \
+  if (!munet::is_dtype_trace_enabled()) {                                      \
+  } else                                                                       \
+    std::cerr << MUNET_C_CYAN "[DTYPE] " MUNET_C_RESET
+
 struct OpStats {
   double cpu_us = 0;
   double gpu_us = 0;
@@ -78,6 +88,7 @@ class Profiler {
   size_t current_memory = 0;
   std::mutex mtx;
   bool printed_at_exit_ = false;
+  std::map<std::string, size_t> dtype_events_;
 
   Profiler() = default;
 
@@ -132,6 +143,11 @@ public:
     s.count++;
     if (!shape.empty())
       s.last_shape = shape;
+  }
+
+  void record_dtype_event(const std::string &event) {
+    std::lock_guard<std::mutex> lock(mtx);
+    dtype_events_[event] += 1;
   }
 
   void print_summary(const std::string &title = "MuNet Performance Summary") {
@@ -199,6 +215,13 @@ private:
                 << avg_gpu << std::setw(12) << s.max_gpu_us << std::setw(12)
                 << std::setprecision(3) << bandwidth << std::setw(10)
                 << std::setprecision(1) << pct << std::endl;
+    }
+
+    if (!dtype_events_.empty()) {
+      std::cerr << MUNET_C_CYAN << "\nDType Event Counters:\n" << MUNET_C_RESET;
+      for (const auto &kv : dtype_events_) {
+        std::cerr << "  " << kv.first << ": " << kv.second << "\n";
+      }
     }
   }
 };

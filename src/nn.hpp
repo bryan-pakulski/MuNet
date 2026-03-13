@@ -1,5 +1,7 @@
 #pragma once
+#include "amp.hpp"
 #include "core/module.hpp"
+#include "util.hpp"
 #include <cmath>
 #include <limits>
 #include <random>
@@ -7,6 +9,55 @@
 
 namespace munet {
 namespace nn {
+
+namespace {
+inline Tensor maybe_autocast_module_input(const Tensor &x, amp::AutocastOp op) {
+  if (!amp::AutocastMode::is_enabled() || !amp::should_autocast(op))
+    return x;
+  DataType target = amp::AutocastMode::dtype();
+  if (!is_float_dtype(x.dtype()) || x.dtype() == target)
+    return x;
+  if (is_dtype_trace_enabled()) {
+    MUNET_DTYPE_LOG << "autocast module input op=" << static_cast<int>(op)
+                    << " " << dtype_name(x.dtype()) << " -> "
+                    << dtype_name(target) << " shape=" << to_string(x.shape())
+                    << std::endl;
+    Profiler::get().record_dtype_event(
+        std::string("autocast.module_in.") + dtype_name(x.dtype()) + "->" +
+        dtype_name(target));
+  }
+  return x.to_dtype(target);
+}
+
+inline Tensor maybe_autocast_module_output(const Tensor &out, amp::AutocastOp op,
+                                          bool autocast_active) {
+  if (!autocast_active || !amp::should_autocast(op))
+    return out;
+  DataType target = amp::AutocastMode::dtype();
+  if (!is_float_dtype(out.dtype()) || out.dtype() == target)
+    return out;
+  if (is_dtype_trace_enabled()) {
+    MUNET_DTYPE_LOG << "autocast module output op=" << static_cast<int>(op)
+                    << " " << dtype_name(out.dtype()) << " -> "
+                    << dtype_name(target) << " shape="
+                    << to_string(out.shape()) << std::endl;
+    Profiler::get().record_dtype_event(
+        std::string("autocast.module_out.") + dtype_name(out.dtype()) + "->" +
+        dtype_name(target));
+  }
+  return out.to_dtype(target);
+}
+} // namespace
+
+struct ScopedAutocastModeToggle {
+  bool prev_enabled;
+  explicit ScopedAutocastModeToggle(bool disable)
+      : prev_enabled(amp::AutocastMode::is_enabled()) {
+    if (disable && prev_enabled)
+      amp::AutocastMode::set_enabled(false);
+  }
+  ~ScopedAutocastModeToggle() { amp::AutocastMode::set_enabled(prev_enabled); }
+};
 
 class Module : public core::Module {
 public:
@@ -118,12 +169,15 @@ public:
 class Tanh : public Module {
 public:
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    ScopedAutocastModeToggle scoped(autocast_active);
     // tanh(x) = 2 * sigmoid(2x) - 1
     Tensor two({1}, x.device(), x.dtype(), false);
     two.uniform_(2.0f, 2.0f);
     Tensor one({1}, x.device(), x.dtype(), false);
     one.uniform_(1.0f, 1.0f);
-    return (x * two).sigmoid() * two - one;
+    Tensor out = (x * two).sigmoid() * two - one;
+    return maybe_autocast_module_output(out, amp::AutocastOp::Tanh, autocast_active);
   }
 };
 
@@ -131,10 +185,13 @@ public:
 class GELU : public Module {
 public:
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    ScopedAutocastModeToggle scoped(autocast_active);
     // Fast GELU approximation: x * sigmoid(1.702 * x)
     Tensor c({1}, x.device(), x.dtype(), false);
     c.uniform_(1.702f, 1.702f);
-    return x * (x * c).sigmoid();
+    Tensor out = x * (x * c).sigmoid();
+    return maybe_autocast_module_output(out, amp::AutocastOp::GELU, autocast_active);
   }
 };
 
@@ -146,8 +203,11 @@ public:
   }
 
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    ScopedAutocastModeToggle scoped(autocast_active);
+
     if (!training_ || p_ == 0.0f)
-      return x;
+      return maybe_autocast_module_output(x, amp::AutocastOp::Dropout, autocast_active);
 
     Device cpu{DeviceType::CPU, 0};
     Tensor mask_cpu(x.shape(), cpu, x.dtype(), false);
@@ -156,14 +216,15 @@ public:
     std::bernoulli_distribution keep(keep_prob);
     std::mt19937 rng(std::random_device{}());
 
-    float *m = static_cast<float *>(mask_cpu.data());
     for (size_t i = 0; i < mask_cpu.size(); ++i) {
-      m[i] = keep(rng) ? (1.0f / keep_prob) : 0.0f;
+      double mv = keep(rng) ? (1.0 / static_cast<double>(keep_prob)) : 0.0;
+      store_scalar_from_double(mask_cpu.data(), mask_cpu.dtype(), i, mv);
     }
 
     Tensor mask = (x.device().type == DeviceType::CPU) ? mask_cpu
                                                         : mask_cpu.to(x.device());
-    return x * mask;
+    Tensor out = x * mask;
+    return maybe_autocast_module_output(out, amp::AutocastOp::Dropout, autocast_active);
   }
 
   float p_;
@@ -220,6 +281,9 @@ public:
   }
 
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    x = maybe_autocast_module_input(x, amp::AutocastOp::Embedding);
+    ScopedAutocastModeToggle scoped(autocast_active);
     auto s = x.shape();
 
     // Efficient index-based gather path for [B, T] token ids.
@@ -247,8 +311,10 @@ public:
         }
       }
 
-      return (x.device().type == DeviceType::CPU) ? out_cpu
-                                                   : out_cpu.to(x.device());
+      Tensor out = (x.device().type == DeviceType::CPU) ? out_cpu
+                                                         : out_cpu.to(x.device());
+      return maybe_autocast_module_output(out, amp::AutocastOp::Embedding,
+                                          autocast_active);
     }
 
     // One-hot/probability path [B, T, V] (keeps autograd support).
@@ -262,7 +328,9 @@ public:
     int B = s[0], T = s[1], V = s[2];
     Tensor flat = x.reshape({B * T, V});
     Tensor out = flat.matmul(weight);
-    return out.reshape({B, T, embedding_dim_});
+    out = out.reshape({B, T, embedding_dim_});
+    return maybe_autocast_module_output(out, amp::AutocastOp::Embedding,
+                                        autocast_active);
   }
 
   Tensor weight;
@@ -288,6 +356,10 @@ public:
   }
 
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    // Keep internal MHA math in stable native dtype for now; apply autocast on
+    // module output under policy control.
+    ScopedAutocastModeToggle scoped(autocast_active);
     auto s = x.shape();
     if (s.size() != 3)
       throw std::runtime_error("MultiHeadAttention expects input shape [B,T,E]");
@@ -322,8 +394,7 @@ public:
 
     // Block + causal mask on CPU, then move to target device.
     Device cpu{DeviceType::CPU, 0};
-    Tensor mask_cpu({BH * T, BH * T}, cpu, scores.dtype(), false);
-    float *m = static_cast<float *>(mask_cpu.data());
+    Tensor mask_cpu({BH * T, BH * T}, cpu, DataType::Float32, false);
     for (int i = 0; i < BH * T; ++i) {
       int bh_i = i / T;
       int t_i = i % T;
@@ -331,7 +402,9 @@ public:
         int bh_j = j / T;
         int t_j = j % T;
         bool masked = (bh_i != bh_j) || (causal_ && t_j > t_i);
-        m[i * (BH * T) + j] = masked ? 1.0f : 0.0f;
+        store_scalar_from_double(mask_cpu.data(), mask_cpu.dtype(),
+                                 static_cast<size_t>(i * (BH * T) + j),
+                                 masked ? 1.0 : 0.0);
       }
     }
     Tensor mask = (scores.device().type == DeviceType::CPU)
@@ -349,7 +422,9 @@ public:
                       .reshape({B * T, E});
 
     Tensor out2d = std::dynamic_pointer_cast<Linear>(out_proj)->forward(merged);
-    return out2d.reshape({B, T, E});
+    Tensor out = out2d.reshape({B, T, E});
+    return maybe_autocast_module_output(out, amp::AutocastOp::MultiHeadAttention,
+                                        autocast_active);
   }
 
   int embed_dim_;
@@ -362,6 +437,9 @@ public:
 class GlobalAvgPool2d : public Module {
 public:
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    x = maybe_autocast_module_input(x, amp::AutocastOp::GlobalAvgPool2d);
+    ScopedAutocastModeToggle scoped(autocast_active);
     auto s = x.shape();
     if (s.size() != 4)
       throw std::runtime_error("GlobalAvgPool2d expects NCHW input");
@@ -375,7 +453,9 @@ public:
     weights.uniform_(scale, scale);
 
     Tensor out = flat.matmul(weights);
-    return out.reshape({B, C, 1, 1});
+    out = out.reshape({B, C, 1, 1});
+    return maybe_autocast_module_output(out, amp::AutocastOp::GlobalAvgPool2d,
+                                        autocast_active);
   }
 };
 
@@ -385,9 +465,12 @@ public:
       : negative_slope_(negative_slope) {}
 
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    ScopedAutocastModeToggle scoped(autocast_active);
     Tensor slope({1}, x.device(), x.dtype(), false);
     slope.uniform_(negative_slope_, negative_slope_);
-    return x.relu() + (x - x.relu()) * slope;
+    Tensor out = x.relu() + (x - x.relu()) * slope;
+    return maybe_autocast_module_output(out, amp::AutocastOp::LeakyRelu, autocast_active);
   }
 
   float negative_slope_;

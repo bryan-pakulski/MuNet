@@ -77,6 +77,21 @@ public:
     }
   }
 
+  virtual void to_dtype(DataType dtype) {
+    for (auto &[name, p] : parameters_) {
+      bool req = p->requires_grad();
+      *p = p->to_dtype(dtype);
+      if (req)
+        p->set_requires_grad(true);
+    }
+    for (auto &[name, b] : buffers_) {
+      *b = b->to_dtype(dtype);
+    }
+    for (auto &[name, m] : modules_) {
+      m->to_dtype(dtype);
+    }
+  }
+
   void zero_grad() {
     for (auto &p : parameters()) {
       p.zero_grad();

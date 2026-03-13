@@ -22,7 +22,9 @@ class DebugBackend : public Backend {
   void check(const char *name, double cpu_us,
              const Storage *out_storage = nullptr) {
     try {
-      double gpu_us = base_->get_last_kernel_time_us();
+      double gpu_us = 0.0;
+      if (out_storage && out_storage->device().type != DeviceType::CPU)
+        gpu_us = base_->get_last_kernel_time_us();
 
       // Full synchronization and NaN checks are expensive and should only run
       // in explicit debug mode, not in profile-only mode.
@@ -58,6 +60,14 @@ public:
 
   double get_last_kernel_time_us() override {
     return base_->get_last_kernel_time_us();
+  }
+
+  bool supports_non_finite_check() const override {
+    return base_->supports_non_finite_check();
+  }
+
+  bool has_non_finite(const Storage &s, size_t n) const override {
+    return base_->has_non_finite(s, n);
   }
 
   void *allocate(size_t bytes) override {

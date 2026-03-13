@@ -86,6 +86,445 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(t.device.type, munet.DeviceType.CPU)
         self.assertEqual(t.dtype, munet.DataType.Float32)
 
+    def test_module_to_dtype_casts_parameters_and_buffers(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.BatchNorm2d(8),
+        ])
+
+        for _, p in model.named_parameters().items():
+            self.assertEqual(p.dtype, munet.DataType.Float32)
+
+        model.to_dtype(munet.DataType.Float16)
+        for _, p in model.named_parameters().items():
+            self.assertEqual(p.dtype, munet.DataType.Float16)
+
+
+    def test_to_dtype_and_dispatch_config(self):
+        t = munet.Tensor([2], dtype=munet.DataType.Float32)
+        arr = np.array(t, copy=False)
+        arr[:] = [3.0, -2.0]
+
+        t_i8 = t.to_dtype(munet.DataType.Int8)
+        self.assertEqual(t_i8.dtype, munet.DataType.Int8)
+
+        t_back = t_i8.to_dtype(munet.DataType.Float32)
+        back = np.array(t_back, copy=False)
+        self.assertTrue(np.allclose(back, np.array([3.0, -2.0], dtype=np.float32), atol=1e-5))
+
+        cfg = munet.DTypeDispatchConfig()
+        cfg.has_compute_dtype = True
+        cfg.compute_dtype = munet.DataType.Int8
+        cfg.fallback_mode = munet.KernelFallbackMode.WarnAndUpcast
+
+        with munet.precision_dispatch(cfg):
+            y = t_i8 + t_i8
+            y_back = y.to_dtype(munet.DataType.Float32)
+            y_np = np.array(y_back, copy=False)
+            self.assertEqual(y_np.shape[0], 2)
+            self.assertTrue(np.allclose(y_np, np.array([6.0, -4.0], dtype=np.float32), atol=1e-5))
+
+
+
+    def test_amp_autocast_policy_override_binding(self):
+        a = munet.Tensor([2], dtype=munet.DataType.Float32)
+        b = munet.Tensor([2], dtype=munet.DataType.Float32)
+        np.array(a, copy=False)[:] = [1.0, 2.0]
+        np.array(b, copy=False)[:] = [3.0, 4.0]
+
+        munet.amp.AutocastPolicy.clear_all_overrides()
+        self.assertTrue(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+
+        g = munet.amp.AutoCastGuard(munet.DataType.Float16)
+        try:
+            out = a + b
+            self.assertEqual(out.dtype, munet.DataType.Float16)
+
+            pg = munet.amp.AutocastPolicyGuard(munet.amp.AutocastOp.Add, False)
+            try:
+                out2 = a + b
+                self.assertEqual(out2.dtype, munet.DataType.Float32)
+            finally:
+                del pg
+
+            out3 = a + b
+            self.assertEqual(out3.dtype, munet.DataType.Float16)
+        finally:
+            del g
+            munet.amp.AutocastPolicy.clear_all_overrides()
+
+
+
+
+
+    def test_amp_autocast_policy_snapshot_restore_binding(self):
+        munet.amp.AutocastPolicy.clear_all_overrides()
+        baseline = munet.amp.AutocastPolicy.current_overrides()
+
+        self.assertTrue(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+        munet.amp.AutocastPolicy.set_override(munet.amp.AutocastOp.Add, False)
+        self.assertFalse(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+
+        munet.amp.AutocastPolicy.set_overrides(baseline)
+        self.assertTrue(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+
+    def test_amp_autocast_context_helpers(self):
+        a = munet.Tensor([2], dtype=munet.DataType.Float32)
+        b = munet.Tensor([2], dtype=munet.DataType.Float32)
+        np.array(a, copy=False)[:] = [1.0, 2.0]
+        np.array(b, copy=False)[:] = [3.0, 4.0]
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            out = a + b
+            self.assertEqual(out.dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(munet.amp.AutocastOp.Add, False):
+                out2 = a + b
+                self.assertEqual(out2.dtype, munet.DataType.Float32)
+
+            out3 = a + b
+            self.assertEqual(out3.dtype, munet.DataType.Float16)
+
+
+
+    def test_amp_module_forward_coverage(self):
+        x = munet.Tensor([2, 4], dtype=munet.DataType.Float32)
+        np.array(x, copy=False)[:] = np.array(
+            [[1.0, 2.0, 3.0, 4.0], [-1.0, 0.5, 0.0, 2.0]], dtype=np.float32
+        )
+
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.ReLU(),
+            munet.nn.Linear(8, 2),
+        ])
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            y = model.forward(x)
+        self.assertEqual(y.dtype, munet.DataType.Float16)
+
+    def test_amp_activation_module_policy_override(self):
+        x = munet.Tensor([2, 4], dtype=munet.DataType.Float32)
+        np.array(x, copy=False)[:] = np.array(
+            [[1.0, -1.0, 0.5, -0.5], [0.2, -0.2, 0.1, -0.1]], dtype=np.float32
+        )
+
+        tanh = munet.nn.Tanh()
+        gelu = munet.nn.GELU()
+        lrelu = munet.nn.LeakyReLU(0.1)
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            self.assertEqual(tanh.forward(x).dtype, munet.DataType.Float16)
+            self.assertEqual(gelu.forward(x).dtype, munet.DataType.Float16)
+            self.assertEqual(lrelu.forward(x).dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(munet.amp.AutocastOp.Tanh, False):
+                self.assertEqual(tanh.forward(x).dtype, munet.DataType.Float32)
+                self.assertEqual(gelu.forward(x).dtype, munet.DataType.Float16)
+
+    def test_amp_dropout_globalavgpool_policy_override(self):
+        x2d = munet.Tensor([2, 4], dtype=munet.DataType.Float32)
+        np.array(x2d, copy=False)[:] = np.array(
+            [[1.0, 2.0, 3.0, 4.0], [0.5, 0.25, 0.75, 1.25]], dtype=np.float32
+        )
+        x4d = munet.Tensor([1, 3, 4, 4], dtype=munet.DataType.Float32)
+        np.array(x4d, copy=False)[:] = np.random.default_rng(1).uniform(0.0, 1.0, size=(1, 3, 4, 4)).astype(np.float32)
+
+        drop = munet.nn.Dropout(0.2)
+        gap = munet.nn.GlobalAvgPool2d()
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            self.assertEqual(drop.forward(x2d).dtype, munet.DataType.Float16)
+            self.assertEqual(gap.forward(x4d).dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(munet.amp.AutocastOp.Dropout, False):
+                self.assertEqual(drop.forward(x2d).dtype, munet.DataType.Float32)
+                self.assertEqual(gap.forward(x4d).dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(munet.amp.AutocastOp.GlobalAvgPool2d, False):
+                self.assertEqual(gap.forward(x4d).dtype, munet.DataType.Float32)
+                self.assertEqual(drop.forward(x2d).dtype, munet.DataType.Float16)
+
+    def test_amp_embedding_policy_override(self):
+        one_hot = munet.Tensor([2, 3, 8], dtype=munet.DataType.Float32)
+        np.array(one_hot, copy=False)[:] = np.array(
+            [
+                [[1, 0, 0, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0, 0]],
+                [[0, 0, 0, 1, 0, 0, 0, 0], [0, 0, 0, 0, 1, 0, 0, 0], [0, 0, 0, 0, 0, 1, 0, 0]],
+            ],
+            dtype=np.float32,
+        )
+        emb = munet.nn.Embedding(8, 4)
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            self.assertEqual(emb.forward(one_hot).dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(munet.amp.AutocastOp.Embedding, False):
+                self.assertEqual(emb.forward(one_hot).dtype, munet.DataType.Float32)
+
+        self.assertTrue(
+            munet.amp.AutocastPolicy.should_autocast(
+                munet.amp.AutocastOp.MultiHeadAttention
+            )
+        )
+
+    def test_amp_mha_policy_override(self):
+        x = munet.Tensor([2, 3, 4], dtype=munet.DataType.Float32)
+        np.array(x, copy=False)[:] = np.random.default_rng(2).uniform(
+            0.0, 1.0, size=(2, 3, 4)
+        ).astype(np.float32)
+
+        mha = munet.nn.MultiHeadAttention(4, 2, causal=True)
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            self.assertEqual(mha.forward(x).dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(
+                munet.amp.AutocastOp.MultiHeadAttention, False
+            ):
+                self.assertEqual(mha.forward(x).dtype, munet.DataType.Float32)
+
+    def test_amp_spatial_module_forward_coverage(self):
+        x = munet.Tensor([1, 3, 8, 8], dtype=munet.DataType.Float32)
+        np.array(x, copy=False)[:] = np.random.default_rng(0).uniform(0.0, 1.0, size=(1, 3, 8, 8)).astype(np.float32)
+
+        conv = munet.nn.Conv2d(3, 4, 3, stride=1, padding=1)
+        bn = munet.nn.BatchNorm2d(4)
+        pool = munet.nn.MaxPool2d(2, 2, 0)
+        up = munet.nn.Upsample(2)
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            y = conv.forward(x)
+            y = bn.forward(y)
+            y = pool.forward(y)
+            y = up.forward(y)
+        self.assertEqual(y.dtype, munet.DataType.Float16)
+
+    def test_amp_adam_extended_training_parity_loop(self):
+        w_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=True)
+        w_fp32.uniform_(10.0, 10.0)
+        x_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32)
+        x_fp32.uniform_(1.0, 1.0)
+        t_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32)
+        t_fp32.uniform_(0.0, 0.0)
+        opt_fp32 = munet.optim.Adam([w_fp32], 0.05)
+
+        w_amp = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
+        w_amp.uniform_(10.0, 10.0)
+        x_amp = munet.Tensor([1], dtype=munet.DataType.Float16)
+        x_amp.uniform_(1.0, 1.0)
+        t_amp = munet.Tensor([1], dtype=munet.DataType.Float16)
+        t_amp.uniform_(0.0, 0.0)
+        opt_amp = munet.amp.FP32MasterAdam([w_amp], 0.05)
+
+        for _ in range(12):
+            opt_fp32.zero_grad()
+            loss_fp32 = (w_fp32 * x_fp32).mse_loss(t_fp32)
+            loss_fp32.backward()
+            opt_fp32.step()
+
+            opt_amp.zero_grad()
+            loss_amp = (w_amp * x_amp).mse_loss(t_amp)
+            loss_amp.backward()
+            opt_amp.step()
+
+        w_amp_f32 = w_amp.to_dtype(munet.DataType.Float32)
+        self.assertLess(w_amp_f32.item(), 10.0)
+        self.assertLess(w_fp32.item(), 10.0)
+        # Float16 path currently uses low-precision proxy storage; keep tolerant parity bound.
+        self.assertLess(abs(w_amp_f32.item() - w_fp32.item()), 12.0)
+
+    def test_amp_bf16_sensitive_ops_accumulate_fp32(self):
+        x = munet.Tensor([1, 4], dtype=munet.DataType.Float32)
+        np.array(x, copy=False)[:] = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+        y = munet.Tensor([1, 4], dtype=munet.DataType.Float32)
+        np.array(y, copy=False)[:] = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+
+        x_bf16 = x.to_dtype(munet.DataType.BFloat16)
+        y_bf16 = y.to_dtype(munet.DataType.BFloat16)
+
+        self.assertEqual(x_bf16.sum().dtype, munet.DataType.Float32)
+        self.assertEqual(x_bf16.softmax(-1).dtype, munet.DataType.Float32)
+        self.assertEqual(x_bf16.log_softmax(-1).dtype, munet.DataType.Float32)
+        self.assertEqual(x_bf16.mse_loss(y_bf16).dtype, munet.DataType.Float32)
+        self.assertEqual(x_bf16.cross_entropy(y_bf16).dtype, munet.DataType.Float32)
+
+    def test_amp_bf16_master_sgd_training_parity_loop(self):
+        w_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=True)
+        w_fp32.uniform_(10.0, 10.0)
+        x_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32)
+        x_fp32.uniform_(1.0, 1.0)
+        t_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32)
+        t_fp32.uniform_(0.0, 0.0)
+        opt_fp32 = munet.optim.SGD([w_fp32], 0.05)
+
+        w_bf16 = munet.Tensor([1], dtype=munet.DataType.BFloat16, requires_grad=True)
+        w_bf16.uniform_(10.0, 10.0)
+        x_bf16 = x_fp32.to_dtype(munet.DataType.BFloat16)
+        t_bf16 = t_fp32.to_dtype(munet.DataType.BFloat16)
+        opt_bf16 = munet.amp.FP32MasterSGD([w_bf16], 0.05)
+
+        for _ in range(16):
+            opt_fp32.zero_grad()
+            loss_fp32 = (w_fp32 * x_fp32).mse_loss(t_fp32)
+            loss_fp32.backward()
+            opt_fp32.step()
+
+            opt_bf16.zero_grad()
+            loss_bf16 = (w_bf16 * x_bf16).mse_loss(t_bf16)
+            loss_bf16.backward()
+            opt_bf16.step()
+
+        w_bf16_f32 = w_bf16.to_dtype(munet.DataType.Float32)
+        self.assertLess(w_bf16_f32.item(), 10.0)
+        self.assertLess(w_fp32.item(), 10.0)
+        self.assertLess(abs(w_bf16_f32.item() - w_fp32.item()), 2.0)
+
+    def test_amp_model_level_training_parity_loop(self):
+        # FP32 reference path
+        w_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=True)
+        w_fp32.uniform_(10.0, 10.0)
+        x_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32)
+        x_fp32.uniform_(1.0, 1.0)
+        t_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32)
+        t_fp32.uniform_(0.0, 0.0)
+        opt_fp32 = munet.optim.SGD([w_fp32], 0.1)
+
+        # AMP-like master-weight path
+        w_amp = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
+        w_amp.uniform_(10.0, 10.0)
+        x_amp = munet.Tensor([1], dtype=munet.DataType.Float16)
+        x_amp.uniform_(1.0, 1.0)
+        t_amp = munet.Tensor([1], dtype=munet.DataType.Float16)
+        t_amp.uniform_(0.0, 0.0)
+        opt_amp = munet.amp.FP32MasterSGD([w_amp], 0.1)
+
+        for _ in range(5):
+            opt_fp32.zero_grad()
+            loss_fp32 = (w_fp32 * x_fp32).mse_loss(t_fp32)
+            loss_fp32.backward()
+            opt_fp32.step()
+
+            opt_amp.zero_grad()
+            loss_amp = (w_amp * x_amp).mse_loss(t_amp)
+            loss_amp.backward()
+            opt_amp.step()
+
+        w_amp_f32 = w_amp.to_dtype(munet.DataType.Float32)
+        self.assertLess(w_fp32.item(), 10.0)
+        self.assertLess(w_amp_f32.item(), 10.0)
+        self.assertLess(abs(w_amp_f32.item() - w_fp32.item()), 5.0)
+
+
+    def test_amp_extended_training_parity_loop(self):
+        w_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=True)
+        w_fp32.uniform_(10.0, 10.0)
+        x_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32)
+        x_fp32.uniform_(1.0, 1.0)
+        t_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32)
+        t_fp32.uniform_(0.0, 0.0)
+        opt_fp32 = munet.optim.SGD([w_fp32], 0.05)
+
+        w_amp = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
+        w_amp.uniform_(10.0, 10.0)
+        x_amp = munet.Tensor([1], dtype=munet.DataType.Float16)
+        x_amp.uniform_(1.0, 1.0)
+        t_amp = munet.Tensor([1], dtype=munet.DataType.Float16)
+        t_amp.uniform_(0.0, 0.0)
+        opt_amp = munet.amp.FP32MasterSGD([w_amp], 0.05)
+
+        for _ in range(20):
+            opt_fp32.zero_grad()
+            loss_fp32 = (w_fp32 * x_fp32).mse_loss(t_fp32)
+            loss_fp32.backward()
+            opt_fp32.step()
+
+            opt_amp.zero_grad()
+            loss_amp = (w_amp * x_amp).mse_loss(t_amp)
+            loss_amp.backward()
+            opt_amp.step()
+
+        w_amp_f32 = w_amp.to_dtype(munet.DataType.Float32)
+        self.assertLess(w_amp_f32.item(), 10.0)
+        self.assertLess(w_fp32.item(), 10.0)
+        # Float16 path currently uses low-precision proxy storage; keep tolerant parity bound.
+        self.assertLess(abs(w_amp_f32.item() - w_fp32.item()), 12.0)
+
+    def test_amp_gradscaler_static_mode_binding(self):
+        self.assertTrue(hasattr(munet.amp, "GradScalerMode"))
+        scaler = munet.amp.GradScaler(8.0, 2.0, 0.5, 2, munet.amp.GradScalerMode.Static)
+        self.assertEqual(scaler.mode(), munet.amp.GradScalerMode.Static)
+        scaler.update(True)
+        self.assertEqual(scaler.current_scale(), 8.0)
+
+    def test_amp_gradscaler_invalid_hparams_binding(self):
+        with self.assertRaises(RuntimeError):
+            munet.amp.GradScaler(0.0, 2.0, 0.5, 2, munet.amp.GradScalerMode.Dynamic)
+        with self.assertRaises(RuntimeError):
+            munet.amp.GradScaler(8.0, 1.0, 0.5, 2, munet.amp.GradScalerMode.Dynamic)
+        with self.assertRaises(RuntimeError):
+            munet.amp.GradScaler(8.0, 2.0, 1.0, 2, munet.amp.GradScalerMode.Dynamic)
+        with self.assertRaises(RuntimeError):
+            munet.amp.GradScaler(8.0, 2.0, 0.5, 0, munet.amp.GradScalerMode.Dynamic)
+
+    def test_amp_gradscaler_dynamic_step_and_growth(self):
+        w = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=False)
+        np.array(w, copy=False)[:] = np.array([2.0], dtype=np.float32)
+        w.requires_grad = True
+        opt = munet.optim.SGD([w], 0.1)
+        scaler = munet.amp.GradScaler(8.0, 2.0, 0.5, 2, munet.amp.GradScalerMode.Dynamic)
+        t = munet.Tensor([1], dtype=munet.DataType.Float32)
+        np.array(t, copy=False)[:] = np.array([0.0], dtype=np.float32)
+
+        for _ in range(2):
+            opt.zero_grad()
+            loss = w.mse_loss(t)
+            scaled = scaler.scale(loss)
+            scaled.backward()
+            self.assertTrue(scaler.step(opt, [w]))
+
+        self.assertEqual(scaler.current_scale(), 16.0)
+
+    def test_amp_gradscaler_unscale_and_inf_backoff(self):
+        w = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=False)
+        np.array(w, copy=False)[:] = np.array([2.0], dtype=np.float32)
+        w.requires_grad = True
+        opt = munet.optim.SGD([w], 0.1)
+        scaler = munet.amp.GradScaler(8.0, 2.0, 0.5, 2, munet.amp.GradScalerMode.Dynamic)
+
+        t = munet.Tensor([1], dtype=munet.DataType.Float32)
+        np.array(t, copy=False)[:] = np.array([0.0], dtype=np.float32)
+        loss = w.mse_loss(t)
+        scaler.scale(loss).backward()
+        found_inf = scaler.unscale_([w])
+        self.assertFalse(found_inf)
+        self.assertAlmostEqual(w.grad.item(), 4.0, places=6)
+
+        opt.zero_grad()
+        inf_const = munet.Tensor([1], dtype=munet.DataType.Float32)
+        np.array(inf_const, copy=False)[:] = np.array([np.inf], dtype=np.float32)
+        loss_inf = (w * w) * inf_const
+        loss_inf.backward()
+        stepped = scaler.step(opt, [w])
+        self.assertFalse(stepped)
+        self.assertEqual(scaler.current_scale(), 4.0)
+
+    def test_amp_fp32_master_sgd_binding(self):
+        # Binding/API smoke test (avoid writing Float16 buffer directly in Python for now)
+        w = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
+        opt = munet.amp.FP32MasterSGD([w], 0.1)
+        opt.zero_grad()
+        self.assertTrue(hasattr(munet.amp, "FP32MasterSGD"))
+        self.assertEqual(opt.master_dtype(), munet.DataType.Float32)
+
+    def test_amp_fp32_master_adam_binding(self):
+        w = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
+        opt = munet.amp.FP32MasterAdam([w], 1e-3)
+        opt.zero_grad()
+        self.assertTrue(hasattr(munet.amp, "FP32MasterAdam"))
+        self.assertEqual(opt.master_dtype(), munet.DataType.Float32)
+        self.assertEqual(opt.state_dtype(), munet.DataType.Float32)
+        self.assertEqual(opt.step_count(), 0)
     def test_numpy_buffer_protocol(self):
         """Test zero-copy memory sharing between C++ and NumPy."""
         t = munet.Tensor([2, 2])

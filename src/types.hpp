@@ -1,12 +1,178 @@
 #pragma once
 
 #include <cstddef>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <string>
 #include <vector>
 namespace munet {
 
 enum class DeviceType { CPU, CUDA, VULKAN, UNKNOWN };
-enum class DataType { Float32, Float16, Int32 };
+enum class DataType {
+  Float32,
+  Float16,
+  BFloat16,
+  Float8E4M3FN,
+  Float8E5M2,
+  Int8,
+  Int4,
+  Int32,
+  Float64
+};
+
+inline bool is_float_dtype(DataType dt) {
+  switch (dt) {
+  case DataType::Float8E4M3FN:
+  case DataType::Float8E5M2:
+  case DataType::Float16:
+  case DataType::BFloat16:
+  case DataType::Float32:
+  case DataType::Float64:
+    return true;
+  case DataType::Int8:
+  case DataType::Int4:
+  case DataType::Int32:
+    return false;
+  default:
+    return false;
+  }
+}
+
+inline bool is_fp8(DataType dt) {
+  return dt == DataType::Float8E4M3FN || dt == DataType::Float8E5M2;
+}
+
+inline bool is_low_precision(DataType dt) {
+  return is_fp8(dt) || dt == DataType::Float16 || dt == DataType::BFloat16;
+}
+
+inline DataType accumulation_dtype(DataType dt) {
+  if (is_low_precision(dt))
+    return DataType::Float32;
+  return dt;
+}
+
+inline const char *dtype_name(DataType dt) {
+  switch (dt) {
+  case DataType::Float32:
+    return "float32";
+  case DataType::Float16:
+    return "float16";
+  case DataType::BFloat16:
+    return "bfloat16";
+  case DataType::Float8E4M3FN:
+    return "float8_e4m3fn";
+  case DataType::Float8E5M2:
+    return "float8_e5m2";
+  case DataType::Int8:
+    return "int8";
+  case DataType::Int4:
+    return "int4";
+  case DataType::Int32:
+    return "int32";
+  case DataType::Float64:
+    return "float64";
+  default:
+    return "unknown";
+  }
+}
+
+
+enum class KernelFallbackMode { Error, WarnAndUpcast };
+
+struct DTypeDispatchConfig {
+  bool has_compute_dtype = false;
+  DataType compute_dtype = DataType::Float32;
+  KernelFallbackMode fallback_mode = KernelFallbackMode::WarnAndUpcast;
+};
+
+class DTypeDispatch {
+public:
+  static DTypeDispatchConfig current() { return cfg_; }
+  static void set_current(const DTypeDispatchConfig &cfg) { cfg_ = cfg; }
+  static void reset() { cfg_ = {}; }
+
+private:
+  inline static thread_local DTypeDispatchConfig cfg_{};
+};
+
+class DTypeDispatchGuard {
+public:
+  explicit DTypeDispatchGuard(const DTypeDispatchConfig &cfg)
+      : prev_(DTypeDispatch::current()) {
+    DTypeDispatch::set_current(cfg);
+  }
+
+  ~DTypeDispatchGuard() { DTypeDispatch::set_current(prev_); }
+
+private:
+  DTypeDispatchConfig prev_;
+};
+
+
+inline double load_scalar_as_double(const void *data, DataType dt, size_t idx) {
+  const char *base = static_cast<const char *>(data);
+  switch (dt) {
+  case DataType::Float32:
+    return static_cast<double>(static_cast<const float *>(data)[idx]);
+  case DataType::Float64:
+    return static_cast<const double *>(data)[idx];
+  case DataType::Int32:
+    return static_cast<double>(static_cast<const int32_t *>(data)[idx]);
+  case DataType::Int8:
+    return static_cast<double>(static_cast<const int8_t *>(data)[idx]);
+  case DataType::Int4: {
+    int8_t v = static_cast<int8_t>(base[idx] & 0x0F);
+    if (v >= 8)
+      v -= 16;
+    return static_cast<double>(v);
+  }
+  case DataType::Float16:
+  case DataType::BFloat16:
+  case DataType::Float8E4M3FN:
+  case DataType::Float8E5M2:
+    return static_cast<double>(static_cast<const int8_t *>(data)[idx]);
+  default:
+    return 0.0;
+  }
+}
+
+inline void store_scalar_from_double(void *data, DataType dt, size_t idx,
+                                     double v) {
+  char *base = static_cast<char *>(data);
+  switch (dt) {
+  case DataType::Float32:
+    static_cast<float *>(data)[idx] = static_cast<float>(v);
+    break;
+  case DataType::Float64:
+    static_cast<double *>(data)[idx] = v;
+    break;
+  case DataType::Int32:
+    static_cast<int32_t *>(data)[idx] = static_cast<int32_t>(std::llround(v));
+    break;
+  case DataType::Int8: {
+    int iv = static_cast<int>(std::llround(v));
+    iv = std::max(-128, std::min(127, iv));
+    static_cast<int8_t *>(data)[idx] = static_cast<int8_t>(iv);
+    break;
+  }
+  case DataType::Int4: {
+    int iv = static_cast<int>(std::llround(v));
+    iv = std::max(-8, std::min(7, iv));
+    base[idx] = static_cast<char>(iv & 0x0F);
+    break;
+  }
+  case DataType::Float16:
+  case DataType::BFloat16:
+  case DataType::Float8E4M3FN:
+  case DataType::Float8E5M2:
+    static_cast<int8_t *>(data)[idx] = static_cast<int8_t>(std::llround(v));
+    break;
+  default:
+    break;
+  }
+}
 
 using Shape = std::vector<int>;
 using Strides = std::vector<int>;
@@ -150,10 +316,20 @@ inline size_t dtype_size(DataType dt) {
   switch (dt) {
   case DataType::Float32:
     return 4;
+  case DataType::Float64:
+    return 8;
+  case DataType::Int8:
+    return 1;
+  case DataType::Int4:
+    return 1;
   case DataType::Int32:
     return 4;
   case DataType::Float16:
+  case DataType::BFloat16:
     return 2;
+  case DataType::Float8E4M3FN:
+  case DataType::Float8E5M2:
+    return 1;
   default:
     return 0;
   }
