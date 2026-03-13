@@ -356,6 +356,32 @@ TEST(AMPTest, SensitiveOpsAccumulateToFP32FromLowPrecisionInputs) {
   EXPECT_EQ(ce.dtype(), DataType::Float32);
 }
 
+TEST(AMPTest, SensitiveOpsAccumulateToFP32FromBFloat16Inputs) {
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor x32({1, 4}, cpu, DataType::Float32, false);
+  Tensor y32({1, 4}, cpu, DataType::Float32, false);
+  auto *x32p = static_cast<float *>(x32.data());
+  auto *y32p = static_cast<float *>(y32.data());
+  x32p[0] = 1.0f; x32p[1] = 2.0f; x32p[2] = 3.0f; x32p[3] = 4.0f;
+  y32p[0] = 1.0f; y32p[1] = 0.0f; y32p[2] = 0.0f; y32p[3] = 0.0f;
+
+  Tensor x = x32.to_dtype(DataType::BFloat16);
+  Tensor y = y32.to_dtype(DataType::BFloat16);
+
+  Tensor s = x.sum();
+  Tensor sm = x.softmax(-1);
+  Tensor lsm = x.log_softmax(-1);
+  Tensor mse = x.mse_loss(y);
+  Tensor ce = x.cross_entropy(y);
+
+  EXPECT_EQ(s.dtype(), DataType::Float32);
+  EXPECT_EQ(sm.dtype(), DataType::Float32);
+  EXPECT_EQ(lsm.dtype(), DataType::Float32);
+  EXPECT_EQ(mse.dtype(), DataType::Float32);
+  EXPECT_EQ(ce.dtype(), DataType::Float32);
+}
+
 TEST(AMPTest, DebugBackendForwardsNonFiniteCheckHook) {
   Device cpu{DeviceType::CPU, 0};
   auto base = BackendManager::get(cpu);
@@ -601,6 +627,48 @@ TEST(AMPTest, FP32MasterAdamTrainingLoopParityAgainstFP32) {
   EXPECT_LT(w_fp32.item(), 10.0f);
   EXPECT_LT(w_lp_fp32.item(), 10.0f);
   EXPECT_NEAR(w_lp_fp32.item(), w_fp32.item(), 1.0f);
+}
+
+TEST(AMPTest, FP32MasterBF16TrainingLoopParityAgainstFP32) {
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor w_fp32({1}, cpu, DataType::Float32, true);
+  static_cast<float *>(w_fp32.data())[0] = 10.0f;
+  optim::SGD sgd_fp32({w_fp32}, 0.05f);
+
+  Tensor w_bf16({1}, cpu, DataType::BFloat16, true);
+  Tensor init({1}, cpu, DataType::Float32, false);
+  static_cast<float *>(init.data())[0] = 10.0f;
+  w_bf16 = init.to_dtype(DataType::BFloat16);
+  w_bf16.set_requires_grad(true);
+  amp::FP32MasterSGD sgd_bf16({w_bf16}, 0.05f);
+
+  Tensor x_fp32({1}, cpu, DataType::Float32, false);
+  static_cast<float *>(x_fp32.data())[0] = 1.0f;
+  Tensor t_fp32({1}, cpu, DataType::Float32, false);
+  static_cast<float *>(t_fp32.data())[0] = 0.0f;
+
+  Tensor x_bf16 = x_fp32.to_dtype(DataType::BFloat16);
+  Tensor t_bf16 = t_fp32.to_dtype(DataType::BFloat16);
+
+  for (int step = 0; step < 12; ++step) {
+    sgd_fp32.zero_grad();
+    Tensor y_fp32 = w_fp32 * x_fp32;
+    Tensor loss_fp32 = y_fp32.mse_loss(t_fp32);
+    loss_fp32.backward();
+    sgd_fp32.step();
+
+    sgd_bf16.zero_grad();
+    Tensor y_bf16 = w_bf16 * x_bf16;
+    Tensor loss_bf16 = y_bf16.mse_loss(t_bf16);
+    loss_bf16.backward();
+    sgd_bf16.step();
+  }
+
+  Tensor w_bf16_f32 = w_bf16.to_dtype(DataType::Float32);
+  EXPECT_LT(w_fp32.item(), 10.0f);
+  EXPECT_LT(w_bf16_f32.item(), 10.0f);
+  EXPECT_NEAR(w_bf16_f32.item(), w_fp32.item(), 0.8f);
 }
 
 TEST(AMPTest, FP32MasterAdamStepParityAgainstFP32) {

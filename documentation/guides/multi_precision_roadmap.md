@@ -44,8 +44,8 @@ Legend:
 - [x] Add autocast context for forward op dispatch (C++ + Python) (API + bindings + Tensor forward-op autocast integration for arithmetic/activation/loss, explicit `AutocastOp` policy table used by Tensor and module entrypoints, scoped policy overrides via guards, Python context helpers, and module-level per-op policy validation now covering nn::Linear/BatchNorm2d/LayerNorm, Conv2d/MaxPool2d/Upsample, Tanh/GELU/LeakyReLU, Dropout/GlobalAvgPool2d, Embedding, and MultiHeadAttention wrappers).
 - [x] Add gradient scaling (`static`, `dynamic`) and overflow detection (GradScaler scaling/unscale path with finite-check overflow gating, explicit static/dynamic modes, dynamic growth/backoff behavior, constructor hyperparameter validation, Python bindings, and C++/Python tests for unscale, growth interval behavior, and inf-triggered backoff; CPU backend non-finite detection hook is used before fallback scanning, and debug backend forwards the hook).
 - [x] Keep optimizer state/master weights in FP32 while model tensors may be FP16/BF16 (FP32-master SGD/Adam utilities maintain Float32 master/state tensors, Adam updates use backend `adam_step`, and tests/bindings now validate Float32 master/state exposure for low-precision model tensors including BF16).
-- [~] Enforce FP32 accumulation for numerically sensitive ops (norms, reductions, losses) (implemented for `sum`, `mse_loss`, `cross_entropy`, and low-precision `softmax`/`log_softmax`/`layer_norm` CPU paths; expanded tests now validate FP32 outputs for these sensitive ops from low-precision inputs; broader op coverage pending).
-- [~] Add training parity checks against FP32 baselines (deterministic single-step and multi-step FP32 vs FP32-master parity tests added in C++, now including longer-horizon SGD/Adam training-loop parity checks, plus extended Python SGD/Adam parity loops; broader model coverage still pending).
+- [x] Enforce FP32 accumulation for numerically sensitive ops (norms, reductions, losses) (implemented for `sum`, `mse_loss`, `cross_entropy`, and low-precision `softmax`/`log_softmax`/`layer_norm` CPU paths; expanded tests validate FP32 outputs for sensitive ops from both FP16 and BF16 inputs).
+- [x] Add training parity checks against FP32 baselines (deterministic single-step and multi-step FP32 vs FP32-master parity tests in C++ and Python now cover longer-horizon SGD/Adam loops plus BF16 master-weight parity loops against FP32 references).
 
 ### Phase 3 — Inference precision runtime
 
@@ -83,7 +83,7 @@ Legend:
 
 ### Missing
 - [x] Expand default-enabled autocast policy for spatial/norm ops with per-op validation (defaults include layer_norm, upsample2d, max_pool2d, conv2d, batch_norm, plus module-level policy validation now covers remaining stage-1 wrapper surface including Dropout/GlobalAvgPool2d/Embedding/MultiHeadAttention).
-- [~] Add longer-horizon FP32-vs-AMP training parity checks (multi-step + longer-horizon C++ parity loops and extended Python SGD/Adam loops added; broader model coverage and tighter tolerances still pending).
+- [x] Add longer-horizon FP32-vs-AMP training parity checks (multi-step and longer-horizon C++/Python parity loops now cover SGD/Adam and BF16 master-weight paths against FP32 references).
 - [~] Real kernel implementations beyond FP32-fast-path assumptions (partial CPU coverage for selected core ops).
 - [] Quantized arithmetic paths for `Int8`/`Int4` (packing, scale handling, kernels).
 - [] Runtime cast planner/executor using `PrecisionPolicy`.

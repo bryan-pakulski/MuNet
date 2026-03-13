@@ -320,6 +320,52 @@ class TestBindings(unittest.TestCase):
         # Float16 path currently uses low-precision proxy storage; keep tolerant parity bound.
         self.assertLess(abs(w_amp_f32.item() - w_fp32.item()), 12.0)
 
+    def test_amp_bf16_sensitive_ops_accumulate_fp32(self):
+        x = munet.Tensor([1, 4], dtype=munet.DataType.Float32)
+        np.array(x, copy=False)[:] = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+        y = munet.Tensor([1, 4], dtype=munet.DataType.Float32)
+        np.array(y, copy=False)[:] = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+
+        x_bf16 = x.to_dtype(munet.DataType.BFloat16)
+        y_bf16 = y.to_dtype(munet.DataType.BFloat16)
+
+        self.assertEqual(x_bf16.sum().dtype, munet.DataType.Float32)
+        self.assertEqual(x_bf16.softmax(-1).dtype, munet.DataType.Float32)
+        self.assertEqual(x_bf16.log_softmax(-1).dtype, munet.DataType.Float32)
+        self.assertEqual(x_bf16.mse_loss(y_bf16).dtype, munet.DataType.Float32)
+        self.assertEqual(x_bf16.cross_entropy(y_bf16).dtype, munet.DataType.Float32)
+
+    def test_amp_bf16_master_sgd_training_parity_loop(self):
+        w_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=True)
+        w_fp32.uniform_(10.0, 10.0)
+        x_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32)
+        x_fp32.uniform_(1.0, 1.0)
+        t_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32)
+        t_fp32.uniform_(0.0, 0.0)
+        opt_fp32 = munet.optim.SGD([w_fp32], 0.05)
+
+        w_bf16 = munet.Tensor([1], dtype=munet.DataType.BFloat16, requires_grad=True)
+        w_bf16.uniform_(10.0, 10.0)
+        x_bf16 = x_fp32.to_dtype(munet.DataType.BFloat16)
+        t_bf16 = t_fp32.to_dtype(munet.DataType.BFloat16)
+        opt_bf16 = munet.amp.FP32MasterSGD([w_bf16], 0.05)
+
+        for _ in range(16):
+            opt_fp32.zero_grad()
+            loss_fp32 = (w_fp32 * x_fp32).mse_loss(t_fp32)
+            loss_fp32.backward()
+            opt_fp32.step()
+
+            opt_bf16.zero_grad()
+            loss_bf16 = (w_bf16 * x_bf16).mse_loss(t_bf16)
+            loss_bf16.backward()
+            opt_bf16.step()
+
+        w_bf16_f32 = w_bf16.to_dtype(munet.DataType.Float32)
+        self.assertLess(w_bf16_f32.item(), 10.0)
+        self.assertLess(w_fp32.item(), 10.0)
+        self.assertLess(abs(w_bf16_f32.item() - w_fp32.item()), 2.0)
+
     def test_amp_model_level_training_parity_loop(self):
         # FP32 reference path
         w_fp32 = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=True)
