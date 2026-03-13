@@ -117,3 +117,16 @@ stepped = scaler.step(optimizer, model.parameters())
 - **FP32**: baseline for correctness/debugging.
 - **FP16/BF16**: preferred first mixed-precision trial dtypes.
 - **FP8/INT4/INT8**: currently best treated as experimental until backend-native kernels and packing/calibration flows are completed.
+
+
+## Should guard be exposed directly?
+
+Short answer: **both low-level and high-level access are useful**.
+
+- Expose low-level guard/config APIs (`DTypeDispatchConfig`, `DTypeDispatchGuard`) for advanced users, benchmarking, and backend bring-up.
+- For normal training/inference usage, prefer higher-level wrappers/context managers (`precision_dispatch`, AMP helpers, and future policy-driven module/engine configs).
+
+Recommended layering:
+1. Low-level guard (expert/debug).
+2. Python context wrapper (`precision_dispatch`) for day-to-day experimentation.
+3. Framework-level policy objects (engine/trainer configs) as default ergonomic path.

@@ -270,7 +270,7 @@ struct MSELossBackward : public Node {
 
 inline Tensor mse_loss(const Tensor &pred, const Tensor &target) {
   if (pred.shape() == target.shape()) {
-    Tensor out({1}, pred.device(), pred.dtype());
+    Tensor out({1}, pred.device(), accumulation_dtype(pred.dtype()));
     pred.impl_->backend().mse_loss(*pred.impl_->storage, *target.impl_->storage,
                                    *out.impl_->storage, pred.size());
 
@@ -346,7 +346,7 @@ inline Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
     spatial = 1;
   }
 
-  Tensor out({1}, logits.device(), logits.dtype());
+  Tensor out({1}, logits.device(), accumulation_dtype(logits.dtype()));
   logits.impl_->backend().cross_entropy(
       *logits.impl_->storage, *targets.impl_->storage, *out.impl_->storage,
       batch_size, num_classes, spatial);

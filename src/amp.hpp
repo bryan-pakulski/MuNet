@@ -127,5 +127,47 @@ private:
   int growth_tracker_ = 0;
 };
 
+
+
+class FP32MasterSGD {
+public:
+  FP32MasterSGD(std::vector<Tensor> params, float lr)
+      : params_(std::move(params)), lr_(lr) {
+    for (auto &p : params_) {
+      master_params_.push_back(p.to_dtype(DataType::Float32));
+    }
+  }
+
+  void step() {
+    for (size_t i = 0; i < params_.size(); ++i) {
+      auto &p = params_[i];
+      if (!p.has_grad())
+        continue;
+
+      Tensor grad_fp32 = p.grad().to_dtype(DataType::Float32);
+      Tensor lr_t({1}, master_params_[i].device(), DataType::Float32, false);
+      lr_t.uniform_(lr_, lr_);
+
+      Tensor updated = master_params_[i] - (grad_fp32 * lr_t);
+      master_params_[i].impl_ = updated.impl_;
+
+      Tensor model_copy = master_params_[i].to_dtype(p.dtype());
+      p.impl_->backend().copy(model_copy.data(), p.data(), p.bytes(), p.device(),
+                              p.device());
+    }
+  }
+
+  void zero_grad() {
+    for (auto &p : params_) {
+      p.zero_grad();
+    }
+  }
+
+private:
+  std::vector<Tensor> params_;
+  std::vector<Tensor> master_params_;
+  float lr_;
+};
+
 } // namespace amp
 } // namespace munet

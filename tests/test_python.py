@@ -86,6 +86,36 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(t.device.type, munet.DeviceType.CPU)
         self.assertEqual(t.dtype, munet.DataType.Float32)
 
+
+    def test_to_dtype_and_dispatch_config(self):
+        t = munet.Tensor([2], dtype=munet.DataType.Float32)
+        arr = np.array(t, copy=False)
+        arr[:] = [3.0, -2.0]
+
+        t_i8 = t.to_dtype(munet.DataType.Int8)
+        self.assertEqual(t_i8.dtype, munet.DataType.Int8)
+
+        t_back = t_i8.to_dtype(munet.DataType.Float32)
+        back = np.array(t_back, copy=False)
+        self.assertTrue(np.allclose(back, np.array([3.0, -2.0], dtype=np.float32), atol=1e-5))
+
+        cfg = munet.DTypeDispatchConfig()
+        cfg.has_compute_dtype = True
+        cfg.compute_dtype = munet.DataType.Int8
+        cfg.fallback_mode = munet.KernelFallbackMode.WarnAndUpcast
+
+        with munet.precision_dispatch(cfg):
+            y = t_i8 + t_i8
+            y_back = y.to_dtype(munet.DataType.Float32)
+            y_np = np.array(y_back, copy=False)
+            self.assertEqual(y_np.shape[0], 2)
+
+    def test_amp_fp32_master_sgd_binding(self):
+        # Binding/API smoke test (avoid writing Float16 buffer directly in Python for now)
+        w = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
+        opt = munet.amp.FP32MasterSGD([w], 0.1)
+        opt.zero_grad()
+        self.assertTrue(hasattr(munet.amp, "FP32MasterSGD"))
     def test_numpy_buffer_protocol(self):
         """Test zero-copy memory sharing between C++ and NumPy."""
         t = munet.Tensor([2, 2])

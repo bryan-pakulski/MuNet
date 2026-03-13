@@ -663,6 +663,12 @@ PYBIND11_MODULE(munet, m) {
       .def("update", &amp::GradScaler::update, py::arg("found_inf"))
       .def("current_scale", &amp::GradScaler::current_scale);
 
+  py::class_<amp::FP32MasterSGD>(amp_mod, "FP32MasterSGD")
+      .def(py::init<std::vector<Tensor>, float>(), py::arg("params"),
+           py::arg("lr"))
+      .def("step", &amp::FP32MasterSGD::step)
+      .def("zero_grad", &amp::FP32MasterSGD::zero_grad);
+
   // ============================================================================
   // Optimizers (munet.optim)
   // ============================================================================
