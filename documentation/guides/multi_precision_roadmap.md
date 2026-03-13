@@ -41,7 +41,7 @@ Legend:
 
 ### Phase 2 — Mixed precision training
 
-- [~] Add autocast context for forward op dispatch (C++ + Python) (API + bindings + Tensor forward-op autocast integration for arithmetic/activation/loss, plus explicit `AutocastOp` policy table used by Tensor entrypoints (with scoped policy overrides via guard for controlled rollout/testing, including Python context helpers); spatial ops currently mapped to skip while `layer_norm` is now enabled via the policy table; broader module coverage still pending).
+- [~] Add autocast context for forward op dispatch (C++ + Python) (API + bindings + Tensor forward-op autocast integration for arithmetic/activation/loss, plus explicit `AutocastOp` policy table used by Tensor entrypoints (with scoped policy overrides via guard for controlled rollout/testing, including Python context helpers plus override snapshot/restore APIs); `layer_norm` and `upsample2d` are now enabled via policy while other spatial ops remain skip-by-default; broader module coverage still pending).
 - [~] Add gradient scaling (`static`, `dynamic`) and overflow detection (GradScaler scaling/unscale path with finite-check overflow gating, dynamic growth/backoff behavior, Python bindings, and tests added; broader backend-specific overflow signals pending).
 - [~] Keep optimizer state/master weights in FP32 while model tensors may be FP16/BF16 (initial FP32-master SGD/Adam utilities added).
 - [~] Enforce FP32 accumulation for numerically sensitive ops (norms, reductions, losses) (implemented for `sum`, `mse_loss`, `cross_entropy`, and low-precision `softmax`/`log_softmax`/`layer_norm` CPU paths; broader op coverage pending).
@@ -82,6 +82,8 @@ Legend:
 - [x] Basic unit tests for new type metadata and policy plumbing.
 
 ### Missing
+- [] Expand default-enabled autocast policy for remaining skipped spatial/norm ops with per-op validation.
+- [] Add longer-horizon FP32-vs-AMP training parity checks (multi-step model loops).
 - [~] Real kernel implementations beyond FP32-fast-path assumptions (partial CPU coverage for selected core ops).
 - [] Quantized arithmetic paths for `Int8`/`Int4` (packing, scale handling, kernels).
 - [] Runtime cast planner/executor using `PrecisionPolicy`.

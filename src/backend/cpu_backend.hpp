@@ -704,29 +704,30 @@ public:
   }
   void upsample2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
                   int scale) override {
+    (void)resolve_compute_plan(accumulation_dtype(in.dtype()));
     int oH = iH * scale, oW = iW * scale;
-    const float *in_p = (const float *)in.data();
-    float *out_p = (float *)out.data();
     parallel_for(0, B * C * oH * oW, [&](size_t start, size_t end) {
       for (size_t idx = start; idx < end; ++idx) {
         int ow = idx % oW, oh = (idx / oW) % oH, c = (idx / (oW * oH)) % C,
             b = idx / (oW * oH * C);
-        out_p[idx] =
-            in_p[((b * C + c) * iH + (oh / scale)) * iW + (ow / scale)];
+        size_t src_idx = ((b * C + c) * iH + (oh / scale)) * iW + (ow / scale);
+        store_from_compute(out, idx, load_as_compute(in, src_idx));
       }
     });
   }
   void upsample2d_backward(const Storage &grad_out, Storage &grad_in, int B,
                            int C, int iH, int iW, int scale) override {
+    (void)resolve_compute_plan(accumulation_dtype(grad_out.dtype()));
     int oH = iH * scale, oW = iW * scale;
-    const float *go_p = (const float *)grad_out.data();
-    float *gi_p = (float *)grad_in.data();
     for (int b = 0; b < B; ++b) {
       for (int c = 0; c < C; ++c) {
         for (int oh = 0; oh < oH; ++oh) {
           for (int ow = 0; ow < oW; ++ow) {
-            gi_p[((b * C + c) * iH + (oh / scale)) * iW + (ow / scale)] +=
-                go_p[((b * C + c) * oH + oh) * oW + ow];
+            size_t gi_idx = ((b * C + c) * iH + (oh / scale)) * iW + (ow / scale);
+            size_t go_idx = ((b * C + c) * oH + oh) * oW + ow;
+            double accum = load_as_compute(grad_in, gi_idx) +
+                           load_as_compute(grad_out, go_idx);
+            store_from_compute(grad_in, gi_idx, accum);
           }
         }
       }

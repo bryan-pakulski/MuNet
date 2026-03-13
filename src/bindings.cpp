@@ -666,7 +666,10 @@ PYBIND11_MODULE(munet, m) {
                   py::arg("op"), py::arg("enabled"))
       .def_static("clear_override", &amp::AutocastPolicy::clear_override,
                   py::arg("op"))
-      .def_static("clear_all_overrides", &amp::AutocastPolicy::clear_all_overrides);
+      .def_static("clear_all_overrides", &amp::AutocastPolicy::clear_all_overrides)
+      .def_static("current_overrides", &amp::AutocastPolicy::current_overrides)
+      .def_static("set_overrides", &amp::AutocastPolicy::set_overrides,
+                  py::arg("overrides"));
 
   py::class_<amp::AutocastPolicyGuard>(amp_mod, "AutocastPolicyGuard")
       .def(py::init<amp::AutocastOp, bool>(), py::arg("op"),

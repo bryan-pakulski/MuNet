@@ -52,9 +52,10 @@ inline bool default_should_autocast(AutocastOp op) {
   case AutocastOp::CrossEntropy:
   case AutocastOp::LayerNorm:
     return true;
+  case AutocastOp::Upsample2D:
+    return true;
   case AutocastOp::Conv2D:
   case AutocastOp::MaxPool2D:
-  case AutocastOp::Upsample2D:
   case AutocastOp::BatchNorm:
     return false;
   default:

@@ -141,6 +141,19 @@ class TestBindings(unittest.TestCase):
 
 
 
+
+
+    def test_amp_autocast_policy_snapshot_restore_binding(self):
+        munet.amp.AutocastPolicy.clear_all_overrides()
+        baseline = munet.amp.AutocastPolicy.current_overrides()
+
+        self.assertTrue(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+        munet.amp.AutocastPolicy.set_override(munet.amp.AutocastOp.Add, False)
+        self.assertFalse(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+
+        munet.amp.AutocastPolicy.set_overrides(baseline)
+        self.assertTrue(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+
     def test_amp_autocast_context_helpers(self):
         a = munet.Tensor([2], dtype=munet.DataType.Float32)
         b = munet.Tensor([2], dtype=munet.DataType.Float32)

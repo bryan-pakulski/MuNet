@@ -27,6 +27,7 @@ TEST(AMPTest, AutocastPolicyTableReflectsCurrentCoverage) {
 
   EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::Conv2D));
   EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::MaxPool2D));
+  EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::Upsample2D));
   EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::BatchNorm));
   EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::LayerNorm));
 }
@@ -140,7 +141,7 @@ TEST(AMPTest, AutocastSkipsUnsupportedSpatialOpsButCastsLayerNorm) {
 
     EXPECT_EQ(conv.dtype(), DataType::Float32);
     EXPECT_EQ(pool.dtype(), DataType::Float32);
-    EXPECT_EQ(up.dtype(), DataType::Float32);
+    EXPECT_EQ(up.dtype(), DataType::Float16);
     EXPECT_EQ(bn.dtype(), DataType::Float32);
     EXPECT_EQ(ln.dtype(), DataType::Float16);
   }
@@ -239,6 +240,35 @@ TEST(AMPTest, FP32MasterSGDStepParityAgainstFP32) {
 
   Tensor w_lp_fp32 = w_lp.to_dtype(DataType::Float32);
   EXPECT_NEAR(w_lp_fp32.item(), w_fp32.item(), 1e-5f);
+}
+
+
+
+TEST(AMPTest, FP32MasterSGDMultiStepParityAgainstFP32) {
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor w_fp32({1}, cpu, DataType::Float32, true);
+  static_cast<float *>(w_fp32.data())[0] = 10.0f;
+  optim::SGD sgd_fp32({w_fp32}, 0.5f);
+
+  Tensor w_lp({1}, cpu, DataType::Float16, true);
+  static_cast<int8_t *>(w_lp.data())[0] = 10;
+  amp::FP32MasterSGD sgd_lp({w_lp}, 0.5f);
+
+  for (int step = 0; step < 5; ++step) {
+    Tensor g_fp32({1}, cpu, DataType::Float32, false);
+    static_cast<float *>(g_fp32.data())[0] = 2.0f;
+    w_fp32.impl_->grad = g_fp32.impl_;
+    sgd_fp32.step();
+
+    Tensor g_lp({1}, cpu, DataType::Float16, false);
+    static_cast<int8_t *>(g_lp.data())[0] = 2;
+    w_lp.impl_->grad = g_lp.impl_;
+    sgd_lp.step();
+
+    Tensor w_lp_fp32 = w_lp.to_dtype(DataType::Float32);
+    EXPECT_NEAR(w_lp_fp32.item(), w_fp32.item(), 1e-5f);
+  }
 }
 
 TEST(AMPTest, FP32MasterAdamStepParityAgainstFP32) {
