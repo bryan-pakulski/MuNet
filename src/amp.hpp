@@ -54,8 +54,9 @@ inline bool default_should_autocast(AutocastOp op) {
     return true;
   case AutocastOp::Upsample2D:
     return true;
-  case AutocastOp::Conv2D:
   case AutocastOp::MaxPool2D:
+    return true;
+  case AutocastOp::Conv2D:
   case AutocastOp::BatchNorm:
     return false;
   default:

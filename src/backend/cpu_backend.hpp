@@ -648,55 +648,56 @@ public:
   }
   void max_pool2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
                   int k, int s, int p) override {
+    (void)resolve_compute_plan(accumulation_dtype(in.dtype()));
     int oH = (iH + 2 * p - k) / s + 1, oW = (iW + 2 * p - k) / s + 1;
-    const float *in_p = (const float *)in.data();
-    float *out_p = (float *)out.data();
     parallel_for(0, B * C * oH * oW, [&](size_t start, size_t end) {
       for (size_t idx = start; idx < end; ++idx) {
         int ow = idx % oW, oh = (idx / oW) % oH, c = (idx / (oW * oH)) % C,
             b = idx / (oW * oH * C);
-        float max_val = -1e9f;
+        double max_val = -1e300;
         for (int kh = 0; kh < k; ++kh) {
           for (int kw = 0; kw < k; ++kw) {
             int ih = oh * s - p + kh, iw = ow * s - p + kw;
             if (ih >= 0 && ih < iH && iw >= 0 && iw < iW) {
-              max_val =
-                  std::max(max_val, in_p[((b * C + c) * iH + ih) * iW + iw]);
+              size_t src_idx = ((b * C + c) * iH + ih) * iW + iw;
+              max_val = std::max(max_val, load_as_compute(in, src_idx));
             }
           }
         }
-        out_p[idx] = max_val;
+        store_from_compute(out, idx, max_val);
       }
     });
   }
   void max_pool2d_backward(const Storage &grad_out, const Storage &in,
                            Storage &grad_in, int B, int C, int iH, int iW,
                            int k, int s, int p) override {
+    (void)resolve_compute_plan(accumulation_dtype(grad_out.dtype()));
     int oH = (iH + 2 * p - k) / s + 1, oW = (iW + 2 * p - k) / s + 1;
-    const float *go_p = (const float *)grad_out.data(),
-                *in_p = (const float *)in.data();
-    float *gi_p = (float *)grad_in.data();
-    // Recompute max to route gradient
     for (int b = 0; b < B; ++b) {
       for (int c = 0; c < C; ++c) {
         for (int oh = 0; oh < oH; ++oh) {
           for (int ow = 0; ow < oW; ++ow) {
-            float max_val = -1e9f;
+            double max_val = -1e300;
             int max_idx = -1;
             for (int kh = 0; kh < k; ++kh) {
               for (int kw = 0; kw < k; ++kw) {
                 int ih = oh * s - p + kh, iw = ow * s - p + kw;
                 if (ih >= 0 && ih < iH && iw >= 0 && iw < iW) {
                   int idx = ((b * C + c) * iH + ih) * iW + iw;
-                  if (*in_p > max_val) {
-                    max_val = *in_p;
+                  double v = load_as_compute(in, static_cast<size_t>(idx));
+                  if (v > max_val) {
+                    max_val = v;
                     max_idx = idx;
                   }
                 }
               }
             }
-            if (max_idx != -1)
-              gi_p[max_idx] += go_p[((b * C + c) * oH + oh) * oW + ow];
+            if (max_idx != -1) {
+              size_t go_idx = ((b * C + c) * oH + oh) * oW + ow;
+              double accum = load_as_compute(grad_in, static_cast<size_t>(max_idx)) +
+                             load_as_compute(grad_out, go_idx);
+              store_from_compute(grad_in, static_cast<size_t>(max_idx), accum);
+            }
           }
         }
       }
