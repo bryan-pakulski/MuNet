@@ -6,7 +6,74 @@
 namespace munet {
 
 enum class DeviceType { CPU, CUDA, VULKAN, UNKNOWN };
-enum class DataType { Float32, Float16, Int32 };
+enum class DataType {
+  Float32,
+  Float16,
+  BFloat16,
+  Float8E4M3FN,
+  Float8E5M2,
+  Int8,
+  Int4,
+  Int32,
+  Float64
+};
+
+inline bool is_float_dtype(DataType dt) {
+  switch (dt) {
+  case DataType::Float8E4M3FN:
+  case DataType::Float8E5M2:
+  case DataType::Float16:
+  case DataType::BFloat16:
+  case DataType::Float32:
+  case DataType::Float64:
+    return true;
+  case DataType::Int8:
+  case DataType::Int4:
+  case DataType::Int32:
+    return false;
+  default:
+    return false;
+  }
+}
+
+inline bool is_fp8(DataType dt) {
+  return dt == DataType::Float8E4M3FN || dt == DataType::Float8E5M2;
+}
+
+inline bool is_low_precision(DataType dt) {
+  return is_fp8(dt) || dt == DataType::Float16 || dt == DataType::BFloat16;
+}
+
+inline DataType accumulation_dtype(DataType dt) {
+  if (is_low_precision(dt))
+    return DataType::Float32;
+  return dt;
+}
+
+inline const char *dtype_name(DataType dt) {
+  switch (dt) {
+  case DataType::Float32:
+    return "float32";
+  case DataType::Float16:
+    return "float16";
+  case DataType::BFloat16:
+    return "bfloat16";
+  case DataType::Float8E4M3FN:
+    return "float8_e4m3fn";
+  case DataType::Float8E5M2:
+    return "float8_e5m2";
+  case DataType::Int8:
+    return "int8";
+  case DataType::Int4:
+    return "int4";
+  case DataType::Int32:
+    return "int32";
+  case DataType::Float64:
+    return "float64";
+  default:
+    return "unknown";
+  }
+}
 
 using Shape = std::vector<int>;
 using Strides = std::vector<int>;
@@ -150,10 +217,20 @@ inline size_t dtype_size(DataType dt) {
   switch (dt) {
   case DataType::Float32:
     return 4;
+  case DataType::Float64:
+    return 8;
+  case DataType::Int8:
+    return 1;
+  case DataType::Int4:
+    return 1;
   case DataType::Int32:
     return 4;
   case DataType::Float16:
+  case DataType::BFloat16:
     return 2;
+  case DataType::Float8E4M3FN:
+  case DataType::Float8E5M2:
+    return 1;
   default:
     return 0;
   }

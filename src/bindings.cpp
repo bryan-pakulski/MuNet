@@ -38,7 +38,13 @@ PYBIND11_MODULE(munet, m) {
   py::enum_<DataType>(m, "DataType", "Supported data types for tensors.")
       .value("Float32", DataType::Float32)
       .value("Float16", DataType::Float16)
+      .value("BFloat16", DataType::BFloat16)
+      .value("Float8E4M3FN", DataType::Float8E4M3FN)
+      .value("Float8E5M2", DataType::Float8E5M2)
+      .value("Int8", DataType::Int8)
+      .value("Int4", DataType::Int4)
       .value("Int32", DataType::Int32)
+      .value("Float64", DataType::Float64)
       .export_values();
 
   py::class_<Device>(
@@ -524,12 +530,35 @@ PYBIND11_MODULE(munet, m) {
   // ============================================================================
   auto inf = m.def_submodule("inference", "Inference runtime APIs");
 
+  py::enum_<inference::LossScaleMode>(inf, "LossScaleMode")
+      .value("None", inference::LossScaleMode::None)
+      .value("Dynamic", inference::LossScaleMode::Dynamic)
+      .value("Static", inference::LossScaleMode::Static)
+      .export_values();
+
+  py::enum_<inference::PrecisionFallbackMode>(inf, "PrecisionFallbackMode")
+      .value("Error", inference::PrecisionFallbackMode::Error)
+      .value("WarnAndUpcast", inference::PrecisionFallbackMode::WarnAndUpcast)
+      .export_values();
+
+  py::class_<inference::PrecisionPolicy>(inf, "PrecisionPolicy")
+      .def(py::init<>())
+      .def_readwrite("param_dtype", &inference::PrecisionPolicy::param_dtype)
+      .def_readwrite("activation_dtype", &inference::PrecisionPolicy::activation_dtype)
+      .def_readwrite("gradient_dtype", &inference::PrecisionPolicy::gradient_dtype)
+      .def_readwrite("optimizer_state_dtype", &inference::PrecisionPolicy::optimizer_state_dtype)
+      .def_readwrite("accumulation_dtype", &inference::PrecisionPolicy::accumulation_dtype)
+      .def_readwrite("loss_scale_mode", &inference::PrecisionPolicy::loss_scale_mode)
+      .def_readwrite("fallback_mode", &inference::PrecisionPolicy::fallback_mode);
+
   py::class_<inference::EngineConfig>(inf, "EngineConfig")
       .def(py::init<>())
       .def_readwrite("device", &inference::EngineConfig::device)
       .def_readwrite("warmup_runs", &inference::EngineConfig::warmup_runs)
       .def_readwrite("strict_shape_check",
-                     &inference::EngineConfig::strict_shape_check);
+                     &inference::EngineConfig::strict_shape_check)
+      .def_readwrite("precision_policy",
+                     &inference::EngineConfig::precision_policy);
 
   py::class_<inference::EngineStats>(inf, "EngineStats")
       .def(py::init<>())
@@ -549,6 +578,9 @@ PYBIND11_MODULE(munet, m) {
            py::arg("warmup_runs"))
       .def("set_strict_shape_check", &inference::Engine::set_strict_shape_check,
            py::arg("enabled"))
+      .def("set_precision_policy", &inference::Engine::set_precision_policy,
+           py::arg("policy"))
+      .def("precision_policy", &inference::Engine::precision_policy)
       .def(
           "load",
           [](inference::Engine &self, const std::shared_ptr<nn::Module> &module) {

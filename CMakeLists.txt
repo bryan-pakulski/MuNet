@@ -112,6 +112,7 @@ add_executable(munet_tests
         tests/test_inference.cpp
         tests/test_backend_manager.cpp
         tests/test_performance.cpp
+        tests/test_types.cpp
 )
 
 target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_main)

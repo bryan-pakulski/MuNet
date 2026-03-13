@@ -24,6 +24,7 @@ nav:
       - Inference Engine: documentation/guides/inference_engine.md
       - Serialization & Model Loading: documentation/guides/serialization.md
       - Common Design Patterns: documentation/guides/design_patterns.md
+      - Multi-Precision Roadmap: documentation/guides/multi_precision_roadmap.md
   - Tutorials:
       - End-to-end Training to Inference: documentation/tutorials/e2e_workflow.md
   - Performance:
