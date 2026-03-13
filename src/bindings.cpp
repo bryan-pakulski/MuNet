@@ -1,3 +1,4 @@
+#include "amp.hpp"
 #include "autograd/autograd.hpp"
 #include "inference.hpp"
 #include "nn.hpp"
@@ -606,6 +607,34 @@ PYBIND11_MODULE(munet, m) {
       .def("compiled_input_shape", &inference::Engine::compiled_input_shape)
       .def("compiled_output_shape", &inference::Engine::compiled_output_shape)
       .def("stats", &inference::Engine::stats);
+
+  // ============================================================================
+  // AMP / Mixed Precision utilities (munet.amp)
+  // ============================================================================
+  auto amp_mod = m.def_submodule("amp", "Automatic mixed precision helpers");
+
+  py::class_<amp::AutocastMode>(amp_mod, "AutocastMode")
+      .def_static("is_enabled", &amp::AutocastMode::is_enabled)
+      .def_static("set_enabled", &amp::AutocastMode::set_enabled,
+                  py::arg("enabled"))
+      .def_static("dtype", &amp::AutocastMode::dtype)
+      .def_static("set_dtype", &amp::AutocastMode::set_dtype,
+                  py::arg("dtype"));
+
+  py::class_<amp::AutoCastGuard>(amp_mod, "AutoCastGuard")
+      .def(py::init<DataType>(), py::arg("dtype") = DataType::Float16);
+
+  py::class_<amp::GradScaler>(amp_mod, "GradScaler")
+      .def(py::init<float, float, float, int>(),
+           py::arg("init_scale") = 65536.0f,
+           py::arg("growth_factor") = 2.0f,
+           py::arg("backoff_factor") = 0.5f,
+           py::arg("growth_interval") = 2000)
+      .def("scale", &amp::GradScaler::scale, py::arg("loss"))
+      .def("unscale_", &amp::GradScaler::unscale_, py::arg("params"))
+      .def("step", &amp::GradScaler::step, py::arg("optimizer"), py::arg("params"))
+      .def("update", &amp::GradScaler::update, py::arg("found_inf"))
+      .def("current_scale", &amp::GradScaler::current_scale);
 
   // ============================================================================
   // Optimizers (munet.optim)
