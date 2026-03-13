@@ -4,6 +4,7 @@
 #include "ops.hpp"
 #include "tensor.hpp"
 #include "types.hpp"
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -30,7 +31,13 @@ enum class AutocastOp {
   LayerNorm
 };
 
-inline bool should_autocast(AutocastOp op) {
+constexpr size_t kAutocastOpCount = 16;
+
+inline size_t autocast_op_index(AutocastOp op) {
+  return static_cast<size_t>(op);
+}
+
+inline bool default_should_autocast(AutocastOp op) {
   switch (op) {
   case AutocastOp::Add:
   case AutocastOp::Sub:
@@ -43,7 +50,6 @@ inline bool should_autocast(AutocastOp op) {
   case AutocastOp::LogSoftmax:
   case AutocastOp::MSELoss:
   case AutocastOp::CrossEntropy:
-    return true;
   case AutocastOp::LayerNorm:
     return true;
   case AutocastOp::Conv2D:
@@ -55,6 +61,59 @@ inline bool should_autocast(AutocastOp op) {
     return false;
   }
 }
+
+class AutocastPolicy {
+public:
+  static bool should_autocast(AutocastOp op) {
+    int8_t v = overrides_[autocast_op_index(op)];
+    if (v >= 0)
+      return v != 0;
+    return default_should_autocast(op);
+  }
+
+  static void set_override(AutocastOp op, bool enabled) {
+    overrides_[autocast_op_index(op)] = enabled ? 1 : 0;
+  }
+
+  static void clear_override(AutocastOp op) {
+    overrides_[autocast_op_index(op)] = -1;
+  }
+
+  static void clear_all_overrides() {
+    for (auto &v : overrides_)
+      v = -1;
+  }
+
+  static std::array<int8_t, kAutocastOpCount> current_overrides() {
+    return overrides_;
+  }
+
+  static void set_overrides(const std::array<int8_t, kAutocastOpCount> &values) {
+    overrides_ = values;
+  }
+
+private:
+  inline static thread_local std::array<int8_t, kAutocastOpCount> overrides_ = {
+      -1, -1, -1, -1, -1, -1, -1, -1,
+      -1, -1, -1, -1, -1, -1, -1, -1};
+};
+
+inline bool should_autocast(AutocastOp op) {
+  return AutocastPolicy::should_autocast(op);
+}
+
+class AutocastPolicyGuard {
+public:
+  AutocastPolicyGuard(AutocastOp op, bool enabled)
+      : prev_(AutocastPolicy::current_overrides()) {
+    AutocastPolicy::set_override(op, enabled);
+  }
+
+  ~AutocastPolicyGuard() { AutocastPolicy::set_overrides(prev_); }
+
+private:
+  std::array<int8_t, kAutocastOpCount> prev_;
+};
 
 class AutocastMode {
 public:

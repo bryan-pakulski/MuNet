@@ -31,6 +31,34 @@ TEST(AMPTest, AutocastPolicyTableReflectsCurrentCoverage) {
   EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::LayerNorm));
 }
 
+
+
+TEST(AMPTest, AutocastPolicyGuardCanDisableSupportedOpTemporarily) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a({2}, cpu, DataType::Float32, false);
+  Tensor b({2}, cpu, DataType::Float32, false);
+  auto *ap = static_cast<float *>(a.data());
+  auto *bp = static_cast<float *>(b.data());
+  ap[0] = 1.0f; ap[1] = 2.0f;
+  bp[0] = 3.0f; bp[1] = 4.0f;
+
+  {
+    amp::AutoCastGuard guard(DataType::Float16);
+
+    Tensor base = a + b;
+    EXPECT_EQ(base.dtype(), DataType::Float16);
+
+    {
+      amp::AutocastPolicyGuard disable_add(amp::AutocastOp::Add, false);
+      Tensor no_cast = a + b;
+      EXPECT_EQ(no_cast.dtype(), DataType::Float32);
+    }
+
+    Tensor restored = a + b;
+    EXPECT_EQ(restored.dtype(), DataType::Float16);
+  }
+}
+
 TEST(AMPTest, AutocastCastsCoreForwardOps) {
   Device cpu{DeviceType::CPU, 0};
   Tensor a({2, 2}, cpu, DataType::Float32, false);
