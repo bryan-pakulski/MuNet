@@ -240,6 +240,36 @@ TEST(AMPTest, AutocastCoversDropoutAndGlobalAvgPoolModules) {
       Tensor y_gap_still_cast = gap.forward(x4d);
       EXPECT_EQ(y_gap_still_cast.dtype(), DataType::Float16);
     }
+
+    {
+      amp::AutocastPolicyGuard disable_gap(amp::AutocastOp::GlobalAvgPool2d,
+                                           false);
+      Tensor y_gap_fp32 = gap.forward(x4d);
+      EXPECT_EQ(y_gap_fp32.dtype(), DataType::Float32);
+      Tensor y_drop_still_cast = drop.forward(x2d);
+      EXPECT_EQ(y_drop_still_cast.dtype(), DataType::Float16);
+    }
+  }
+}
+
+TEST(AMPTest, AutocastCoversMultiHeadAttentionModuleWithPolicyOverride) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::MultiHeadAttention mha(4, 2, true);
+
+  Tensor x({2, 3, 4}, cpu, DataType::Float32, false);
+  x.uniform_(0.0f, 1.0f);
+
+  {
+    amp::AutoCastGuard guard(DataType::Float16);
+    Tensor y_cast = mha.forward(x);
+    EXPECT_EQ(y_cast.dtype(), DataType::Float16);
+
+    {
+      amp::AutocastPolicyGuard disable_mha(amp::AutocastOp::MultiHeadAttention,
+                                           false);
+      Tensor y_fp32 = mha.forward(x);
+      EXPECT_EQ(y_fp32.dtype(), DataType::Float32);
+    }
   }
 }
 

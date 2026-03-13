@@ -338,7 +338,8 @@ public:
 
   Tensor forward(Tensor x) override {
     bool autocast_active = amp::AutocastMode::is_enabled();
-    x = maybe_autocast_module_input(x, amp::AutocastOp::MultiHeadAttention);
+    // Keep internal MHA math in stable native dtype for now; apply autocast on
+    // module output under policy control.
     ScopedAutocastModeToggle scoped(autocast_active);
     auto s = x.shape();
     if (s.size() != 3)
@@ -417,7 +418,9 @@ public:
 class GlobalAvgPool2d : public Module {
 public:
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
     x = maybe_autocast_module_input(x, amp::AutocastOp::GlobalAvgPool2d);
+    ScopedAutocastModeToggle scoped(autocast_active);
     auto s = x.shape();
     if (s.size() != 4)
       throw std::runtime_error("GlobalAvgPool2d expects NCHW input");
@@ -431,7 +434,9 @@ public:
     weights.uniform_(scale, scale);
 
     Tensor out = flat.matmul(weights);
-    return out.reshape({B, C, 1, 1});
+    out = out.reshape({B, C, 1, 1});
+    return maybe_autocast_module_output(out, amp::AutocastOp::GlobalAvgPool2d,
+                                        autocast_active);
   }
 };
 
