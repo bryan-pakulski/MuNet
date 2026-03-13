@@ -669,6 +669,14 @@ PYBIND11_MODULE(munet, m) {
       .def("step", &amp::FP32MasterSGD::step)
       .def("zero_grad", &amp::FP32MasterSGD::zero_grad);
 
+  py::class_<amp::FP32MasterAdam>(amp_mod, "FP32MasterAdam")
+      .def(py::init<std::vector<Tensor>, float, float, float, float>(),
+           py::arg("params"), py::arg("lr") = 1e-3f,
+           py::arg("beta1") = 0.9f, py::arg("beta2") = 0.999f,
+           py::arg("eps") = 1e-8f)
+      .def("step", &amp::FP32MasterAdam::step)
+      .def("zero_grad", &amp::FP32MasterAdam::zero_grad);
+
   // ============================================================================
   // Optimizers (munet.optim)
   // ============================================================================

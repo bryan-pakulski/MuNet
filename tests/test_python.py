@@ -116,6 +116,12 @@ class TestBindings(unittest.TestCase):
         opt = munet.amp.FP32MasterSGD([w], 0.1)
         opt.zero_grad()
         self.assertTrue(hasattr(munet.amp, "FP32MasterSGD"))
+
+    def test_amp_fp32_master_adam_binding(self):
+        w = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
+        opt = munet.amp.FP32MasterAdam([w], 1e-3)
+        opt.zero_grad()
+        self.assertTrue(hasattr(munet.amp, "FP32MasterAdam"))
     def test_numpy_buffer_protocol(self):
         """Test zero-copy memory sharing between C++ and NumPy."""
         t = munet.Tensor([2, 2])

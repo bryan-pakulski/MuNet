@@ -61,3 +61,24 @@ TEST(AMPTest, FP32MasterSGDKeepsModelLowPrecision) {
   auto *w_after = static_cast<int8_t *>(w.data());
   EXPECT_NE(w_after[0], 4);
 }
+
+
+TEST(AMPTest, FP32MasterAdamKeepsModelLowPrecision) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor w({1}, cpu, DataType::Float16, true);
+  auto *wp = static_cast<int8_t *>(w.data());
+  wp[0] = 8;
+
+  amp::FP32MasterAdam opt({w}, 4.0f);
+
+  Tensor grad({1}, cpu, DataType::Float16, false);
+  auto *gp = static_cast<int8_t *>(grad.data());
+  gp[0] = 4;
+  w.impl_->grad = grad.impl_;
+
+  opt.step();
+
+  EXPECT_EQ(w.dtype(), DataType::Float16);
+  auto *w_after = static_cast<int8_t *>(w.data());
+  EXPECT_NE(w_after[0], 8);
+}

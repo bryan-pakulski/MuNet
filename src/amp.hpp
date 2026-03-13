@@ -169,5 +169,75 @@ private:
   float lr_;
 };
 
+class FP32MasterAdam {
+public:
+  FP32MasterAdam(std::vector<Tensor> params, float lr = 1e-3,
+                 float beta1 = 0.9f, float beta2 = 0.999f,
+                 float eps = 1e-8f)
+      : params_(std::move(params)), lr_(lr), beta1_(beta1), beta2_(beta2),
+        eps_(eps) {
+    for (auto &p : params_) {
+      Tensor master = p.to_dtype(DataType::Float32);
+      master_params_.push_back(master);
+
+      Tensor m(p.shape(), p.device(), DataType::Float32, false);
+      Tensor v(p.shape(), p.device(), DataType::Float32, false);
+      m.impl_->storage->zero_();
+      v.impl_->storage->zero_();
+      exp_avg_.push_back(m);
+      exp_avg_sq_.push_back(v);
+    }
+  }
+
+  void step() {
+    step_count_++;
+    float bias_correction1 = 1.0f - std::pow(beta1_, step_count_);
+    float bias_correction2 = 1.0f - std::pow(beta2_, step_count_);
+
+    for (size_t i = 0; i < params_.size(); ++i) {
+      auto &p = params_[i];
+      if (!p.has_grad())
+        continue;
+
+      Tensor grad_fp32 = p.grad().to_dtype(DataType::Float32);
+      auto *g = static_cast<float *>(grad_fp32.data());
+      auto *w = static_cast<float *>(master_params_[i].data());
+      auto *m = static_cast<float *>(exp_avg_[i].data());
+      auto *v = static_cast<float *>(exp_avg_sq_[i].data());
+
+      for (size_t j = 0; j < p.size(); ++j) {
+        float gj = g[j];
+        m[j] = beta1_ * m[j] + (1.0f - beta1_) * gj;
+        v[j] = beta2_ * v[j] + (1.0f - beta2_) * (gj * gj);
+
+        float m_hat = m[j] / bias_correction1;
+        float v_hat = v[j] / bias_correction2;
+        w[j] -= lr_ * m_hat / (std::sqrt(v_hat) + eps_);
+      }
+
+      Tensor model_copy = master_params_[i].to_dtype(p.dtype());
+      p.impl_->backend().copy(model_copy.data(), p.data(), p.bytes(), p.device(),
+                              p.device());
+    }
+  }
+
+  void zero_grad() {
+    for (auto &p : params_) {
+      p.zero_grad();
+    }
+  }
+
+private:
+  std::vector<Tensor> params_;
+  std::vector<Tensor> master_params_;
+  std::vector<Tensor> exp_avg_;
+  std::vector<Tensor> exp_avg_sq_;
+  float lr_;
+  float beta1_;
+  float beta2_;
+  float eps_;
+  int step_count_ = 0;
+};
+
 } // namespace amp
 } // namespace munet

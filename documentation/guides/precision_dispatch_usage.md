@@ -110,6 +110,11 @@ with munet.amp.AutoCastGuard(munet.DataType.Float16):
 scaled_loss = scaler.scale(loss)
 scaled_loss.backward()
 stepped = scaler.step(optimizer, model.parameters())
+
+# Optional: keep model in low precision with FP32 master weights
+master_opt = munet.amp.FP32MasterSGD(model.parameters(), lr=1e-3)
+# or Adam-style master optimizer
+master_adam = munet.amp.FP32MasterAdam(model.parameters(), lr=1e-3)
 ```
 
 ## DType selection guidance
