@@ -16,6 +16,36 @@ TEST(AMPTest, AutocastGuardTogglesState) {
   EXPECT_FALSE(amp::AutocastMode::is_enabled());
 }
 
+
+
+TEST(AMPTest, AutocastCastsCoreForwardOps) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a({2, 2}, cpu, DataType::Float32, false);
+  Tensor b({2, 2}, cpu, DataType::Float32, false);
+  auto *ap = static_cast<float *>(a.data());
+  auto *bp = static_cast<float *>(b.data());
+  ap[0] = 1.0f; ap[1] = 2.0f; ap[2] = 3.0f; ap[3] = 4.0f;
+  bp[0] = 1.0f; bp[1] = 1.0f; bp[2] = 1.0f; bp[3] = 1.0f;
+
+  Tensor add_fp32 = a + b;
+  EXPECT_EQ(add_fp32.dtype(), DataType::Float32);
+
+  {
+    amp::AutoCastGuard guard(DataType::Float16);
+    Tensor add_out = a + b;
+    Tensor mul_out = a * b;
+    Tensor mm_out = a.matmul(b);
+    Tensor relu_out = a.relu();
+    Tensor loss = a.mse_loss(b);
+
+    EXPECT_EQ(add_out.dtype(), DataType::Float16);
+    EXPECT_EQ(mul_out.dtype(), DataType::Float16);
+    EXPECT_EQ(mm_out.dtype(), DataType::Float16);
+    EXPECT_EQ(relu_out.dtype(), DataType::Float16);
+    EXPECT_EQ(loss.dtype(), DataType::Float32);
+  }
+}
+
 TEST(AMPTest, GradScalerScalesLossAndSteps) {
   Device cpu{DeviceType::CPU, 0};
   Tensor w({1}, cpu, DataType::Float32, true);

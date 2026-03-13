@@ -1,4 +1,5 @@
 #include "tensor.hpp"
+#include "amp.hpp"
 #include "autograd/autograd.hpp"
 #include "ops.hpp"
 #include "util.hpp"
@@ -12,6 +13,16 @@
 
 namespace munet {
 
+namespace {
+inline Tensor maybe_autocast_tensor(const Tensor &t) {
+  if (!amp::AutocastMode::is_enabled())
+    return t;
+  DataType target = amp::AutocastMode::dtype();
+  if (!is_float_dtype(t.dtype()) || t.dtype() == target)
+    return t;
+  return t.to_dtype(target);
+}
+} // namespace
 
 // --- Autograd ---
 void Tensor::backward(const Tensor &grad) {
@@ -49,17 +60,33 @@ Tensor Tensor::detach() const {
 
 // --- Ops ---
 Tensor Tensor::operator+(const Tensor &other) const {
-  return ops::add(*this, other);
+  Tensor lhs = maybe_autocast_tensor(*this);
+  Tensor rhs = maybe_autocast_tensor(other);
+  return ops::add(lhs, rhs);
 }
 
 Tensor Tensor::matmul(const Tensor &other) const {
-  return ops::matmul(*this, other);
+  Tensor lhs = maybe_autocast_tensor(*this);
+  Tensor rhs = maybe_autocast_tensor(other);
+  return ops::matmul(lhs, rhs);
 }
 
-Tensor Tensor::relu() const { return ops::relu(*this); }
-Tensor Tensor::sigmoid() const { return ops::sigmoid(*this); }
-Tensor Tensor::softmax(int dim) const { return ops::softmax(*this, dim); }
-Tensor Tensor::log_softmax(int dim) const { return ops::log_softmax(*this, dim); }
+Tensor Tensor::relu() const {
+  Tensor x = maybe_autocast_tensor(*this);
+  return ops::relu(x);
+}
+Tensor Tensor::sigmoid() const {
+  Tensor x = maybe_autocast_tensor(*this);
+  return ops::sigmoid(x);
+}
+Tensor Tensor::softmax(int dim) const {
+  Tensor x = maybe_autocast_tensor(*this);
+  return ops::softmax(x, dim);
+}
+Tensor Tensor::log_softmax(int dim) const {
+  Tensor x = maybe_autocast_tensor(*this);
+  return ops::log_softmax(x, dim);
+}
 
 Tensor Tensor::conv2d(const Tensor &weight, const Tensor &bias, int stride,
                       int padding) const {
@@ -194,14 +221,20 @@ Tensor Tensor::to_dtype(DataType target_dtype) const {
 }
 
 Tensor Tensor::operator-(const Tensor &other) const {
-  return ops::sub(*this, other);
+  Tensor lhs = maybe_autocast_tensor(*this);
+  Tensor rhs = maybe_autocast_tensor(other);
+  return ops::sub(lhs, rhs);
 }
 Tensor Tensor::operator*(const Tensor &other) const {
-  return ops::mul(*this, other);
+  Tensor lhs = maybe_autocast_tensor(*this);
+  Tensor rhs = maybe_autocast_tensor(other);
+  return ops::mul(lhs, rhs);
 }
 
 Tensor Tensor::operator/(const Tensor &other) const {
-  return ops::div(*this, other);
+  Tensor lhs = maybe_autocast_tensor(*this);
+  Tensor rhs = maybe_autocast_tensor(other);
+  return ops::div(lhs, rhs);
 }
 
 Tensor Tensor::cat(const std::vector<Tensor> &inputs, int dim) {
@@ -254,11 +287,15 @@ Tensor Tensor::layer_norm(const Tensor &weight, const Tensor &bias,
 }
 
 Tensor Tensor::mse_loss(const Tensor &target) const {
-  return ops::mse_loss(*this, target);
+  Tensor pred = maybe_autocast_tensor(*this);
+  Tensor tgt = maybe_autocast_tensor(target);
+  return ops::mse_loss(pred, tgt);
 }
 
 Tensor Tensor::cross_entropy(const Tensor &target) const {
-  return ops::cross_entropy(*this, target);
+  Tensor logits = maybe_autocast_tensor(*this);
+  Tensor tgt = maybe_autocast_tensor(target);
+  return ops::cross_entropy(logits, tgt);
 }
 
 void Tensor::uniform_(float low, float high) {
