@@ -10,6 +10,15 @@ namespace munet {
 namespace nn {
 
 namespace {
+inline Tensor maybe_autocast_module_input(const Tensor &x, amp::AutocastOp op) {
+  if (!amp::AutocastMode::is_enabled() || !amp::should_autocast(op))
+    return x;
+  DataType target = amp::AutocastMode::dtype();
+  if (!is_float_dtype(x.dtype()) || x.dtype() == target)
+    return x;
+  return x.to_dtype(target);
+}
+
 inline Tensor maybe_autocast_module_output(const Tensor &out, amp::AutocastOp op,
                                           bool autocast_active) {
   if (!autocast_active || !amp::should_autocast(op))
@@ -175,8 +184,11 @@ public:
   }
 
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    ScopedAutocastModeToggle scoped(autocast_active);
+
     if (!training_ || p_ == 0.0f)
-      return x;
+      return maybe_autocast_module_output(x, amp::AutocastOp::Dropout, autocast_active);
 
     Device cpu{DeviceType::CPU, 0};
     Tensor mask_cpu(x.shape(), cpu, x.dtype(), false);
@@ -185,14 +197,15 @@ public:
     std::bernoulli_distribution keep(keep_prob);
     std::mt19937 rng(std::random_device{}());
 
-    float *m = static_cast<float *>(mask_cpu.data());
     for (size_t i = 0; i < mask_cpu.size(); ++i) {
-      m[i] = keep(rng) ? (1.0f / keep_prob) : 0.0f;
+      double mv = keep(rng) ? (1.0 / static_cast<double>(keep_prob)) : 0.0;
+      store_scalar_from_double(mask_cpu.data(), mask_cpu.dtype(), i, mv);
     }
 
     Tensor mask = (x.device().type == DeviceType::CPU) ? mask_cpu
                                                         : mask_cpu.to(x.device());
-    return x * mask;
+    Tensor out = x * mask;
+    return maybe_autocast_module_output(out, amp::AutocastOp::Dropout, autocast_active);
   }
 
   float p_;
@@ -249,6 +262,7 @@ public:
   }
 
   Tensor forward(Tensor x) override {
+    x = maybe_autocast_module_input(x, amp::AutocastOp::GlobalAvgPool2d);
     auto s = x.shape();
 
     // Efficient index-based gather path for [B, T] token ids.
@@ -317,6 +331,7 @@ public:
   }
 
   Tensor forward(Tensor x) override {
+    x = maybe_autocast_module_input(x, amp::AutocastOp::GlobalAvgPool2d);
     auto s = x.shape();
     if (s.size() != 3)
       throw std::runtime_error("MultiHeadAttention expects input shape [B,T,E]");
@@ -391,6 +406,7 @@ public:
 class GlobalAvgPool2d : public Module {
 public:
   Tensor forward(Tensor x) override {
+    x = maybe_autocast_module_input(x, amp::AutocastOp::GlobalAvgPool2d);
     auto s = x.shape();
     if (s.size() != 4)
       throw std::runtime_error("GlobalAvgPool2d expects NCHW input");

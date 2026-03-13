@@ -208,6 +208,25 @@ class TestBindings(unittest.TestCase):
                 self.assertEqual(tanh.forward(x).dtype, munet.DataType.Float32)
                 self.assertEqual(gelu.forward(x).dtype, munet.DataType.Float16)
 
+    def test_amp_dropout_globalavgpool_policy_override(self):
+        x2d = munet.Tensor([2, 4], dtype=munet.DataType.Float32)
+        np.array(x2d, copy=False)[:] = np.array(
+            [[1.0, 2.0, 3.0, 4.0], [0.5, 0.25, 0.75, 1.25]], dtype=np.float32
+        )
+        x4d = munet.Tensor([1, 3, 4, 4], dtype=munet.DataType.Float32)
+        np.array(x4d, copy=False)[:] = np.random.default_rng(1).uniform(0.0, 1.0, size=(1, 3, 4, 4)).astype(np.float32)
+
+        drop = munet.nn.Dropout(0.2)
+        gap = munet.nn.GlobalAvgPool2d()
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            self.assertEqual(drop.forward(x2d).dtype, munet.DataType.Float16)
+            self.assertEqual(gap.forward(x4d).dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(munet.amp.AutocastOp.Dropout, False):
+                self.assertEqual(drop.forward(x2d).dtype, munet.DataType.Float32)
+                self.assertEqual(gap.forward(x4d).dtype, munet.DataType.Float16)
+
     def test_amp_spatial_module_forward_coverage(self):
         x = munet.Tensor([1, 3, 8, 8], dtype=munet.DataType.Float32)
         np.array(x, copy=False)[:] = np.random.default_rng(0).uniform(0.0, 1.0, size=(1, 3, 8, 8)).astype(np.float32)

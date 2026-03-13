@@ -35,6 +35,8 @@ TEST(AMPTest, AutocastPolicyTableReflectsCurrentCoverage) {
   EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::Tanh));
   EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::GELU));
   EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::LeakyRelu));
+  EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::Dropout));
+  EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::GlobalAvgPool2d));
 }
 
 
@@ -206,6 +208,35 @@ TEST(AMPTest, AutocastCoversActivationModulesWithPolicyOverride) {
       EXPECT_EQ(y_tanh_fp32.dtype(), DataType::Float32);
       Tensor y_gelu_still_cast = gelu.forward(x);
       EXPECT_EQ(y_gelu_still_cast.dtype(), DataType::Float16);
+    }
+  }
+}
+
+TEST(AMPTest, AutocastCoversDropoutAndGlobalAvgPoolModules) {
+  Device cpu{DeviceType::CPU, 0};
+
+  nn::Dropout drop(0.2f);
+  nn::GlobalAvgPool2d gap;
+
+  Tensor x2d({2, 4}, cpu, DataType::Float32, false);
+  x2d.uniform_(0.0f, 1.0f);
+
+  Tensor x4d({1, 3, 4, 4}, cpu, DataType::Float32, false);
+  x4d.uniform_(0.0f, 1.0f);
+
+  {
+    amp::AutoCastGuard guard(DataType::Float16);
+    Tensor y_drop = drop.forward(x2d);
+    Tensor y_gap = gap.forward(x4d);
+    EXPECT_EQ(y_drop.dtype(), DataType::Float16);
+    EXPECT_EQ(y_gap.dtype(), DataType::Float16);
+
+    {
+      amp::AutocastPolicyGuard disable_drop(amp::AutocastOp::Dropout, false);
+      Tensor y_drop_fp32 = drop.forward(x2d);
+      EXPECT_EQ(y_drop_fp32.dtype(), DataType::Float32);
+      Tensor y_gap_still_cast = gap.forward(x4d);
+      EXPECT_EQ(y_gap_still_cast.dtype(), DataType::Float16);
     }
   }
 }

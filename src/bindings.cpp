@@ -660,6 +660,8 @@ PYBIND11_MODULE(munet, m) {
       .value("Tanh", amp::AutocastOp::Tanh)
       .value("GELU", amp::AutocastOp::GELU)
       .value("LeakyRelu", amp::AutocastOp::LeakyRelu)
+      .value("Dropout", amp::AutocastOp::Dropout)
+      .value("GlobalAvgPool2d", amp::AutocastOp::GlobalAvgPool2d)
       .export_values();
 
   py::class_<amp::AutocastPolicy>(amp_mod, "AutocastPolicy")
