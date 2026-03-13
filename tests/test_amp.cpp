@@ -33,6 +33,16 @@ TEST(AMPTest, AutocastPolicyTableReflectsCurrentCoverage) {
 
 
 
+
+
+TEST(AMPTest, AutocastPolicyClearOverrideRestoresDefault) {
+  EXPECT_TRUE(amp::AutocastPolicy::should_autocast(amp::AutocastOp::Matmul));
+  amp::AutocastPolicy::set_override(amp::AutocastOp::Matmul, false);
+  EXPECT_FALSE(amp::AutocastPolicy::should_autocast(amp::AutocastOp::Matmul));
+  amp::AutocastPolicy::clear_override(amp::AutocastOp::Matmul);
+  EXPECT_TRUE(amp::AutocastPolicy::should_autocast(amp::AutocastOp::Matmul));
+}
+
 TEST(AMPTest, AutocastPolicyGuardCanDisableSupportedOpTemporarily) {
   Device cpu{DeviceType::CPU, 0};
   Tensor a({2}, cpu, DataType::Float32, false);

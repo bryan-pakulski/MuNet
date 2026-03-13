@@ -709,6 +709,40 @@ PYBIND11_MODULE(munet, m) {
       .def("step", &amp::FP32MasterAdam::step)
       .def("zero_grad", &amp::FP32MasterAdam::zero_grad);
 
+
+  py::dict amp_locals;
+  amp_locals["munet"] = m;
+  py::exec(
+      R"PY(
+# Inject ergonomic context managers into munet.amp namespace.
+def _autocast(dtype=None):
+    if dtype is None:
+        dtype = munet.DataType.Float16
+    class _AutoCtx:
+        def __enter__(self):
+            self._g = munet.amp.AutoCastGuard(dtype)
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            self._g = None
+            return False
+    return _AutoCtx()
+
+
+def _autocast_policy(op, enabled):
+    class _PolicyCtx:
+        def __enter__(self):
+            self._g = munet.amp.AutocastPolicyGuard(op, enabled)
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            self._g = None
+            return False
+    return _PolicyCtx()
+
+munet.amp.autocast = _autocast
+munet.amp.autocast_policy = _autocast_policy
+)PY",
+      py::globals(), amp_locals);
+
   // ============================================================================
   // Optimizers (munet.optim)
   // ============================================================================

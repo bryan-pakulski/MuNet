@@ -139,6 +139,25 @@ class TestBindings(unittest.TestCase):
             del g
             munet.amp.AutocastPolicy.clear_all_overrides()
 
+
+
+    def test_amp_autocast_context_helpers(self):
+        a = munet.Tensor([2], dtype=munet.DataType.Float32)
+        b = munet.Tensor([2], dtype=munet.DataType.Float32)
+        np.array(a, copy=False)[:] = [1.0, 2.0]
+        np.array(b, copy=False)[:] = [3.0, 4.0]
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            out = a + b
+            self.assertEqual(out.dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(munet.amp.AutocastOp.Add, False):
+                out2 = a + b
+                self.assertEqual(out2.dtype, munet.DataType.Float32)
+
+            out3 = a + b
+            self.assertEqual(out3.dtype, munet.DataType.Float16)
+
     def test_amp_fp32_master_sgd_binding(self):
         # Binding/API smoke test (avoid writing Float16 buffer directly in Python for now)
         w = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
