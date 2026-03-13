@@ -86,6 +86,103 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(t.device.type, munet.DeviceType.CPU)
         self.assertEqual(t.dtype, munet.DataType.Float32)
 
+
+    def test_to_dtype_and_dispatch_config(self):
+        t = munet.Tensor([2], dtype=munet.DataType.Float32)
+        arr = np.array(t, copy=False)
+        arr[:] = [3.0, -2.0]
+
+        t_i8 = t.to_dtype(munet.DataType.Int8)
+        self.assertEqual(t_i8.dtype, munet.DataType.Int8)
+
+        t_back = t_i8.to_dtype(munet.DataType.Float32)
+        back = np.array(t_back, copy=False)
+        self.assertTrue(np.allclose(back, np.array([3.0, -2.0], dtype=np.float32), atol=1e-5))
+
+        cfg = munet.DTypeDispatchConfig()
+        cfg.has_compute_dtype = True
+        cfg.compute_dtype = munet.DataType.Int8
+        cfg.fallback_mode = munet.KernelFallbackMode.WarnAndUpcast
+
+        with munet.precision_dispatch(cfg):
+            y = t_i8 + t_i8
+            y_back = y.to_dtype(munet.DataType.Float32)
+            y_np = np.array(y_back, copy=False)
+            self.assertEqual(y_np.shape[0], 2)
+
+
+
+    def test_amp_autocast_policy_override_binding(self):
+        a = munet.Tensor([2], dtype=munet.DataType.Float32)
+        b = munet.Tensor([2], dtype=munet.DataType.Float32)
+        np.array(a, copy=False)[:] = [1.0, 2.0]
+        np.array(b, copy=False)[:] = [3.0, 4.0]
+
+        munet.amp.AutocastPolicy.clear_all_overrides()
+        self.assertTrue(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+
+        g = munet.amp.AutoCastGuard(munet.DataType.Float16)
+        try:
+            out = a + b
+            self.assertEqual(out.dtype, munet.DataType.Float16)
+
+            pg = munet.amp.AutocastPolicyGuard(munet.amp.AutocastOp.Add, False)
+            try:
+                out2 = a + b
+                self.assertEqual(out2.dtype, munet.DataType.Float32)
+            finally:
+                del pg
+
+            out3 = a + b
+            self.assertEqual(out3.dtype, munet.DataType.Float16)
+        finally:
+            del g
+            munet.amp.AutocastPolicy.clear_all_overrides()
+
+
+
+
+
+    def test_amp_autocast_policy_snapshot_restore_binding(self):
+        munet.amp.AutocastPolicy.clear_all_overrides()
+        baseline = munet.amp.AutocastPolicy.current_overrides()
+
+        self.assertTrue(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+        munet.amp.AutocastPolicy.set_override(munet.amp.AutocastOp.Add, False)
+        self.assertFalse(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+
+        munet.amp.AutocastPolicy.set_overrides(baseline)
+        self.assertTrue(munet.amp.AutocastPolicy.should_autocast(munet.amp.AutocastOp.Add))
+
+    def test_amp_autocast_context_helpers(self):
+        a = munet.Tensor([2], dtype=munet.DataType.Float32)
+        b = munet.Tensor([2], dtype=munet.DataType.Float32)
+        np.array(a, copy=False)[:] = [1.0, 2.0]
+        np.array(b, copy=False)[:] = [3.0, 4.0]
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            out = a + b
+            self.assertEqual(out.dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(munet.amp.AutocastOp.Add, False):
+                out2 = a + b
+                self.assertEqual(out2.dtype, munet.DataType.Float32)
+
+            out3 = a + b
+            self.assertEqual(out3.dtype, munet.DataType.Float16)
+
+    def test_amp_fp32_master_sgd_binding(self):
+        # Binding/API smoke test (avoid writing Float16 buffer directly in Python for now)
+        w = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
+        opt = munet.amp.FP32MasterSGD([w], 0.1)
+        opt.zero_grad()
+        self.assertTrue(hasattr(munet.amp, "FP32MasterSGD"))
+
+    def test_amp_fp32_master_adam_binding(self):
+        w = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
+        opt = munet.amp.FP32MasterAdam([w], 1e-3)
+        opt.zero_grad()
+        self.assertTrue(hasattr(munet.amp, "FP32MasterAdam"))
     def test_numpy_buffer_protocol(self):
         """Test zero-copy memory sharing between C++ and NumPy."""
         t = munet.Tensor([2, 2])

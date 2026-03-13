@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -114,6 +115,49 @@ private:
     last_kernel_time_us_ = t.elapsed_us();
   }
 
+  // ---- DType conversion helpers (Phase 1 scaffolding) ----
+  struct ComputePlan {
+    DataType compute_dtype = DataType::Float32;
+    bool fallback_applied = false;
+  };
+
+  static bool supports_compute_dtype(DataType dt) {
+    return dt == DataType::Float32 || dt == DataType::Float64;
+  }
+
+  static ComputePlan resolve_compute_plan(DataType preferred) {
+    ComputePlan plan;
+    DTypeDispatchConfig cfg = DTypeDispatch::current();
+    DataType requested = cfg.has_compute_dtype ? cfg.compute_dtype : preferred;
+
+    if (supports_compute_dtype(requested)) {
+      plan.compute_dtype = requested;
+      return plan;
+    }
+
+    if (cfg.fallback_mode == KernelFallbackMode::Error) {
+      throw std::runtime_error("CPUBackend: requested compute dtype not supported: " +
+                               std::string(dtype_name(requested)));
+    }
+
+    plan.compute_dtype = DataType::Float32;
+    plan.fallback_applied = true;
+    MUNET_WARNING << "CPUBackend: fallback compute dtype "
+                  << dtype_name(requested)
+                  << " -> float32 (warn_and_upcast mode)" << std::endl;
+    return plan;
+  }
+
+  // Storage dtype may differ from compute dtype. For low precision and quantized
+  // dtypes we currently dequantize/convert into the selected compute dtype.
+  static double load_as_compute(const Storage &s, size_t idx) {
+    return load_scalar_as_double(s.data(), s.dtype(), idx);
+  }
+
+  static void store_from_compute(Storage &s, size_t idx, double v) {
+    store_scalar_from_double(s.data(), s.dtype(), idx, v);
+  }
+
 public:
   ~CPUBackend() override {
     for (auto &kv : free_blocks_) {
@@ -160,23 +204,10 @@ public:
 
   void add(const Storage &a, const Storage &b, Storage &out,
            const BroadcastInfo &info) override {
-    const float *ap = (const float *)a.data();
-    const float *bp = (const float *)b.data();
-    float *op = (float *)out.data();
+    (void)resolve_compute_plan(accumulation_dtype(a.dtype()));
     size_t total = numel(info.out_shape);
     int ndim = (int)info.out_shape.size();
 
-    // Fast Path: Identical shapes and contiguous
-    if (info.strides_a == default_strides(info.out_shape) &&
-        info.strides_b == default_strides(info.out_shape)) {
-      parallel_for(0, total, [&](size_t s, size_t e) {
-        for (size_t i = s; i < e; ++i)
-          op[i] = ap[i] + bp[i];
-      });
-      return;
-    }
-
-    // General Broadcast Path
     parallel_for(0, total, [&](size_t s, size_t e) {
       for (size_t i = s; i < e; ++i) {
         size_t off_a = 0, off_b = 0, curr = i;
@@ -186,15 +217,15 @@ public:
           off_b += coord * info.strides_b[d];
           curr /= info.out_shape[d];
         }
-        op[i] = ap[off_a] + bp[off_b];
+        float v = load_as_compute(a, off_a) + load_as_compute(b, off_b);
+        store_from_compute(out, i, v);
       }
     });
   }
 
   void sub(const Storage &a, const Storage &b, Storage &out,
            const BroadcastInfo &info) override {
-    const float *ap = (const float *)a.data(), *bp = (const float *)b.data();
-    float *op = (float *)out.data();
+    (void)resolve_compute_plan(accumulation_dtype(a.dtype()));
     size_t total = numel(info.out_shape);
     int ndim = (int)info.out_shape.size();
 
@@ -207,15 +238,15 @@ public:
           off_b += coord * info.strides_b[d];
           curr /= info.out_shape[d];
         }
-        op[i] = ap[off_a] - bp[off_b];
+        double v = load_as_compute(a, off_a) - load_as_compute(b, off_b);
+        store_from_compute(out, i, v);
       }
     });
   }
 
   void mul(const Storage &a, const Storage &b, Storage &out,
            const BroadcastInfo &info) override {
-    const float *ap = (const float *)a.data(), *bp = (const float *)b.data();
-    float *op = (float *)out.data();
+    (void)resolve_compute_plan(accumulation_dtype(a.dtype()));
     size_t total = numel(info.out_shape);
     int ndim = (int)info.out_shape.size();
 
@@ -228,15 +259,15 @@ public:
           off_b += coord * info.strides_b[d];
           curr /= info.out_shape[d];
         }
-        op[i] = ap[off_a] * bp[off_b];
+        float v = load_as_compute(a, off_a) * load_as_compute(b, off_b);
+        store_from_compute(out, i, v);
       }
     });
   }
 
   void div(const Storage &a, const Storage &b, Storage &out,
            const BroadcastInfo &info) override {
-    const float *ap = (const float *)a.data(), *bp = (const float *)b.data();
-    float *op = (float *)out.data();
+    (void)resolve_compute_plan(accumulation_dtype(a.dtype()));
     size_t total = numel(info.out_shape);
     int ndim = (int)info.out_shape.size();
 
@@ -249,26 +280,26 @@ public:
           off_b += coord * info.strides_b[d];
           curr /= info.out_shape[d];
         }
-        op[i] = ap[off_a] / bp[off_b];
+        double denom = load_as_compute(b, off_b);
+        double v = load_as_compute(a, off_a) / denom;
+        store_from_compute(out, i, v);
       }
     });
   }
 
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override {
-    const float *ap = (const float *)a.data();
-    const float *bp = (const float *)b.data();
-    float *cp = (float *)out.data();
+    (void)resolve_compute_plan(accumulation_dtype(a.dtype()));
     parallel_for(0, M, [&](size_t start_m, size_t end_m) {
       for (int m = start_m; m < end_m; ++m) {
         for (int n = 0; n < N; ++n) {
-          float sum = 0.0f;
+          float acc = 0.0f;
           for (int k = 0; k < K; ++k) {
-            float a_val = transA ? ap[k * M + m] : ap[m * K + k];
-            float b_val = transB ? bp[n * K + k] : bp[k * N + n];
-            sum += a_val * b_val;
+            size_t a_idx = transA ? (size_t)k * M + m : (size_t)m * K + k;
+            size_t b_idx = transB ? (size_t)n * K + k : (size_t)k * N + n;
+            acc += load_as_compute(a, a_idx) * load_as_compute(b, b_idx);
           }
-          cp[m * N + n] = sum;
+          store_from_compute(out, (size_t)m * N + n, acc);
         }
       }
     });
@@ -393,25 +424,26 @@ public:
 
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
-    const float *ip = (const float *)in.data();
-    float *op = (float *)out.data();
+    (void)resolve_compute_plan(accumulation_dtype(in.dtype()));
     parallel_for(0, batch_size, [&](size_t s, size_t e) {
       for (size_t b = s; b < e; ++b) {
-        const float *in_row = ip + b * num_classes;
-        float *out_row = op + b * num_classes;
-        float max_val = in_row[0];
-        for (int i = 1; i < num_classes; ++i)
-          if (in_row[i] > max_val)
-            max_val = in_row[i];
+        float max_val = load_as_compute(in, b * num_classes);
+        for (int i = 1; i < num_classes; ++i) {
+          float v = load_as_compute(in, b * num_classes + i);
+          if (v > max_val)
+            max_val = v;
+        }
 
-        // Use double for higher precision accumulation
         double sum_exp = 0.0;
         for (int i = 0; i < num_classes; ++i) {
-          sum_exp += std::exp((double)in_row[i] - (double)max_val);
+          sum_exp += std::exp((double)load_as_compute(in, b * num_classes + i) -
+                              (double)max_val);
         }
         for (int i = 0; i < num_classes; ++i) {
-          out_row[i] =
-              (float)(std::exp((double)in_row[i] - (double)max_val) / sum_exp);
+          float o = (float)(std::exp((double)load_as_compute(in, b * num_classes + i) -
+                                     (double)max_val) /
+                            sum_exp);
+          store_from_compute(out, b * num_classes + i, o);
         }
       }
     });
@@ -420,54 +452,48 @@ public:
   void softmax_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, int batch_size,
                         int num_classes) override {
-    const float *go = (const float *)grad_out.data();
-    const float *o = (const float *)out.data();
-    float *gi = (float *)grad_in.data();
+    (void)resolve_compute_plan(accumulation_dtype(out.dtype()));
     parallel_for(0, batch_size, [&](size_t s, size_t e) {
       for (size_t b = s; b < e; ++b) {
-        const float *go_row = go + b * num_classes;
-        const float *out_row = o + b * num_classes;
-        float *gi_row = gi + b * num_classes;
-
         double sum_out_go = 0.0;
-        for (int i = 0; i < num_classes; ++i)
-          sum_out_go += (double)out_row[i] * (double)go_row[i];
+        for (int i = 0; i < num_classes; ++i) {
+          double out_v = load_as_compute(out, b * num_classes + i);
+          double go_v = load_as_compute(grad_out, b * num_classes + i);
+          sum_out_go += out_v * go_v;
+        }
 
-        for (int i = 0; i < num_classes; ++i)
-          gi_row[i] =
-              (float)((double)out_row[i] * ((double)go_row[i] - sum_out_go));
+        for (int i = 0; i < num_classes; ++i) {
+          double out_v = load_as_compute(out, b * num_classes + i);
+          double go_v = load_as_compute(grad_out, b * num_classes + i);
+          double gi = out_v * (go_v - sum_out_go);
+          store_from_compute(grad_in, b * num_classes + i, gi);
+        }
       }
     });
   }
 
   void mse_loss(const Storage &pred, const Storage &target, Storage &out_loss,
                 size_t num_elements) override {
-    const float *p = (const float *)pred.data();
-    const float *t = (const float *)target.data();
-    float *out = (float *)out_loss.data();
-
-    // Sequential reduction for simplicity and thread safety
-    float sum = 0.0f;
+    (void)resolve_compute_plan(accumulation_dtype(pred.dtype()));
+    double sum = 0.0;
     for (size_t i = 0; i < num_elements; ++i) {
-      float diff = p[i] - t[i];
-      sum += diff * diff;
+      float diff = load_as_compute(pred, i) - load_as_compute(target, i);
+      sum += (double)diff * (double)diff;
     }
-    out[0] = sum / (float)num_elements;
+    store_from_compute(out_loss, 0, (float)(sum / (double)num_elements));
   }
 
   void mse_loss_backward(const Storage &grad_out, const Storage &pred,
                          const Storage &target, Storage &grad_in,
                          size_t num_elements) override {
-    const float *go = (const float *)grad_out.data();
-    const float *p = (const float *)pred.data();
-    const float *t = (const float *)target.data();
-    float *gi = (float *)grad_in.data();
-
+    (void)resolve_compute_plan(accumulation_dtype(pred.dtype()));
     parallel_for(0, num_elements, [&](size_t s, size_t e) {
-      float go_val = go[0]; // Loss is scalar
-      float scale = 2.0f / (float)num_elements;
+      double go_val = load_as_compute(grad_out, 0); // Loss is scalar
+      double scale = 2.0 / (double)num_elements;
       for (size_t i = s; i < e; ++i) {
-        gi[i] = go_val * scale * (p[i] - t[i]);
+        double gi = go_val * scale *
+                    (load_as_compute(pred, i) - load_as_compute(target, i));
+        store_from_compute(grad_in, i, gi);
       }
     });
   }
@@ -475,88 +501,71 @@ public:
   void cross_entropy(const Storage &logits, const Storage &targets,
                      Storage &out_loss, int batch_size, int num_classes,
                      int spatial) override {
-    const float *l = (const float *)logits.data();
-    const float *t = (const float *)targets.data();
-    float *out = (float *)out_loss.data();
-
-    // Sum reduction requires lock or atomic. We use a thread-local accumulation
-    // strategy via sequential loop for simplicity in this fallback backend.
+    (void)resolve_compute_plan(accumulation_dtype(logits.dtype()));
     double total_loss = 0.0;
 
-    // Iterate over N samples
     for (int b = 0; b < batch_size; ++b) {
-      // Iterate over spatial locations (pixels)
       for (int s = 0; s < spatial; ++s) {
-        // Find Max for stability (over classes)
         float max_val = -1e30f;
         for (int c = 0; c < num_classes; ++c) {
-          // NCHW offset: b * (C*S) + c * S + s
           int idx = b * (num_classes * spatial) + c * spatial + s;
-          if (l[idx] > max_val)
-            max_val = l[idx];
+          float lv = load_as_compute(logits, idx);
+          if (lv > max_val)
+            max_val = lv;
         }
 
-        // Sum Exp
         double sum_exp = 0.0;
         for (int c = 0; c < num_classes; ++c) {
           int idx = b * (num_classes * spatial) + c * spatial + s;
-          sum_exp += std::exp((double)l[idx] - (double)max_val);
+          sum_exp += std::exp((double)load_as_compute(logits, idx) -
+                              (double)max_val);
         }
 
-        // Compute Loss
         for (int c = 0; c < num_classes; ++c) {
           int idx = b * (num_classes * spatial) + c * spatial + s;
-          float prob =
-              (float)(std::exp((double)l[idx] - (double)max_val) / sum_exp);
-          float tgt = t[idx];
+          float prob = (float)(std::exp((double)load_as_compute(logits, idx) -
+                                        (double)max_val) /
+                               sum_exp);
+          float tgt = load_as_compute(targets, idx);
           if (tgt > 0.0f) {
             total_loss -= tgt * std::log(prob + 1e-9f);
           }
         }
       }
     }
-    // Mean over Batch (standard definition)
-    out[0] = (float)(total_loss / (double)batch_size);
+    store_from_compute(out_loss, 0, (float)(total_loss / (double)batch_size));
   }
 
   void cross_entropy_backward(const Storage &grad_out, const Storage &logits,
                               const Storage &targets, Storage &grad_in,
                               int batch_size, int num_classes,
                               int spatial) override {
-    const float *go = (const float *)grad_out.data();
-    const float *l = (const float *)logits.data();
-    const float *t = (const float *)targets.data();
-    float *gi = (float *)grad_in.data();
-
-    float go_val = go[0];
+    (void)resolve_compute_plan(accumulation_dtype(logits.dtype()));
+    double go_val = load_as_compute(grad_out, 0);
 
     parallel_for(0, batch_size * spatial, [&](size_t start, size_t end) {
       for (size_t i = start; i < end; ++i) {
         int b = i / spatial;
         int s = i % spatial;
 
-        // Find Max
-        float max_val = -1e30f;
+        double max_val = -1e30;
         for (int c = 0; c < num_classes; ++c) {
           int idx = b * (num_classes * spatial) + c * spatial + s;
-          if (l[idx] > max_val)
-            max_val = l[idx];
+          max_val = std::max(max_val, load_as_compute(logits, idx));
         }
 
-        // Sum Exp
         double sum_exp = 0.0;
         for (int c = 0; c < num_classes; ++c) {
           int idx = b * (num_classes * spatial) + c * spatial + s;
-          sum_exp += std::exp((double)l[idx] - (double)max_val);
+          sum_exp += std::exp(load_as_compute(logits, idx) - max_val);
         }
 
-        // Gradient
         for (int c = 0; c < num_classes; ++c) {
           int idx = b * (num_classes * spatial) + c * spatial + s;
-          float prob =
-              (float)(std::exp((double)l[idx] - (double)max_val) / sum_exp);
-          // Gradient is (p - t) / N
-          gi[idx] = go_val * (prob - t[idx]) / (float)batch_size;
+          double prob = std::exp(load_as_compute(logits, idx) - max_val) / sum_exp;
+          double tgt = load_as_compute(targets, idx);
+          double gi = go_val * (prob - tgt) / (double)batch_size;
+          store_from_compute(grad_in, idx, gi);
         }
       }
     });
@@ -639,55 +648,56 @@ public:
   }
   void max_pool2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
                   int k, int s, int p) override {
+    (void)resolve_compute_plan(accumulation_dtype(in.dtype()));
     int oH = (iH + 2 * p - k) / s + 1, oW = (iW + 2 * p - k) / s + 1;
-    const float *in_p = (const float *)in.data();
-    float *out_p = (float *)out.data();
     parallel_for(0, B * C * oH * oW, [&](size_t start, size_t end) {
       for (size_t idx = start; idx < end; ++idx) {
         int ow = idx % oW, oh = (idx / oW) % oH, c = (idx / (oW * oH)) % C,
             b = idx / (oW * oH * C);
-        float max_val = -1e9f;
+        double max_val = -1e300;
         for (int kh = 0; kh < k; ++kh) {
           for (int kw = 0; kw < k; ++kw) {
             int ih = oh * s - p + kh, iw = ow * s - p + kw;
             if (ih >= 0 && ih < iH && iw >= 0 && iw < iW) {
-              max_val =
-                  std::max(max_val, in_p[((b * C + c) * iH + ih) * iW + iw]);
+              size_t src_idx = ((b * C + c) * iH + ih) * iW + iw;
+              max_val = std::max(max_val, load_as_compute(in, src_idx));
             }
           }
         }
-        out_p[idx] = max_val;
+        store_from_compute(out, idx, max_val);
       }
     });
   }
   void max_pool2d_backward(const Storage &grad_out, const Storage &in,
                            Storage &grad_in, int B, int C, int iH, int iW,
                            int k, int s, int p) override {
+    (void)resolve_compute_plan(accumulation_dtype(grad_out.dtype()));
     int oH = (iH + 2 * p - k) / s + 1, oW = (iW + 2 * p - k) / s + 1;
-    const float *go_p = (const float *)grad_out.data(),
-                *in_p = (const float *)in.data();
-    float *gi_p = (float *)grad_in.data();
-    // Recompute max to route gradient
     for (int b = 0; b < B; ++b) {
       for (int c = 0; c < C; ++c) {
         for (int oh = 0; oh < oH; ++oh) {
           for (int ow = 0; ow < oW; ++ow) {
-            float max_val = -1e9f;
+            double max_val = -1e300;
             int max_idx = -1;
             for (int kh = 0; kh < k; ++kh) {
               for (int kw = 0; kw < k; ++kw) {
                 int ih = oh * s - p + kh, iw = ow * s - p + kw;
                 if (ih >= 0 && ih < iH && iw >= 0 && iw < iW) {
                   int idx = ((b * C + c) * iH + ih) * iW + iw;
-                  if (*in_p > max_val) {
-                    max_val = *in_p;
+                  double v = load_as_compute(in, static_cast<size_t>(idx));
+                  if (v > max_val) {
+                    max_val = v;
                     max_idx = idx;
                   }
                 }
               }
             }
-            if (max_idx != -1)
-              gi_p[max_idx] += go_p[((b * C + c) * oH + oh) * oW + ow];
+            if (max_idx != -1) {
+              size_t go_idx = ((b * C + c) * oH + oh) * oW + ow;
+              double accum = load_as_compute(grad_in, static_cast<size_t>(max_idx)) +
+                             load_as_compute(grad_out, go_idx);
+              store_from_compute(grad_in, static_cast<size_t>(max_idx), accum);
+            }
           }
         }
       }
@@ -695,29 +705,30 @@ public:
   }
   void upsample2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
                   int scale) override {
+    (void)resolve_compute_plan(accumulation_dtype(in.dtype()));
     int oH = iH * scale, oW = iW * scale;
-    const float *in_p = (const float *)in.data();
-    float *out_p = (float *)out.data();
     parallel_for(0, B * C * oH * oW, [&](size_t start, size_t end) {
       for (size_t idx = start; idx < end; ++idx) {
         int ow = idx % oW, oh = (idx / oW) % oH, c = (idx / (oW * oH)) % C,
             b = idx / (oW * oH * C);
-        out_p[idx] =
-            in_p[((b * C + c) * iH + (oh / scale)) * iW + (ow / scale)];
+        size_t src_idx = ((b * C + c) * iH + (oh / scale)) * iW + (ow / scale);
+        store_from_compute(out, idx, load_as_compute(in, src_idx));
       }
     });
   }
   void upsample2d_backward(const Storage &grad_out, Storage &grad_in, int B,
                            int C, int iH, int iW, int scale) override {
+    (void)resolve_compute_plan(accumulation_dtype(grad_out.dtype()));
     int oH = iH * scale, oW = iW * scale;
-    const float *go_p = (const float *)grad_out.data();
-    float *gi_p = (float *)grad_in.data();
     for (int b = 0; b < B; ++b) {
       for (int c = 0; c < C; ++c) {
         for (int oh = 0; oh < oH; ++oh) {
           for (int ow = 0; ow < oW; ++ow) {
-            gi_p[((b * C + c) * iH + (oh / scale)) * iW + (ow / scale)] +=
-                go_p[((b * C + c) * oH + oh) * oW + ow];
+            size_t gi_idx = ((b * C + c) * iH + (oh / scale)) * iW + (ow / scale);
+            size_t go_idx = ((b * C + c) * oH + oh) * oW + ow;
+            double accum = load_as_compute(grad_in, gi_idx) +
+                           load_as_compute(grad_out, go_idx);
+            store_from_compute(grad_in, gi_idx, accum);
           }
         }
       }
@@ -840,14 +851,11 @@ public:
   }
 
   void sum(const Storage &in, Storage &out, size_t num_elements) override {
-    const float *ip = (const float *)in.data();
-    float *op = (float *)out.data();
-
-    // Simple sequential sum for now to avoid atomic overheads on CPU
-    float total = 0.0f;
+    (void)resolve_compute_plan(accumulation_dtype(in.dtype()));
+    double total = 0.0;
     for (size_t i = 0; i < num_elements; ++i)
-      total += ip[i];
-    op[0] = total;
+      total += (double)load_as_compute(in, i);
+    store_from_compute(out, 0, (float)total);
   }
 
   void broadcast_row(const Storage &src, Storage &dst, int rows,

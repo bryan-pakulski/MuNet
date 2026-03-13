@@ -1,3 +1,4 @@
+#include "amp.hpp"
 #include "autograd/autograd.hpp"
 #include "inference.hpp"
 #include "nn.hpp"
@@ -38,8 +39,39 @@ PYBIND11_MODULE(munet, m) {
   py::enum_<DataType>(m, "DataType", "Supported data types for tensors.")
       .value("Float32", DataType::Float32)
       .value("Float16", DataType::Float16)
+      .value("BFloat16", DataType::BFloat16)
+      .value("Float8E4M3FN", DataType::Float8E4M3FN)
+      .value("Float8E5M2", DataType::Float8E5M2)
+      .value("Int8", DataType::Int8)
+      .value("Int4", DataType::Int4)
       .value("Int32", DataType::Int32)
+      .value("Float64", DataType::Float64)
       .export_values();
+
+
+  py::enum_<KernelFallbackMode>(m, "KernelFallbackMode")
+      .value("Error", KernelFallbackMode::Error)
+      .value("WarnAndUpcast", KernelFallbackMode::WarnAndUpcast)
+      .export_values();
+
+
+  py::class_<DTypeDispatchConfig>(m, "DTypeDispatchConfig")
+      .def(py::init<>())
+      .def_readwrite("has_compute_dtype", &DTypeDispatchConfig::has_compute_dtype)
+      .def_readwrite("compute_dtype", &DTypeDispatchConfig::compute_dtype)
+      .def_readwrite("fallback_mode", &DTypeDispatchConfig::fallback_mode);
+
+  py::class_<DTypeDispatch>(m, "DTypeDispatch")
+      .def_static("current", &DTypeDispatch::current)
+      .def_static("set_current", &DTypeDispatch::set_current, py::arg("config"))
+      .def_static("reset", &DTypeDispatch::reset);
+
+  py::class_<DTypeDispatchGuard>(m, "DTypeDispatchGuard")
+      .def(py::init<const DTypeDispatchConfig &>(), py::arg("config"))
+      .def("__enter__", [](DTypeDispatchGuard &self) -> DTypeDispatchGuard& { return self; }, py::return_value_policy::reference_internal)
+      .def("__exit__", [](DTypeDispatchGuard &self, py::object, py::object, py::object) {
+        (void)self;
+      });
 
   py::class_<Device>(
       m, "Device",
@@ -122,6 +154,8 @@ PYBIND11_MODULE(munet, m) {
            })
       .def("to", &Tensor::to, py::arg("device"),
            "Moves the tensor to the specified device.")
+      .def("to_dtype", &Tensor::to_dtype, py::arg("dtype"),
+           "Casts tensor storage dtype while preserving shape/device.")
       .def(
           "copy_from_numpy",
           [](Tensor &t, py::array_t<float> input) {
@@ -524,12 +558,35 @@ PYBIND11_MODULE(munet, m) {
   // ============================================================================
   auto inf = m.def_submodule("inference", "Inference runtime APIs");
 
+  py::enum_<inference::LossScaleMode>(inf, "LossScaleMode")
+      .value("None", inference::LossScaleMode::None)
+      .value("Dynamic", inference::LossScaleMode::Dynamic)
+      .value("Static", inference::LossScaleMode::Static)
+      .export_values();
+
+  py::enum_<inference::PrecisionFallbackMode>(inf, "PrecisionFallbackMode")
+      .value("Error", inference::PrecisionFallbackMode::Error)
+      .value("WarnAndUpcast", inference::PrecisionFallbackMode::WarnAndUpcast)
+      .export_values();
+
+  py::class_<inference::PrecisionPolicy>(inf, "PrecisionPolicy")
+      .def(py::init<>())
+      .def_readwrite("param_dtype", &inference::PrecisionPolicy::param_dtype)
+      .def_readwrite("activation_dtype", &inference::PrecisionPolicy::activation_dtype)
+      .def_readwrite("gradient_dtype", &inference::PrecisionPolicy::gradient_dtype)
+      .def_readwrite("optimizer_state_dtype", &inference::PrecisionPolicy::optimizer_state_dtype)
+      .def_readwrite("accumulation_dtype", &inference::PrecisionPolicy::accumulation_dtype)
+      .def_readwrite("loss_scale_mode", &inference::PrecisionPolicy::loss_scale_mode)
+      .def_readwrite("fallback_mode", &inference::PrecisionPolicy::fallback_mode);
+
   py::class_<inference::EngineConfig>(inf, "EngineConfig")
       .def(py::init<>())
       .def_readwrite("device", &inference::EngineConfig::device)
       .def_readwrite("warmup_runs", &inference::EngineConfig::warmup_runs)
       .def_readwrite("strict_shape_check",
-                     &inference::EngineConfig::strict_shape_check);
+                     &inference::EngineConfig::strict_shape_check)
+      .def_readwrite("precision_policy",
+                     &inference::EngineConfig::precision_policy);
 
   py::class_<inference::EngineStats>(inf, "EngineStats")
       .def(py::init<>())
@@ -549,6 +606,9 @@ PYBIND11_MODULE(munet, m) {
            py::arg("warmup_runs"))
       .def("set_strict_shape_check", &inference::Engine::set_strict_shape_check,
            py::arg("enabled"))
+      .def("set_precision_policy", &inference::Engine::set_precision_policy,
+           py::arg("policy"))
+      .def("precision_policy", &inference::Engine::precision_policy)
       .def(
           "load",
           [](inference::Engine &self, const std::shared_ptr<nn::Module> &module) {
@@ -574,6 +634,117 @@ PYBIND11_MODULE(munet, m) {
       .def("compiled_input_shape", &inference::Engine::compiled_input_shape)
       .def("compiled_output_shape", &inference::Engine::compiled_output_shape)
       .def("stats", &inference::Engine::stats);
+
+  // ============================================================================
+  // AMP / Mixed Precision utilities (munet.amp)
+  // ============================================================================
+  auto amp_mod = m.def_submodule("amp", "Automatic mixed precision helpers");
+
+  py::enum_<amp::AutocastOp>(amp_mod, "AutocastOp")
+      .value("Add", amp::AutocastOp::Add)
+      .value("Sub", amp::AutocastOp::Sub)
+      .value("Mul", amp::AutocastOp::Mul)
+      .value("Div", amp::AutocastOp::Div)
+      .value("Matmul", amp::AutocastOp::Matmul)
+      .value("Relu", amp::AutocastOp::Relu)
+      .value("Sigmoid", amp::AutocastOp::Sigmoid)
+      .value("Softmax", amp::AutocastOp::Softmax)
+      .value("LogSoftmax", amp::AutocastOp::LogSoftmax)
+      .value("MSELoss", amp::AutocastOp::MSELoss)
+      .value("CrossEntropy", amp::AutocastOp::CrossEntropy)
+      .value("Conv2D", amp::AutocastOp::Conv2D)
+      .value("MaxPool2D", amp::AutocastOp::MaxPool2D)
+      .value("Upsample2D", amp::AutocastOp::Upsample2D)
+      .value("BatchNorm", amp::AutocastOp::BatchNorm)
+      .value("LayerNorm", amp::AutocastOp::LayerNorm)
+      .export_values();
+
+  py::class_<amp::AutocastPolicy>(amp_mod, "AutocastPolicy")
+      .def_static("should_autocast", &amp::AutocastPolicy::should_autocast,
+                  py::arg("op"))
+      .def_static("set_override", &amp::AutocastPolicy::set_override,
+                  py::arg("op"), py::arg("enabled"))
+      .def_static("clear_override", &amp::AutocastPolicy::clear_override,
+                  py::arg("op"))
+      .def_static("clear_all_overrides", &amp::AutocastPolicy::clear_all_overrides)
+      .def_static("current_overrides", &amp::AutocastPolicy::current_overrides)
+      .def_static("set_overrides", &amp::AutocastPolicy::set_overrides,
+                  py::arg("overrides"));
+
+  py::class_<amp::AutocastPolicyGuard>(amp_mod, "AutocastPolicyGuard")
+      .def(py::init<amp::AutocastOp, bool>(), py::arg("op"),
+           py::arg("enabled"));
+
+  py::class_<amp::AutocastMode>(amp_mod, "AutocastMode")
+      .def_static("is_enabled", &amp::AutocastMode::is_enabled)
+      .def_static("set_enabled", &amp::AutocastMode::set_enabled,
+                  py::arg("enabled"))
+      .def_static("dtype", &amp::AutocastMode::dtype)
+      .def_static("set_dtype", &amp::AutocastMode::set_dtype,
+                  py::arg("dtype"));
+
+  py::class_<amp::AutoCastGuard>(amp_mod, "AutoCastGuard")
+      .def(py::init<DataType>(), py::arg("dtype") = DataType::Float16);
+
+  py::class_<amp::GradScaler>(amp_mod, "GradScaler")
+      .def(py::init<float, float, float, int>(),
+           py::arg("init_scale") = 65536.0f,
+           py::arg("growth_factor") = 2.0f,
+           py::arg("backoff_factor") = 0.5f,
+           py::arg("growth_interval") = 2000)
+      .def("scale", &amp::GradScaler::scale, py::arg("loss"))
+      .def("unscale_", &amp::GradScaler::unscale_, py::arg("params"))
+      .def("step", &amp::GradScaler::step, py::arg("optimizer"), py::arg("params"))
+      .def("update", &amp::GradScaler::update, py::arg("found_inf"))
+      .def("current_scale", &amp::GradScaler::current_scale);
+
+  py::class_<amp::FP32MasterSGD>(amp_mod, "FP32MasterSGD")
+      .def(py::init<std::vector<Tensor>, float>(), py::arg("params"),
+           py::arg("lr"))
+      .def("step", &amp::FP32MasterSGD::step)
+      .def("zero_grad", &amp::FP32MasterSGD::zero_grad);
+
+  py::class_<amp::FP32MasterAdam>(amp_mod, "FP32MasterAdam")
+      .def(py::init<std::vector<Tensor>, float, float, float, float>(),
+           py::arg("params"), py::arg("lr") = 1e-3f,
+           py::arg("beta1") = 0.9f, py::arg("beta2") = 0.999f,
+           py::arg("eps") = 1e-8f)
+      .def("step", &amp::FP32MasterAdam::step)
+      .def("zero_grad", &amp::FP32MasterAdam::zero_grad);
+
+
+  py::dict amp_locals;
+  amp_locals["munet"] = m;
+  py::exec(
+      R"PY(
+# Inject ergonomic context managers into munet.amp namespace.
+def _autocast(dtype=None):
+    if dtype is None:
+        dtype = munet.DataType.Float16
+    class _AutoCtx:
+        def __enter__(self):
+            self._g = munet.amp.AutoCastGuard(dtype)
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            self._g = None
+            return False
+    return _AutoCtx()
+
+
+def _autocast_policy(op, enabled):
+    class _PolicyCtx:
+        def __enter__(self):
+            self._g = munet.amp.AutocastPolicyGuard(op, enabled)
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            self._g = None
+            return False
+    return _PolicyCtx()
+
+munet.amp.autocast = _autocast
+munet.amp.autocast_policy = _autocast_policy
+)PY",
+      py::globals(), amp_locals);
 
   // ============================================================================
   // Optimizers (munet.optim)
@@ -635,6 +806,21 @@ PYBIND11_MODULE(munet, m) {
      def __exit__(self, exc_type, exc_val, exc_tb):
          import munet
          munet.GradMode.set_enabled(self.prev)
+
+ class precision_dispatch:
+     """Context-manager for dtype dispatch/fallback configuration."""
+     def __init__(self, config):
+         import munet
+         self._cfg = config
+         self._prev = None
+     def __enter__(self):
+         import munet
+         self._prev = munet.DTypeDispatch.current()
+         munet.DTypeDispatch.set_current(self._cfg)
+         return self
+     def __exit__(self, exc_type, exc_val, exc_tb):
+         import munet
+         munet.DTypeDispatch.set_current(self._prev)
 
  class enable_grad:
      """Context-manager that enables gradient calculation."""
