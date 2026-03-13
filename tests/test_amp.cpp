@@ -1,4 +1,5 @@
 #include "amp.hpp"
+#include "backend/debug_backend.hpp"
 #include "nn.hpp"
 #include "optim.hpp"
 #include <gtest/gtest.h>
@@ -201,6 +202,26 @@ TEST(AMPTest, SensitiveOpsAccumulateToFP32FromLowPrecisionInputs) {
   EXPECT_EQ(lsm.dtype(), DataType::Float32);
   EXPECT_EQ(mse.dtype(), DataType::Float32);
   EXPECT_EQ(ce.dtype(), DataType::Float32);
+}
+
+TEST(AMPTest, DebugBackendForwardsNonFiniteCheckHook) {
+  Device cpu{DeviceType::CPU, 0};
+  auto base = BackendManager::get(cpu);
+  auto dbg = wrap_with_debug_backend(base);
+
+  ASSERT_TRUE(dbg->supports_non_finite_check());
+
+  Storage finite(2 * dtype_size(DataType::Float32), cpu, DataType::Float32);
+  auto *fp = static_cast<float *>(finite.data());
+  fp[0] = 3.0f;
+  fp[1] = 4.0f;
+  EXPECT_FALSE(dbg->has_non_finite(finite, 2));
+
+  Storage bad(2 * dtype_size(DataType::Float32), cpu, DataType::Float32);
+  auto *bp = static_cast<float *>(bad.data());
+  bp[0] = 3.0f;
+  bp[1] = -std::numeric_limits<float>::infinity();
+  EXPECT_TRUE(dbg->has_non_finite(bad, 2));
 }
 
 TEST(AMPTest, CPUBackendProvidesNonFiniteCheckHook) {

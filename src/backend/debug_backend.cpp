@@ -60,6 +60,14 @@ public:
     return base_->get_last_kernel_time_us();
   }
 
+  bool supports_non_finite_check() const override {
+    return base_->supports_non_finite_check();
+  }
+
+  bool has_non_finite(const Storage &s, size_t n) const override {
+    return base_->has_non_finite(s, n);
+  }
+
   void *allocate(size_t bytes) override {
     void *ptr = base_->allocate(bytes);
     {
