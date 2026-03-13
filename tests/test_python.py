@@ -227,6 +227,29 @@ class TestBindings(unittest.TestCase):
                 self.assertEqual(drop.forward(x2d).dtype, munet.DataType.Float32)
                 self.assertEqual(gap.forward(x4d).dtype, munet.DataType.Float16)
 
+    def test_amp_embedding_policy_override(self):
+        one_hot = munet.Tensor([2, 3, 8], dtype=munet.DataType.Float32)
+        np.array(one_hot, copy=False)[:] = np.array(
+            [
+                [[1, 0, 0, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0, 0]],
+                [[0, 0, 0, 1, 0, 0, 0, 0], [0, 0, 0, 0, 1, 0, 0, 0], [0, 0, 0, 0, 0, 1, 0, 0]],
+            ],
+            dtype=np.float32,
+        )
+        emb = munet.nn.Embedding(8, 4)
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            self.assertEqual(emb.forward(one_hot).dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(munet.amp.AutocastOp.Embedding, False):
+                self.assertEqual(emb.forward(one_hot).dtype, munet.DataType.Float32)
+
+        self.assertTrue(
+            munet.amp.AutocastPolicy.should_autocast(
+                munet.amp.AutocastOp.MultiHeadAttention
+            )
+        )
+
     def test_amp_spatial_module_forward_coverage(self):
         x = munet.Tensor([1, 3, 8, 8], dtype=munet.DataType.Float32)
         np.array(x, copy=False)[:] = np.random.default_rng(0).uniform(0.0, 1.0, size=(1, 3, 8, 8)).astype(np.float32)

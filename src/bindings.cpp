@@ -662,6 +662,8 @@ PYBIND11_MODULE(munet, m) {
       .value("LeakyRelu", amp::AutocastOp::LeakyRelu)
       .value("Dropout", amp::AutocastOp::Dropout)
       .value("GlobalAvgPool2d", amp::AutocastOp::GlobalAvgPool2d)
+      .value("Embedding", amp::AutocastOp::Embedding)
+      .value("MultiHeadAttention", amp::AutocastOp::MultiHeadAttention)
       .export_values();
 
   py::class_<amp::AutocastPolicy>(amp_mod, "AutocastPolicy")

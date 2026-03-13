@@ -262,7 +262,9 @@ public:
   }
 
   Tensor forward(Tensor x) override {
-    x = maybe_autocast_module_input(x, amp::AutocastOp::GlobalAvgPool2d);
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    x = maybe_autocast_module_input(x, amp::AutocastOp::Embedding);
+    ScopedAutocastModeToggle scoped(autocast_active);
     auto s = x.shape();
 
     // Efficient index-based gather path for [B, T] token ids.
@@ -290,8 +292,10 @@ public:
         }
       }
 
-      return (x.device().type == DeviceType::CPU) ? out_cpu
-                                                   : out_cpu.to(x.device());
+      Tensor out = (x.device().type == DeviceType::CPU) ? out_cpu
+                                                         : out_cpu.to(x.device());
+      return maybe_autocast_module_output(out, amp::AutocastOp::Embedding,
+                                          autocast_active);
     }
 
     // One-hot/probability path [B, T, V] (keeps autograd support).
@@ -305,7 +309,9 @@ public:
     int B = s[0], T = s[1], V = s[2];
     Tensor flat = x.reshape({B * T, V});
     Tensor out = flat.matmul(weight);
-    return out.reshape({B, T, embedding_dim_});
+    out = out.reshape({B, T, embedding_dim_});
+    return maybe_autocast_module_output(out, amp::AutocastOp::Embedding,
+                                        autocast_active);
   }
 
   Tensor weight;
@@ -331,7 +337,9 @@ public:
   }
 
   Tensor forward(Tensor x) override {
-    x = maybe_autocast_module_input(x, amp::AutocastOp::GlobalAvgPool2d);
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    x = maybe_autocast_module_input(x, amp::AutocastOp::MultiHeadAttention);
+    ScopedAutocastModeToggle scoped(autocast_active);
     auto s = x.shape();
     if (s.size() != 3)
       throw std::runtime_error("MultiHeadAttention expects input shape [B,T,E]");
@@ -366,8 +374,7 @@ public:
 
     // Block + causal mask on CPU, then move to target device.
     Device cpu{DeviceType::CPU, 0};
-    Tensor mask_cpu({BH * T, BH * T}, cpu, scores.dtype(), false);
-    float *m = static_cast<float *>(mask_cpu.data());
+    Tensor mask_cpu({BH * T, BH * T}, cpu, DataType::Float32, false);
     for (int i = 0; i < BH * T; ++i) {
       int bh_i = i / T;
       int t_i = i % T;
@@ -375,7 +382,9 @@ public:
         int bh_j = j / T;
         int t_j = j % T;
         bool masked = (bh_i != bh_j) || (causal_ && t_j > t_i);
-        m[i * (BH * T) + j] = masked ? 1.0f : 0.0f;
+        store_scalar_from_double(mask_cpu.data(), mask_cpu.dtype(),
+                                 static_cast<size_t>(i * (BH * T) + j),
+                                 masked ? 1.0 : 0.0);
       }
     }
     Tensor mask = (scores.device().type == DeviceType::CPU)
@@ -393,7 +402,9 @@ public:
                       .reshape({B * T, E});
 
     Tensor out2d = std::dynamic_pointer_cast<Linear>(out_proj)->forward(merged);
-    return out2d.reshape({B, T, E});
+    Tensor out = out2d.reshape({B, T, E});
+    return maybe_autocast_module_output(out, amp::AutocastOp::MultiHeadAttention,
+                                        autocast_active);
   }
 
   int embed_dim_;

@@ -37,6 +37,8 @@ TEST(AMPTest, AutocastPolicyTableReflectsCurrentCoverage) {
   EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::LeakyRelu));
   EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::Dropout));
   EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::GlobalAvgPool2d));
+  EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::Embedding));
+  EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::MultiHeadAttention));
 }
 
 
@@ -237,6 +239,37 @@ TEST(AMPTest, AutocastCoversDropoutAndGlobalAvgPoolModules) {
       EXPECT_EQ(y_drop_fp32.dtype(), DataType::Float32);
       Tensor y_gap_still_cast = gap.forward(x4d);
       EXPECT_EQ(y_gap_still_cast.dtype(), DataType::Float16);
+    }
+  }
+}
+
+TEST(AMPTest, AutocastCoversEmbeddingModuleWithPolicyOverride) {
+  Device cpu{DeviceType::CPU, 0};
+
+  nn::Embedding embedding(8, 4);
+
+  Tensor one_hot({2, 3, 8}, cpu, DataType::Float32, false);
+  one_hot.uniform_(0.0f, 0.0f);
+  auto *oh = static_cast<float *>(one_hot.data());
+  auto set_tok = [&](int b, int t, int token) {
+    oh[(b * 3 + t) * 8 + token] = 1.0f;
+  };
+  set_tok(0, 0, 0);
+  set_tok(0, 1, 1);
+  set_tok(0, 2, 2);
+  set_tok(1, 0, 3);
+  set_tok(1, 1, 4);
+  set_tok(1, 2, 5);
+
+  {
+    amp::AutoCastGuard guard(DataType::Float16);
+    Tensor y_embed = embedding.forward(one_hot);
+    EXPECT_EQ(y_embed.dtype(), DataType::Float16);
+
+    {
+      amp::AutocastPolicyGuard disable_embed(amp::AutocastOp::Embedding, false);
+      Tensor y_embed_fp32 = embedding.forward(one_hot);
+      EXPECT_EQ(y_embed_fp32.dtype(), DataType::Float32);
     }
   }
 }

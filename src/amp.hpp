@@ -33,10 +33,12 @@ enum class AutocastOp {
   GELU,
   LeakyRelu,
   Dropout,
-  GlobalAvgPool2d
+  GlobalAvgPool2d,
+  Embedding,
+  MultiHeadAttention
 };
 
-constexpr size_t kAutocastOpCount = 21;
+constexpr size_t kAutocastOpCount = 23;
 
 inline size_t autocast_op_index(AutocastOp op) {
   return static_cast<size_t>(op);
@@ -61,6 +63,8 @@ inline bool default_should_autocast(AutocastOp op) {
   case AutocastOp::LeakyRelu:
   case AutocastOp::Dropout:
   case AutocastOp::GlobalAvgPool2d:
+  case AutocastOp::Embedding:
+  case AutocastOp::MultiHeadAttention:
     return true;
   case AutocastOp::Upsample2D:
     return true;
@@ -107,7 +111,7 @@ private:
   inline static thread_local std::array<int8_t, kAutocastOpCount> overrides_ = {
       -1, -1, -1, -1, -1, -1, -1, -1,
       -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1, -1};
+      -1, -1, -1, -1, -1, -1, -1};
 };
 
 inline bool should_autocast(AutocastOp op) {
