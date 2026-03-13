@@ -654,6 +654,22 @@ TEST(AMPTest, GradScalerSkipsStepAndBacksOffOnInfGradients) {
   EXPECT_FLOAT_EQ(scaler.current_scale(), 4.0f);
 }
 
+TEST(AMPTest, GradScalerUnscaleDividesGradientsByScale) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor w({1}, cpu, DataType::Float32, true);
+  static_cast<float *>(w.data())[0] = 2.0f;
+
+  amp::GradScaler scaler(8.0f, 2.0f, 0.5f, 2);
+
+  Tensor grad({1}, cpu, DataType::Float32, false);
+  static_cast<float *>(grad.data())[0] = 16.0f;
+  w.impl_->grad = grad.impl_;
+
+  bool found_inf = scaler.unscale_({w});
+  EXPECT_FALSE(found_inf);
+  EXPECT_FLOAT_EQ(w.grad().item(), 2.0f);
+}
+
 TEST(AMPTest, GradScalerGrowsScaleAfterConfiguredInterval) {
   Device cpu{DeviceType::CPU, 0};
   Tensor w({1}, cpu, DataType::Float32, true);

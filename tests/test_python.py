@@ -397,6 +397,48 @@ class TestBindings(unittest.TestCase):
         scaler.update(True)
         self.assertEqual(scaler.current_scale(), 8.0)
 
+    def test_amp_gradscaler_dynamic_step_and_growth(self):
+        w = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=False)
+        np.array(w, copy=False)[:] = np.array([2.0], dtype=np.float32)
+        w.requires_grad = True
+        opt = munet.optim.SGD([w], 0.1)
+        scaler = munet.amp.GradScaler(8.0, 2.0, 0.5, 2, munet.amp.GradScalerMode.Dynamic)
+        t = munet.Tensor([1], dtype=munet.DataType.Float32)
+        np.array(t, copy=False)[:] = np.array([0.0], dtype=np.float32)
+
+        for _ in range(2):
+            opt.zero_grad()
+            loss = w.mse_loss(t)
+            scaled = scaler.scale(loss)
+            scaled.backward()
+            self.assertTrue(scaler.step(opt, [w]))
+
+        self.assertEqual(scaler.current_scale(), 16.0)
+
+    def test_amp_gradscaler_unscale_and_inf_backoff(self):
+        w = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=False)
+        np.array(w, copy=False)[:] = np.array([2.0], dtype=np.float32)
+        w.requires_grad = True
+        opt = munet.optim.SGD([w], 0.1)
+        scaler = munet.amp.GradScaler(8.0, 2.0, 0.5, 2, munet.amp.GradScalerMode.Dynamic)
+
+        t = munet.Tensor([1], dtype=munet.DataType.Float32)
+        np.array(t, copy=False)[:] = np.array([0.0], dtype=np.float32)
+        loss = w.mse_loss(t)
+        scaler.scale(loss).backward()
+        found_inf = scaler.unscale_([w])
+        self.assertFalse(found_inf)
+        self.assertAlmostEqual(w.grad.item(), 4.0, places=6)
+
+        opt.zero_grad()
+        inf_const = munet.Tensor([1], dtype=munet.DataType.Float32)
+        np.array(inf_const, copy=False)[:] = np.array([np.inf], dtype=np.float32)
+        loss_inf = (w * w) * inf_const
+        loss_inf.backward()
+        stepped = scaler.step(opt, [w])
+        self.assertFalse(stepped)
+        self.assertEqual(scaler.current_scale(), 4.0)
+
     def test_amp_fp32_master_sgd_binding(self):
         # Binding/API smoke test (avoid writing Float16 buffer directly in Python for now)
         w = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
