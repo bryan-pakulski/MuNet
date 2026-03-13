@@ -33,11 +33,11 @@ Legend:
 
 ### Phase 1 — Kernel dtype dispatch and fallback
 
-- [] Refactor CPU backend kernels to stop assuming `float*` in operator codepaths.
-- [] Introduce typed dispatch for core ops (`add`, `mul`, `matmul`, `softmax`, `sum`, losses).
+- [~] Refactor CPU backend kernels to stop assuming `float*` in operator codepaths (started for core op paths in CPU backend).
+- [~] Introduce typed dispatch for core ops (`add`, `mul`, `matmul`, `softmax`, `sum`, losses) (CPU fallback path now uses dtype-aware load/store + FP32 accumulation).
 - [] Add compute dtype vs storage dtype split in backend execution contracts.
 - [] Implement fallback behavior (`error` vs `warn_and_upcast`) when kernels are unavailable for requested dtypes.
-- [] Add explicit rules for integer quantized flows (`Int4`/`Int8`) with dequant/accumulate/requant boundaries.
+- [~] Add explicit rules for integer quantized flows (`Int4`/`Int8`) with dequant/accumulate/requant boundaries (initial CPU rule added; exact packed formats/kernels still pending).
 
 ### Phase 2 — Mixed precision training
 
@@ -82,7 +82,7 @@ Legend:
 - [x] Basic unit tests for new type metadata and policy plumbing.
 
 ### Missing
-- [] Real kernel implementations beyond FP32-fast-path assumptions.
+- [~] Real kernel implementations beyond FP32-fast-path assumptions (partial CPU coverage for selected core ops).
 - [] Quantized arithmetic paths for `Int8`/`Int4` (packing, scale handling, kernels).
 - [] Runtime cast planner/executor using `PrecisionPolicy`.
 - [] Serialization schema updates for precision and quantization metadata.

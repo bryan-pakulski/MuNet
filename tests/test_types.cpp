@@ -63,3 +63,34 @@ TEST(InferencePrecisionPolicyTest, EngineExposesPrecisionPolicy) {
   EXPECT_EQ(configured.fallback_mode,
             inference::PrecisionFallbackMode::WarnAndUpcast);
 }
+
+
+TEST(DataTypeTest, BackendDispatchUsesStorageDtypes) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a({2}, cpu, DataType::Int8, false);
+  Tensor b({2}, cpu, DataType::Int8, false);
+  auto *ap = static_cast<int8_t *>(a.data());
+  auto *bp = static_cast<int8_t *>(b.data());
+  ap[0] = 2; ap[1] = 3;
+  bp[0] = 4; bp[1] = 5;
+
+  Tensor c = a + b;
+  auto *cp = static_cast<int8_t *>(c.data());
+  EXPECT_EQ(cp[0], 6);
+  EXPECT_EQ(cp[1], 8);
+
+  Tensor m1({1, 2}, cpu, DataType::Int8, false);
+  Tensor m2({2, 1}, cpu, DataType::Int8, false);
+  auto *m1p = static_cast<int8_t *>(m1.data());
+  auto *m2p = static_cast<int8_t *>(m2.data());
+  m1p[0] = 2; m1p[1] = 3;
+  m2p[0] = 4; m2p[1] = 5;
+
+  Tensor out = m1.matmul(m2);
+  auto *op = static_cast<int8_t *>(out.data());
+  EXPECT_EQ(op[0], 23);
+
+  Tensor s = a.sum();
+  auto *sp = static_cast<int8_t *>(s.data());
+  EXPECT_EQ(sp[0], 5);
+}
