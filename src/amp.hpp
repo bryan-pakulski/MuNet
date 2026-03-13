@@ -178,6 +178,12 @@ public:
         mode_(mode) {
     if (init_scale <= 0.0f)
       throw std::runtime_error("GradScaler init_scale must be > 0");
+    if (growth_factor_ <= 1.0f)
+      throw std::runtime_error("GradScaler growth_factor must be > 1");
+    if (backoff_factor_ <= 0.0f || backoff_factor_ >= 1.0f)
+      throw std::runtime_error("GradScaler backoff_factor must be in (0, 1)");
+    if (growth_interval_ <= 0)
+      throw std::runtime_error("GradScaler growth_interval must be > 0");
   }
 
   Tensor scale(const Tensor &loss) const {
@@ -252,6 +258,7 @@ public:
 
   float current_scale() const { return scale_; }
   Mode mode() const { return mode_; }
+  int growth_tracker() const { return growth_tracker_; }
 
 private:
   float scale_;
@@ -297,6 +304,8 @@ public:
       p.zero_grad();
     }
   }
+
+  DataType master_dtype() const { return DataType::Float32; }
 
 private:
   std::vector<Tensor> params_;
@@ -351,6 +360,10 @@ public:
       p.zero_grad();
     }
   }
+
+  DataType master_dtype() const { return DataType::Float32; }
+  DataType state_dtype() const { return DataType::Float32; }
+  int step_count() const { return step_count_; }
 
 private:
   std::vector<Tensor> params_;

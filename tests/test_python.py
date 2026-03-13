@@ -397,6 +397,16 @@ class TestBindings(unittest.TestCase):
         scaler.update(True)
         self.assertEqual(scaler.current_scale(), 8.0)
 
+    def test_amp_gradscaler_invalid_hparams_binding(self):
+        with self.assertRaises(RuntimeError):
+            munet.amp.GradScaler(0.0, 2.0, 0.5, 2, munet.amp.GradScalerMode.Dynamic)
+        with self.assertRaises(RuntimeError):
+            munet.amp.GradScaler(8.0, 1.0, 0.5, 2, munet.amp.GradScalerMode.Dynamic)
+        with self.assertRaises(RuntimeError):
+            munet.amp.GradScaler(8.0, 2.0, 1.0, 2, munet.amp.GradScalerMode.Dynamic)
+        with self.assertRaises(RuntimeError):
+            munet.amp.GradScaler(8.0, 2.0, 0.5, 0, munet.amp.GradScalerMode.Dynamic)
+
     def test_amp_gradscaler_dynamic_step_and_growth(self):
         w = munet.Tensor([1], dtype=munet.DataType.Float32, requires_grad=False)
         np.array(w, copy=False)[:] = np.array([2.0], dtype=np.float32)
@@ -445,12 +455,16 @@ class TestBindings(unittest.TestCase):
         opt = munet.amp.FP32MasterSGD([w], 0.1)
         opt.zero_grad()
         self.assertTrue(hasattr(munet.amp, "FP32MasterSGD"))
+        self.assertEqual(opt.master_dtype(), munet.DataType.Float32)
 
     def test_amp_fp32_master_adam_binding(self):
         w = munet.Tensor([1], dtype=munet.DataType.Float16, requires_grad=True)
         opt = munet.amp.FP32MasterAdam([w], 1e-3)
         opt.zero_grad()
         self.assertTrue(hasattr(munet.amp, "FP32MasterAdam"))
+        self.assertEqual(opt.master_dtype(), munet.DataType.Float32)
+        self.assertEqual(opt.state_dtype(), munet.DataType.Float32)
+        self.assertEqual(opt.step_count(), 0)
     def test_numpy_buffer_protocol(self):
         """Test zero-copy memory sharing between C++ and NumPy."""
         t = munet.Tensor([2, 2])

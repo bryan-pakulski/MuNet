@@ -709,13 +709,15 @@ PYBIND11_MODULE(munet, m) {
       .def("step", &amp::GradScaler::step, py::arg("optimizer"), py::arg("params"))
       .def("update", &amp::GradScaler::update, py::arg("found_inf"))
       .def("current_scale", &amp::GradScaler::current_scale)
+      .def("growth_tracker", &amp::GradScaler::growth_tracker)
       .def("mode", &amp::GradScaler::mode);
 
   py::class_<amp::FP32MasterSGD>(amp_mod, "FP32MasterSGD")
       .def(py::init<std::vector<Tensor>, float>(), py::arg("params"),
            py::arg("lr"))
       .def("step", &amp::FP32MasterSGD::step)
-      .def("zero_grad", &amp::FP32MasterSGD::zero_grad);
+      .def("zero_grad", &amp::FP32MasterSGD::zero_grad)
+      .def("master_dtype", &amp::FP32MasterSGD::master_dtype);
 
   py::class_<amp::FP32MasterAdam>(amp_mod, "FP32MasterAdam")
       .def(py::init<std::vector<Tensor>, float, float, float, float>(),
@@ -723,7 +725,10 @@ PYBIND11_MODULE(munet, m) {
            py::arg("beta1") = 0.9f, py::arg("beta2") = 0.999f,
            py::arg("eps") = 1e-8f)
       .def("step", &amp::FP32MasterAdam::step)
-      .def("zero_grad", &amp::FP32MasterAdam::zero_grad);
+      .def("zero_grad", &amp::FP32MasterAdam::zero_grad)
+      .def("master_dtype", &amp::FP32MasterAdam::master_dtype)
+      .def("state_dtype", &amp::FP32MasterAdam::state_dtype)
+      .def("step_count", &amp::FP32MasterAdam::step_count);
 
 
   py::dict amp_locals;

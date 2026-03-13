@@ -713,3 +713,29 @@ TEST(AMPTest, GradScalerStaticModeKeepsScaleConstant) {
   EXPECT_FALSE(scaler.step(opt, {w}));
   EXPECT_FLOAT_EQ(scaler.current_scale(), 8.0f);
 }
+
+TEST(AMPTest, GradScalerRejectsInvalidHyperparameters) {
+  EXPECT_THROW((amp::GradScaler(0.0f, 2.0f, 0.5f, 2)), std::runtime_error);
+  EXPECT_THROW((amp::GradScaler(8.0f, 1.0f, 0.5f, 2)), std::runtime_error);
+  EXPECT_THROW((amp::GradScaler(8.0f, 2.0f, 1.0f, 2)), std::runtime_error);
+  EXPECT_THROW((amp::GradScaler(8.0f, 2.0f, 0.5f, 0)), std::runtime_error);
+}
+
+TEST(AMPTest, FP32MasterOptimizersExposeFloat32StateForBFloat16Model) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor w({1}, cpu, DataType::BFloat16, true);
+
+  amp::FP32MasterSGD sgd({w}, 0.1f);
+  EXPECT_EQ(sgd.master_dtype(), DataType::Float32);
+
+  amp::FP32MasterAdam adam({w}, 1e-3f);
+  EXPECT_EQ(adam.master_dtype(), DataType::Float32);
+  EXPECT_EQ(adam.state_dtype(), DataType::Float32);
+  EXPECT_EQ(adam.step_count(), 0);
+
+  Tensor g({1}, cpu, DataType::BFloat16, false);
+  static_cast<int8_t *>(g.data())[0] = 4;
+  w.impl_->grad = g.impl_;
+  adam.step();
+  EXPECT_EQ(adam.step_count(), 1);
+}
