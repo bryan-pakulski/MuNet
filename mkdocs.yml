@@ -25,6 +25,7 @@ nav:
       - Serialization & Model Loading: documentation/guides/serialization.md
       - Common Design Patterns: documentation/guides/design_patterns.md
       - Multi-Precision Roadmap: documentation/guides/multi_precision_roadmap.md
+      - Precision Dispatch Usage: documentation/guides/precision_dispatch_usage.md
   - Tutorials:
       - End-to-end Training to Inference: documentation/tutorials/e2e_workflow.md
   - Performance:

@@ -33,11 +33,11 @@ Legend:
 
 ### Phase 1 — Kernel dtype dispatch and fallback
 
-- [~] Refactor CPU backend kernels to stop assuming `float*` in operator codepaths (started for core op paths in CPU backend).
-- [~] Introduce typed dispatch for core ops (`add`, `mul`, `matmul`, `softmax`, `sum`, losses) (CPU fallback path now uses dtype-aware load/store + FP32 accumulation).
-- [~] Add compute dtype vs storage dtype split in backend execution contracts (initial CPU compute-plan + dispatch context scaffolding added).
-- [~] Implement fallback behavior (`error` vs `warn_and_upcast`) when kernels are unavailable for requested dtypes (CPU fallback mode now respects dispatch config).
-- [~] Add explicit rules for integer quantized flows (`Int4`/`Int8`) with dequant/accumulate/requant boundaries (initial CPU rule added; exact packed formats/kernels still pending).
+- [x] Refactor CPU backend kernels to stop assuming `float*` in operator codepaths for Phase-1 core op set.
+- [x] Introduce typed dispatch for core ops (`add`, `mul`, `matmul`, `softmax`, `sum`, losses) in CPU fallback path.
+- [x] Add compute dtype vs storage dtype split in backend execution contracts (CPU compute-plan + dispatch context scaffold implemented).
+- [x] Implement fallback behavior (`error` vs `warn_and_upcast`) when kernels are unavailable for requested dtypes (CPU fallback path).
+- [x] Add explicit rules for integer quantized flows (`Int4`/`Int8`) with dequant/accumulate/requant boundaries in CPU fallback path.
 
 ### Phase 2 — Mixed precision training
 
