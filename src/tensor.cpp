@@ -20,6 +20,15 @@ inline Tensor maybe_autocast_tensor(const Tensor &t, amp::AutocastOp op) {
   DataType target = amp::AutocastMode::dtype();
   if (!is_float_dtype(t.dtype()) || t.dtype() == target)
     return t;
+  if (is_dtype_trace_enabled()) {
+    MUNET_DTYPE_LOG << "autocast tensor op=" << static_cast<int>(op) << " "
+                    << dtype_name(t.dtype()) << " -> "
+                    << dtype_name(target) << " shape=" << to_string(t.shape())
+                    << std::endl;
+    Profiler::get().record_dtype_event(
+        std::string("autocast.tensor.") + dtype_name(t.dtype()) + "->" +
+        dtype_name(target));
+  }
   return t.to_dtype(target);
 }
 } // namespace
@@ -195,6 +204,16 @@ Tensor Tensor::to(Device dev) const {
 Tensor Tensor::to_dtype(DataType target_dtype) const {
   if (dtype() == target_dtype)
     return *this;
+
+  if (is_dtype_trace_enabled()) {
+    MUNET_DTYPE_LOG << "to_dtype " << dtype_name(dtype()) << " -> "
+                    << dtype_name(target_dtype) << " device="
+                    << device().to_string() << " shape=" << to_string(shape())
+                    << std::endl;
+    Profiler::get().record_dtype_event(
+        std::string("to_dtype.") + dtype_name(dtype()) + "->" +
+        dtype_name(target_dtype));
+  }
 
   Device cpu{DeviceType::CPU, 0};
   Tensor src_cpu = (device().type == DeviceType::CPU) ? *this : to(cpu);

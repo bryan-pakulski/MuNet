@@ -137,6 +137,17 @@ def main():
     model.to(munet.Device(munet.DeviceType.CPU, 0))
     optimizer = munet.optim.SGD(model.parameters(), lr=0.1)
 
+    param_dtypes = {}
+    total_params = 0
+    for _, p in model.named_parameters().items():
+        k = str(p.dtype)
+        param_dtypes[k] = param_dtypes.get(k, 0) + int(np.prod(np.array(p.shape)))
+        total_params += int(np.prod(np.array(p.shape)))
+    print(f"Model parameter elements: {total_params}")
+    print("Model parameter dtype distribution:")
+    for k, v in sorted(param_dtypes.items()):
+        print(f"  {k}: {v}")
+
     for epoch in range(args.epochs):
         avg_loss, elapsed = run_epoch(
             model,

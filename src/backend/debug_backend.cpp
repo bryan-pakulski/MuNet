@@ -22,7 +22,9 @@ class DebugBackend : public Backend {
   void check(const char *name, double cpu_us,
              const Storage *out_storage = nullptr) {
     try {
-      double gpu_us = base_->get_last_kernel_time_us();
+      double gpu_us = 0.0;
+      if (out_storage && out_storage->device().type != DeviceType::CPU)
+        gpu_us = base_->get_last_kernel_time_us();
 
       // Full synchronization and NaN checks are expensive and should only run
       // in explicit debug mode, not in profile-only mode.

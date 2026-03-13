@@ -142,6 +142,12 @@ private:
 
     if (supports_compute_dtype(requested)) {
       plan.compute_dtype = requested;
+      if (is_dtype_trace_enabled()) {
+        MUNET_DTYPE_LOG << "CPU compute dtype selected="
+                        << dtype_name(plan.compute_dtype) << std::endl;
+        Profiler::get().record_dtype_event(
+            std::string("cpu.compute.") + dtype_name(plan.compute_dtype));
+      }
       return plan;
     }
 
@@ -152,6 +158,11 @@ private:
 
     plan.compute_dtype = DataType::Float32;
     plan.fallback_applied = true;
+    if (is_dtype_trace_enabled()) {
+      Profiler::get().record_dtype_event(std::string("cpu.fallback.") +
+                                         dtype_name(requested) + "->" +
+                                         dtype_name(plan.compute_dtype));
+    }
     MUNET_WARNING << "CPUBackend: fallback compute dtype "
                   << dtype_name(requested)
                   << " -> float32 (warn_and_upcast mode)" << std::endl;

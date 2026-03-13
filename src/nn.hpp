@@ -1,6 +1,7 @@
 #pragma once
 #include "amp.hpp"
 #include "core/module.hpp"
+#include "util.hpp"
 #include <cmath>
 #include <limits>
 #include <random>
@@ -16,6 +17,15 @@ inline Tensor maybe_autocast_module_input(const Tensor &x, amp::AutocastOp op) {
   DataType target = amp::AutocastMode::dtype();
   if (!is_float_dtype(x.dtype()) || x.dtype() == target)
     return x;
+  if (is_dtype_trace_enabled()) {
+    MUNET_DTYPE_LOG << "autocast module input op=" << static_cast<int>(op)
+                    << " " << dtype_name(x.dtype()) << " -> "
+                    << dtype_name(target) << " shape=" << to_string(x.shape())
+                    << std::endl;
+    Profiler::get().record_dtype_event(
+        std::string("autocast.module_in.") + dtype_name(x.dtype()) + "->" +
+        dtype_name(target));
+  }
   return x.to_dtype(target);
 }
 
@@ -26,6 +36,15 @@ inline Tensor maybe_autocast_module_output(const Tensor &out, amp::AutocastOp op
   DataType target = amp::AutocastMode::dtype();
   if (!is_float_dtype(out.dtype()) || out.dtype() == target)
     return out;
+  if (is_dtype_trace_enabled()) {
+    MUNET_DTYPE_LOG << "autocast module output op=" << static_cast<int>(op)
+                    << " " << dtype_name(out.dtype()) << " -> "
+                    << dtype_name(target) << " shape="
+                    << to_string(out.shape()) << std::endl;
+    Profiler::get().record_dtype_event(
+        std::string("autocast.module_out.") + dtype_name(out.dtype()) + "->" +
+        dtype_name(target));
+  }
   return out.to_dtype(target);
 }
 } // namespace
