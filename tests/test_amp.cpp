@@ -177,6 +177,31 @@ TEST(AMPTest, AutocastCoversNNModuleForwardPaths) {
   }
 }
 
+TEST(AMPTest, AutocastCoversSpatialNNModuleForwardPaths) {
+  Device cpu{DeviceType::CPU, 0};
+
+  auto conv = std::make_shared<nn::Conv2d>(3, 4, 3, 1, 1);
+  auto bn = std::make_shared<nn::BatchNorm2d>(4);
+  auto pool = std::make_shared<nn::MaxPool2d>(2, 2, 0);
+  auto up = std::make_shared<nn::Upsample>(2);
+
+  Tensor x({1, 3, 8, 8}, cpu, DataType::Float32, false);
+  x.uniform_(0.0f, 1.0f);
+
+  {
+    amp::AutoCastGuard guard(DataType::Float16);
+    Tensor y_conv = conv->forward(x);
+    Tensor y_bn = bn->forward(y_conv);
+    Tensor y_pool = pool->forward(y_bn);
+    Tensor y_up = up->forward(y_pool);
+
+    EXPECT_EQ(y_conv.dtype(), DataType::Float16);
+    EXPECT_EQ(y_bn.dtype(), DataType::Float16);
+    EXPECT_EQ(y_pool.dtype(), DataType::Float16);
+    EXPECT_EQ(y_up.dtype(), DataType::Float16);
+  }
+}
+
 TEST(AMPTest, SensitiveOpsAccumulateToFP32FromLowPrecisionInputs) {
   Device cpu{DeviceType::CPU, 0};
 

@@ -41,11 +41,11 @@ Legend:
 
 ### Phase 2 — Mixed precision training
 
-- [~] Add autocast context for forward op dispatch (C++ + Python) (API + bindings + Tensor forward-op autocast integration for arithmetic/activation/loss, plus explicit `AutocastOp` policy table used by Tensor entrypoints (with scoped policy overrides via guard for controlled rollout/testing, including Python context helpers plus override snapshot/restore APIs); `layer_norm`, `upsample2d`, `max_pool2d`, `conv2d`, and `batch_norm` are now enabled via policy with mixed-storage-safe CPU paths; broader module coverage still pending; module-level autocast forward coverage tests now include nn::Linear/BatchNorm2d/LayerNorm wrappers).
+- [~] Add autocast context for forward op dispatch (C++ + Python) (API + bindings + Tensor forward-op autocast integration for arithmetic/activation/loss, plus explicit `AutocastOp` policy table used by Tensor entrypoints (with scoped policy overrides via guard for controlled rollout/testing, including Python context helpers plus override snapshot/restore APIs); `layer_norm`, `upsample2d`, `max_pool2d`, `conv2d`, and `batch_norm` are now enabled via policy with mixed-storage-safe CPU paths; broader module coverage still pending; module-level autocast forward coverage tests now include nn::Linear/BatchNorm2d/LayerNorm wrappers plus spatial module wrappers (Conv2d/MaxPool2d/Upsample)).
 - [~] Add gradient scaling (`static`, `dynamic`) and overflow detection (GradScaler scaling/unscale path with finite-check overflow gating, explicit static/dynamic modes, dynamic growth/backoff behavior, Python bindings, and tests added; CPU backend now provides a non-finite detection hook consumed by GradScaler before fallback scanning (and debug wrapper forwards the hook); broader backend-specific overflow signals (CUDA/Vulkan/native device checks) pending).
 - [~] Keep optimizer state/master weights in FP32 while model tensors may be FP16/BF16 (initial FP32-master SGD/Adam utilities added).
 - [~] Enforce FP32 accumulation for numerically sensitive ops (norms, reductions, losses) (implemented for `sum`, `mse_loss`, `cross_entropy`, and low-precision `softmax`/`log_softmax`/`layer_norm` CPU paths; expanded tests now validate FP32 outputs for these sensitive ops from low-precision inputs; broader op coverage pending).
-- [~] Add training parity checks against FP32 baselines (deterministic single-step and multi-step FP32 vs FP32-master parity tests added in C++, now including longer-horizon SGD/Adam training-loop parity checks, plus extended Python parity loops; broader model coverage still pending).
+- [~] Add training parity checks against FP32 baselines (deterministic single-step and multi-step FP32 vs FP32-master parity tests added in C++, now including longer-horizon SGD/Adam training-loop parity checks, plus extended Python SGD/Adam parity loops; broader model coverage still pending).
 
 ### Phase 3 — Inference precision runtime
 
@@ -83,7 +83,7 @@ Legend:
 
 ### Missing
 - [~] Expand default-enabled autocast policy for spatial/norm ops with per-op validation (current defaults now include layer_norm, upsample2d, max_pool2d, conv2d, batch_norm; continue validating broader op/module coverage).
-- [~] Add longer-horizon FP32-vs-AMP training parity checks (multi-step + longer-horizon C++ parity loops and extended Python loops added; broader model coverage and tighter tolerances still pending).
+- [~] Add longer-horizon FP32-vs-AMP training parity checks (multi-step + longer-horizon C++ parity loops and extended Python SGD/Adam loops added; broader model coverage and tighter tolerances still pending).
 - [~] Real kernel implementations beyond FP32-fast-path assumptions (partial CPU coverage for selected core ops).
 - [] Quantized arithmetic paths for `Int8`/`Int4` (packing, scale handling, kernels).
 - [] Runtime cast planner/executor using `PrecisionPolicy`.
