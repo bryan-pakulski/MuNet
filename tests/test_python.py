@@ -109,6 +109,7 @@ class TestBindings(unittest.TestCase):
             y_back = y.to_dtype(munet.DataType.Float32)
             y_np = np.array(y_back, copy=False)
             self.assertEqual(y_np.shape[0], 2)
+            self.assertTrue(np.allclose(y_np, np.array([6.0, -4.0], dtype=np.float32), atol=1e-5))
 
 
 

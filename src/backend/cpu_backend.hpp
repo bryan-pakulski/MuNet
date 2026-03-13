@@ -122,7 +122,17 @@ private:
   };
 
   static bool supports_compute_dtype(DataType dt) {
-    return dt == DataType::Float32 || dt == DataType::Float64;
+    switch (dt) {
+    case DataType::Float32:
+    case DataType::Float64:
+    case DataType::Float16:
+    case DataType::BFloat16:
+    case DataType::Int8:
+    case DataType::Int4:
+      return true;
+    default:
+      return false;
+    }
   }
 
   static ComputePlan resolve_compute_plan(DataType preferred) {
