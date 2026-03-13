@@ -918,7 +918,7 @@ struct SumBackward : public Node {
 };
 
 inline Tensor sum(const Tensor &a) {
-  Tensor out({1}, a.device(), a.dtype());
+  Tensor out({1}, a.device(), accumulation_dtype(a.dtype()));
 
   // Use Backend!
   a.impl_->backend().sum(*a.impl_->storage, *out.impl_->storage, a.size());
