@@ -46,6 +46,55 @@ TEST(AMPTest, AutocastCastsCoreForwardOps) {
   }
 }
 
+
+
+TEST(AMPTest, AutocastSkipsUnsupportedSpatialAndNormEntryPoints) {
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor x({1, 1, 4, 4}, cpu, DataType::Float32, false);
+  Tensor w({1, 1, 3, 3}, cpu, DataType::Float32, false);
+  Tensor b({1}, cpu, DataType::Float32, false);
+  auto *xp = static_cast<float *>(x.data());
+  auto *wp = static_cast<float *>(w.data());
+  auto *bp = static_cast<float *>(b.data());
+  for (int i = 0; i < 16; ++i)
+    xp[i] = 1.0f;
+  for (int i = 0; i < 9; ++i)
+    wp[i] = 1.0f;
+  bp[0] = 0.0f;
+
+  Tensor running_mean({1}, cpu, DataType::Float32, false);
+  Tensor running_var({1}, cpu, DataType::Float32, false);
+  Tensor bn_w({1}, cpu, DataType::Float32, false);
+  Tensor bn_b({1}, cpu, DataType::Float32, false);
+  static_cast<float *>(running_mean.data())[0] = 0.0f;
+  static_cast<float *>(running_var.data())[0] = 1.0f;
+  static_cast<float *>(bn_w.data())[0] = 1.0f;
+  static_cast<float *>(bn_b.data())[0] = 0.0f;
+
+  Tensor ln_w({4}, cpu, DataType::Float32, false);
+  Tensor ln_b({4}, cpu, DataType::Float32, false);
+  for (int i = 0; i < 4; ++i) {
+    static_cast<float *>(ln_w.data())[i] = 1.0f;
+    static_cast<float *>(ln_b.data())[i] = 0.0f;
+  }
+
+  {
+    amp::AutoCastGuard guard(DataType::Float16);
+    Tensor conv = x.conv2d(w, b, 1, 0);
+    Tensor pool = x.max_pool2d(2, 2, 0);
+    Tensor up = pool.upsample2d(2);
+    Tensor bn = x.batch_norm(running_mean, running_var, bn_w, bn_b, true, 0.1f, 1e-5f);
+    Tensor ln = x.layer_norm(ln_w, ln_b, 1e-5f);
+
+    EXPECT_EQ(conv.dtype(), DataType::Float32);
+    EXPECT_EQ(pool.dtype(), DataType::Float32);
+    EXPECT_EQ(up.dtype(), DataType::Float32);
+    EXPECT_EQ(bn.dtype(), DataType::Float32);
+    EXPECT_EQ(ln.dtype(), DataType::Float32);
+  }
+}
+
 TEST(AMPTest, GradScalerScalesLossAndSteps) {
   Device cpu{DeviceType::CPU, 0};
   Tensor w({1}, cpu, DataType::Float32, true);

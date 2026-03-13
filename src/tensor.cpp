@@ -14,8 +14,8 @@
 namespace munet {
 
 namespace {
-inline Tensor maybe_autocast_tensor(const Tensor &t) {
-  if (!amp::AutocastMode::is_enabled())
+inline Tensor maybe_autocast_tensor(const Tensor &t, bool autocast_allowed = true) {
+  if (!autocast_allowed || !amp::AutocastMode::is_enabled())
     return t;
   DataType target = amp::AutocastMode::dtype();
   if (!is_float_dtype(t.dtype()) || t.dtype() == target)
@@ -90,13 +90,18 @@ Tensor Tensor::log_softmax(int dim) const {
 
 Tensor Tensor::conv2d(const Tensor &weight, const Tensor &bias, int stride,
                       int padding) const {
-  return ops::conv2d(*this, weight, bias, stride, padding);
+  Tensor in = maybe_autocast_tensor(*this, false);
+  Tensor w = maybe_autocast_tensor(weight, false);
+  Tensor b = maybe_autocast_tensor(bias, false);
+  return ops::conv2d(in, w, b, stride, padding);
 }
 Tensor Tensor::max_pool2d(int kernel_size, int stride, int padding) const {
-  return ops::max_pool2d(*this, kernel_size, stride, padding);
+  Tensor in = maybe_autocast_tensor(*this, false);
+  return ops::max_pool2d(in, kernel_size, stride, padding);
 }
 Tensor Tensor::upsample2d(int scale_factor) const {
-  return ops::upsample2d(*this, scale_factor);
+  Tensor in = maybe_autocast_tensor(*this, false);
+  return ops::upsample2d(in, scale_factor);
 }
 
 // --- Utilities ---
@@ -277,13 +282,19 @@ void Tensor::step(float lr) {
 Tensor Tensor::batch_norm(Tensor &running_mean, Tensor &running_var,
                           const Tensor &weight, const Tensor &bias,
                           bool training, float momentum, float eps) const {
-  return ops::batch_norm(*this, running_mean, running_var, weight, bias,
-                         training, momentum, eps);
+  Tensor in = maybe_autocast_tensor(*this, false);
+  Tensor w = maybe_autocast_tensor(weight, false);
+  Tensor b = maybe_autocast_tensor(bias, false);
+  return ops::batch_norm(in, running_mean, running_var, w, b, training,
+                         momentum, eps);
 }
 
 Tensor Tensor::layer_norm(const Tensor &weight, const Tensor &bias,
                           float eps) const {
-  return ops::layer_norm(*this, weight, bias, eps);
+  Tensor in = maybe_autocast_tensor(*this, false);
+  Tensor w = maybe_autocast_tensor(weight, false);
+  Tensor b = maybe_autocast_tensor(bias, false);
+  return ops::layer_norm(in, w, b, eps);
 }
 
 Tensor Tensor::mse_loss(const Tensor &target) const {

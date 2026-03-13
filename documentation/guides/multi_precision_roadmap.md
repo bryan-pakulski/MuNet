@@ -41,7 +41,7 @@ Legend:
 
 ### Phase 2 — Mixed precision training
 
-- [~] Add autocast context for forward op dispatch (C++ + Python) (API + bindings + core Tensor forward-op autocast integration for add/sub/mul/div/matmul/relu/sigmoid/softmax/log_softmax/loss entrypoints added; module-level policy coverage still pending).
+- [~] Add autocast context for forward op dispatch (C++ + Python) (API + bindings + Tensor forward-op autocast integration for arithmetic/activation/loss added, plus explicit skip-policy for unsupported spatial/normalization entrypoints to avoid unsafe low-precision kernel paths; broader per-op policy tables and module coverage still pending).
 - [~] Add gradient scaling (`static`, `dynamic`) and overflow detection (GradScaler scaling/unscale path with finite-check overflow gating, dynamic growth/backoff behavior, Python bindings, and tests added; broader backend-specific overflow signals pending).
 - [~] Keep optimizer state/master weights in FP32 while model tensors may be FP16/BF16 (initial FP32-master SGD/Adam utilities added).
 - [~] Enforce FP32 accumulation for numerically sensitive ops (norms, reductions, losses) (implemented for `sum`, `mse_loss`, `cross_entropy`, and low-precision `softmax`/`log_softmax`/`layer_norm` CPU paths; broader op coverage pending).
