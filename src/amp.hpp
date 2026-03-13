@@ -53,7 +53,7 @@ public:
   }
 
   Tensor scale(const Tensor &loss) const {
-    Tensor s({1}, loss.device(), loss.dtype(), false);
+    Tensor s({1}, loss.device(), accumulation_dtype(loss.dtype()), false);
     s.uniform_(scale_, scale_);
     return loss * s;
   }
@@ -70,9 +70,8 @@ public:
                          ? g
                          : g.to(Device{DeviceType::CPU, 0});
 
-      // Check finite before unscaling
       for (size_t i = 0; i < g_cpu.size(); ++i) {
-        float v = static_cast<float *>(g_cpu.data())[i];
+        double v = load_scalar_as_double(g_cpu.data(), g_cpu.dtype(), i);
         if (!std::isfinite(v)) {
           found_inf = true;
           break;
@@ -81,12 +80,10 @@ public:
       if (found_inf)
         break;
 
-      Tensor inv({1}, g.device(), g.dtype(), false);
+      Tensor inv({1}, g.device(), accumulation_dtype(g.dtype()), false);
       inv.uniform_(1.0f / scale_, 1.0f / scale_);
       Tensor unscaled = g * inv;
-
-      // Replace grad storage with unscaled grad
-      g.impl_ = unscaled.impl_;
+      p.impl_->grad = unscaled.impl_;
     }
 
     return found_inf;

@@ -2,6 +2,7 @@
 #include "nn.hpp"
 #include "optim.hpp"
 #include <gtest/gtest.h>
+#include <limits>
 
 using namespace munet;
 
@@ -135,4 +136,47 @@ TEST(AMPTest, FP32MasterAdamStepParityAgainstFP32) {
 
   Tensor w_lp_fp32 = w_lp.to_dtype(DataType::Float32);
   EXPECT_NEAR(w_lp_fp32.item(), w_fp32.item(), 1e-4f);
+}
+
+
+TEST(AMPTest, GradScalerSkipsStepAndBacksOffOnInfGradients) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor w({1}, cpu, DataType::Float32, true);
+  auto *wp = static_cast<float *>(w.data());
+  wp[0] = 2.0f;
+
+  optim::SGD opt({w}, 0.1f);
+  amp::GradScaler scaler(8.0f, 2.0f, 0.5f, 2);
+
+  Tensor grad({1}, cpu, DataType::Float32, false);
+  auto *gp = static_cast<float *>(grad.data());
+  gp[0] = std::numeric_limits<float>::infinity();
+  w.impl_->grad = grad.impl_;
+
+  bool stepped = scaler.step(opt, {w});
+  EXPECT_FALSE(stepped);
+  EXPECT_FLOAT_EQ(w.item(), 2.0f);
+  EXPECT_FLOAT_EQ(scaler.current_scale(), 4.0f);
+}
+
+TEST(AMPTest, GradScalerGrowsScaleAfterConfiguredInterval) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor w({1}, cpu, DataType::Float32, true);
+  auto *wp = static_cast<float *>(w.data());
+  wp[0] = 2.0f;
+
+  optim::SGD opt({w}, 0.1f);
+  amp::GradScaler scaler(8.0f, 2.0f, 0.5f, 2);
+
+  Tensor grad({1}, cpu, DataType::Float32, false);
+  auto *gp = static_cast<float *>(grad.data());
+  gp[0] = 1.0f;
+
+  w.impl_->grad = grad.impl_;
+  EXPECT_TRUE(scaler.step(opt, {w}));
+  EXPECT_FLOAT_EQ(scaler.current_scale(), 8.0f);
+
+  w.impl_->grad = grad.impl_;
+  EXPECT_TRUE(scaler.step(opt, {w}));
+  EXPECT_FLOAT_EQ(scaler.current_scale(), 16.0f);
 }
