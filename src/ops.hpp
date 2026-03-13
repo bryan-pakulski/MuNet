@@ -270,7 +270,7 @@ struct MSELossBackward : public Node {
 
 inline Tensor mse_loss(const Tensor &pred, const Tensor &target) {
   if (pred.shape() == target.shape()) {
-    Tensor out({1}, pred.device(), pred.dtype());
+    Tensor out({1}, pred.device(), accumulation_dtype(pred.dtype()));
     pred.impl_->backend().mse_loss(*pred.impl_->storage, *target.impl_->storage,
                                    *out.impl_->storage, pred.size());
 
@@ -346,7 +346,7 @@ inline Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
     spatial = 1;
   }
 
-  Tensor out({1}, logits.device(), logits.dtype());
+  Tensor out({1}, logits.device(), accumulation_dtype(logits.dtype()));
   logits.impl_->backend().cross_entropy(
       *logits.impl_->storage, *targets.impl_->storage, *out.impl_->storage,
       batch_size, num_classes, spatial);
@@ -451,36 +451,39 @@ inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
   Tensor b_cpu = bias.to(cpu);
 
   Tensor out_cpu(x.shape(), cpu, x.dtype());
-  Tensor mean_cpu({rows}, cpu, x.dtype(), false);
-  Tensor inv_std_cpu({rows}, cpu, x.dtype(), false);
+  Tensor mean_cpu({rows}, cpu, DataType::Float32, false);
+  Tensor inv_std_cpu({rows}, cpu, DataType::Float32, false);
 
-  const float *xv = static_cast<const float *>(x_cpu.data());
-  const float *wv = static_cast<const float *>(w_cpu.data());
-  const float *bv = static_cast<const float *>(b_cpu.data());
-  float *ov = static_cast<float *>(out_cpu.data());
   float *mv = static_cast<float *>(mean_cpu.data());
   float *iv = static_cast<float *>(inv_std_cpu.data());
 
   for (int r = 0; r < rows; ++r) {
-    float mean = 0.0f;
+    double mean = 0.0;
     for (int c = 0; c < cols; ++c)
-      mean += xv[r * cols + c];
-    mean /= cols;
+      mean += load_scalar_as_double(x_cpu.data(), x_cpu.dtype(), r * cols + c);
+    mean /= static_cast<double>(cols);
 
-    float var = 0.0f;
+    double var = 0.0;
     for (int c = 0; c < cols; ++c) {
-      float d = xv[r * cols + c] - mean;
+      double xval =
+          load_scalar_as_double(x_cpu.data(), x_cpu.dtype(), r * cols + c);
+      double d = xval - mean;
       var += d * d;
     }
-    var /= cols;
+    var /= static_cast<double>(cols);
 
-    float inv = 1.0f / std::sqrt(var + eps);
-    mv[r] = mean;
-    iv[r] = inv;
+    double inv = 1.0 / std::sqrt(var + static_cast<double>(eps));
+    mv[r] = static_cast<float>(mean);
+    iv[r] = static_cast<float>(inv);
 
     for (int c = 0; c < cols; ++c) {
-      float xhat = (xv[r * cols + c] - mean) * inv;
-      ov[r * cols + c] = xhat * wv[c] + bv[c];
+      double xval =
+          load_scalar_as_double(x_cpu.data(), x_cpu.dtype(), r * cols + c);
+      double wval = load_scalar_as_double(w_cpu.data(), w_cpu.dtype(), c);
+      double bval = load_scalar_as_double(b_cpu.data(), b_cpu.dtype(), c);
+      double xhat = (xval - mean) * inv;
+      store_scalar_from_double(out_cpu.data(), out_cpu.dtype(), r * cols + c,
+                               xhat * wval + bval);
     }
   }
 
@@ -581,20 +584,21 @@ struct SoftmaxBackward : public Node {
     for (int i = resolved + 1; i < rank; ++i)
       inner *= shape[i];
 
-    const float *go = static_cast<const float *>(go_cpu.data());
-    const float *out = static_cast<const float *>(out_cpu.data());
-    float *gi = static_cast<float *>(gi_cpu.data());
-
     for (int o = 0; o < outer; ++o) {
       for (int in = 0; in < inner; ++in) {
-        float dot = 0.0f;
+        double dot = 0.0;
         for (int d = 0; d < dim_size; ++d) {
           int idx = (o * dim_size + d) * inner + in;
-          dot += go[idx] * out[idx];
+          dot += load_scalar_as_double(go_cpu.data(), go_cpu.dtype(), idx) *
+                 load_scalar_as_double(out_cpu.data(), out_cpu.dtype(), idx);
         }
         for (int d = 0; d < dim_size; ++d) {
           int idx = (o * dim_size + d) * inner + in;
-          gi[idx] = out[idx] * (go[idx] - dot);
+          double out_v =
+              load_scalar_as_double(out_cpu.data(), out_cpu.dtype(), idx);
+          double go_v = load_scalar_as_double(go_cpu.data(), go_cpu.dtype(), idx);
+          store_scalar_from_double(gi_cpu.data(), gi_cpu.dtype(), idx,
+                                   out_v * (go_v - dot));
         }
       }
     }
@@ -619,7 +623,7 @@ inline Tensor softmax(const Tensor &a, int dim = -1) {
 
   int num_classes = a.shape().back();
   int batch_size = a.size() / num_classes;
-  Tensor out(a.shape(), a.device(), a.dtype());
+  Tensor out(a.shape(), a.device(), accumulation_dtype(a.dtype()));
   a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage,
                              batch_size, num_classes);
 
@@ -656,22 +660,21 @@ struct LogSoftmaxBackward : public Node {
     for (int i = resolved + 1; i < rank; ++i)
       inner *= shape[i];
 
-    const float *go = static_cast<const float *>(go_cpu.data());
-    const float *lp = static_cast<const float *>(lp_cpu.data());
-    float *gi = static_cast<float *>(gi_cpu.data());
-
     for (int o = 0; o < outer; ++o) {
       for (int in = 0; in < inner; ++in) {
-        float sum_go = 0.0f;
+        double sum_go = 0.0;
         for (int d = 0; d < dim_size; ++d) {
           int idx = (o * dim_size + d) * inner + in;
-          sum_go += go[idx];
+          sum_go += load_scalar_as_double(go_cpu.data(), go_cpu.dtype(), idx);
         }
 
         for (int d = 0; d < dim_size; ++d) {
           int idx = (o * dim_size + d) * inner + in;
-          float p = std::exp(lp[idx]);
-          gi[idx] = go[idx] - p * sum_go;
+          double p =
+              std::exp(load_scalar_as_double(lp_cpu.data(), lp_cpu.dtype(), idx));
+          double go_v = load_scalar_as_double(go_cpu.data(), go_cpu.dtype(), idx);
+          store_scalar_from_double(gi_cpu.data(), gi_cpu.dtype(), idx,
+                                   go_v - p * sum_go);
         }
       }
     }
@@ -688,11 +691,12 @@ inline Tensor log_softmax(const Tensor &a, int dim) {
 
   Device cpu{DeviceType::CPU, 0};
   Tensor p_cpu = p.to(cpu);
-  Tensor out_cpu(a.shape(), cpu, a.dtype());
-  const float *pv = static_cast<const float *>(p_cpu.data());
-  float *ov = static_cast<float *>(out_cpu.data());
+  Tensor out_cpu(a.shape(), cpu, accumulation_dtype(a.dtype()));
   for (size_t i = 0; i < p_cpu.size(); ++i)
-    ov[i] = std::log(std::max(pv[i], 1e-20f));
+    store_scalar_from_double(
+        out_cpu.data(), out_cpu.dtype(), i,
+        std::log(std::max(load_scalar_as_double(p_cpu.data(), p_cpu.dtype(), i),
+                          1e-20)));
 
   Tensor out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
 
@@ -918,7 +922,7 @@ struct SumBackward : public Node {
 };
 
 inline Tensor sum(const Tensor &a) {
-  Tensor out({1}, a.device(), a.dtype());
+  Tensor out({1}, a.device(), accumulation_dtype(a.dtype()));
 
   // Use Backend!
   a.impl_->backend().sum(*a.impl_->storage, *out.impl_->storage, a.size());
