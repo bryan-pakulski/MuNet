@@ -44,11 +44,12 @@ inline bool should_autocast(AutocastOp op) {
   case AutocastOp::MSELoss:
   case AutocastOp::CrossEntropy:
     return true;
+  case AutocastOp::LayerNorm:
+    return true;
   case AutocastOp::Conv2D:
   case AutocastOp::MaxPool2D:
   case AutocastOp::Upsample2D:
   case AutocastOp::BatchNorm:
-  case AutocastOp::LayerNorm:
     return false;
   default:
     return false;

@@ -28,7 +28,7 @@ TEST(AMPTest, AutocastPolicyTableReflectsCurrentCoverage) {
   EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::Conv2D));
   EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::MaxPool2D));
   EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::BatchNorm));
-  EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::LayerNorm));
+  EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::LayerNorm));
 }
 
 TEST(AMPTest, AutocastCastsCoreForwardOps) {
@@ -61,7 +61,7 @@ TEST(AMPTest, AutocastCastsCoreForwardOps) {
 
 
 
-TEST(AMPTest, AutocastSkipsUnsupportedSpatialAndNormEntryPoints) {
+TEST(AMPTest, AutocastSkipsUnsupportedSpatialOpsButCastsLayerNorm) {
   Device cpu{DeviceType::CPU, 0};
 
   Tensor x({1, 1, 4, 4}, cpu, DataType::Float32, false);
@@ -104,7 +104,7 @@ TEST(AMPTest, AutocastSkipsUnsupportedSpatialAndNormEntryPoints) {
     EXPECT_EQ(pool.dtype(), DataType::Float32);
     EXPECT_EQ(up.dtype(), DataType::Float32);
     EXPECT_EQ(bn.dtype(), DataType::Float32);
-    EXPECT_EQ(ln.dtype(), DataType::Float32);
+    EXPECT_EQ(ln.dtype(), DataType::Float16);
   }
 }
 
