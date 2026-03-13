@@ -18,6 +18,19 @@ TEST(AMPTest, AutocastGuardTogglesState) {
 
 
 
+
+
+TEST(AMPTest, AutocastPolicyTableReflectsCurrentCoverage) {
+  EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::Add));
+  EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::Matmul));
+  EXPECT_TRUE(amp::should_autocast(amp::AutocastOp::MSELoss));
+
+  EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::Conv2D));
+  EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::MaxPool2D));
+  EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::BatchNorm));
+  EXPECT_FALSE(amp::should_autocast(amp::AutocastOp::LayerNorm));
+}
+
 TEST(AMPTest, AutocastCastsCoreForwardOps) {
   Device cpu{DeviceType::CPU, 0};
   Tensor a({2, 2}, cpu, DataType::Float32, false);

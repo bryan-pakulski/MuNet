@@ -14,8 +14,8 @@
 namespace munet {
 
 namespace {
-inline Tensor maybe_autocast_tensor(const Tensor &t, bool autocast_allowed = true) {
-  if (!autocast_allowed || !amp::AutocastMode::is_enabled())
+inline Tensor maybe_autocast_tensor(const Tensor &t, amp::AutocastOp op) {
+  if (!amp::AutocastMode::is_enabled() || !amp::should_autocast(op))
     return t;
   DataType target = amp::AutocastMode::dtype();
   if (!is_float_dtype(t.dtype()) || t.dtype() == target)
@@ -60,47 +60,47 @@ Tensor Tensor::detach() const {
 
 // --- Ops ---
 Tensor Tensor::operator+(const Tensor &other) const {
-  Tensor lhs = maybe_autocast_tensor(*this);
-  Tensor rhs = maybe_autocast_tensor(other);
+  Tensor lhs = maybe_autocast_tensor(*this, amp::AutocastOp::Add);
+  Tensor rhs = maybe_autocast_tensor(other, amp::AutocastOp::Add);
   return ops::add(lhs, rhs);
 }
 
 Tensor Tensor::matmul(const Tensor &other) const {
-  Tensor lhs = maybe_autocast_tensor(*this);
-  Tensor rhs = maybe_autocast_tensor(other);
+  Tensor lhs = maybe_autocast_tensor(*this, amp::AutocastOp::Matmul);
+  Tensor rhs = maybe_autocast_tensor(other, amp::AutocastOp::Matmul);
   return ops::matmul(lhs, rhs);
 }
 
 Tensor Tensor::relu() const {
-  Tensor x = maybe_autocast_tensor(*this);
+  Tensor x = maybe_autocast_tensor(*this, amp::AutocastOp::Relu);
   return ops::relu(x);
 }
 Tensor Tensor::sigmoid() const {
-  Tensor x = maybe_autocast_tensor(*this);
+  Tensor x = maybe_autocast_tensor(*this, amp::AutocastOp::Sigmoid);
   return ops::sigmoid(x);
 }
 Tensor Tensor::softmax(int dim) const {
-  Tensor x = maybe_autocast_tensor(*this);
+  Tensor x = maybe_autocast_tensor(*this, amp::AutocastOp::Softmax);
   return ops::softmax(x, dim);
 }
 Tensor Tensor::log_softmax(int dim) const {
-  Tensor x = maybe_autocast_tensor(*this);
+  Tensor x = maybe_autocast_tensor(*this, amp::AutocastOp::LogSoftmax);
   return ops::log_softmax(x, dim);
 }
 
 Tensor Tensor::conv2d(const Tensor &weight, const Tensor &bias, int stride,
                       int padding) const {
-  Tensor in = maybe_autocast_tensor(*this, false);
-  Tensor w = maybe_autocast_tensor(weight, false);
-  Tensor b = maybe_autocast_tensor(bias, false);
+  Tensor in = maybe_autocast_tensor(*this, amp::AutocastOp::Conv2D);
+  Tensor w = maybe_autocast_tensor(weight, amp::AutocastOp::Conv2D);
+  Tensor b = maybe_autocast_tensor(bias, amp::AutocastOp::Conv2D);
   return ops::conv2d(in, w, b, stride, padding);
 }
 Tensor Tensor::max_pool2d(int kernel_size, int stride, int padding) const {
-  Tensor in = maybe_autocast_tensor(*this, false);
+  Tensor in = maybe_autocast_tensor(*this, amp::AutocastOp::MaxPool2D);
   return ops::max_pool2d(in, kernel_size, stride, padding);
 }
 Tensor Tensor::upsample2d(int scale_factor) const {
-  Tensor in = maybe_autocast_tensor(*this, false);
+  Tensor in = maybe_autocast_tensor(*this, amp::AutocastOp::Upsample2D);
   return ops::upsample2d(in, scale_factor);
 }
 
@@ -226,19 +226,19 @@ Tensor Tensor::to_dtype(DataType target_dtype) const {
 }
 
 Tensor Tensor::operator-(const Tensor &other) const {
-  Tensor lhs = maybe_autocast_tensor(*this);
-  Tensor rhs = maybe_autocast_tensor(other);
+  Tensor lhs = maybe_autocast_tensor(*this, amp::AutocastOp::Sub);
+  Tensor rhs = maybe_autocast_tensor(other, amp::AutocastOp::Sub);
   return ops::sub(lhs, rhs);
 }
 Tensor Tensor::operator*(const Tensor &other) const {
-  Tensor lhs = maybe_autocast_tensor(*this);
-  Tensor rhs = maybe_autocast_tensor(other);
+  Tensor lhs = maybe_autocast_tensor(*this, amp::AutocastOp::Mul);
+  Tensor rhs = maybe_autocast_tensor(other, amp::AutocastOp::Mul);
   return ops::mul(lhs, rhs);
 }
 
 Tensor Tensor::operator/(const Tensor &other) const {
-  Tensor lhs = maybe_autocast_tensor(*this);
-  Tensor rhs = maybe_autocast_tensor(other);
+  Tensor lhs = maybe_autocast_tensor(*this, amp::AutocastOp::Div);
+  Tensor rhs = maybe_autocast_tensor(other, amp::AutocastOp::Div);
   return ops::div(lhs, rhs);
 }
 
@@ -282,30 +282,30 @@ void Tensor::step(float lr) {
 Tensor Tensor::batch_norm(Tensor &running_mean, Tensor &running_var,
                           const Tensor &weight, const Tensor &bias,
                           bool training, float momentum, float eps) const {
-  Tensor in = maybe_autocast_tensor(*this, false);
-  Tensor w = maybe_autocast_tensor(weight, false);
-  Tensor b = maybe_autocast_tensor(bias, false);
+  Tensor in = maybe_autocast_tensor(*this, amp::AutocastOp::BatchNorm);
+  Tensor w = maybe_autocast_tensor(weight, amp::AutocastOp::BatchNorm);
+  Tensor b = maybe_autocast_tensor(bias, amp::AutocastOp::BatchNorm);
   return ops::batch_norm(in, running_mean, running_var, w, b, training,
                          momentum, eps);
 }
 
 Tensor Tensor::layer_norm(const Tensor &weight, const Tensor &bias,
                           float eps) const {
-  Tensor in = maybe_autocast_tensor(*this, false);
-  Tensor w = maybe_autocast_tensor(weight, false);
-  Tensor b = maybe_autocast_tensor(bias, false);
+  Tensor in = maybe_autocast_tensor(*this, amp::AutocastOp::LayerNorm);
+  Tensor w = maybe_autocast_tensor(weight, amp::AutocastOp::LayerNorm);
+  Tensor b = maybe_autocast_tensor(bias, amp::AutocastOp::LayerNorm);
   return ops::layer_norm(in, w, b, eps);
 }
 
 Tensor Tensor::mse_loss(const Tensor &target) const {
-  Tensor pred = maybe_autocast_tensor(*this);
-  Tensor tgt = maybe_autocast_tensor(target);
+  Tensor pred = maybe_autocast_tensor(*this, amp::AutocastOp::MSELoss);
+  Tensor tgt = maybe_autocast_tensor(target, amp::AutocastOp::MSELoss);
   return ops::mse_loss(pred, tgt);
 }
 
 Tensor Tensor::cross_entropy(const Tensor &target) const {
-  Tensor logits = maybe_autocast_tensor(*this);
-  Tensor tgt = maybe_autocast_tensor(target);
+  Tensor logits = maybe_autocast_tensor(*this, amp::AutocastOp::CrossEntropy);
+  Tensor tgt = maybe_autocast_tensor(target, amp::AutocastOp::CrossEntropy);
   return ops::cross_entropy(logits, tgt);
 }
 

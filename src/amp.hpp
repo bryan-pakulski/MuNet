@@ -10,6 +10,51 @@
 namespace munet {
 namespace amp {
 
+
+enum class AutocastOp {
+  Add,
+  Sub,
+  Mul,
+  Div,
+  Matmul,
+  Relu,
+  Sigmoid,
+  Softmax,
+  LogSoftmax,
+  MSELoss,
+  CrossEntropy,
+  Conv2D,
+  MaxPool2D,
+  Upsample2D,
+  BatchNorm,
+  LayerNorm
+};
+
+inline bool should_autocast(AutocastOp op) {
+  switch (op) {
+  case AutocastOp::Add:
+  case AutocastOp::Sub:
+  case AutocastOp::Mul:
+  case AutocastOp::Div:
+  case AutocastOp::Matmul:
+  case AutocastOp::Relu:
+  case AutocastOp::Sigmoid:
+  case AutocastOp::Softmax:
+  case AutocastOp::LogSoftmax:
+  case AutocastOp::MSELoss:
+  case AutocastOp::CrossEntropy:
+    return true;
+  case AutocastOp::Conv2D:
+  case AutocastOp::MaxPool2D:
+  case AutocastOp::Upsample2D:
+  case AutocastOp::BatchNorm:
+  case AutocastOp::LayerNorm:
+    return false;
+  default:
+    return false;
+  }
+}
+
 class AutocastMode {
 public:
   static bool is_enabled() { return enabled_; }
