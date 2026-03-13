@@ -82,3 +82,57 @@ TEST(AMPTest, FP32MasterAdamKeepsModelLowPrecision) {
   auto *w_after = static_cast<int8_t *>(w.data());
   EXPECT_NE(w_after[0], 8);
 }
+
+TEST(AMPTest, FP32MasterSGDStepParityAgainstFP32) {
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor w_fp32({1}, cpu, DataType::Float32, true);
+  auto *w32 = static_cast<float *>(w_fp32.data());
+  w32[0] = 10.0f;
+  Tensor g_fp32({1}, cpu, DataType::Float32, false);
+  auto *g32 = static_cast<float *>(g_fp32.data());
+  g32[0] = 4.0f;
+  w_fp32.impl_->grad = g_fp32.impl_;
+  optim::SGD sgd_fp32({w_fp32}, 0.5f);
+  sgd_fp32.step();
+
+  Tensor w_lp({1}, cpu, DataType::Float16, true);
+  auto *wlp = static_cast<int8_t *>(w_lp.data());
+  wlp[0] = 10;
+  Tensor g_lp({1}, cpu, DataType::Float16, false);
+  auto *glp = static_cast<int8_t *>(g_lp.data());
+  glp[0] = 4;
+  w_lp.impl_->grad = g_lp.impl_;
+  amp::FP32MasterSGD sgd_lp({w_lp}, 0.5f);
+  sgd_lp.step();
+
+  Tensor w_lp_fp32 = w_lp.to_dtype(DataType::Float32);
+  EXPECT_NEAR(w_lp_fp32.item(), w_fp32.item(), 1e-5f);
+}
+
+TEST(AMPTest, FP32MasterAdamStepParityAgainstFP32) {
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor w_fp32({1}, cpu, DataType::Float32, true);
+  auto *w32 = static_cast<float *>(w_fp32.data());
+  w32[0] = 10.0f;
+  Tensor g_fp32({1}, cpu, DataType::Float32, false);
+  auto *g32 = static_cast<float *>(g_fp32.data());
+  g32[0] = 4.0f;
+  w_fp32.impl_->grad = g_fp32.impl_;
+  optim::Adam adam_fp32({w_fp32}, 2.0f);
+  adam_fp32.step();
+
+  Tensor w_lp({1}, cpu, DataType::Float16, true);
+  auto *wlp = static_cast<int8_t *>(w_lp.data());
+  wlp[0] = 10;
+  Tensor g_lp({1}, cpu, DataType::Float16, false);
+  auto *glp = static_cast<int8_t *>(g_lp.data());
+  glp[0] = 4;
+  w_lp.impl_->grad = g_lp.impl_;
+  amp::FP32MasterAdam adam_lp({w_lp}, 2.0f);
+  adam_lp.step();
+
+  Tensor w_lp_fp32 = w_lp.to_dtype(DataType::Float32);
+  EXPECT_NEAR(w_lp_fp32.item(), w_fp32.item(), 1e-4f);
+}

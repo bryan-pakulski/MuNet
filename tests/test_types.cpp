@@ -95,6 +95,42 @@ TEST(DataTypeTest, BackendDispatchUsesStorageDtypes) {
   EXPECT_EQ(sp[0], 5);
 }
 
+TEST(DataTypeTest, SensitiveReductionsAndLossesUseAccumulationDType) {
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor a({2}, cpu, DataType::Float16, false);
+  auto *ap = static_cast<int8_t *>(a.data());
+  ap[0] = 2;
+  ap[1] = 3;
+
+  Tensor s = a.sum();
+  EXPECT_EQ(s.dtype(), DataType::Float32);
+
+  Tensor target({2}, cpu, DataType::Float16, false);
+  auto *tp = static_cast<int8_t *>(target.data());
+  tp[0] = 1;
+  tp[1] = 1;
+
+  Tensor mse = a.mse_loss(target);
+  EXPECT_EQ(mse.dtype(), DataType::Float32);
+
+  Tensor logits({2, 2}, cpu, DataType::Float16, false);
+  auto *lp = static_cast<int8_t *>(logits.data());
+  lp[0] = 2;
+  lp[1] = 1;
+  lp[2] = 1;
+  lp[3] = 2;
+  Tensor labels({2, 2}, cpu, DataType::Float16, false);
+  auto *y = static_cast<int8_t *>(labels.data());
+  y[0] = 1;
+  y[1] = 0;
+  y[2] = 0;
+  y[3] = 1;
+
+  Tensor ce = logits.cross_entropy(labels);
+  EXPECT_EQ(ce.dtype(), DataType::Float32);
+}
+
 
 TEST(DataTypeTest, DTypeDispatchWarnAndUpcastFallbackWorks) {
   Device cpu{DeviceType::CPU, 0};
