@@ -189,6 +189,25 @@ class TestBindings(unittest.TestCase):
             y = model.forward(x)
         self.assertEqual(y.dtype, munet.DataType.Float16)
 
+    def test_amp_activation_module_policy_override(self):
+        x = munet.Tensor([2, 4], dtype=munet.DataType.Float32)
+        np.array(x, copy=False)[:] = np.array(
+            [[1.0, -1.0, 0.5, -0.5], [0.2, -0.2, 0.1, -0.1]], dtype=np.float32
+        )
+
+        tanh = munet.nn.Tanh()
+        gelu = munet.nn.GELU()
+        lrelu = munet.nn.LeakyReLU(0.1)
+
+        with munet.amp.autocast(munet.DataType.Float16):
+            self.assertEqual(tanh.forward(x).dtype, munet.DataType.Float16)
+            self.assertEqual(gelu.forward(x).dtype, munet.DataType.Float16)
+            self.assertEqual(lrelu.forward(x).dtype, munet.DataType.Float16)
+
+            with munet.amp.autocast_policy(munet.amp.AutocastOp.Tanh, False):
+                self.assertEqual(tanh.forward(x).dtype, munet.DataType.Float32)
+                self.assertEqual(gelu.forward(x).dtype, munet.DataType.Float16)
+
     def test_amp_spatial_module_forward_coverage(self):
         x = munet.Tensor([1, 3, 8, 8], dtype=munet.DataType.Float32)
         np.array(x, copy=False)[:] = np.random.default_rng(0).uniform(0.0, 1.0, size=(1, 3, 8, 8)).astype(np.float32)

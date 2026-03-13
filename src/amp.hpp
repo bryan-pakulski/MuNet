@@ -28,10 +28,13 @@ enum class AutocastOp {
   MaxPool2D,
   Upsample2D,
   BatchNorm,
-  LayerNorm
+  LayerNorm,
+  Tanh,
+  GELU,
+  LeakyRelu
 };
 
-constexpr size_t kAutocastOpCount = 16;
+constexpr size_t kAutocastOpCount = 19;
 
 inline size_t autocast_op_index(AutocastOp op) {
   return static_cast<size_t>(op);
@@ -51,6 +54,9 @@ inline bool default_should_autocast(AutocastOp op) {
   case AutocastOp::MSELoss:
   case AutocastOp::CrossEntropy:
   case AutocastOp::LayerNorm:
+  case AutocastOp::Tanh:
+  case AutocastOp::GELU:
+  case AutocastOp::LeakyRelu:
     return true;
   case AutocastOp::Upsample2D:
     return true;
@@ -96,7 +102,8 @@ public:
 private:
   inline static thread_local std::array<int8_t, kAutocastOpCount> overrides_ = {
       -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1, -1, -1, -1, -1};
+      -1, -1, -1, -1, -1, -1, -1, -1,
+      -1, -1, -1};
 };
 
 inline bool should_autocast(AutocastOp op) {

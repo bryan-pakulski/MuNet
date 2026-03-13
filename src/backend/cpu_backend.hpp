@@ -844,13 +844,12 @@ public:
   }
   void fill_uniform(Storage &out, float low, float high,
                     size_t num_elements) override {
-    float *ptr = (float *)out.data();
     // Not strictly thread-safe to share generator, creating local one
     parallel_for(0, num_elements, [&](size_t s, size_t e) {
       std::mt19937 gen(42 + s); // Seed offset by index
       std::uniform_real_distribution<float> dis(low, high);
       for (size_t i = s; i < e; ++i) {
-        ptr[i] = dis(gen);
+        store_from_compute(out, i, static_cast<double>(dis(gen)));
       }
     });
   }

@@ -1,4 +1,5 @@
 #pragma once
+#include "amp.hpp"
 #include "core/module.hpp"
 #include <cmath>
 #include <limits>
@@ -7,6 +8,28 @@
 
 namespace munet {
 namespace nn {
+
+namespace {
+inline Tensor maybe_autocast_module_output(const Tensor &out, amp::AutocastOp op,
+                                          bool autocast_active) {
+  if (!autocast_active || !amp::should_autocast(op))
+    return out;
+  DataType target = amp::AutocastMode::dtype();
+  if (!is_float_dtype(out.dtype()) || out.dtype() == target)
+    return out;
+  return out.to_dtype(target);
+}
+} // namespace
+
+struct ScopedAutocastModeToggle {
+  bool prev_enabled;
+  explicit ScopedAutocastModeToggle(bool disable)
+      : prev_enabled(amp::AutocastMode::is_enabled()) {
+    if (disable && prev_enabled)
+      amp::AutocastMode::set_enabled(false);
+  }
+  ~ScopedAutocastModeToggle() { amp::AutocastMode::set_enabled(prev_enabled); }
+};
 
 class Module : public core::Module {
 public:
@@ -118,12 +141,15 @@ public:
 class Tanh : public Module {
 public:
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    ScopedAutocastModeToggle scoped(autocast_active);
     // tanh(x) = 2 * sigmoid(2x) - 1
     Tensor two({1}, x.device(), x.dtype(), false);
     two.uniform_(2.0f, 2.0f);
     Tensor one({1}, x.device(), x.dtype(), false);
     one.uniform_(1.0f, 1.0f);
-    return (x * two).sigmoid() * two - one;
+    Tensor out = (x * two).sigmoid() * two - one;
+    return maybe_autocast_module_output(out, amp::AutocastOp::Tanh, autocast_active);
   }
 };
 
@@ -131,10 +157,13 @@ public:
 class GELU : public Module {
 public:
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    ScopedAutocastModeToggle scoped(autocast_active);
     // Fast GELU approximation: x * sigmoid(1.702 * x)
     Tensor c({1}, x.device(), x.dtype(), false);
     c.uniform_(1.702f, 1.702f);
-    return x * (x * c).sigmoid();
+    Tensor out = x * (x * c).sigmoid();
+    return maybe_autocast_module_output(out, amp::AutocastOp::GELU, autocast_active);
   }
 };
 
@@ -385,9 +414,12 @@ public:
       : negative_slope_(negative_slope) {}
 
   Tensor forward(Tensor x) override {
+    bool autocast_active = amp::AutocastMode::is_enabled();
+    ScopedAutocastModeToggle scoped(autocast_active);
     Tensor slope({1}, x.device(), x.dtype(), false);
     slope.uniform_(negative_slope_, negative_slope_);
-    return x.relu() + (x - x.relu()) * slope;
+    Tensor out = x.relu() + (x - x.relu()) * slope;
+    return maybe_autocast_module_output(out, amp::AutocastOp::LeakyRelu, autocast_active);
   }
 
   float negative_slope_;

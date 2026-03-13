@@ -657,6 +657,9 @@ PYBIND11_MODULE(munet, m) {
       .value("Upsample2D", amp::AutocastOp::Upsample2D)
       .value("BatchNorm", amp::AutocastOp::BatchNorm)
       .value("LayerNorm", amp::AutocastOp::LayerNorm)
+      .value("Tanh", amp::AutocastOp::Tanh)
+      .value("GELU", amp::AutocastOp::GELU)
+      .value("LeakyRelu", amp::AutocastOp::LeakyRelu)
       .export_values();
 
   py::class_<amp::AutocastPolicy>(amp_mod, "AutocastPolicy")
