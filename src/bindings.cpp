@@ -401,6 +401,8 @@ PYBIND11_MODULE(munet, m) {
       .def("eval", &nn::Module::eval, "Sets the module in evaluation mode.")
       .def("to", &nn::Module::to, py::arg("device"),
            "Moves all parameters and buffers to the specified device.")
+      .def("to_dtype", &nn::Module::to_dtype, py::arg("dtype"),
+           "Casts all parameters and buffers to the specified dtype.")
       .def("zero_grad", &nn::Module::zero_grad,
            "Clears the gradients of all optimized parameters.")
       .def("__call__", &nn::Module::forward)

@@ -86,6 +86,19 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(t.device.type, munet.DeviceType.CPU)
         self.assertEqual(t.dtype, munet.DataType.Float32)
 
+    def test_module_to_dtype_casts_parameters_and_buffers(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.BatchNorm2d(8),
+        ])
+
+        for _, p in model.named_parameters().items():
+            self.assertEqual(p.dtype, munet.DataType.Float32)
+
+        model.to_dtype(munet.DataType.Float16)
+        for _, p in model.named_parameters().items():
+            self.assertEqual(p.dtype, munet.DataType.Float16)
+
 
     def test_to_dtype_and_dispatch_config(self):
         t = munet.Tensor([2], dtype=munet.DataType.Float32)

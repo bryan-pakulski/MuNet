@@ -72,6 +72,16 @@ def parse_dtype(name: str):
     return table[name]
 
 
+def resolve_param_dtype(data_dtype_name: str, override: str):
+    if override == "auto":
+        # Default policy: for trainable float modes, store params in the same
+        # dtype; for quantized modes, keep fp32 params for stability.
+        if data_dtype_name in ("fp16", "bf16", "fp32"):
+            return parse_dtype(data_dtype_name)
+        return munet.DataType.Float32
+    return parse_dtype(override)
+
+
 def run_epoch(model, optimizer, x_train, y_train, batch_size, compute_dtype,
               trainable=True):
     losses = []
@@ -118,11 +128,18 @@ def main():
     parser.add_argument("--epochs", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--samples", type=int, default=200)
+    parser.add_argument(
+        "--param-dtype",
+        default="auto",
+        choices=["auto", "fp32", "fp16", "bf16", "int8", "int4"],
+        help="Model parameter storage dtype. 'auto' picks dtype for fp32/fp16/bf16 runs and fp32 for int8/int4 runs.",
+    )
     args = parser.parse_args()
 
     data_dtype = parse_dtype(args.dtype)
     compute_dtype = None if args.dtype == "fp32" else data_dtype
     trainable = args.dtype in ("fp32", "fp16", "bf16")
+    param_dtype = resolve_param_dtype(args.dtype, args.param_dtype)
 
     print(f"Running dynamic dtype demo on CPU with dtype={args.dtype}")
     if compute_dtype is not None:
@@ -135,7 +152,13 @@ def main():
     x_train, y_train = generate_shapes(args.samples)
     model = create_quant_benchmark_model()
     model.to(munet.Device(munet.DeviceType.CPU, 0))
-    optimizer = munet.optim.SGD(model.parameters(), lr=0.1)
+    model.to_dtype(param_dtype)
+    if trainable and param_dtype != munet.DataType.Float32:
+        optimizer = munet.amp.FP32MasterSGD(model.parameters(), 0.1)
+        print("Optimizer: FP32MasterSGD (low-precision model params)")
+    else:
+        optimizer = munet.optim.SGD(model.parameters(), lr=0.1)
+        print("Optimizer: SGD")
 
     param_dtypes = {}
     total_params = 0
@@ -147,6 +170,7 @@ def main():
     print("Model parameter dtype distribution:")
     for k, v in sorted(param_dtypes.items()):
         print(f"  {k}: {v}")
+    print(f"Requested param dtype: {param_dtype}")
 
     for epoch in range(args.epochs):
         avg_loss, elapsed = run_epoch(
