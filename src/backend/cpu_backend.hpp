@@ -116,59 +116,90 @@ private:
   }
 
   // ---- DType conversion helpers (Phase 1 scaffolding) ----
+  struct ComputePlan {
+    DataType compute_dtype = DataType::Float32;
+    bool fallback_applied = false;
+  };
+
+  static bool supports_compute_dtype(DataType dt) {
+    return dt == DataType::Float32 || dt == DataType::Float64;
+  }
+
+  static ComputePlan resolve_compute_plan(DataType preferred) {
+    ComputePlan plan;
+    DTypeDispatchConfig cfg = DTypeDispatch::current();
+    DataType requested = cfg.has_compute_dtype ? cfg.compute_dtype : preferred;
+
+    if (supports_compute_dtype(requested)) {
+      plan.compute_dtype = requested;
+      return plan;
+    }
+
+    if (cfg.fallback_mode == KernelFallbackMode::Error) {
+      throw std::runtime_error("CPUBackend: requested compute dtype not supported: " +
+                               std::string(dtype_name(requested)));
+    }
+
+    plan.compute_dtype = DataType::Float32;
+    plan.fallback_applied = true;
+    MUNET_WARNING << "CPUBackend: fallback compute dtype "
+                  << dtype_name(requested)
+                  << " -> float32 (warn_and_upcast mode)" << std::endl;
+    return plan;
+  }
+
   // Storage dtype may differ from compute dtype. For low precision and quantized
-  // dtypes we currently accumulate in FP32.
-  static float load_as_float(const Storage &s, size_t idx) {
+  // dtypes we currently dequantize/convert into the selected compute dtype.
+  static double load_as_compute(const Storage &s, size_t idx) {
     const char *base = static_cast<const char *>(s.data());
     switch (s.dtype()) {
     case DataType::Float32:
-      return static_cast<const float *>(s.data())[idx];
+      return static_cast<double>(static_cast<const float *>(s.data())[idx]);
     case DataType::Float64:
-      return static_cast<float>(static_cast<const double *>(s.data())[idx]);
+      return static_cast<const double *>(s.data())[idx];
     case DataType::Int32:
-      return static_cast<float>(static_cast<const int32_t *>(s.data())[idx]);
+      return static_cast<double>(static_cast<const int32_t *>(s.data())[idx]);
     case DataType::Int8:
-      return static_cast<float>(static_cast<const int8_t *>(s.data())[idx]);
+      return static_cast<double>(static_cast<const int8_t *>(s.data())[idx]);
     case DataType::Int4: {
-      // Phase-1 rule: Int4 is stored unpacked in low nibble of each byte
+      // Phase-1 rule: Int4 is stored unpacked in low nibble of each byte.
       int8_t v = static_cast<int8_t>(base[idx] & 0x0F);
       if (v >= 8)
         v -= 16;
-      return static_cast<float>(v);
+      return static_cast<double>(v);
     }
     case DataType::Float16:
     case DataType::BFloat16:
     case DataType::Float8E4M3FN:
     case DataType::Float8E5M2:
-      // Temporary fallback path: treat storage as signed byte-like proxy until
-      // exact packing/format kernels are implemented.
-      return static_cast<float>(static_cast<const int8_t *>(s.data())[idx]);
+      // Temporary fallback path until exact format kernels are implemented.
+      return static_cast<double>(static_cast<const int8_t *>(s.data())[idx]);
     default:
-      return 0.0f;
+      return 0.0;
     }
   }
 
-  static void store_from_float(Storage &s, size_t idx, float v) {
+  static void store_from_compute(Storage &s, size_t idx, double v) {
     char *base = static_cast<char *>(s.data());
     switch (s.dtype()) {
     case DataType::Float32:
-      static_cast<float *>(s.data())[idx] = v;
+      static_cast<float *>(s.data())[idx] = static_cast<float>(v);
       break;
     case DataType::Float64:
-      static_cast<double *>(s.data())[idx] = static_cast<double>(v);
+      static_cast<double *>(s.data())[idx] = v;
       break;
     case DataType::Int32:
-      static_cast<int32_t *>(s.data())[idx] = static_cast<int32_t>(std::lrint(v));
+      static_cast<int32_t *>(s.data())[idx] =
+          static_cast<int32_t>(std::llround(v));
       break;
     case DataType::Int8: {
-      int iv = static_cast<int>(std::lrint(v));
+      int iv = static_cast<int>(std::llround(v));
       iv = std::max(-128, std::min(127, iv));
       static_cast<int8_t *>(s.data())[idx] = static_cast<int8_t>(iv);
       break;
     }
     case DataType::Int4: {
-      // Phase-1 rule: Int4 uses low nibble in one byte per element.
-      int iv = static_cast<int>(std::lrint(v));
+      int iv = static_cast<int>(std::llround(v));
       iv = std::max(-8, std::min(7, iv));
       base[idx] = static_cast<char>(iv & 0x0F);
       break;
@@ -177,8 +208,8 @@ private:
     case DataType::BFloat16:
     case DataType::Float8E4M3FN:
     case DataType::Float8E5M2:
-      // Temporary fallback storage until exact format support lands.
-      static_cast<int8_t *>(s.data())[idx] = static_cast<int8_t>(std::lrint(v));
+      static_cast<int8_t *>(s.data())[idx] =
+          static_cast<int8_t>(std::llround(v));
       break;
     default:
       break;
@@ -231,6 +262,7 @@ public:
 
   void add(const Storage &a, const Storage &b, Storage &out,
            const BroadcastInfo &info) override {
+    (void)resolve_compute_plan(accumulation_dtype(a.dtype()));
     size_t total = numel(info.out_shape);
     int ndim = (int)info.out_shape.size();
 
@@ -243,8 +275,8 @@ public:
           off_b += coord * info.strides_b[d];
           curr /= info.out_shape[d];
         }
-        float v = load_as_float(a, off_a) + load_as_float(b, off_b);
-        store_from_float(out, i, v);
+        float v = load_as_compute(a, off_a) + load_as_compute(b, off_b);
+        store_from_compute(out, i, v);
       }
     });
   }
@@ -272,6 +304,7 @@ public:
 
   void mul(const Storage &a, const Storage &b, Storage &out,
            const BroadcastInfo &info) override {
+    (void)resolve_compute_plan(accumulation_dtype(a.dtype()));
     size_t total = numel(info.out_shape);
     int ndim = (int)info.out_shape.size();
 
@@ -284,8 +317,8 @@ public:
           off_b += coord * info.strides_b[d];
           curr /= info.out_shape[d];
         }
-        float v = load_as_float(a, off_a) * load_as_float(b, off_b);
-        store_from_float(out, i, v);
+        float v = load_as_compute(a, off_a) * load_as_compute(b, off_b);
+        store_from_compute(out, i, v);
       }
     });
   }
@@ -313,6 +346,7 @@ public:
 
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override {
+    (void)resolve_compute_plan(accumulation_dtype(a.dtype()));
     parallel_for(0, M, [&](size_t start_m, size_t end_m) {
       for (int m = start_m; m < end_m; ++m) {
         for (int n = 0; n < N; ++n) {
@@ -320,9 +354,9 @@ public:
           for (int k = 0; k < K; ++k) {
             size_t a_idx = transA ? (size_t)k * M + m : (size_t)m * K + k;
             size_t b_idx = transB ? (size_t)n * K + k : (size_t)k * N + n;
-            acc += load_as_float(a, a_idx) * load_as_float(b, b_idx);
+            acc += load_as_compute(a, a_idx) * load_as_compute(b, b_idx);
           }
-          store_from_float(out, (size_t)m * N + n, acc);
+          store_from_compute(out, (size_t)m * N + n, acc);
         }
       }
     });
@@ -447,25 +481,26 @@ public:
 
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
+    (void)resolve_compute_plan(accumulation_dtype(in.dtype()));
     parallel_for(0, batch_size, [&](size_t s, size_t e) {
       for (size_t b = s; b < e; ++b) {
-        float max_val = load_as_float(in, b * num_classes);
+        float max_val = load_as_compute(in, b * num_classes);
         for (int i = 1; i < num_classes; ++i) {
-          float v = load_as_float(in, b * num_classes + i);
+          float v = load_as_compute(in, b * num_classes + i);
           if (v > max_val)
             max_val = v;
         }
 
         double sum_exp = 0.0;
         for (int i = 0; i < num_classes; ++i) {
-          sum_exp += std::exp((double)load_as_float(in, b * num_classes + i) -
+          sum_exp += std::exp((double)load_as_compute(in, b * num_classes + i) -
                               (double)max_val);
         }
         for (int i = 0; i < num_classes; ++i) {
-          float o = (float)(std::exp((double)load_as_float(in, b * num_classes + i) -
+          float o = (float)(std::exp((double)load_as_compute(in, b * num_classes + i) -
                                      (double)max_val) /
                             sum_exp);
-          store_from_float(out, b * num_classes + i, o);
+          store_from_compute(out, b * num_classes + i, o);
         }
       }
     });
@@ -496,12 +531,13 @@ public:
 
   void mse_loss(const Storage &pred, const Storage &target, Storage &out_loss,
                 size_t num_elements) override {
+    (void)resolve_compute_plan(accumulation_dtype(pred.dtype()));
     double sum = 0.0;
     for (size_t i = 0; i < num_elements; ++i) {
-      float diff = load_as_float(pred, i) - load_as_float(target, i);
+      float diff = load_as_compute(pred, i) - load_as_compute(target, i);
       sum += (double)diff * (double)diff;
     }
-    store_from_float(out_loss, 0, (float)(sum / (double)num_elements));
+    store_from_compute(out_loss, 0, (float)(sum / (double)num_elements));
   }
 
   void mse_loss_backward(const Storage &grad_out, const Storage &pred,
@@ -524,6 +560,7 @@ public:
   void cross_entropy(const Storage &logits, const Storage &targets,
                      Storage &out_loss, int batch_size, int num_classes,
                      int spatial) override {
+    (void)resolve_compute_plan(accumulation_dtype(logits.dtype()));
     double total_loss = 0.0;
 
     for (int b = 0; b < batch_size; ++b) {
@@ -531,7 +568,7 @@ public:
         float max_val = -1e30f;
         for (int c = 0; c < num_classes; ++c) {
           int idx = b * (num_classes * spatial) + c * spatial + s;
-          float lv = load_as_float(logits, idx);
+          float lv = load_as_compute(logits, idx);
           if (lv > max_val)
             max_val = lv;
         }
@@ -539,23 +576,23 @@ public:
         double sum_exp = 0.0;
         for (int c = 0; c < num_classes; ++c) {
           int idx = b * (num_classes * spatial) + c * spatial + s;
-          sum_exp += std::exp((double)load_as_float(logits, idx) -
+          sum_exp += std::exp((double)load_as_compute(logits, idx) -
                               (double)max_val);
         }
 
         for (int c = 0; c < num_classes; ++c) {
           int idx = b * (num_classes * spatial) + c * spatial + s;
-          float prob = (float)(std::exp((double)load_as_float(logits, idx) -
+          float prob = (float)(std::exp((double)load_as_compute(logits, idx) -
                                         (double)max_val) /
                                sum_exp);
-          float tgt = load_as_float(targets, idx);
+          float tgt = load_as_compute(targets, idx);
           if (tgt > 0.0f) {
             total_loss -= tgt * std::log(prob + 1e-9f);
           }
         }
       }
     }
-    store_from_float(out_loss, 0, (float)(total_loss / (double)batch_size));
+    store_from_compute(out_loss, 0, (float)(total_loss / (double)batch_size));
   }
 
   void cross_entropy_backward(const Storage &grad_out, const Storage &logits,
@@ -879,10 +916,11 @@ public:
   }
 
   void sum(const Storage &in, Storage &out, size_t num_elements) override {
+    (void)resolve_compute_plan(accumulation_dtype(in.dtype()));
     double total = 0.0;
     for (size_t i = 0; i < num_elements; ++i)
-      total += (double)load_as_float(in, i);
-    store_from_float(out, 0, (float)total);
+      total += (double)load_as_compute(in, i);
+    store_from_compute(out, 0, (float)total);
   }
 
   void broadcast_row(const Storage &src, Storage &dst, int rows,

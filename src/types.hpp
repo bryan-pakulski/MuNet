@@ -75,6 +75,38 @@ inline const char *dtype_name(DataType dt) {
   }
 }
 
+
+enum class KernelFallbackMode { Error, WarnAndUpcast };
+
+struct DTypeDispatchConfig {
+  bool has_compute_dtype = false;
+  DataType compute_dtype = DataType::Float32;
+  KernelFallbackMode fallback_mode = KernelFallbackMode::WarnAndUpcast;
+};
+
+class DTypeDispatch {
+public:
+  static DTypeDispatchConfig current() { return cfg_; }
+  static void set_current(const DTypeDispatchConfig &cfg) { cfg_ = cfg; }
+  static void reset() { cfg_ = {}; }
+
+private:
+  inline static thread_local DTypeDispatchConfig cfg_{};
+};
+
+class DTypeDispatchGuard {
+public:
+  explicit DTypeDispatchGuard(const DTypeDispatchConfig &cfg)
+      : prev_(DTypeDispatch::current()) {
+    DTypeDispatch::set_current(cfg);
+  }
+
+  ~DTypeDispatchGuard() { DTypeDispatch::set_current(prev_); }
+
+private:
+  DTypeDispatchConfig prev_;
+};
+
 using Shape = std::vector<int>;
 using Strides = std::vector<int>;
 

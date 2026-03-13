@@ -48,6 +48,12 @@ PYBIND11_MODULE(munet, m) {
       .value("Float64", DataType::Float64)
       .export_values();
 
+
+  py::enum_<KernelFallbackMode>(m, "KernelFallbackMode")
+      .value("Error", KernelFallbackMode::Error)
+      .value("WarnAndUpcast", KernelFallbackMode::WarnAndUpcast)
+      .export_values();
+
   py::class_<Device>(
       m, "Device",
       "Represents a compute device (e.g., CPU, CUDA) and its index.")

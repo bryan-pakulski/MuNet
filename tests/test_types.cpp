@@ -94,3 +94,39 @@ TEST(DataTypeTest, BackendDispatchUsesStorageDtypes) {
   auto *sp = static_cast<int8_t *>(s.data());
   EXPECT_EQ(sp[0], 5);
 }
+
+
+TEST(DataTypeTest, DTypeDispatchWarnAndUpcastFallbackWorks) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a({2}, cpu, DataType::Int8, false);
+  Tensor b({2}, cpu, DataType::Int8, false);
+  auto *ap = static_cast<int8_t *>(a.data());
+  auto *bp = static_cast<int8_t *>(b.data());
+  ap[0] = 2; ap[1] = 3;
+  bp[0] = 4; bp[1] = 5;
+
+  DTypeDispatchConfig cfg;
+  cfg.has_compute_dtype = true;
+  cfg.compute_dtype = DataType::Int8; // unsupported compute dtype
+  cfg.fallback_mode = KernelFallbackMode::WarnAndUpcast;
+  DTypeDispatchGuard guard(cfg);
+
+  Tensor c = a + b;
+  auto *cp = static_cast<int8_t *>(c.data());
+  EXPECT_EQ(cp[0], 6);
+  EXPECT_EQ(cp[1], 8);
+}
+
+TEST(DataTypeTest, DTypeDispatchErrorModeThrowsOnUnsupportedComputeDType) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a({2}, cpu, DataType::Int8, false);
+  Tensor b({2}, cpu, DataType::Int8, false);
+
+  DTypeDispatchConfig cfg;
+  cfg.has_compute_dtype = true;
+  cfg.compute_dtype = DataType::Int8; // unsupported compute dtype
+  cfg.fallback_mode = KernelFallbackMode::Error;
+  DTypeDispatchGuard guard(cfg);
+
+  EXPECT_THROW((void)(a + b), std::runtime_error);
+}
