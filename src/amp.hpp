@@ -311,8 +311,6 @@ public:
 
   void step() {
     step_count_++;
-    float bias_correction1 = 1.0f - std::pow(beta1_, step_count_);
-    float bias_correction2 = 1.0f - std::pow(beta2_, step_count_);
 
     for (size_t i = 0; i < params_.size(); ++i) {
       auto &p = params_[i];
@@ -320,20 +318,12 @@ public:
         continue;
 
       Tensor grad_fp32 = p.grad().to_dtype(DataType::Float32);
-      auto *g = static_cast<float *>(grad_fp32.data());
-      auto *w = static_cast<float *>(master_params_[i].data());
-      auto *m = static_cast<float *>(exp_avg_[i].data());
-      auto *v = static_cast<float *>(exp_avg_sq_[i].data());
-
-      for (size_t j = 0; j < p.size(); ++j) {
-        float gj = g[j];
-        m[j] = beta1_ * m[j] + (1.0f - beta1_) * gj;
-        v[j] = beta2_ * v[j] + (1.0f - beta2_) * (gj * gj);
-
-        float m_hat = m[j] / bias_correction1;
-        float v_hat = v[j] / bias_correction2;
-        w[j] -= lr_ * m_hat / (std::sqrt(v_hat) + eps_);
-      }
+      auto &backend = master_params_[i].impl_->backend();
+      backend.adam_step(*master_params_[i].impl_->storage,
+                        *grad_fp32.impl_->storage,
+                        *exp_avg_[i].impl_->storage,
+                        *exp_avg_sq_[i].impl_->storage,
+                        lr_, beta1_, beta2_, eps_, step_count_, p.size());
 
       Tensor model_copy = master_params_[i].to_dtype(p.dtype());
       p.impl_->backend().copy(model_copy.data(), p.data(), p.bytes(), p.device(),
