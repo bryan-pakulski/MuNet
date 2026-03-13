@@ -640,6 +640,38 @@ PYBIND11_MODULE(munet, m) {
   // ============================================================================
   auto amp_mod = m.def_submodule("amp", "Automatic mixed precision helpers");
 
+  py::enum_<amp::AutocastOp>(amp_mod, "AutocastOp")
+      .value("Add", amp::AutocastOp::Add)
+      .value("Sub", amp::AutocastOp::Sub)
+      .value("Mul", amp::AutocastOp::Mul)
+      .value("Div", amp::AutocastOp::Div)
+      .value("Matmul", amp::AutocastOp::Matmul)
+      .value("Relu", amp::AutocastOp::Relu)
+      .value("Sigmoid", amp::AutocastOp::Sigmoid)
+      .value("Softmax", amp::AutocastOp::Softmax)
+      .value("LogSoftmax", amp::AutocastOp::LogSoftmax)
+      .value("MSELoss", amp::AutocastOp::MSELoss)
+      .value("CrossEntropy", amp::AutocastOp::CrossEntropy)
+      .value("Conv2D", amp::AutocastOp::Conv2D)
+      .value("MaxPool2D", amp::AutocastOp::MaxPool2D)
+      .value("Upsample2D", amp::AutocastOp::Upsample2D)
+      .value("BatchNorm", amp::AutocastOp::BatchNorm)
+      .value("LayerNorm", amp::AutocastOp::LayerNorm)
+      .export_values();
+
+  py::class_<amp::AutocastPolicy>(amp_mod, "AutocastPolicy")
+      .def_static("should_autocast", &amp::AutocastPolicy::should_autocast,
+                  py::arg("op"))
+      .def_static("set_override", &amp::AutocastPolicy::set_override,
+                  py::arg("op"), py::arg("enabled"))
+      .def_static("clear_override", &amp::AutocastPolicy::clear_override,
+                  py::arg("op"))
+      .def_static("clear_all_overrides", &amp::AutocastPolicy::clear_all_overrides);
+
+  py::class_<amp::AutocastPolicyGuard>(amp_mod, "AutocastPolicyGuard")
+      .def(py::init<amp::AutocastOp, bool>(), py::arg("op"),
+           py::arg("enabled"));
+
   py::class_<amp::AutocastMode>(amp_mod, "AutocastMode")
       .def_static("is_enabled", &amp::AutocastMode::is_enabled)
       .def_static("set_enabled", &amp::AutocastMode::set_enabled,
