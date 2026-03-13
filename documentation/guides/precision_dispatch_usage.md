@@ -72,3 +72,48 @@ Notes:
 - For production-like correctness: run FP32 baseline first.
 - For lower-precision validation: run with `WarnAndUpcast`, compare outputs/metrics.
 - For readiness gating: switch to `Error` mode in tests to catch unsupported paths explicitly.
+
+
+## Python usage
+
+### Dispatch guard config
+
+```python
+import munet
+
+cfg = munet.DTypeDispatchConfig()
+cfg.has_compute_dtype = True
+cfg.compute_dtype = munet.DataType.Float16
+cfg.fallback_mode = munet.KernelFallbackMode.WarnAndUpcast
+
+with munet.precision_dispatch(cfg):
+    y = x + w
+```
+
+### Casting tensor storage dtype
+
+```python
+x_fp32 = munet.Tensor([4, 4], dtype=munet.DataType.Float32)
+x_i8 = x_fp32.to_dtype(munet.DataType.Int8)
+x_back = x_i8.to_dtype(munet.DataType.Float32)
+```
+
+### AMP helpers
+
+```python
+import munet
+
+scaler = munet.amp.GradScaler()
+with munet.amp.AutoCastGuard(munet.DataType.Float16):
+    loss = model(x).mse_loss(target)
+
+scaled_loss = scaler.scale(loss)
+scaled_loss.backward()
+stepped = scaler.step(optimizer, model.parameters())
+```
+
+## DType selection guidance
+
+- **FP32**: baseline for correctness/debugging.
+- **FP16/BF16**: preferred first mixed-precision trial dtypes.
+- **FP8/INT4/INT8**: currently best treated as experimental until backend-native kernels and packing/calibration flows are completed.

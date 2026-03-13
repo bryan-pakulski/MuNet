@@ -54,6 +54,25 @@ PYBIND11_MODULE(munet, m) {
       .value("WarnAndUpcast", KernelFallbackMode::WarnAndUpcast)
       .export_values();
 
+
+  py::class_<DTypeDispatchConfig>(m, "DTypeDispatchConfig")
+      .def(py::init<>())
+      .def_readwrite("has_compute_dtype", &DTypeDispatchConfig::has_compute_dtype)
+      .def_readwrite("compute_dtype", &DTypeDispatchConfig::compute_dtype)
+      .def_readwrite("fallback_mode", &DTypeDispatchConfig::fallback_mode);
+
+  py::class_<DTypeDispatch>(m, "DTypeDispatch")
+      .def_static("current", &DTypeDispatch::current)
+      .def_static("set_current", &DTypeDispatch::set_current, py::arg("config"))
+      .def_static("reset", &DTypeDispatch::reset);
+
+  py::class_<DTypeDispatchGuard>(m, "DTypeDispatchGuard")
+      .def(py::init<const DTypeDispatchConfig &>(), py::arg("config"))
+      .def("__enter__", [](DTypeDispatchGuard &self) -> DTypeDispatchGuard& { return self; }, py::return_value_policy::reference_internal)
+      .def("__exit__", [](DTypeDispatchGuard &self, py::object, py::object, py::object) {
+        (void)self;
+      });
+
   py::class_<Device>(
       m, "Device",
       "Represents a compute device (e.g., CPU, CUDA) and its index.")
@@ -135,6 +154,8 @@ PYBIND11_MODULE(munet, m) {
            })
       .def("to", &Tensor::to, py::arg("device"),
            "Moves the tensor to the specified device.")
+      .def("to_dtype", &Tensor::to_dtype, py::arg("dtype"),
+           "Casts tensor storage dtype while preserving shape/device.")
       .def(
           "copy_from_numpy",
           [](Tensor &t, py::array_t<float> input) {
@@ -702,6 +723,21 @@ PYBIND11_MODULE(munet, m) {
      def __exit__(self, exc_type, exc_val, exc_tb):
          import munet
          munet.GradMode.set_enabled(self.prev)
+
+ class precision_dispatch:
+     """Context-manager for dtype dispatch/fallback configuration."""
+     def __init__(self, config):
+         import munet
+         self._cfg = config
+         self._prev = None
+     def __enter__(self):
+         import munet
+         self._prev = munet.DTypeDispatch.current()
+         munet.DTypeDispatch.set_current(self._cfg)
+         return self
+     def __exit__(self, exc_type, exc_val, exc_tb):
+         import munet
+         munet.DTypeDispatch.set_current(self._prev)
 
  class enable_grad:
      """Context-manager that enables gradient calculation."""

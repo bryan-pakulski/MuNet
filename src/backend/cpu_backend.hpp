@@ -151,69 +151,11 @@ private:
   // Storage dtype may differ from compute dtype. For low precision and quantized
   // dtypes we currently dequantize/convert into the selected compute dtype.
   static double load_as_compute(const Storage &s, size_t idx) {
-    const char *base = static_cast<const char *>(s.data());
-    switch (s.dtype()) {
-    case DataType::Float32:
-      return static_cast<double>(static_cast<const float *>(s.data())[idx]);
-    case DataType::Float64:
-      return static_cast<const double *>(s.data())[idx];
-    case DataType::Int32:
-      return static_cast<double>(static_cast<const int32_t *>(s.data())[idx]);
-    case DataType::Int8:
-      return static_cast<double>(static_cast<const int8_t *>(s.data())[idx]);
-    case DataType::Int4: {
-      // Phase-1 rule: Int4 is stored unpacked in low nibble of each byte.
-      int8_t v = static_cast<int8_t>(base[idx] & 0x0F);
-      if (v >= 8)
-        v -= 16;
-      return static_cast<double>(v);
-    }
-    case DataType::Float16:
-    case DataType::BFloat16:
-    case DataType::Float8E4M3FN:
-    case DataType::Float8E5M2:
-      // Temporary fallback path until exact format kernels are implemented.
-      return static_cast<double>(static_cast<const int8_t *>(s.data())[idx]);
-    default:
-      return 0.0;
-    }
+    return load_scalar_as_double(s.data(), s.dtype(), idx);
   }
 
   static void store_from_compute(Storage &s, size_t idx, double v) {
-    char *base = static_cast<char *>(s.data());
-    switch (s.dtype()) {
-    case DataType::Float32:
-      static_cast<float *>(s.data())[idx] = static_cast<float>(v);
-      break;
-    case DataType::Float64:
-      static_cast<double *>(s.data())[idx] = v;
-      break;
-    case DataType::Int32:
-      static_cast<int32_t *>(s.data())[idx] =
-          static_cast<int32_t>(std::llround(v));
-      break;
-    case DataType::Int8: {
-      int iv = static_cast<int>(std::llround(v));
-      iv = std::max(-128, std::min(127, iv));
-      static_cast<int8_t *>(s.data())[idx] = static_cast<int8_t>(iv);
-      break;
-    }
-    case DataType::Int4: {
-      int iv = static_cast<int>(std::llround(v));
-      iv = std::max(-8, std::min(7, iv));
-      base[idx] = static_cast<char>(iv & 0x0F);
-      break;
-    }
-    case DataType::Float16:
-    case DataType::BFloat16:
-    case DataType::Float8E4M3FN:
-    case DataType::Float8E5M2:
-      static_cast<int8_t *>(s.data())[idx] =
-          static_cast<int8_t>(std::llround(v));
-      break;
-    default:
-      break;
-    }
+    store_scalar_from_double(s.data(), s.dtype(), idx, v);
   }
 
 public:

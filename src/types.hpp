@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <string>
 #include <vector>
 namespace munet {
@@ -106,6 +109,70 @@ public:
 private:
   DTypeDispatchConfig prev_;
 };
+
+
+inline double load_scalar_as_double(const void *data, DataType dt, size_t idx) {
+  const char *base = static_cast<const char *>(data);
+  switch (dt) {
+  case DataType::Float32:
+    return static_cast<double>(static_cast<const float *>(data)[idx]);
+  case DataType::Float64:
+    return static_cast<const double *>(data)[idx];
+  case DataType::Int32:
+    return static_cast<double>(static_cast<const int32_t *>(data)[idx]);
+  case DataType::Int8:
+    return static_cast<double>(static_cast<const int8_t *>(data)[idx]);
+  case DataType::Int4: {
+    int8_t v = static_cast<int8_t>(base[idx] & 0x0F);
+    if (v >= 8)
+      v -= 16;
+    return static_cast<double>(v);
+  }
+  case DataType::Float16:
+  case DataType::BFloat16:
+  case DataType::Float8E4M3FN:
+  case DataType::Float8E5M2:
+    return static_cast<double>(static_cast<const int8_t *>(data)[idx]);
+  default:
+    return 0.0;
+  }
+}
+
+inline void store_scalar_from_double(void *data, DataType dt, size_t idx,
+                                     double v) {
+  char *base = static_cast<char *>(data);
+  switch (dt) {
+  case DataType::Float32:
+    static_cast<float *>(data)[idx] = static_cast<float>(v);
+    break;
+  case DataType::Float64:
+    static_cast<double *>(data)[idx] = v;
+    break;
+  case DataType::Int32:
+    static_cast<int32_t *>(data)[idx] = static_cast<int32_t>(std::llround(v));
+    break;
+  case DataType::Int8: {
+    int iv = static_cast<int>(std::llround(v));
+    iv = std::max(-128, std::min(127, iv));
+    static_cast<int8_t *>(data)[idx] = static_cast<int8_t>(iv);
+    break;
+  }
+  case DataType::Int4: {
+    int iv = static_cast<int>(std::llround(v));
+    iv = std::max(-8, std::min(7, iv));
+    base[idx] = static_cast<char>(iv & 0x0F);
+    break;
+  }
+  case DataType::Float16:
+  case DataType::BFloat16:
+  case DataType::Float8E4M3FN:
+  case DataType::Float8E5M2:
+    static_cast<int8_t *>(data)[idx] = static_cast<int8_t>(std::llround(v));
+    break;
+  default:
+    break;
+  }
+}
 
 using Shape = std::vector<int>;
 using Strides = std::vector<int>;

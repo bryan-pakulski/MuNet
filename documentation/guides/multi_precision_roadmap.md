@@ -41,8 +41,8 @@ Legend:
 
 ### Phase 2 — Mixed precision training
 
-- [~] Add autocast context for forward op dispatch (C++ + Python) (initial autocast state + guard API added).
-- [~] Add gradient scaling (`static`, `dynamic`) and overflow detection (initial GradScaler API + finite-check/unscale flow added).
+- [~] Add autocast context for forward op dispatch (C++ + Python) (initial API + Python bindings added; full op-level autocast policy integration pending).
+- [~] Add gradient scaling (`static`, `dynamic`) and overflow detection (initial GradScaler API + Python bindings + tests added).
 - [] Keep optimizer state/master weights in FP32 while model tensors may be FP16/BF16.
 - [] Enforce FP32 accumulation for numerically sensitive ops (norms, reductions, losses).
 - [] Add training parity checks against FP32 baselines.

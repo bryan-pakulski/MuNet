@@ -82,6 +82,16 @@ struct ToBackward : public Node {
   }
 };
 
+
+struct ToDTypeBackward : public Node {
+  DataType src_dtype;
+  explicit ToDTypeBackward(DataType dt) : src_dtype(dt) {}
+  std::string name() const override { return "ToDTypeBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    return {grads[0].to_dtype(src_dtype)};
+  }
+};
+
 Tensor Tensor::to(Device dev) const {
   if (device() == dev)
     return *this;
@@ -144,6 +154,40 @@ Tensor Tensor::to(Device dev) const {
 
   if (impl_->grad_fn) {
     ops::record_trace(out, "To", {*this});
+  }
+
+  return out;
+}
+
+
+Tensor Tensor::to_dtype(DataType target_dtype) const {
+  if (dtype() == target_dtype)
+    return *this;
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor src_cpu = (device().type == DeviceType::CPU) ? *this : to(cpu);
+  Tensor out_cpu(shape(), cpu, target_dtype, requires_grad());
+
+  for (size_t i = 0; i < src_cpu.size(); ++i) {
+    double v = load_scalar_as_double(src_cpu.data(), src_cpu.dtype(), i);
+    store_scalar_from_double(out_cpu.data(), target_dtype, i, v);
+  }
+
+  Tensor out = (device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(device());
+
+  if (GradMode::is_enabled() && requires_grad()) {
+    if (impl_->grad_fn) {
+      auto fn = std::make_shared<ToDTypeBackward>(dtype());
+      ops::link_backward_edges(fn.get(), {*this});
+      out.set_requires_grad(true);
+      out.impl_->grad_fn = fn;
+    } else {
+      out.set_requires_grad(true);
+    }
+  }
+
+  if (impl_->grad_fn) {
+    ops::record_trace(out, "ToDType", {*this});
   }
 
   return out;

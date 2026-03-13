@@ -130,3 +130,45 @@ TEST(DataTypeTest, DTypeDispatchErrorModeThrowsOnUnsupportedComputeDType) {
 
   EXPECT_THROW((void)(a + b), std::runtime_error);
 }
+
+
+TEST(DataTypeTest, TensorToDTypeRoundTrip) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a({2}, cpu, DataType::Float32, false);
+  auto *ap = static_cast<float *>(a.data());
+  ap[0] = 3.0f;
+  ap[1] = -2.0f;
+
+  Tensor i8 = a.to_dtype(DataType::Int8);
+  EXPECT_EQ(i8.dtype(), DataType::Int8);
+  auto *i8p = static_cast<int8_t *>(i8.data());
+  EXPECT_EQ(i8p[0], 3);
+  EXPECT_EQ(i8p[1], -2);
+
+  Tensor back = i8.to_dtype(DataType::Float32);
+  auto *bp = static_cast<float *>(back.data());
+  EXPECT_FLOAT_EQ(bp[0], 3.0f);
+  EXPECT_FLOAT_EQ(bp[1], -2.0f);
+}
+
+TEST(DataTypeTest, DispatchGuardRestoresPreviousConfig) {
+  DTypeDispatch::reset();
+  auto before = DTypeDispatch::current();
+
+  DTypeDispatchConfig cfg;
+  cfg.has_compute_dtype = true;
+  cfg.compute_dtype = DataType::Float64;
+  cfg.fallback_mode = KernelFallbackMode::Error;
+  {
+    DTypeDispatchGuard guard(cfg);
+    auto active = DTypeDispatch::current();
+    EXPECT_TRUE(active.has_compute_dtype);
+    EXPECT_EQ(active.compute_dtype, DataType::Float64);
+    EXPECT_EQ(active.fallback_mode, KernelFallbackMode::Error);
+  }
+
+  auto after = DTypeDispatch::current();
+  EXPECT_EQ(after.has_compute_dtype, before.has_compute_dtype);
+  EXPECT_EQ(after.compute_dtype, before.compute_dtype);
+  EXPECT_EQ(after.fallback_mode, before.fallback_mode);
+}
