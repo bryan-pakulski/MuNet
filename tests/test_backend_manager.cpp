@@ -473,3 +473,38 @@ TEST(BackendManagerTest, ProfilingCapturesDispatchPathMarkers) {
   EXPECT_NE(snapshot.stats.find("dispatch.resolve.backend.Matmul"),
             snapshot.stats.end());
 }
+
+TEST(BackendManagerTest, ProfilingCapturesDirectionalTransferMarkers) {
+  ScopedProfileOverride profile(true);
+  Profiler::get().reset();
+
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device cpu{DeviceType::CPU, 0};
+  const Device unknown0{DeviceType::UNKNOWN, 0};
+  const Device unknown1{DeviceType::UNKNOWN, 1};
+
+  Tensor cpu_tensor({1}, cpu, DataType::Float32);
+  cpu_tensor.fill_(1.0f);
+
+  Tensor to_unknown = cpu_tensor.to(unknown0);
+  Tensor to_unknown_other = to_unknown.to(unknown1);
+  Tensor back_to_cpu = to_unknown.to(cpu);
+  Tensor half = cpu_tensor.to(DataType::Float16);
+  (void)to_unknown_other;
+  (void)back_to_cpu;
+  (void)half;
+
+  Tensor cpu_copy_dst({1}, cpu, DataType::Float32);
+  BackendManager::get(cpu)->copy(cpu_tensor.data(), cpu_copy_dst.data(),
+                                 cpu_tensor.bytes(), cpu, cpu);
+
+  const auto snapshot = Profiler::get().snapshot();
+  EXPECT_NE(snapshot.stats.find("transfer.h2d"), snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("transfer.d2d"), snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("transfer.d2h"), snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("transfer.cpu_copy"), snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("transfer.dtype_convert"), snapshot.stats.end());
+}

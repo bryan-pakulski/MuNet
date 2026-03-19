@@ -31,7 +31,7 @@ class DebugBackend : public Backend,
 
   bool should_collect_gpu_time() const { return base_->reports_gpu_kernel_time(); }
 
-  void check(const char *name, double cpu_us,
+  void check(const std::string &name, double cpu_us,
              const Storage *out_storage = nullptr) {
     try {
       double gpu_us = 0.0;
@@ -157,7 +157,7 @@ public:
     MUNET_DEBUG << "copy | " << bytes << " bytes" << std::endl;
     Timer t;
     base_->copy(src, dst, bytes, src_dev, dst_dev);
-    check("copy", t.elapsed_us());
+    check(transfer_profile_name(src_dev, dst_dev), t.elapsed_us());
   }
   void synchronize() override { base_->synchronize(); }
   void all_reduce(Storage &buffer, size_t num_elements) override {

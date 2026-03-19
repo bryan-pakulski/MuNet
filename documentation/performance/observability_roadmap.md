@@ -59,7 +59,11 @@ Status legend:
 - Compare a slow parent span like `module.encoder.block_3.forward` against its
   children (`.attn.forward`, `.mlp.forward`) to isolate the hotspot.
 
-## [ ] 2. Transfer-direction markers
+## [x] 2. Transfer-direction markers
+
+> Status: **Implemented via `transfer.h2d`, `transfer.d2h`,
+> `transfer.d2d`, `transfer.cpu_copy`, and `transfer.dtype_convert`
+> profiler rows.**
 
 ### Objectives
 

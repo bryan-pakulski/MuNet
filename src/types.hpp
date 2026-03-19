@@ -110,6 +110,19 @@ struct Device {
   }
 };
 
+inline const char *transfer_profile_name(Device src, Device dst) {
+  if (src.type == DeviceType::CPU && dst.type == DeviceType::CPU) {
+    return "transfer.cpu_copy";
+  }
+  if (src.type == DeviceType::CPU && dst.type != DeviceType::CPU) {
+    return "transfer.h2d";
+  }
+  if (src.type != DeviceType::CPU && dst.type == DeviceType::CPU) {
+    return "transfer.d2h";
+  }
+  return "transfer.d2d";
+}
+
 struct TensorOptions {
   Device device{DeviceType::CPU, 0};
   DataType dtype{DataType::Float32};

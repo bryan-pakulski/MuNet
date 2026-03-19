@@ -12,7 +12,12 @@
 ## Reading Profiler Output
 
 - Focus first on `%Total` to find top contributors.
-- Check transfer ops (`to(...)`, `copy`) for data movement bottlenecks.
+- Check `transfer.*` rows for data movement bottlenecks:
+  - `transfer.h2d`
+  - `transfer.d2h`
+  - `transfer.d2d`
+  - `transfer.cpu_copy`
+  - `transfer.dtype_convert`
 - Compare CPU vs GPU timings to identify launch/queue overhead.
 - CPU backends now report `AvgGPU=0` consistently; GPU backends force a timing
   synchronization while profiling so kernel timings are actually populated.
