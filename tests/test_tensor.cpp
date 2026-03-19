@@ -6,6 +6,58 @@
 
 using namespace munet;
 
+
+TEST(TensorDTypeTest, DTypeUtilitiesProvidePromotionAndAccumulationRules) {
+  EXPECT_TRUE(is_floating(DataType::Float32));
+  EXPECT_TRUE(is_low_precision(DataType::Float16));
+  EXPECT_TRUE(is_integral(DataType::Int32));
+  EXPECT_EQ(dtype_name(DataType::Float16), "float16");
+  EXPECT_EQ(promote_types(DataType::Int32, DataType::Float16),
+            DataType::Float16);
+  EXPECT_EQ(accumulation_type(AccumulationOp::Matmul, DataType::Float16),
+            DataType::Float32);
+}
+
+TEST(TensorDTypeTest, TensorOptionsAndDTypeConversionRoundTrip) {
+  TensorOptions options;
+  options.device = Device{DeviceType::CPU, 0};
+  options.dtype = DataType::Float16;
+  options.requires_grad = true;
+
+  Tensor configured({2}, options);
+  EXPECT_EQ(configured.dtype(), DataType::Float16);
+  EXPECT_TRUE(configured.requires_grad());
+
+  Tensor base({2}, Device{DeviceType::CPU, 0}, DataType::Float32, true);
+  float *base_ptr = static_cast<float *>(base.data());
+  base_ptr[0] = 1.5f;
+  base_ptr[1] = -2.25f;
+
+  Tensor half = base.to(DataType::Float16);
+  EXPECT_EQ(half.dtype(), DataType::Float16);
+  EXPECT_EQ(half.options().dtype, DataType::Float16);
+
+  Tensor roundtrip = half.to(DataType::Float32);
+  const float *roundtrip_ptr = static_cast<const float *>(roundtrip.data());
+  EXPECT_NEAR(roundtrip_ptr[0], 1.5f, 1e-3f);
+  EXPECT_NEAR(roundtrip_ptr[1], -2.25f, 1e-3f);
+}
+
+TEST(TensorDTypeTest, ItemValueSupportsInt32AndFloat16) {
+  Tensor ints({1}, Device{DeviceType::CPU, 0}, DataType::Int32);
+  static_cast<int32_t *>(ints.data())[0] = 7;
+  ScalarValue int_value = ints.item_value();
+  EXPECT_EQ(int_value.dtype, DataType::Int32);
+  EXPECT_EQ(int_value.as_int32(), 7);
+
+  Tensor base({1}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  static_cast<float *>(base.data())[0] = 1.25f;
+  Tensor half = base.to(DataType::Float16);
+  ScalarValue half_value = half.item_value();
+  EXPECT_EQ(half_value.dtype, DataType::Float16);
+  EXPECT_NEAR(half_value.as_float(), 1.25f, 1e-3f);
+}
+
 class TensorTest : public ::testing::TestWithParam<Device> {
 protected:
   Device dev() { return GetParam(); }
@@ -24,6 +76,23 @@ TEST_P(TensorTest, CreationAndMetadata) {
   EXPECT_EQ(t.size(), 6);
   EXPECT_EQ(t.shape()[0], 2);
   EXPECT_EQ(t.device().type, dev().type);
+}
+
+TEST_P(TensorTest, DeviceMovePreservesDTypeAndRequiresGrad) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor base({1}, cpu, DataType::Float32, true);
+  static_cast<float *>(base.data())[0] = 2.5f;
+
+  Tensor half = base.to(DataType::Float16);
+  Tensor moved = half.to(dev());
+
+  EXPECT_EQ(moved.dtype(), DataType::Float16);
+  EXPECT_TRUE(moved.requires_grad());
+  EXPECT_EQ(moved.device(), dev());
+
+  ScalarValue roundtrip = moved.to(cpu).item_value();
+  EXPECT_EQ(roundtrip.dtype, DataType::Float16);
+  EXPECT_NEAR(roundtrip.as_float(), 2.5f, 1e-3f);
 }
 
 TEST_P(TensorTest, Addition) {

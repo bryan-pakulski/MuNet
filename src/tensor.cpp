@@ -1,17 +1,91 @@
 #include "tensor.hpp"
-#include "autograd/autograd.hpp"
+#include "autograd/engine.hpp"
 #include "ops.hpp"
-#include "util.hpp"
+#include "core/util.hpp"
 
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
 namespace munet {
+namespace {
 
+void write_scalar_to_buffer(void *dst, DataType dtype, double value) {
+  switch (dtype) {
+  case DataType::Float32: {
+    float converted = static_cast<float>(value);
+    std::memcpy(dst, &converted, sizeof(converted));
+    return;
+  }
+  case DataType::Float16: {
+    uint16_t converted = float_to_half_bits(static_cast<float>(value));
+    std::memcpy(dst, &converted, sizeof(converted));
+    return;
+  }
+  case DataType::Int32: {
+    int32_t converted = static_cast<int32_t>(value);
+    std::memcpy(dst, &converted, sizeof(converted));
+    return;
+  }
+  default:
+    throw std::runtime_error("Unsupported scalar dtype write");
+  }
+}
+
+ScalarValue read_scalar_from_buffer(const void *src, DataType dtype) {
+  ScalarValue out;
+  out.dtype = dtype;
+  switch (dtype) {
+  case DataType::Float32: {
+    float value = 0.0f;
+    std::memcpy(&value, src, sizeof(value));
+    out.value = value;
+    return out;
+  }
+  case DataType::Float16: {
+    uint16_t value = 0;
+    std::memcpy(&value, src, sizeof(value));
+    out.value = half_bits_to_float(value);
+    return out;
+  }
+  case DataType::Int32: {
+    int32_t value = 0;
+    std::memcpy(&value, src, sizeof(value));
+    out.value = static_cast<double>(value);
+    return out;
+  }
+  default:
+    throw std::runtime_error("Unsupported scalar dtype read");
+  }
+}
+
+void convert_buffer_dtype(const void *src, DataType src_dtype, void *dst,
+                          DataType dst_dtype, size_t count) {
+  const char *src_bytes = static_cast<const char *>(src);
+  char *dst_bytes = static_cast<char *>(dst);
+  const size_t src_size = dtype_size(src_dtype);
+  const size_t dst_size = dtype_size(dst_dtype);
+
+  for (size_t i = 0; i < count; ++i) {
+    ScalarValue scalar =
+        read_scalar_from_buffer(src_bytes + i * src_size, src_dtype);
+    write_scalar_to_buffer(dst_bytes + i * dst_size, dst_dtype, scalar.value);
+  }
+}
+
+Tensor convert_tensor_dtype_cpu(const Tensor &input, DataType target_dtype) {
+  Tensor out(input.shape(), Device{DeviceType::CPU, 0}, target_dtype,
+             input.requires_grad());
+  convert_buffer_dtype(input.data(), input.dtype(), out.data(), target_dtype,
+                       input.size());
+  return out;
+}
+
+} // namespace
 
 // --- Autograd ---
 void Tensor::backward(const Tensor &grad) {
@@ -26,24 +100,22 @@ void Tensor::backward() {
 
   if (size() != 1)
     throw std::runtime_error("backward() requires scalar tensor");
+  if (!is_floating(dtype())) {
+    throw std::runtime_error("backward() requires a floating-point tensor");
+  }
 
   Tensor root_grad(shape(), device(), dtype());
-
-  float one = 1.0f;
-
-  impl_->backend().copy(&one, root_grad.data(), sizeof(float),
-                        Device{DeviceType::CPU, 0}, device());
+  Tensor root_cpu(shape(), Device{DeviceType::CPU, 0}, dtype());
+  write_scalar_to_buffer(root_cpu.data(), dtype(), 1.0);
+  impl_->backend().copy(root_cpu.data(), root_grad.data(), root_grad.bytes(),
+                        root_cpu.device(), device());
 
   Engine::execute(impl_->grad_fn.get(), root_grad);
 }
 
 Tensor Tensor::detach() const {
-  // Create a new tensor with the same shape, device, and dtype, but NO grad
   Tensor out(shape(), device(), dtype(), false);
-
-  // Share the underlying storage (no physical memory copy needed yet)
   out.impl_->storage = impl_->storage;
-
   return out;
 }
 
@@ -75,10 +147,19 @@ Tensor Tensor::upsample2d(int scale_factor) const {
 // --- Utilities ---
 struct ToBackward : public Node {
   Device src_device;
-  ToBackward(Device dev) : src_device(dev) {}
+  explicit ToBackward(Device dev) : src_device(dev) {}
   std::string name() const override { return "ToBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
     return {grads[0].to(src_device)};
+  }
+};
+
+struct ToDTypeBackward : public Node {
+  DataType src_dtype;
+  explicit ToDTypeBackward(DataType dtype) : src_dtype(dtype) {}
+  std::string name() const override { return "ToDTypeBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    return {grads[0].to(src_dtype)};
   }
 };
 
@@ -86,7 +167,6 @@ Tensor Tensor::to(Device dev) const {
   if (device() == dev)
     return *this;
 
-  // 1. Setup Profiling only if enabled (enqueue-time, non-blocking)
   bool profiling = is_profile_enabled();
   std::unique_ptr<Timer> timer;
 
@@ -97,7 +177,6 @@ Tensor Tensor::to(Device dev) const {
     timer = std::make_unique<Timer>();
   }
 
-  // 2. Perform the actual transfer
   if (device().type == DeviceType::CUDA || dev.type == DeviceType::CUDA) {
 #ifdef MUNET_USE_CUDA
     Device cuda_dev = (device().type == DeviceType::CUDA) ? device() : dev;
@@ -119,18 +198,13 @@ Tensor Tensor::to(Device dev) const {
     impl_->backend().copy(data(), out.data(), byte_count, device(), dev);
   }
 
-  // 3. Finalize Profiling (avoid forced sync in profile-only mode)
   if (profiling) {
     double us = timer->elapsed_us();
     std::string name = "to(" + dev.to_string() + ")";
     Profiler::get().record(name, us, 0.0, byte_count, to_string(shape()));
   }
 
-  // 4. Autograd and Tracing
   if (GradMode::is_enabled() && requires_grad()) {
-    // Only link ToBackward if the current tensor is already part of a graph
-    // (non-leaf). If it's a leaf (no grad_fn), moving it to a new device
-    // creates a new leaf on that device.
     if (impl_->grad_fn) {
       auto fn = std::make_shared<ToBackward>(device());
       ops::link_backward_edges(fn.get(), {*this});
@@ -138,12 +212,58 @@ Tensor Tensor::to(Device dev) const {
       out.impl_->grad_fn = fn;
     } else {
       out.set_requires_grad(true);
-      // out.impl_->grad_fn remains nullptr, making 'out' a proper leaf tensor.
     }
   }
 
   if (impl_->grad_fn) {
     ops::record_trace(out, "To", {*this});
+  }
+
+  return out;
+}
+
+Tensor Tensor::to(DataType target_dtype) const {
+  if (dtype() == target_dtype)
+    return *this;
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor cpu_src = (device().type == DeviceType::CPU) ? *this : to(cpu);
+  Tensor cpu_out = convert_tensor_dtype_cpu(cpu_src, target_dtype);
+  Tensor out = (device().type == DeviceType::CPU) ? cpu_out : cpu_out.to(device());
+
+  if (GradMode::is_enabled() && requires_grad()) {
+    if (impl_->grad_fn) {
+      auto fn = std::make_shared<ToDTypeBackward>(dtype());
+      ops::link_backward_edges(fn.get(), {*this});
+      out.set_requires_grad(true);
+      out.impl_->grad_fn = fn;
+    } else {
+      out.set_requires_grad(true);
+    }
+  }
+
+  if (impl_->grad_fn) {
+    ops::record_trace(out, "ToDType", {*this},
+                      {{"dtype", {static_cast<int>(target_dtype)}}});
+  }
+
+  return out;
+}
+
+Tensor Tensor::to(const TensorOptions &target_options) const {
+  Tensor out = *this;
+  if (dtype() != target_options.dtype) {
+    out = out.to(target_options.dtype);
+  }
+  if (out.device() != target_options.device) {
+    out = out.to(target_options.device);
+  }
+
+  if (!target_options.requires_grad) {
+    out = out.detach();
+    out.set_requires_grad(false);
+  } else {
+    out.set_requires_grad(true);
   }
 
   return out;
@@ -174,20 +294,21 @@ Tensor Tensor::masked_fill(const Tensor &mask, float value) const {
   return ops::masked_fill(*this, mask, value);
 }
 
-float Tensor::item() const {
+ScalarValue Tensor::item_value() const {
   if (size() != 1) {
     throw std::runtime_error(
-        "item() can only be called on tensors with 1 element");
+        "item_value() can only be called on tensors with 1 element");
   }
 
   if (device().type == DeviceType::CPU) {
     impl_->backend().synchronize();
-    return static_cast<const float *>(data())[0];
-  } else {
-    // Recursively call item() on a CPU copy
-    return to(Device{DeviceType::CPU, 0}).item();
+    return read_scalar_from_buffer(data(), dtype());
   }
+
+  return to(Device{DeviceType::CPU, 0}).item_value();
 }
+
+float Tensor::item() const { return item_value().as_float(); }
 
 void Tensor::step(float lr) {
   if (!impl_ || !impl_->grad) {
@@ -220,12 +341,14 @@ Tensor Tensor::cross_entropy(const Tensor &target) const {
 void Tensor::uniform_(float low, float high) {
   if (size() == 0)
     return;
-  // Delegate directly to backend. No more CPU roundtrip.
+  if (!is_floating(dtype())) {
+    throw std::runtime_error("uniform_ only supports floating-point tensors");
+  }
   impl_->backend().fill_uniform(*impl_->storage, low, high, size());
 }
 
 Tensor Tensor::transpose(int dim0, int dim1) const {
-  Tensor out = *this; // Shallow copy of TensorImpl
+  Tensor out = *this;
   out.impl_ = std::make_shared<TensorImpl>(*impl_);
   std::swap(out.impl_->shape[dim0], out.impl_->shape[dim1]);
   std::swap(out.impl_->strides[dim0], out.impl_->strides[dim1]);
@@ -268,7 +391,7 @@ Tensor Tensor::contiguous() const {
     return cpu_contig.to(device());
   }
 
-  Tensor out(shape(), device(), dtype(), requires_grad());
+  Tensor out(shape(), options());
 
   const char *src = static_cast<const char *>(data());
   char *dst = static_cast<char *>(out.data());

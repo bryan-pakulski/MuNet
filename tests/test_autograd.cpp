@@ -98,3 +98,18 @@ TEST_P(AutogradTest, SimpleAutograd) {
   for (size_t i = 0; i < 4; ++i)
     EXPECT_FLOAT_EQ(g_ptr[i], 1.0f);
 }
+
+TEST_P(AutogradTest, GradientAccumulatesAcrossMultipleGraphPaths) {
+  Tensor x({1}, dev(), DataType::Float32, true);
+  Tensor val({1}, {DeviceType::CPU, 0});
+  static_cast<float *>(val.data())[0] = 3.0f;
+  x.impl_->backend().copy(val.data(), x.data(), x.bytes(), val.device(), dev());
+
+  Tensor y = x + x;
+  Tensor loss = y.sum();
+  loss.backward();
+
+  ASSERT_TRUE(x.has_grad());
+  Tensor grad = x.grad().to({DeviceType::CPU, 0});
+  EXPECT_FLOAT_EQ(static_cast<float *>(grad.data())[0], 2.0f);
+}

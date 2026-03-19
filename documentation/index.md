@@ -23,5 +23,8 @@ Welcome to MuNet docs. This documentation is structured for interactive/searchab
 
 - [Runtime Architecture](architecture/runtime.md)
 - [Backends](architecture/backends.md)
+- [Architecture Decision Log](architecture/decision_log.md)
+- [Dtype-Sensitive Inventory](architecture/dtype_sensitive_inventory.md)
+- [Refactor Roadmap](architecture/refactor_roadmap.md)
 - [Profiling](performance/profiling.md)
 - [Contributing: Add a New Op](contributing/add_new_op.md)

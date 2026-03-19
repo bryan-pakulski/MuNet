@@ -32,6 +32,22 @@ TEST(NNTest, ModuleParameters) {
   EXPECT_TRUE(named_modules.count("2"));
 }
 
+TEST(NNTest, ModuleToMovesParametersAndBuffers) {
+  auto bn = std::make_shared<nn::BatchNorm2d>(3);
+  Device target = test::get_available_devices().front();
+
+  bn->to(target);
+
+  EXPECT_EQ(bn->weight.device(), target);
+  EXPECT_EQ(bn->bias.device(), target);
+  EXPECT_EQ(bn->running_mean.device(), target);
+  EXPECT_EQ(bn->running_var.device(), target);
+  EXPECT_TRUE(bn->weight.requires_grad());
+  EXPECT_TRUE(bn->bias.requires_grad());
+  EXPECT_FALSE(bn->running_mean.requires_grad());
+  EXPECT_FALSE(bn->running_var.requires_grad());
+}
+
 TEST(NNTest, BatchNormTrainEval) {
   Device cpu{DeviceType::CPU, 0};
   auto bn = std::make_shared<nn::BatchNorm2d>(1);

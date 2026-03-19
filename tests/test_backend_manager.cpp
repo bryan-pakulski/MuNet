@@ -38,3 +38,26 @@ TEST(BackendManagerTest, ForwardsDeviceIndexToFactoryAndCachesPerIndex) {
   EXPECT_EQ(requested_indices[0], 0);
   EXPECT_EQ(requested_indices[1], 1);
 }
+
+TEST(BackendManagerTest, ReRegisteringBackendTypeClearsCachedInstances) {
+  int generation = 0;
+
+  BackendManager::register_backend(DeviceType::UNKNOWN, [&](Device) {
+    ++generation;
+    return std::make_shared<CPUBackend>();
+  });
+
+  auto first = BackendManager::get(Device{DeviceType::UNKNOWN, 7});
+  EXPECT_NE(first, nullptr);
+  EXPECT_EQ(generation, 1);
+
+  BackendManager::register_backend(DeviceType::UNKNOWN, [&](Device) {
+    ++generation;
+    return std::make_shared<CPUBackend>();
+  });
+
+  auto second = BackendManager::get(Device{DeviceType::UNKNOWN, 7});
+  EXPECT_NE(second, nullptr);
+  EXPECT_NE(first, second);
+  EXPECT_EQ(generation, 2);
+}

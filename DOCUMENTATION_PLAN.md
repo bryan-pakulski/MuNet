@@ -36,6 +36,9 @@
 - [x] `documentation/index.md`
 - [x] `documentation/architecture/runtime.md`
 - [x] `documentation/architecture/backends.md`
+- [x] `documentation/architecture/decision_log.md`
+- [x] `documentation/architecture/dtype_sensitive_inventory.md`
+- [x] `documentation/architecture/refactor_roadmap.md`
 - [x] `documentation/performance/profiling.md`
 - [x] `documentation/contributing/add_new_op.md`
 - [x] `documentation/getting-started/*`

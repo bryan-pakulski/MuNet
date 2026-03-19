@@ -8,7 +8,7 @@
 
 namespace munet {
 
-struct Node; // Autograd Backward Node
+struct Node;
 class Tensor;
 
 struct ForwardNode {
@@ -33,9 +33,10 @@ struct TensorImpl {
   std::shared_ptr<ForwardNode> trace_node = nullptr;
 
   TensorImpl(Shape s, Device d, DataType dt, bool req_grad)
-      : shape(s), strides(default_strides(s)), requires_grad(req_grad) {
-    size_t bytes = numel(s) * dtype_size(dt);
-    storage = std::make_shared<Storage>(bytes, d, dt, s);
+      : shape(std::move(s)), strides(default_strides(shape)),
+        requires_grad(req_grad) {
+    size_t bytes = numel(shape) * dtype_size(dt);
+    storage = std::make_shared<Storage>(bytes, d, dt, shape);
   }
 
   bool is_contiguous() const {
@@ -55,10 +56,17 @@ class Tensor {
 public:
   Tensor() = default;
 
-  Tensor(Shape shape, Device dev = Device{DeviceType::CPU, 0},
-         DataType dtype = DataType::Float32, bool requires_grad = false) {
-    impl_ = std::make_shared<TensorImpl>(shape, dev, dtype, requires_grad);
+  Tensor(Shape shape, const TensorOptions &options) {
+    impl_ = std::make_shared<TensorImpl>(std::move(shape), options.device,
+                                         options.dtype,
+                                         options.requires_grad);
   }
+
+  Tensor(Shape shape, Device dev = Device{DeviceType::CPU, 0},
+         DataType dtype = DataType::Float32, bool requires_grad = false)
+      : Tensor(std::move(shape),
+               TensorOptions{}.with_device(dev).with_dtype(dtype).with_requires_grad(
+                   requires_grad)) {}
 
   const Shape &shape() const { return impl_->shape; }
   const Strides &strides() const { return impl_->strides; }
@@ -66,6 +74,10 @@ public:
   bool is_contiguous() const { return impl_->is_contiguous(); }
   Device device() const { return impl_->storage->device(); }
   DataType dtype() const { return impl_->storage->dtype(); }
+  TensorOptions options() const {
+    return TensorOptions{}.with_device(device()).with_dtype(dtype()).with_requires_grad(
+        requires_grad());
+  }
   void *data() { return impl_->storage->data(); }
   const void *data() const { return impl_->storage->data(); }
   size_t size() const { return numel(impl_->shape); }
@@ -100,12 +112,14 @@ public:
   Tensor detach() const;
 
   Tensor clone() const {
-    Tensor out(shape(), device(), dtype(), requires_grad());
+    Tensor out(shape(), options());
     impl_->backend().copy(data(), out.data(), bytes(), device(), out.device());
     return out;
   }
 
   Tensor to(Device dev) const;
+  Tensor to(DataType dtype) const;
+  Tensor to(const TensorOptions &options) const;
 
   static Tensor cat(const std::vector<Tensor> &inputs, int dim = 1);
   Tensor operator+(const Tensor &other) const;
@@ -120,6 +134,7 @@ public:
   Tensor sum() const;
   Tensor reshape(Shape new_shape) const;
   Tensor masked_fill(const Tensor &mask, float value) const;
+  ScalarValue item_value() const;
   float item() const;
 
   Tensor conv2d(const Tensor &weight, const Tensor &bias, int stride = 1,
@@ -133,13 +148,10 @@ public:
   Tensor layer_norm(const Tensor &weight, const Tensor &bias,
                     float eps = 1e-5f) const;
 
-  // Losses
   Tensor mse_loss(const Tensor &target) const;
   Tensor cross_entropy(const Tensor &target) const;
 
-  // In-place initialization
   void uniform_(float low = -1.0f, float high = 1.0f);
-  // Optimizer Step
   void step(float lr);
 
   std::shared_ptr<TensorImpl> impl_ = nullptr;
