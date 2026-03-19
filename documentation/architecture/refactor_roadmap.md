@@ -17,7 +17,7 @@ The recent header split made the codebase easier to navigate, but the next stage
 - [x] Phase 2 - Op dispatch and op file decomposition
 - [x] Phase 3 - Backend capability split and registry cleanup
 - [x] Phase 4 - Autograd hardening
-- [ ] Phase 5 - Module, optimizer, and training ergonomics
+- [~] Phase 5 - Module, optimizer, and training ergonomics
 - [ ] Phase 6 - Inference and production hardening
 
 ## Primary goals
@@ -278,25 +278,34 @@ Phase 1 follow-up items are complete. Any finer-grained per-op/per-shape dispatc
 
 ### Action points
 
-- Add module construction/configuration patterns that can carry device and dtype defaults.
-- Ensure parameter and buffer initialization no longer hard-code `Float32` unless explicitly requested.
-- Introduce parameter groups in optimizers.
-- Add optimizer state policies for:
+- [x] Add module construction/configuration patterns that can carry device and dtype defaults.
+- [x] Ensure parameter and buffer initialization no longer hard-code `Float32` unless explicitly requested.
+- [x] Introduce parameter groups in optimizers.
+- [x] Add optimizer state policies for:
   - model dtype
   - master weight dtype
   - momentum/state tensor dtype
-- Design `GradScaler` / loss scaling interfaces.
-- Add autocast guard APIs with a clear policy for allowed implicit conversions.
-- Document recommended training flows for:
+- [x] Design `GradScaler` / loss scaling interfaces.
+- [x] Add autocast guard APIs with a clear policy for allowed implicit conversions.
+- [x] Document recommended training flows for:
   - fp32 baseline
   - mixed precision training
   - pure fp16 inference where safe
 
+### Phase 5 implementation update
+
+- `core::Module` now stores explicit default `TensorOptions`, so module construction and migration follow one predictable device/dtype source of truth.
+- Buffer registration now carries dtype intent for migration, which keeps accumulation-sensitive buffers such as BatchNorm running statistics in an accumulation-friendly dtype instead of blindly following parameter casts.
+- `optim::Optimizer` now supports parameter groups with per-group learning rates and `OptimizerStatePolicy` controls for logical model dtype, optional master weights, and optimizer-state tensor dtype.
+- `optim::Adam` exposes typed-state and optional master-weight behavior without forcing AMP concerns into module definitions.
+- `amp::GradScaler` and `amp::AutocastGuard` provide additive training primitives with an explicit conversion-policy surface.
+- Recommended fp32, mixed-precision, and pure-fp16-safe inference flows are now documented in `documentation/guides/training_precision.md`.
+
 ### Validation checklist
 
-- Modules can be created and migrated with predictable device/dtype behavior.
-- Optimizer state behavior is explicit and tested.
-- Mixed precision training primitives exist without leaking implementation details everywhere.
+- [x] Modules can be created and migrated with predictable device/dtype behavior.
+- [x] Optimizer state behavior is explicit and tested.
+- [x] Mixed precision training primitives exist without leaking implementation details everywhere.
 
 ### Exit criteria
 

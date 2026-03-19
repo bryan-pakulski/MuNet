@@ -9,7 +9,7 @@ class MultiHeadAttention : public Module {
 public:
   MultiHeadAttention(int embed_dim, int num_heads, bool causal = true,
                      TensorOptions options = TensorOptions{})
-      : embed_dim_(embed_dim), num_heads_(num_heads), causal_(causal) {
+      : Module(options), embed_dim_(embed_dim), num_heads_(num_heads), causal_(causal) {
     if (embed_dim_ <= 0 || num_heads_ <= 0 || (embed_dim_ % num_heads_) != 0)
       throw std::runtime_error(
           "MultiHeadAttention expects embed_dim > 0, num_heads > 0 and "

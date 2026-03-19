@@ -7,7 +7,8 @@ namespace nn {
 
 class Sequential : public Module {
 public:
-  Sequential() = default;
+  explicit Sequential(TensorOptions options = TensorOptions{})
+      : Module(options) {}
 
   void add(std::shared_ptr<Module> m) {
     register_module(std::to_string(modules_.size()), m);
