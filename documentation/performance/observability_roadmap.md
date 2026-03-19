@@ -4,7 +4,13 @@ This page turns the next round of profiling/debugging work into a concrete
 execution plan. Each task below is written so it can be picked up as an
 implementation milestone and reviewed against clear success criteria.
 
-## 1. Per-module spans in forward passes
+Status legend:
+
+- `[ ]` not started
+- `[~]` in progress
+- `[x]` completed
+
+## [x] 1. Per-module spans in forward passes
 
 > Status: **Implemented for registered `Module::forward(...)` paths via
 > `module.<path>.forward` profiler rows.**
@@ -53,7 +59,7 @@ implementation milestone and reviewed against clear success criteria.
 - Compare a slow parent span like `module.encoder.block_3.forward` against its
   children (`.attn.forward`, `.mlp.forward`) to isolate the hotspot.
 
-## 2. Transfer-direction markers
+## [ ] 2. Transfer-direction markers
 
 ### Objectives
 
@@ -102,7 +108,7 @@ implementation milestone and reviewed against clear success criteria.
 - Heavy `transfer.dtype_convert` suggests unnecessary precision churn rather
   than pure transport cost.
 
-## 3. Fallback reason accounting
+## [~] 3. Fallback reason accounting
 
 ### Objectives
 
@@ -146,7 +152,7 @@ implementation milestone and reviewed against clear success criteria.
 - If shape reasons dominate, inspect broadcasting/layout assumptions.
 - If feature reasons dominate, prioritize backend feature implementation work.
 
-## 4. Allocator and synchronization visibility
+## [~] 4. Allocator and synchronization visibility
 
 ### Objectives
 
@@ -195,7 +201,7 @@ implementation milestone and reviewed against clear success criteria.
 - Compare allocator and sync markers against backend-op rows to determine
   whether the device is busy or the host/runtime is the bottleneck.
 
-## 5. Correlated trace IDs
+## [ ] 5. Correlated trace IDs
 
 ### Objectives
 

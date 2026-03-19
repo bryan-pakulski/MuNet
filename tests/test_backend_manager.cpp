@@ -13,34 +13,13 @@ using namespace munet;
 
 namespace {
 
-class ScopedEnvVar {
+class ScopedProfileOverride {
 public:
-  ScopedEnvVar(const char *name, const char *value) : name_(name) {
-    const char *existing = std::getenv(name_);
-    if (existing) {
-      had_previous_ = true;
-      previous_ = existing;
-    }
-
-    if (value) {
-      setenv(name_, value, 1);
-    } else {
-      unsetenv(name_);
-    }
+  explicit ScopedProfileOverride(bool enabled) {
+    set_profile_enabled_override(enabled);
   }
 
-  ~ScopedEnvVar() {
-    if (had_previous_) {
-      setenv(name_, previous_.c_str(), 1);
-    } else {
-      unsetenv(name_);
-    }
-  }
-
-private:
-  const char *name_;
-  bool had_previous_ = false;
-  std::string previous_;
+  ~ScopedProfileOverride() { set_profile_enabled_override(std::nullopt); }
 };
 
 class PartialMatmulBackend : public Backend,
@@ -352,7 +331,7 @@ TEST(BackendRegistryTest, PartialBackendReportsCapabilitiesAndFallbackMetadata) 
 }
 
 TEST(BackendManagerTest, ProfileWrapperDoesNotReportGpuTimeForCpuBackends) {
-  ScopedEnvVar profile("MUNET_PROFILE", "1");
+  ScopedProfileOverride profile(true);
   Profiler::get().reset();
 
   std::shared_ptr<TimedAddBackend> base_backend;
@@ -384,7 +363,7 @@ TEST(BackendManagerTest, ProfileWrapperDoesNotReportGpuTimeForCpuBackends) {
 }
 
 TEST(BackendManagerTest, ProfileWrapperSynchronizesGpuBackendsToCaptureGpuTime) {
-  ScopedEnvVar profile("MUNET_PROFILE", "1");
+  ScopedProfileOverride profile(true);
   Profiler::get().reset();
 
   std::shared_ptr<TimedAddBackend> base_backend;
@@ -472,7 +451,7 @@ TEST(BackendManagerTest, PartialBackendSurfacesUnsupportedOpsDuringCapabilityChe
 }
 
 TEST(BackendManagerTest, ProfilingCapturesDispatchPathMarkers) {
-  ScopedEnvVar profile("MUNET_PROFILE", "1");
+  ScopedProfileOverride profile(true);
   Profiler::get().reset();
 
   BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {

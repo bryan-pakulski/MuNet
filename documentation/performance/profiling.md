@@ -5,6 +5,9 @@
 - `MUNET_PROFILE=1`: enable profiler collection + auto summary on process exit.
 - `MUNET_DEBUG=1`: enable debug validation/logs.
 - `MUNET_LOG_LEVEL=0..3`: control logging verbosity.
+- When these flags are **disabled**, MuNet takes a cheap fast path that avoids
+  timer/string work in hot profiling call sites; runtime overrides are intended
+  primarily for tests/debug harnesses rather than production toggling.
 
 ## Reading Profiler Output
 

@@ -9,34 +9,13 @@
 using namespace munet;
 
 namespace {
-class ScopedEnvVar {
+class ScopedProfileOverride {
 public:
-  ScopedEnvVar(const char *name, const char *value) : name_(name) {
-    const char *existing = std::getenv(name_);
-    if (existing) {
-      had_previous_ = true;
-      previous_ = existing;
-    }
-
-    if (value) {
-      setenv(name_, value, 1);
-    } else {
-      unsetenv(name_);
-    }
+  explicit ScopedProfileOverride(bool enabled) {
+    set_profile_enabled_override(enabled);
   }
 
-  ~ScopedEnvVar() {
-    if (had_previous_) {
-      setenv(name_, previous_.c_str(), 1);
-    } else {
-      unsetenv(name_);
-    }
-  }
-
-private:
-  const char *name_;
-  bool had_previous_ = false;
-  std::string previous_;
+  ~ScopedProfileOverride() { set_profile_enabled_override(std::nullopt); }
 };
 
 class IdentityLayer : public inference::Module {
@@ -323,7 +302,7 @@ TEST(InferenceTest, EngineObserverReceivesLifecycleAndErrorEvents) {
 }
 
 TEST(InferenceTest, EngineProfilesLifecyclePhasesIntoStatsAndProfiler) {
-  ScopedEnvVar profile("MUNET_PROFILE", "1");
+  ScopedProfileOverride profile(true);
   Profiler::get().reset();
 
   auto m = std::make_shared<IdentityLayer>();

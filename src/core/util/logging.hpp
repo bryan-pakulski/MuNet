@@ -1,8 +1,10 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 
 namespace munet {
 
@@ -16,14 +18,85 @@ inline bool env_flag_enabled(const char *name) {
   return std::getenv(name) != nullptr;
 }
 
-inline bool is_debug_enabled() { return env_flag_enabled("MUNET_DEBUG"); }
+constexpr int kRuntimeFlagUseEnv = -1;
+constexpr int kRuntimeFlagDisabled = 0;
+constexpr int kRuntimeFlagEnabled = 1;
 
-inline bool is_profile_enabled() { return env_flag_enabled("MUNET_PROFILE"); }
+inline std::atomic<int> &debug_enabled_override() {
+  static std::atomic<int> value{kRuntimeFlagUseEnv};
+  return value;
+}
+
+inline std::atomic<int> &profile_enabled_override() {
+  static std::atomic<int> value{kRuntimeFlagUseEnv};
+  return value;
+}
+
+inline std::atomic<int> &log_level_override() {
+  static std::atomic<int> value{kRuntimeFlagUseEnv};
+  return value;
+}
+
+inline bool cached_env_debug_enabled() {
+  static const bool enabled = env_flag_enabled("MUNET_DEBUG");
+  return enabled;
+}
+
+inline bool cached_env_profile_enabled() {
+  static const bool enabled = env_flag_enabled("MUNET_PROFILE");
+  return enabled;
+}
+
+inline std::optional<int> cached_env_log_level() {
+  static const std::optional<int> level = []() -> std::optional<int> {
+    const char *env = std::getenv("MUNET_LOG_LEVEL");
+    if (!env)
+      return std::nullopt;
+    return std::max(0, std::min(3, std::atoi(env)));
+  }();
+  return level;
+}
+
+inline void set_debug_enabled_override(std::optional<bool> enabled) {
+  debug_enabled_override().store(
+      enabled.has_value()
+          ? (*enabled ? kRuntimeFlagEnabled : kRuntimeFlagDisabled)
+          : kRuntimeFlagUseEnv);
+}
+
+inline void set_profile_enabled_override(std::optional<bool> enabled) {
+  profile_enabled_override().store(
+      enabled.has_value()
+          ? (*enabled ? kRuntimeFlagEnabled : kRuntimeFlagDisabled)
+          : kRuntimeFlagUseEnv);
+}
+
+inline void set_log_level_override(std::optional<int> level) {
+  log_level_override().store(level.has_value()
+                                 ? std::max(0, std::min(3, *level))
+                                 : kRuntimeFlagUseEnv);
+}
+
+inline bool is_debug_enabled() {
+  const int override_value = debug_enabled_override().load();
+  if (override_value != kRuntimeFlagUseEnv)
+    return override_value == kRuntimeFlagEnabled;
+  return cached_env_debug_enabled();
+}
+
+inline bool is_profile_enabled() {
+  const int override_value = profile_enabled_override().load();
+  if (override_value != kRuntimeFlagUseEnv)
+    return override_value == kRuntimeFlagEnabled;
+  return cached_env_profile_enabled();
+}
 
 inline int log_level() {
-  const char *env = std::getenv("MUNET_LOG_LEVEL");
-  if (env)
-    return std::max(0, std::min(3, std::atoi(env)));
+  const int override_value = log_level_override().load();
+  if (override_value != kRuntimeFlagUseEnv)
+    return override_value;
+  if (const auto env_level = cached_env_log_level())
+    return *env_level;
   return is_debug_enabled() ? 3 : 1;
 }
 
