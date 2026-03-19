@@ -88,7 +88,7 @@ Current audit artifact: [Inference Runtime Phase 0 Audit](inference_phase0_audit
 
 ### Phase 1 - API and package boundary split
 
-**Status:** [~] in progress
+**Status:** [x] completed
 
 Current boundary artifact: [Inference Runtime Phase 1 Boundary Split](inference_phase1_boundary_split.md).
 
@@ -101,7 +101,7 @@ Current boundary artifact: [Inference Runtime Phase 1 Boundary Split](inference_
 
 - [x] Audit `munet_core`, `munet_inference`, and `munet_training` headers/targets for unwanted transitive dependencies.
 - [x] Move deploy-safe abstractions behind inference-oriented headers instead of exposing training-oriented includes by default.
-- [ ] Ensure inference-facing module/runtime interfaces depend only on:
+- [x] Ensure inference-facing module/runtime interfaces depend only on:
   - tensor/runtime primitives
   - serialization/model execution contracts
   - backend capability discovery needed at deploy time
@@ -117,7 +117,7 @@ Current boundary artifact: [Inference Runtime Phase 1 Boundary Split](inference_
 
 #### Exit Criteria
 
-- [ ] Inference headers and targets present a training-free public API surface.
+- [x] Inference headers and targets present a training-free public API surface.
 - [x] Build graph checks exist for transitive dependency regressions.
 - [x] Documentation clearly states the ownership boundary between core, inference, and training layers.
 

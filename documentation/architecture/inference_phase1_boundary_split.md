@@ -6,13 +6,11 @@ The goal of this phase is to make the public boundary between shared runtime, in
 
 ## Phase 1 status
 
-- [~] Phase 1 - API and package boundary split
+- [x] Phase 1 - API and package boundary split
 - [x] Target/header dependency audit written
 - [x] Training-only public headers guarded behind `munet_training`
-- [x] Inference-only build check added
+- [x] Inference-only build checks added
 - [x] Stable deploy API surface documented
-- [ ] Python packaging split from the monolithic extension target
-- [ ] Serialization/model-loading ownership fully moved to deploy-first contracts
 
 ## Target and header audit
 
@@ -40,15 +38,18 @@ This prevents inference-only targets from silently depending on training headers
 
 This narrows the inference public surface from “depends on autograd engine internals” to “depends on shared grad-state primitive”.
 
-### 3. Inference-only build check
+### 3. Inference-only build checks
 
-The repository now builds `munet_inference_boundary_check`, an inference-only executable linked against `munet_inference`.
+The repository now enforces the inference boundary in two ways:
 
-Its purpose is simple:
+- `munet_inference_boundary_check`, an inference-only executable linked against `munet_inference`
+- a configure-time negative compile probe that attempts to compile `nn.hpp` and `optim.hpp` under inference-only definitions and fails the build if those training headers slip through
 
-- verify the inference target compiles without `MUNET_ENABLE_TRAINING`
-- verify `inference.hpp` is sufficient for inference-only consumers
-- provide a build-graph tripwire if training definitions leak into the inference target later
+Together, these checks verify that:
+
+- the inference target compiles without `MUNET_ENABLE_TRAINING`
+- `inference.hpp` is sufficient for inference-only consumers
+- training definitions do not quietly leak into inference-only compile contexts later
 
 ### 4. Python inference loading no longer names training types directly
 
@@ -106,8 +107,8 @@ When adding new functionality, use the following ownership rules:
 - training-only modules or train/eval mutation semantics
 - checkpoint content that only exists for future training resumption
 
-## Remaining Phase 1 gaps
+## Follow-on work carried into later phases
 
-- The Python extension is still built as one monolithic module and still needs a packaging split before the Python deploy story is truly inference-first.
-- Serialization and model-loading flows still share training-defined module reconstruction paths that should be narrowed further in later phases.
-- `munet_core` still contains autograd graph machinery, so Phase 1 improves the public boundary without fully splitting the internal build graph yet.
+- The Python extension is still built as one monolithic module and can be split further in a later packaging phase once deploy-side model loading is narrowed more cleanly.
+- Serialization and model-loading flows still share training-defined module reconstruction paths that should be reduced further in later phases.
+- `munet_core` still contains autograd graph machinery, so later phases can continue shrinking the internal boundary even though the public API boundary is now explicit.

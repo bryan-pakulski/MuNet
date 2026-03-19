@@ -2,7 +2,9 @@
 
 #include "core/grad_mode.hpp"
 #include "core/module.hpp"
-#include "core/util.hpp"
+#include "core/util/logging.hpp"
+#include "core/util/profiler.hpp"
+#include "core/util/timer.hpp"
 #include <chrono>
 #include <functional>
 #include <sstream>
