@@ -1,4 +1,5 @@
 #include "inference.hpp"
+#include "backend/cpu_backend.hpp"
 #include "nn.hpp"
 #include "core/util/profiler.hpp"
 #include "test_utils.hpp"
@@ -41,6 +42,23 @@ public:
 
   Tensor weight;
   Tensor running;
+};
+
+class CountingCopyBackend : public CPUBackend {
+public:
+  explicit CountingCopyBackend(std::shared_ptr<int> copy_count)
+      : copy_count_(std::move(copy_count)) {}
+
+  const char *name() const override { return "counting_copy"; }
+
+  void copy(const void *src, void *dst, size_t bytes, Device src_dev,
+            Device dst_dev) override {
+    ++(*copy_count_);
+    CPUBackend::copy(src, dst, bytes, src_dev, dst_dev);
+  }
+
+private:
+  std::shared_ptr<int> copy_count_;
 };
 } // namespace
 
@@ -420,4 +438,59 @@ TEST(InferenceTest, EngineLeanModeDisablesProfilerMemoryByDefault) {
   const auto stats = engine.stats();
   EXPECT_EQ(stats.current_memory_bytes, 0u);
   EXPECT_EQ(stats.peak_memory_bytes, 0u);
+}
+
+TEST(InferenceTest, EngineCachesTransferredInputAcrossCompileAndRun) {
+  auto copy_count = std::make_shared<int>(0);
+  BackendManager::register_backend(DeviceType::UNKNOWN, [copy_count](Device) {
+    return std::make_shared<CountingCopyBackend>(copy_count);
+  });
+
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  engine.set_device(Device{DeviceType::CPU, 0});
+  engine.load(m);
+
+  Tensor x({2, 2}, Device{DeviceType::UNKNOWN, 0});
+  x.fill_(1.0f);
+  *copy_count = 0;
+
+  engine.compile(x);
+  EXPECT_EQ(*copy_count, 1);
+
+  (void)engine.run(x);
+  (void)engine.run(x);
+  EXPECT_EQ(*copy_count, 1);
+
+  const int copies_before_mutation = *copy_count;
+  x.fill_(2.0f);
+  const int copies_after_mutation = *copy_count;
+  (void)engine.run(x);
+  EXPECT_EQ(copies_after_mutation, copies_before_mutation + 1);
+  EXPECT_EQ(*copy_count, copies_after_mutation + 1);
+
+  BackendManager::register_backend(DeviceType::UNKNOWN,
+                                   [](Device) { return std::make_shared<CPUBackend>(); });
+}
+
+TEST(InferenceTest, EngineRejectsAutogradInputBeforeTransfer) {
+  auto copy_count = std::make_shared<int>(0);
+  BackendManager::register_backend(DeviceType::UNKNOWN, [copy_count](Device) {
+    return std::make_shared<CountingCopyBackend>(copy_count);
+  });
+
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  engine.set_device(Device{DeviceType::CPU, 0});
+  engine.load(m);
+
+  Tensor x({2, 2}, Device{DeviceType::UNKNOWN, 0}, DataType::Float32, true);
+  x.fill_(1.0f);
+  *copy_count = 0;
+
+  EXPECT_THROW((void)engine.run(x), std::runtime_error);
+  EXPECT_EQ(*copy_count, 0);
+
+  BackendManager::register_backend(DeviceType::UNKNOWN,
+                                   [](Device) { return std::make_shared<CPUBackend>(); });
 }

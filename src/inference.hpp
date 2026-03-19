@@ -109,6 +109,94 @@ public:
 private:
   std::optional<ScopedTraceContext> scope_;
 };
+
+class ShapeContract {
+public:
+  void reset() {
+    active_ = false;
+    rank_ = 0;
+    constrained_indices_.clear();
+    constrained_dims_.clear();
+  }
+
+  void compile_exact(const std::vector<int> &shape) {
+    active_ = true;
+    rank_ = shape.size();
+    constrained_indices_.resize(shape.size());
+    constrained_dims_ = shape;
+    for (size_t i = 0; i < shape.size(); ++i) {
+      constrained_indices_[i] = i;
+    }
+  }
+
+  void compile_expected(const std::vector<int> &expected) {
+    active_ = true;
+    rank_ = expected.size();
+    constrained_indices_.clear();
+    constrained_dims_.clear();
+    constrained_indices_.reserve(expected.size());
+    constrained_dims_.reserve(expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+      if (expected[i] == -1) {
+        continue;
+      }
+      constrained_indices_.push_back(i);
+      constrained_dims_.push_back(expected[i]);
+    }
+  }
+
+  std::string mismatch_reason(const std::vector<int> &actual) const {
+    if (!active_) {
+      return {};
+    }
+    if (actual.size() != rank_) {
+      return "rank mismatch";
+    }
+    for (size_t i = 0; i < constrained_indices_.size(); ++i) {
+      const size_t dim_index = constrained_indices_[i];
+      if (actual[dim_index] != constrained_dims_[i]) {
+        return "dim mismatch at index " + std::to_string(dim_index);
+      }
+    }
+    return {};
+  }
+
+private:
+  bool active_ = false;
+  size_t rank_ = 0;
+  std::vector<size_t> constrained_indices_{};
+  std::vector<int> constrained_dims_{};
+};
+
+struct PreparedInputCache {
+  const TensorImpl *input_impl = nullptr;
+  uint64_t input_version = 0;
+  Device source_device{DeviceType::UNKNOWN, 0};
+  Device target_device{DeviceType::UNKNOWN, 0};
+  Tensor prepared{};
+
+  void reset() {
+    input_impl = nullptr;
+    input_version = 0;
+    source_device = Device{DeviceType::UNKNOWN, 0};
+    target_device = Device{DeviceType::UNKNOWN, 0};
+    prepared = {};
+  }
+
+  bool matches(const Tensor &input, Device target) const {
+    return prepared.impl_ && input.impl_.get() == input_impl &&
+           input.version() == input_version && input.device() == source_device &&
+           target == target_device;
+  }
+
+  void store(const Tensor &input, Device target, const Tensor &value) {
+    input_impl = input.impl_.get();
+    input_version = input.version();
+    source_device = input.device();
+    target_device = target;
+    prepared = value;
+  }
+};
 } // namespace detail
 
 class Engine {
@@ -117,6 +205,9 @@ public:
 
   void set_device(Device device) {
     config_.device = device;
+    input_shape_contract_.reset();
+    output_shape_contract_.reset();
+    prepared_input_cache_.reset();
     compiled_ = false;
     prepared_ = false;
   }
@@ -161,6 +252,9 @@ public:
 
       module_ = module;
       stats_ = {};
+      input_shape_contract_.reset();
+      output_shape_contract_.reset();
+      prepared_input_cache_.reset();
       {
         Timer timer;
         module_->to(config_.device);
@@ -229,10 +323,10 @@ public:
         validate_shape(expected_input_shape, compiled_input_shape_,
                        "Engine: compile expected_input_shape mismatch");
         expected_input_shape_ = expected_input_shape;
-        use_expected_input_shape_ = true;
+        input_shape_contract_.compile_expected(expected_input_shape_);
       } else {
         expected_input_shape_.clear();
-        use_expected_input_shape_ = false;
+        input_shape_contract_.compile_exact(compiled_input_shape_);
       }
 
       Tensor out;
@@ -252,10 +346,10 @@ public:
         validate_shape(expected_output_shape, compiled_output_shape_,
                        "Engine: compile expected_output_shape mismatch");
         expected_output_shape_ = expected_output_shape;
-        use_expected_output_shape_ = true;
+        output_shape_contract_.compile_expected(expected_output_shape_);
       } else {
         expected_output_shape_.clear();
-        use_expected_output_shape_ = false;
+        output_shape_contract_.compile_exact(compiled_output_shape_);
       }
 
       stats_.compile_warmup_ms = 0.0;
@@ -314,12 +408,8 @@ public:
                              in.bytes());
       }
       if (config_.strict_shape_check && compiled_) {
-        if (use_expected_input_shape_) {
-          validate_shape(expected_input_shape_, in.shape(),
-                         "Engine: input shape mismatch with expected compiled shape");
-        } else if (in.shape() != compiled_input_shape_) {
-          throw std::runtime_error("Engine: input shape mismatch with compiled shape");
-        }
+        validate_shape_contract(input_shape_contract_, in.shape(),
+                                "Engine: input shape mismatch with compiled shape");
       }
 
       emit_event(EngineEventType::RunStarted, 0.0, in.shape(), {}, stats_.runs + 1,
@@ -345,9 +435,9 @@ public:
                              out.bytes());
       }
 
-      if (config_.strict_shape_check && compiled_ && use_expected_output_shape_) {
-        validate_shape(expected_output_shape_, out.shape(),
-                       "Engine: output shape mismatch with expected compiled shape");
+      if (config_.strict_shape_check && compiled_) {
+        validate_shape_contract(output_shape_contract_, out.shape(),
+                                "Engine: output shape mismatch with compiled shape");
       }
       auto end = std::chrono::high_resolution_clock::now();
 
@@ -386,10 +476,6 @@ public:
   EngineStats stats() const { return stats_; }
 
 private:
-  Tensor to_engine_device(const Tensor &input) const {
-    return (input.device() == config_.device) ? input : input.to(config_.device);
-  }
-
   void validate_inference_input(const Tensor &input, const char *stage) const {
     if (!config_.allow_autograd_inputs && input.requires_grad()) {
       throw std::runtime_error(std::string("Engine: ") + stage +
@@ -399,9 +485,17 @@ private:
     }
   }
 
-  Tensor prepare_input(const Tensor &input, const char *stage) const {
-    Tensor prepared = to_engine_device(input);
-    validate_inference_input(prepared, stage);
+  Tensor prepare_input(const Tensor &input, const char *stage) {
+    validate_inference_input(input, stage);
+    if (input.device() == config_.device) {
+      return input;
+    }
+    if (prepared_input_cache_.matches(input, config_.device)) {
+      return prepared_input_cache_.prepared;
+    }
+
+    Tensor prepared = input.to(config_.device);
+    prepared_input_cache_.store(input, config_.device, prepared);
     return prepared;
   }
 
@@ -426,6 +520,15 @@ private:
         throw std::runtime_error(err_prefix + ": dim mismatch at index " +
                                  std::to_string(i));
       }
+    }
+  }
+
+  static void validate_shape_contract(const detail::ShapeContract &contract,
+                                      const std::vector<int> &actual,
+                                      const std::string &err_prefix) {
+    if (const std::string reason = contract.mismatch_reason(actual);
+        !reason.empty()) {
+      throw std::runtime_error(err_prefix + ": " + reason);
     }
   }
 
@@ -518,8 +621,9 @@ private:
   std::vector<int> compiled_output_shape_{};
   std::vector<int> expected_input_shape_{};
   std::vector<int> expected_output_shape_{};
-  bool use_expected_input_shape_ = false;
-  bool use_expected_output_shape_ = false;
+  detail::ShapeContract input_shape_contract_{};
+  detail::ShapeContract output_shape_contract_{};
+  detail::PreparedInputCache prepared_input_cache_{};
 };
 
 class Sequential : public Module {
