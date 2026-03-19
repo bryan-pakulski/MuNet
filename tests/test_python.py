@@ -819,6 +819,26 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(eng.stats().current_memory_bytes, 0)
         self.assertEqual(eng.stats().peak_memory_bytes, 0)
 
+    def test_inference_engine_exposes_bounded_prepared_input_cache_policy(self):
+        cfg = munet.inference.EngineConfig()
+        cfg.prepared_input_cache_entries = 1
+        cfg.prepared_input_cache_max_bytes = 1024
+        eng = munet.inference.Engine(cfg)
+
+        self.assertEqual(eng.prepared_input_cache_entries_limit(), 1)
+        self.assertEqual(eng.prepared_input_cache_max_bytes_limit(), 1024)
+
+        model = munet.nn.Sequential([munet.nn.Linear(4, 2)])
+        eng.load(model)
+
+        a = munet.ones([1, 4], dtype=munet.DataType.Float32)
+        b = munet.ones([1, 4], dtype=munet.DataType.Float32)
+        eng.run_batch([a, b])
+        stats = eng.stats()
+
+        self.assertLessEqual(stats.prepared_input_cache_entries, 1)
+        self.assertLessEqual(stats.prepared_input_cache_bytes, 1024)
+
     def test_inference_engine_from_serialized_model(self):
         model = munet.nn.Sequential([
             munet.nn.Linear(3, 3),

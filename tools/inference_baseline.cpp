@@ -28,6 +28,8 @@ struct BenchmarkConfig {
   int batch_run_iters = 20;
   bool capture_profiler_memory = false;
   bool lean_mode = false;
+  int prepared_input_cache_entries = 8;
+  size_t prepared_input_cache_max_bytes = 64 * 1024 * 1024;
 };
 
 class BenchmarkMLP : public inference::Module {
@@ -190,6 +192,12 @@ BenchmarkConfig parse_args(int argc, char **argv) {
           parse_bool(arg, require_value(arg));
     } else if (arg == "--lean-mode") {
       cfg.lean_mode = parse_bool(arg, require_value(arg));
+    } else if (arg == "--prepared-input-cache-entries") {
+      cfg.prepared_input_cache_entries =
+          parse_nonnegative_int(arg, require_value(arg));
+    } else if (arg == "--prepared-input-cache-max-bytes") {
+      cfg.prepared_input_cache_max_bytes =
+          static_cast<size_t>(std::stoull(require_value(arg)));
     } else if (arg == "--help") {
       std::cout
           << "MuNet inference baseline benchmark\n"
@@ -205,7 +213,9 @@ BenchmarkConfig parse_args(int argc, char **argv) {
           << "  --batch-run-inputs <int>\n"
           << "  --batch-run-iters <int>\n"
           << "  --capture-profiler-memory <0|1|false|true>\n"
-          << "  --lean-mode <0|1|false|true>\n";
+          << "  --lean-mode <0|1|false|true>\n"
+          << "  --prepared-input-cache-entries <int>\n"
+          << "  --prepared-input-cache-max-bytes <int>\n";
       std::exit(0);
     } else {
       throw std::runtime_error("Unknown argument: " + arg);
@@ -268,6 +278,10 @@ int main(int argc, char **argv) {
     engine_cfg.allow_autograd_inputs = false;
     engine_cfg.capture_profiler_memory = cfg.capture_profiler_memory;
     engine_cfg.lean_mode = cfg.lean_mode;
+    engine_cfg.prepared_input_cache_entries =
+        static_cast<size_t>(cfg.prepared_input_cache_entries);
+    engine_cfg.prepared_input_cache_max_bytes =
+        cfg.prepared_input_cache_max_bytes;
     inference::Engine engine(engine_cfg);
 
     const Tensor input = make_input(cfg);
@@ -330,6 +344,12 @@ int main(int argc, char **argv) {
               << quote(build_profile_hint(cfg.device)) << ",\n";
     std::cout << "  \"lean_mode\": "
               << (cfg.lean_mode ? "true" : "false") << ",\n";
+    std::cout << "  \"memory_policy\": {\n";
+    std::cout << "    \"prepared_input_cache_entries\": "
+              << engine.prepared_input_cache_entries_limit() << ",\n";
+    std::cout << "    \"prepared_input_cache_max_bytes\": "
+              << engine.prepared_input_cache_max_bytes_limit() << "\n";
+    std::cout << "  },\n";
     std::cout << "  \"shape_contract\": {\n";
     std::cout << "    \"compiled_input_shape\": "
               << to_json_array(compile_stats.compiled_input_shape) << ",\n";
@@ -379,6 +399,16 @@ int main(int argc, char **argv) {
               << ",\n";
     std::cout << "    \"engine_peak\": " << final_stats.peak_memory_bytes
               << ",\n";
+    std::cout << "    \"prepared_input_cache_entries\": "
+              << final_stats.prepared_input_cache_entries << ",\n";
+    std::cout << "    \"prepared_input_cache_bytes\": "
+              << final_stats.prepared_input_cache_bytes << ",\n";
+    std::cout << "    \"prepared_input_cache_hits\": "
+              << final_stats.prepared_input_cache_hits << ",\n";
+    std::cout << "    \"prepared_input_cache_misses\": "
+              << final_stats.prepared_input_cache_misses << ",\n";
+    std::cout << "    \"prepared_input_cache_evictions\": "
+              << final_stats.prepared_input_cache_evictions << ",\n";
     std::cout << "    \"profiler_current\": "
               << profiler_snapshot.current_memory_bytes << ",\n";
     std::cout << "    \"profiler_peak\": "

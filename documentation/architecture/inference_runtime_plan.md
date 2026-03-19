@@ -153,7 +153,9 @@ Current runtime-slimming artifact: [Inference Runtime Phase 2 Runtime Slimming](
 
 ### Phase 3 - Memory and backend policy optimization
 
-**Status:** [ ] not started
+**Status:** [~] in progress
+
+Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend Policy](inference_phase3_memory_backend_policy.md).
 
 #### Objectives
 
@@ -162,12 +164,12 @@ Current runtime-slimming artifact: [Inference Runtime Phase 2 Runtime Slimming](
 
 #### Action Points
 
-- [ ] Add inference-focused memory policies for:
+- [~] Add inference-focused memory policies for:
   - reusable input/output buffers
   - scratch/workspace reuse
   - optional preallocation during compile/warmup
   - bounded temporary allocations on CPU-only targets
-- [ ] Review backend manager behavior so inference startup does not eagerly initialize unused backends.
+- [~] Review backend manager behavior so inference startup does not eagerly initialize unused backends.
 - [ ] Separate required backend capabilities for deployment from training-only backend capabilities.
 - [ ] Define fallback policy for constrained systems:
   - CPU-only execution
@@ -178,8 +180,8 @@ Current runtime-slimming artifact: [Inference Runtime Phase 2 Runtime Slimming](
 
 #### Exit Criteria
 
-- [ ] Runtime memory reuse policies are implemented and benchmarked.
-- [ ] Backend initialization is lazy/selective enough for minimal deployments.
+- [~] Runtime memory reuse policies are implemented and benchmarked.
+- [~] Backend initialization is lazy/selective enough for minimal deployments.
 - [ ] Inference builds can target constrained systems without carrying unnecessary backend/runtime weight.
 
 ### Phase 4 - Serialization and model execution decoupling

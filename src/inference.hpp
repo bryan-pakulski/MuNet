@@ -6,7 +6,6 @@
 #include "core/util/profiler.hpp"
 #include "core/util/timer.hpp"
 #include <chrono>
-#include <array>
 #include <functional>
 #include <optional>
 #include <sstream>
@@ -37,6 +36,8 @@ struct EngineConfig {
   bool allow_autograd_inputs = false;
   bool capture_profiler_memory = false;
   bool lean_mode = false;
+  size_t prepared_input_cache_entries = 8;
+  size_t prepared_input_cache_max_bytes = 64 * 1024 * 1024;
 };
 
 struct EngineStats {
@@ -57,6 +58,11 @@ struct EngineStats {
   std::vector<int> compiled_output_shape{};
   size_t current_memory_bytes = 0;
   size_t peak_memory_bytes = 0;
+  size_t prepared_input_cache_entries = 0;
+  size_t prepared_input_cache_bytes = 0;
+  size_t prepared_input_cache_hits = 0;
+  size_t prepared_input_cache_misses = 0;
+  size_t prepared_input_cache_evictions = 0;
 };
 
 enum class EngineEventType {
@@ -206,52 +212,89 @@ struct PreparedInputCacheEntry {
 
 class PreparedInputCache {
 public:
+  void configure(size_t max_entries, size_t max_bytes) {
+    max_entries_ = max_entries;
+    max_bytes_ = max_bytes;
+    reset();
+    entries_.reserve(max_entries_);
+  }
+
   const Tensor *find(const Tensor &input, Device target) const {
-    for (size_t i = 0; i < size_; ++i) {
-      if (entries_[i].matches(input, target)) {
-        return &entries_[i].prepared;
+    for (const auto &entry : entries_) {
+      if (entry.matches(input, target)) {
+        return &entry.prepared;
       }
     }
     return nullptr;
   }
 
   void reset() {
-    for (auto &entry : entries_) {
-      entry.clear();
-    }
-    size_ = 0;
-    next_slot_ = 0;
+    entries_.clear();
+    current_bytes_ = 0;
   }
 
-  void store(const Tensor &input, Device target, const Tensor &value) {
-    for (size_t i = 0; i < size_; ++i) {
-      if (entries_[i].matches_identity(input, target)) {
-        entries_[i].store(input, target, value);
-        return;
+  size_t store(const Tensor &input, Device target, const Tensor &value) {
+    if (!value.impl_ || max_entries_ == 0 || max_bytes_ == 0) {
+      return 0;
+    }
+
+    const size_t bytes = value.bytes();
+    if (bytes > max_bytes_) {
+      return 0;
+    }
+
+    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+      if (it->matches_identity(input, target)) {
+        current_bytes_ -= it->prepared.impl_ ? it->prepared.bytes() : 0;
+        entries_.erase(it);
+        break;
       }
     }
 
-    const size_t slot = (size_ < entries_.size()) ? size_++ : next_slot_;
-    entries_[slot].store(input, target, value);
-    next_slot_ = (slot + 1) % entries_.size();
+    size_t evictions = 0;
+    while (!entries_.empty() &&
+           (entries_.size() >= max_entries_ || current_bytes_ + bytes > max_bytes_)) {
+      current_bytes_ -= entries_.front().prepared.impl_
+                            ? entries_.front().prepared.bytes()
+                            : 0;
+      entries_.erase(entries_.begin());
+      ++evictions;
+    }
+
+    PreparedInputCacheEntry entry;
+    entry.store(input, target, value);
+    entries_.push_back(std::move(entry));
+    current_bytes_ += bytes;
+    return evictions;
   }
 
+  size_t size() const { return entries_.size(); }
+  size_t current_bytes() const { return current_bytes_; }
+  size_t max_entries() const { return max_entries_; }
+  size_t max_bytes() const { return max_bytes_; }
+
 private:
-  std::array<PreparedInputCacheEntry, 8> entries_{};
-  size_t size_ = 0;
-  size_t next_slot_ = 0;
+  std::vector<PreparedInputCacheEntry> entries_{};
+  size_t max_entries_ = 8;
+  size_t max_bytes_ = 64 * 1024 * 1024;
+  size_t current_bytes_ = 0;
 };
 } // namespace detail
 
 class Engine {
 public:
-  explicit Engine(EngineConfig cfg = {}) : config_(cfg) {}
+  explicit Engine(EngineConfig cfg = {}) : config_(cfg) {
+    prepared_input_cache_.configure(config_.prepared_input_cache_entries,
+                                    config_.prepared_input_cache_max_bytes);
+    refresh_cache_stats();
+  }
 
   void set_device(Device device) {
     config_.device = device;
     input_shape_contract_.reset();
     output_shape_contract_.reset();
     prepared_input_cache_.reset();
+    refresh_cache_stats();
     compiled_ = false;
     prepared_ = false;
   }
@@ -282,6 +325,31 @@ public:
   bool allow_autograd_inputs() const { return config_.allow_autograd_inputs; }
   bool capture_profiler_memory() const { return config_.capture_profiler_memory; }
   bool lean_mode() const { return config_.lean_mode; }
+  size_t prepared_input_cache_entries_limit() const {
+    return config_.prepared_input_cache_entries;
+  }
+  size_t prepared_input_cache_max_bytes_limit() const {
+    return config_.prepared_input_cache_max_bytes;
+  }
+
+  void set_prepared_input_cache_entries(size_t entries) {
+    config_.prepared_input_cache_entries = entries;
+    prepared_input_cache_.configure(config_.prepared_input_cache_entries,
+                                    config_.prepared_input_cache_max_bytes);
+    refresh_cache_stats();
+  }
+
+  void set_prepared_input_cache_max_bytes(size_t bytes) {
+    config_.prepared_input_cache_max_bytes = bytes;
+    prepared_input_cache_.configure(config_.prepared_input_cache_entries,
+                                    config_.prepared_input_cache_max_bytes);
+    refresh_cache_stats();
+  }
+
+  void clear_prepared_input_cache() {
+    prepared_input_cache_.reset();
+    refresh_cache_stats();
+  }
 
   void set_observer(EngineObserver observer) { observer_ = std::move(observer); }
   void clear_observer() { observer_ = nullptr; }
@@ -299,6 +367,7 @@ public:
       input_shape_contract_.reset();
       output_shape_contract_.reset();
       prepared_input_cache_.reset();
+      refresh_cache_stats();
       {
         Timer timer;
         if (!module_->is_on(config_.device)) {
@@ -537,11 +606,16 @@ private:
       return input;
     }
     if (const Tensor *cached = prepared_input_cache_.find(input, config_.device)) {
+      stats_.prepared_input_cache_hits += 1;
+      refresh_cache_stats();
       return *cached;
     }
+    stats_.prepared_input_cache_misses += 1;
 
     Tensor prepared = input.to(config_.device);
-    prepared_input_cache_.store(input, config_.device, prepared);
+    stats_.prepared_input_cache_evictions +=
+        prepared_input_cache_.store(input, config_.device, prepared);
+    refresh_cache_stats();
     return prepared;
   }
 
@@ -615,6 +689,11 @@ private:
     }
     stats_.current_memory_bytes = Profiler::get().current_memory_bytes();
     stats_.peak_memory_bytes = Profiler::get().peak_memory_bytes();
+  }
+
+  void refresh_cache_stats() {
+    stats_.prepared_input_cache_entries = prepared_input_cache_.size();
+    stats_.prepared_input_cache_bytes = prepared_input_cache_.current_bytes();
   }
 
   size_t count_requires_grad_parameters() const {

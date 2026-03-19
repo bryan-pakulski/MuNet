@@ -682,7 +682,11 @@ PYBIND11_MODULE(munet, m) {
                      &inference::EngineConfig::allow_autograd_inputs)
       .def_readwrite("capture_profiler_memory",
                      &inference::EngineConfig::capture_profiler_memory)
-      .def_readwrite("lean_mode", &inference::EngineConfig::lean_mode);
+      .def_readwrite("lean_mode", &inference::EngineConfig::lean_mode)
+      .def_readwrite("prepared_input_cache_entries",
+                     &inference::EngineConfig::prepared_input_cache_entries)
+      .def_readwrite("prepared_input_cache_max_bytes",
+                     &inference::EngineConfig::prepared_input_cache_max_bytes);
 
   py::class_<inference::EngineStats>(inf, "EngineStats")
       .def(py::init<>())
@@ -714,7 +718,17 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("current_memory_bytes",
                     &inference::EngineStats::current_memory_bytes)
       .def_readonly("peak_memory_bytes",
-                    &inference::EngineStats::peak_memory_bytes);
+                    &inference::EngineStats::peak_memory_bytes)
+      .def_readonly("prepared_input_cache_entries",
+                    &inference::EngineStats::prepared_input_cache_entries)
+      .def_readonly("prepared_input_cache_bytes",
+                    &inference::EngineStats::prepared_input_cache_bytes)
+      .def_readonly("prepared_input_cache_hits",
+                    &inference::EngineStats::prepared_input_cache_hits)
+      .def_readonly("prepared_input_cache_misses",
+                    &inference::EngineStats::prepared_input_cache_misses)
+      .def_readonly("prepared_input_cache_evictions",
+                    &inference::EngineStats::prepared_input_cache_evictions);
 
   py::class_<inference::Engine>(inf, "Engine")
       .def(py::init<inference::EngineConfig>(), py::arg("config") = inference::EngineConfig{})
@@ -735,6 +749,16 @@ PYBIND11_MODULE(munet, m) {
       .def("set_lean_mode", &inference::Engine::set_lean_mode,
            py::arg("enabled"))
       .def("lean_mode", &inference::Engine::lean_mode)
+      .def("set_prepared_input_cache_entries",
+           &inference::Engine::set_prepared_input_cache_entries, py::arg("entries"))
+      .def("prepared_input_cache_entries_limit",
+           &inference::Engine::prepared_input_cache_entries_limit)
+      .def("set_prepared_input_cache_max_bytes",
+           &inference::Engine::set_prepared_input_cache_max_bytes, py::arg("bytes"))
+      .def("prepared_input_cache_max_bytes_limit",
+           &inference::Engine::prepared_input_cache_max_bytes_limit)
+      .def("clear_prepared_input_cache",
+           &inference::Engine::clear_prepared_input_cache)
       .def("set_observer", &inference::Engine::set_observer,
            py::arg("observer"))
       .def("clear_observer", &inference::Engine::clear_observer)
