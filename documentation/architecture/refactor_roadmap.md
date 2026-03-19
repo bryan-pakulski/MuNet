@@ -46,8 +46,8 @@ The recent header split made the codebase easier to navigate, but the next stage
 
 ### Action points
 
-- [ ] Add an architecture decision log under `documentation/architecture/` for major refactor decisions.
-- [~] Inventory all dtype-sensitive code paths:
+- [x] Add an architecture decision log under `documentation/architecture/` for major refactor decisions.
+- [x] Inventory all dtype-sensitive code paths:
   - tensor creation and scalar helpers
   - backend kernels
   - autograd accumulation paths
@@ -64,7 +64,7 @@ The recent header split made the codebase easier to navigate, but the next stage
 
 - [x] Current architecture pain points are documented.
 - [~] Regression coverage exists for the pieces that will be heavily refactored next.
-- [ ] Future phases can point to named design decisions instead of re-litigating fundamentals.
+- [x] Future phases can point to named design decisions instead of re-litigating fundamentals.
 
 ## Phase 1 - Dtype foundation and tensor options
 
