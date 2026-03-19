@@ -252,11 +252,16 @@ PYBIND11_MODULE(munet, m) {
       .def("zero_grad", &Tensor::zero_grad,
            "Clears the gradient of the tensor.")
       .def(
-          "backward", [](Tensor &t) { t.backward(); },
+          "backward",
+          [](Tensor &t, bool retain_graph) { t.backward(retain_graph); },
+          py::arg("retain_graph") = false,
           "Computes the gradient of current tensor w.r.t. graph leaves.")
       .def(
-          "backward", [](Tensor &t, const Tensor &grad) { t.backward(grad); },
-          py::arg("grad"),
+          "backward",
+          [](Tensor &t, const Tensor &grad, bool retain_graph) {
+            t.backward(grad, retain_graph);
+          },
+          py::arg("grad"), py::arg("retain_graph") = false,
           "Computes the gradient with a given upstream gradient.")
 
       // Math & Ops
