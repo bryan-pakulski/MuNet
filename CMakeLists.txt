@@ -126,5 +126,8 @@ add_executable(munet_tests
 
 target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_main)
 
+add_executable(munet_inference_baseline tools/inference_baseline.cpp)
+target_link_libraries(munet_inference_baseline PRIVATE munet_inference)
+
 include(GoogleTest)
 gtest_discover_tests(munet_tests)

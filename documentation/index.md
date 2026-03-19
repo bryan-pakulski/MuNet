@@ -23,6 +23,8 @@ Welcome to MuNet docs. This documentation is structured for interactive/searchab
 ## Existing architecture and perf docs
 
 - [Runtime Architecture](architecture/runtime.md)
+- [Inference Runtime Separation Plan](architecture/inference_runtime_plan.md)
+- [Inference Runtime Phase 0 Audit](architecture/inference_phase0_audit.md)
 - [Backends](architecture/backends.md)
 - [Architecture Decision Log](architecture/decision_log.md)
 - [Dtype-Sensitive Inventory](architecture/dtype_sensitive_inventory.md)

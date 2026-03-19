@@ -19,6 +19,11 @@ The recent header split made the codebase easier to navigate, but the next stage
 - [x] Phase 4 - Autograd hardening
 - [~] Phase 5 - Module, optimizer, and training ergonomics
 - [x] Phase 6 - Inference and production hardening
+- [ ] Phase 7 - Inference runtime separation and lean deploy packaging
+
+## Next active planning document
+
+The next major execution phase is tracked in [Inference Runtime Separation Plan](inference_runtime_plan.md). That document breaks the work into deploy-focused phases centered on trimming inference overhead and separating runtime concerns from the training stack.
 
 ## Primary goals
 

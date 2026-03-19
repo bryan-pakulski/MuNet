@@ -16,6 +16,8 @@ nav:
       - Build & Install: documentation/getting-started/build_install.md
   - Architecture:
       - Runtime: documentation/architecture/runtime.md
+      - Inference Runtime Separation Plan: documentation/architecture/inference_runtime_plan.md
+      - Inference Runtime Phase 0 Audit: documentation/architecture/inference_phase0_audit.md
       - Backends: documentation/architecture/backends.md
   - API Reference:
       - Python API: documentation/api/python.md
