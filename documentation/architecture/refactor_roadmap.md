@@ -4,6 +4,22 @@ This roadmap captures the next restructuring milestones needed to move MuNet fro
 
 The recent header split made the codebase easier to navigate, but the next stage needs to focus on execution architecture: dtype handling, op dispatch, backend capabilities, autograd safety, and training/inference ergonomics.
 
+## Status legend
+
+- [ ] not started
+- [~] in progress
+- [x] completed
+
+## Current implementation status
+
+- [~] Phase 0 - Baseline guardrails and inventory
+- [~] Phase 1 - Dtype foundation and tensor options (some groundwork landed early; phase not closed)
+- [ ] Phase 2 - Op dispatch and op file decomposition
+- [ ] Phase 3 - Backend capability split and registry cleanup
+- [ ] Phase 4 - Autograd hardening
+- [ ] Phase 5 - Module, optimizer, and training ergonomics
+- [ ] Phase 6 - Inference and production hardening
+
 ## Primary goals
 
 - Make **mixed precision and future dtype work** a planned extension point rather than a cross-cutting retrofit.
@@ -30,25 +46,25 @@ The recent header split made the codebase easier to navigate, but the next stage
 
 ### Action points
 
-- Add an architecture decision log under `documentation/architecture/` for major refactor decisions.
-- Inventory all dtype-sensitive code paths:
+- [ ] Add an architecture decision log under `documentation/architecture/` for major refactor decisions.
+- [~] Inventory all dtype-sensitive code paths:
   - tensor creation and scalar helpers
   - backend kernels
   - autograd accumulation paths
   - module parameter/buffer initialization
   - optimizers and serialization
-- Add focused tests for the current behavior of:
+- [~] Add focused tests for the current behavior of:
   - tensor dtype preservation
   - backend registration/fallback behavior
   - parameter/buffer device migration
   - autograd grad accumulation
-- Mark known technical debt explicitly in docs so future work can reference it.
+- [x] Mark known technical debt explicitly in docs so future work can reference it.
 
 ### Exit criteria
 
-- Current architecture pain points are documented.
-- Regression coverage exists for the pieces that will be heavily refactored next.
-- Future phases can point to named design decisions instead of re-litigating fundamentals.
+- [x] Current architecture pain points are documented.
+- [~] Regression coverage exists for the pieces that will be heavily refactored next.
+- [ ] Future phases can point to named design decisions instead of re-litigating fundamentals.
 
 ## Phase 1 - Dtype foundation and tensor options
 
@@ -64,24 +80,24 @@ Mixed precision support depends on having a real dtype model. Right now dtype ex
 
 ### Action points
 
-- Replace the current lightweight dtype helpers with a richer core type system, for example:
+- [~] Replace the current lightweight dtype helpers with a richer core type system, for example:
   - `ScalarType` / `DataType`
   - `DTypeInfo`
   - `is_floating`, `is_integral`, `is_low_precision`
   - `promote_types(a, b)`
   - `accumulation_type(op, dtype)`
-- Introduce `TensorOptions` to carry:
+- [x] Introduce `TensorOptions` to carry:
   - device
   - dtype
   - requires_grad
   - future layout/memory format hooks
-- Add dtype-aware conversion APIs, e.g.:
+- [x] Add dtype-aware conversion APIs, e.g.:
   - `Tensor::to(Device)`
   - `Tensor::to(DataType)`
   - `Tensor::to(TensorOptions)`
-- Remove scalar helpers that hard-code `float` semantics from the public tensor interface.
-- Add typed scalar utility helpers for constants, fills, and host/device transfers.
-- Define policy for:
+- [~] Remove scalar helpers that hard-code `float` semantics from the public tensor interface.
+- [~] Add typed scalar utility helpers for constants, fills, and host/device transfers.
+- [ ] Define policy for:
   - parameter dtype
   - buffer dtype
   - accumulation dtype
@@ -89,14 +105,14 @@ Mixed precision support depends on having a real dtype model. Right now dtype ex
 
 ### Validation checklist
 
-- Tensors can be created, cloned, moved, and copied while preserving dtype correctly.
-- Scalar creation and `item()`-style access work for all supported dtypes or fail explicitly when unsupported.
-- Promotion and accumulation rules are tested and documented.
+- [~] Tensors can be created, cloned, moved, and copied while preserving dtype correctly.
+- [x] Scalar creation and `item()`-style access work for all supported dtypes or fail explicitly when unsupported.
+- [~] Promotion and accumulation rules are tested and documented.
 
 ### Exit criteria
 
-- Dtype decisions live in one place, not spread through ops and kernels.
-- Future fp16 work no longer requires editing the tensor API shape itself.
+- [ ] Dtype decisions live in one place, not spread through ops and kernels.
+- [ ] Future fp16 work no longer requires editing the tensor API shape itself.
 
 ## Phase 2 - Op dispatch and op file decomposition
 
@@ -309,22 +325,22 @@ If we want the highest leverage path with the least future churn, the recommende
 
 ### Milestone A - Core typed foundation
 
-- Complete Phase 0 and Phase 1.
+- [~] Complete Phase 0 and Phase 1.
 - Outcome: dtype-safe tensor core and test coverage for future fp16 work.
 
 ### Milestone B - Modular execution path
 
-- Complete Phase 2 and Phase 3.
+- [ ] Complete Phase 2 and Phase 3.
 - Outcome: new ops and new backend kernels become local, testable changes.
 
 ### Milestone C - Safe training engine
 
-- Complete Phase 4 and Phase 5.
+- [ ] Complete Phase 4 and Phase 5.
 - Outcome: mixed precision training becomes practical and maintainable.
 
 ### Milestone D - Hardened deployment story
 
-- Complete Phase 6.
+- [ ] Complete Phase 6.
 - Outcome: inference and deployment workflows become predictable and supportable.
 
 ## Definition of success
