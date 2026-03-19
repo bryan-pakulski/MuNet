@@ -11,8 +11,8 @@ The goal of this phase is to make low-overhead inference the default runtime beh
 - [x] Optional runtime hooks gated off the default path
 - [x] Lean-mode execution profile added
 - [x] Benchmark support updated for lean-mode comparisons
-- [ ] Host/device transfer path slimmed further
-- [ ] Repeat-run benchmark deltas recorded across multiple hardware tiers
+- [~] Host/device transfer path slimmed further
+- [~] Repeat-run benchmark deltas recorded across multiple hardware tiers
 
 ## Hot-path audit summary
 
@@ -80,6 +80,35 @@ Observed comparison summary:
 - both runs preserved equivalent output-shape contracts and steady-state behavior
 - lean mode kept the explicit deploy-safe diagnostic suppression contract visible in the benchmark output, which gives later phases a stable knob for constrained-device comparisons
 
+## Latest accelerator validation snapshot
+
+Accelerator reruns were provided from target hardware after the latest Phase 2 runtime updates.
+
+### CUDA (`float16`)
+
+- cold load wall time: `204.4189 ms`
+- compile time: `186.0020 ms`
+- steady single-run average: `28.1116 ms`
+- steady batch-run average: `112.3649 ms` for 4 inputs (`28.0912 ms` per input)
+- `avg_prepare_input_ms`: `0.0000 ms`
+- `avg_forward_ms`: `28.1085 ms`
+
+### Vulkan (`float16`)
+
+- cold load wall time: `4157.7010 ms`
+- compile time: `229.6482 ms`
+- steady single-run average: `41.5417 ms`
+- steady batch-run average: `166.8682 ms` for 4 inputs (`41.7171 ms` per input)
+- `avg_prepare_input_ms`: `0.0001 ms`
+- `avg_forward_ms`: `41.4471 ms`
+
+### Comparison against the earlier Phase 0 accelerator baselines
+
+- **CUDA cold load improved materially** (`2113.0076 ms` -> `204.4189 ms`), while steady-state latency stayed effectively flat (`28.0683 ms` -> `28.1116 ms`).
+- **Vulkan cold load also improved** (`6063.4427 ms` -> `4157.7010 ms`), but compile and steady-state latency moved upward (`177.8639 ms` -> `229.6482 ms`, `36.2972 ms` -> `41.5417 ms`).
+- For both accelerators, `avg_prepare_input_ms` remained effectively zero and `avg_engine_run_ms` stayed aligned with `avg_forward_ms`, which indicates the latest inference-engine bookkeeping changes are not the dominant source of the remaining accelerator cost.
+- The current evidence points at backend/device execution behavior—especially Vulkan forward/warmup cost—rather than a new inference hot-path regression in `Engine::prepare_input`, tracing, or shape validation.
+
 ## Current guidance
 
 For the lowest-overhead deploy path today:
@@ -91,6 +120,7 @@ For the lowest-overhead deploy path today:
 
 ## Follow-on Phase 2 work
 
-- slim host/device transfer behavior further where pre-positioned inputs or reusable staging buffers can avoid repeated copies
-- capture benchmark deltas for lean mode versus diagnostic-heavy configurations on CPU and accelerator targets
+- finish slimming model-load transfer behavior, especially where accelerator parameter upload still pays repeated per-tensor setup cost
+- capture lean-mode versus diagnostic-heavy deltas on CUDA and Vulkan hardware so the deploy profile has accelerator-side evidence in addition to CPU snapshots
 - decide whether batched execution should gain a lighter-weight path that avoids per-item observer/event churn when batch-level reporting is enough
+- carry Vulkan forward/warmup investigation into the next backend-focused phase, since the remaining accelerator variance now appears backend-dominated rather than inference-engine dominated

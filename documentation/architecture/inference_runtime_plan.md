@@ -135,7 +135,7 @@ Current runtime-slimming artifact: [Inference Runtime Phase 2 Runtime Slimming](
 #### Action Points
 
 - [x] Audit `Engine::load`, `compile`, `prepare`, `run`, and `run_batch` for unnecessary work on repeat execution.
-- [~] Minimize or cache:
+- [x] Minimize or cache:
   - backend discovery/lookup
   - shape validation setup that can be compiled once
   - repeated dtype/device checks that can be hoisted
@@ -143,11 +143,11 @@ Current runtime-slimming artifact: [Inference Runtime Phase 2 Runtime Slimming](
 - [x] Ensure autograd suppression remains explicit and cheap, with no graph-building residue on inference runs.
 - [x] Gate debug/profiler hooks so the default runtime path pays near-zero cost when observability is disabled.
 - [x] Add a “lean mode” execution profile for constrained devices that favors predictable memory use over convenience features.
-- [ ] Review host-device transfer behavior and remove avoidable copies in model load and input preparation paths.
+- [~] Review host-device transfer behavior and remove avoidable copies in model load and input preparation paths.
 
 #### Exit Criteria
 
-- [ ] Repeat inference runs show lower overhead in profiler/benchmark comparisons.
+- [~] Repeat inference runs show lower overhead in profiler/benchmark comparisons.
 - [ ] Optional diagnostics can be disabled without leaving measurable hot-path bookkeeping behind.
 - [ ] The lean runtime profile is documented and validated on constrained hardware assumptions.
 
