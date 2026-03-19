@@ -44,12 +44,18 @@ The engine exposes lightweight lifecycle hooks without coupling deployment code 
   - profiler current/peak memory snapshots when enabled
   - a human-readable diagnostic message
 - `EngineStats` also records compile/run timings, compiled shapes, profiler memory
-  snapshots, and host-side phase timings for:
+  snapshots, per-run trace ids, and host-side phase timings for:
   - module load transfer/eval
   - compile input preparation / forward / warmup
   - run input preparation / forward / output validation
+- `EngineEvent` now carries the active `trace_id` and `span` for compile/run
+  lifecycle callbacks, making it possible to join observer output with
+  profiler rows and debug logs from the same request.
 
-For production-like profiling, keep `capture_profiler_memory=True` and combine engine events with the process-level profiler (`MUNET_PROFILE=1`) when deeper backend timing is required.
+For production-like profiling, keep `capture_profiler_memory=True` and combine
+engine events with the process-level profiler (`MUNET_PROFILE=1`) when deeper
+backend timing is required. If you also enable `MUNET_DEBUG=1`, log lines will
+include the same `[trace_id=… span=…]` prefix used by profiler detail strings.
 
 ## ONNX native conversion direction
 

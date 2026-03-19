@@ -215,7 +215,12 @@ Status legend:
 - Compare allocator and sync markers against backend-op rows to determine
   whether the device is busy or the host/runtime is the bottleneck.
 
-## [ ] 5. Correlated trace IDs
+## [x] 5. Correlated trace IDs
+
+> Status: **Implemented via lightweight thread-local trace/span context created
+> at `Engine::compile(...)` / `Engine::run(...)`, automatic propagation into
+> profiler detail strings, and automatic log prefixes such as
+> `[trace_id=17 span=run.forward]`.**
 
 ### Objectives
 

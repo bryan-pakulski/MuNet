@@ -294,10 +294,21 @@ TEST(InferenceTest, EngineObserverReceivesLifecycleAndErrorEvents) {
   EXPECT_EQ(events[3].type, inference::EngineEventType::CompileCompleted);
   EXPECT_EQ(events[4].type, inference::EngineEventType::RunStarted);
   EXPECT_EQ(events[5].type, inference::EngineEventType::RunCompleted);
+  EXPECT_GT(events[2].trace_id, 0u);
+  EXPECT_EQ(events[2].trace_id, events[3].trace_id);
+  EXPECT_EQ(events[2].span, "compile");
+  EXPECT_EQ(events[3].span, "compile");
+  EXPECT_GT(events[4].trace_id, 0u);
+  EXPECT_EQ(events[4].trace_id, events[5].trace_id);
+  EXPECT_NE(events[2].trace_id, events[4].trace_id);
+  EXPECT_EQ(events[4].span, "run");
+  EXPECT_EQ(events[5].span, "run");
   EXPECT_EQ(events[3].output_shape, x.shape());
   EXPECT_EQ(events[5].input_shape, x.shape());
   EXPECT_GE(events[5].peak_memory_bytes, events[5].current_memory_bytes);
   EXPECT_EQ(events.back().type, inference::EngineEventType::Error);
+  EXPECT_GT(events.back().trace_id, 0u);
+  EXPECT_EQ(events.back().span, "run");
   EXPECT_NE(events.back().message.find("run failed"), std::string::npos);
 }
 
@@ -318,6 +329,9 @@ TEST(InferenceTest, EngineProfilesLifecyclePhasesIntoStatsAndProfiler) {
   (void)engine.run(x);
 
   const auto stats = engine.stats();
+  EXPECT_GT(stats.last_compile_trace_id, 0u);
+  EXPECT_GT(stats.last_run_trace_id, 0u);
+  EXPECT_NE(stats.last_compile_trace_id, stats.last_run_trace_id);
   EXPECT_GE(stats.load_to_device_ms, 0.0);
   EXPECT_GE(stats.load_eval_ms, 0.0);
   EXPECT_GE(stats.compile_prepare_input_ms, 0.0);
@@ -343,4 +357,26 @@ TEST(InferenceTest, EngineProfilesLifecyclePhasesIntoStatsAndProfiler) {
             snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("inference.run.validate_output"),
             snapshot.stats.end());
+  const auto compile_forward = snapshot.stats.find("inference.compile.forward");
+  ASSERT_NE(compile_forward, snapshot.stats.end());
+  EXPECT_NE(
+      compile_forward->second.last_shape.find("trace_id=" +
+                                              std::to_string(stats.last_compile_trace_id)),
+      std::string::npos);
+  EXPECT_NE(compile_forward->second.last_shape.find("span=compile.forward"),
+            std::string::npos);
+  const auto run_forward = snapshot.stats.find("inference.run.forward");
+  ASSERT_NE(run_forward, snapshot.stats.end());
+  EXPECT_NE(run_forward->second.last_shape.find(
+                "trace_id=" + std::to_string(stats.last_run_trace_id)),
+            std::string::npos);
+  EXPECT_NE(run_forward->second.last_shape.find("span=run.forward"),
+            std::string::npos);
+  const auto module_forward = snapshot.stats.find("module.root.forward");
+  ASSERT_NE(module_forward, snapshot.stats.end());
+  EXPECT_NE(module_forward->second.last_shape.find(
+                "trace_id=" + std::to_string(stats.last_run_trace_id)),
+            std::string::npos);
+  EXPECT_NE(module_forward->second.last_shape.find("span=run.forward"),
+            std::string::npos);
 }

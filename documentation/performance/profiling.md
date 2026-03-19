@@ -18,6 +18,9 @@
   - data movement (`transfer.*`)
   - runtime stalls (`allocator.*`, `sync.*`, `queue_wait.*`,
     `queue_starvation.*`)
+- When tracing is active, each row’s detail string also carries
+  `trace_id=<id>`, `span=<ancestry>`, and optionally `parent=<span>` so the same
+  request can be followed across layers.
 - Check `transfer.*` rows for data movement bottlenecks:
   - `transfer.h2d`
   - `transfer.d2h`
@@ -53,6 +56,22 @@
 - `dispatch.fallback.reason.*` tells you why that happened. The row count is the
   frequency; the attached detail string records the latest `op=`, `backend=`,
   `feature=`, `dtype=`, `shape=`, `reason=`, and `policy=` context.
+
+### Trace/span correlation
+
+- `Engine::compile(...)` and every `Engine::run(...)` now begin a fresh trace.
+- Trace ancestry is encoded in span names such as:
+  - `compile`
+  - `compile.prepare_input`
+  - `compile.forward`
+  - `run`
+  - `run.forward`
+  - `run.validate_output`
+- Any profiler row emitted while a trace is active appends that trace metadata to
+  its detail string, including inference phases, module spans, transfers,
+  dispatch rows, fallback rows, and backend wrapper markers.
+- Debug/info logs emitted inside the same context automatically include prefixes
+  like `[trace_id=17 span=run.forward]`.
 
 ### Allocator visibility
 
@@ -98,6 +117,9 @@
 - Use profile mode without debug for representative timing, then re-run with
   debug only when you need correctness checks or more textual context; debug can
   amplify sync overhead by design.
+- When diagnosing a single outlier request, start from an
+  `inference.run.*` or `inference.compile.*` row, copy its `trace_id`, then
+  search profiler/log output for the same id.
 - Compare `allocator.*` and `queue_wait.*` against backend op rows before
   optimizing kernels; if the stall markers dominate, kernel math is not the
   current bottleneck.
@@ -123,6 +145,12 @@
 - High `queue_wait.*` / `queue_starvation.*` means the backend could not submit
   or recycle work fast enough; investigate in-flight frame count, descriptor
   reuse policy, staging-buffer turnover, and batching cadence.
+- If a single `trace_id` is slow only in one layer, you have immediate scope
+  reduction:
+  - slow only in `transfer.*` => transport/readback problem
+  - slow only in `dispatch.*` => capability/fallback problem
+  - slow only in backend rows => kernel/submission problem
+  - slow only in `inference.*` / `module.*` => orchestration/model problem
 - If CPU `AvgCPU` is high but `AvgGPU` stays near zero on a GPU backend, the
   slowdown is host/runtime overhead rather than kernel execution.
 
@@ -154,6 +182,19 @@ than shader execution.
   `allocator.*.<backend>` / `sync.*.<backend>` namespaces during profiling so
   cross-backend host-side stall patterns stay comparable.
 
+## Trace-Centric Workflow
+
+1. Find the slow request’s `trace_id` from `inference.compile.*`,
+   `inference.run.*`, or an engine event.
+2. Follow the same `trace_id` through:
+   - `module.*`
+   - `transfer.*`
+   - `dispatch.resolve.*`
+   - `dispatch.fallback.reason.*`
+   - backend/allocator/sync/queue rows
+3. If needed, re-run with `MUNET_DEBUG=1` and grep logs for the same
+   `[trace_id=…]` prefix to align textual diagnostics with profiler samples.
+
 ## Next instrumentation roadmap
 
 The next planned observability work is tracked in the
@@ -163,4 +204,4 @@ The next planned observability work is tracked in the
 - directional transfer markers
 - fallback-reason accounting
 - allocator/synchronization visibility ✅
-- correlated trace/span ids
+- correlated trace/span ids ✅

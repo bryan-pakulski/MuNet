@@ -36,6 +36,8 @@ struct EngineConfig {
 
 struct EngineStats {
   size_t runs = 0;
+  uint64_t last_compile_trace_id = 0;
+  uint64_t last_run_trace_id = 0;
   double load_to_device_ms = 0.0;
   double load_eval_ms = 0.0;
   double last_run_ms = 0.0;
@@ -65,12 +67,14 @@ enum class EngineEventType {
 struct EngineEvent {
   EngineEventType type{EngineEventType::LoadStarted};
   Device device{DeviceType::CPU, 0};
+  uint64_t trace_id = 0;
   size_t run_index = 0;
   double duration_ms = 0.0;
   std::vector<int> input_shape{};
   std::vector<int> output_shape{};
   size_t current_memory_bytes = 0;
   size_t peak_memory_bytes = 0;
+  std::string span{};
   std::string message{};
 };
 
@@ -168,9 +172,13 @@ public:
                const std::vector<int> &expected_output_shape = {}) {
     ensure_loaded();
     auto start = std::chrono::high_resolution_clock::now();
+    const uint64_t trace_id = next_trace_id();
+    stats_.last_compile_trace_id = trace_id;
+    ScopedTraceContext compile_trace("compile", trace_id);
     Tensor input;
     try {
       {
+        ScopedTraceContext phase_trace("prepare_input");
         Timer timer;
         input = prepare_input(example_input, "compile");
         stats_.compile_prepare_input_ms = timer.elapsed_ms();
@@ -196,6 +204,7 @@ public:
 
       Tensor out;
       {
+        ScopedTraceContext phase_trace("forward");
         Timer timer;
         out = module_->forward(input);
         stats_.compile_forward_ms = timer.elapsed_ms();
@@ -217,11 +226,14 @@ public:
       }
 
       stats_.compile_warmup_ms = 0.0;
-      for (int i = 1; i < config_.warmup_runs; ++i) {
-        Timer timer;
-        Tensor warmup_out = module_->forward(input);
-        stats_.compile_warmup_ms += timer.elapsed_ms();
-        ensure_inference_output(warmup_out, "warmup");
+      {
+        ScopedTraceContext phase_trace("warmup");
+        for (int i = 1; i < config_.warmup_runs; ++i) {
+          Timer timer;
+          Tensor warmup_out = module_->forward(input);
+          stats_.compile_warmup_ms += timer.elapsed_ms();
+          ensure_inference_output(warmup_out, "warmup");
+        }
       }
       record_profile_phase("inference.compile.warmup",
                            stats_.compile_warmup_ms, input.shape(),
@@ -253,9 +265,13 @@ public:
     ensure_loaded();
 
     auto start = std::chrono::high_resolution_clock::now();
+    const uint64_t trace_id = next_trace_id();
+    stats_.last_run_trace_id = trace_id;
+    ScopedTraceContext run_trace("run", trace_id);
     Tensor in;
     try {
       {
+        ScopedTraceContext phase_trace("prepare_input");
         Timer timer;
         in = prepare_input(input, "run");
         stats_.last_prepare_input_ms = timer.elapsed_ms();
@@ -278,6 +294,7 @@ public:
       detail::InferenceModeGuard no_grad;
       Tensor out;
       {
+        ScopedTraceContext phase_trace("forward");
         Timer timer;
         out = module_->forward(in);
         stats_.last_forward_ms = timer.elapsed_ms();
@@ -285,6 +302,7 @@ public:
                              in.shape(), in.bytes());
       }
       {
+        ScopedTraceContext phase_trace("validate_output");
         Timer timer;
         ensure_inference_output(out, "run");
         stats_.last_output_validation_ms = timer.elapsed_ms();
@@ -434,10 +452,12 @@ private:
     EngineEvent event;
     event.type = type;
     event.device = config_.device;
+    event.trace_id = current_trace_id();
     event.run_index = run_index;
     event.duration_ms = duration_ms;
     event.input_shape = std::move(input_shape);
     event.output_shape = std::move(output_shape);
+    event.span = current_trace_span();
     event.message = std::move(message);
     if (config_.capture_profiler_memory) {
       event.current_memory_bytes = Profiler::get().current_memory_bytes();

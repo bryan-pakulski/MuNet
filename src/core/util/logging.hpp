@@ -2,9 +2,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace munet {
 
@@ -36,6 +41,120 @@ inline std::atomic<int> &log_level_override() {
   static std::atomic<int> value{kRuntimeFlagUseEnv};
   return value;
 }
+
+struct TraceContextState {
+  uint64_t trace_id = 0;
+  std::vector<std::string> span_stack{};
+};
+
+inline TraceContextState &trace_context_state() {
+  thread_local TraceContextState state;
+  return state;
+}
+
+inline uint64_t next_trace_id() {
+  static std::atomic<uint64_t> next_id{1};
+  return next_id.fetch_add(1);
+}
+
+inline uint64_t current_trace_id() {
+  return trace_context_state().trace_id;
+}
+
+inline std::string join_trace_spans(const std::vector<std::string> &spans,
+                                    size_t limit = std::string::npos) {
+  if (spans.empty()) {
+    return "";
+  }
+  const size_t count = std::min(limit, spans.size());
+  std::ostringstream joined;
+  for (size_t i = 0; i < count; ++i) {
+    if (i > 0) {
+      joined << ".";
+    }
+    joined << spans[i];
+  }
+  return joined.str();
+}
+
+inline std::string current_trace_span() {
+  return join_trace_spans(trace_context_state().span_stack);
+}
+
+inline std::string current_trace_parent_span() {
+  const auto &state = trace_context_state();
+  if (state.span_stack.size() <= 1) {
+    return "";
+  }
+  return join_trace_spans(state.span_stack, state.span_stack.size() - 1);
+}
+
+inline std::string current_trace_context_string() {
+  const uint64_t trace_id = current_trace_id();
+  if (trace_id == 0) {
+    return "";
+  }
+
+  std::ostringstream detail;
+  detail << "trace_id=" << trace_id;
+  const std::string span = current_trace_span();
+  if (!span.empty()) {
+    detail << " span=" << span;
+  }
+  const std::string parent = current_trace_parent_span();
+  if (!parent.empty()) {
+    detail << " parent=" << parent;
+  }
+  return detail.str();
+}
+
+inline std::string append_trace_context(std::string detail) {
+  const std::string trace = current_trace_context_string();
+  if (trace.empty()) {
+    return detail;
+  }
+  if (detail.empty()) {
+    return trace;
+  }
+  return detail + " " + trace;
+}
+
+class ScopedTraceContext {
+public:
+  explicit ScopedTraceContext(std::string span,
+                              std::optional<uint64_t> trace_id = std::nullopt)
+      : previous_id_(trace_context_state().trace_id),
+        previous_spans_(trace_context_state().span_stack) {
+    auto &state = trace_context_state();
+    if (trace_id.has_value()) {
+      state.trace_id = *trace_id;
+      state.span_stack.clear();
+      active_ = true;
+    } else if (state.trace_id != 0) {
+      active_ = true;
+    } else {
+      return;
+    }
+
+    if (!span.empty()) {
+      state.span_stack.push_back(std::move(span));
+    }
+  }
+
+  ~ScopedTraceContext() {
+    if (!active_) {
+      return;
+    }
+    auto &state = trace_context_state();
+    state.trace_id = previous_id_;
+    state.span_stack = previous_spans_;
+  }
+
+private:
+  uint64_t previous_id_ = 0;
+  std::vector<std::string> previous_spans_{};
+  bool active_ = false;
+};
 
 inline bool cached_env_debug_enabled() {
   static const bool enabled = env_flag_enabled("MUNET_DEBUG");
@@ -107,6 +226,10 @@ inline std::ostream &log_stream(const char *label, const char *color,
     return null_stream;
   }
   std::cerr << color << label << MUNET_C_RESET;
+  const std::string trace_prefix = current_trace_context_string();
+  if (!trace_prefix.empty()) {
+    std::cerr << "[" << trace_prefix << "] ";
+  }
   return std::cerr;
 }
 

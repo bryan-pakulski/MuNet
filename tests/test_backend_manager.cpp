@@ -22,6 +22,15 @@ public:
   ~ScopedProfileOverride() { set_profile_enabled_override(std::nullopt); }
 };
 
+class ScopedDebugOverride {
+public:
+  explicit ScopedDebugOverride(bool enabled) {
+    set_debug_enabled_override(enabled);
+  }
+
+  ~ScopedDebugOverride() { set_debug_enabled_override(std::nullopt); }
+};
+
 class PartialMatmulBackend : public Backend,
                              public BackendAllocationTransferCapability,
                              public BackendBlasCapability {
@@ -714,4 +723,53 @@ TEST(BackendManagerTest, ProfilingCapturesDirectionalTransferMarkers) {
   EXPECT_NE(snapshot.stats.find("transfer.d2h"), snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("transfer.cpu_copy"), snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("transfer.dtype_convert"), snapshot.stats.end());
+}
+
+TEST(BackendManagerTest, TraceContextCorrelatesTransferDispatchAndLogs) {
+  ScopedProfileOverride profile(true);
+  ScopedDebugOverride debug(true);
+  Profiler::get().reset();
+
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device cpu{DeviceType::CPU, 0};
+  const Device partial_device{DeviceType::UNKNOWN, 0};
+
+  Tensor cpu_tensor({1}, cpu, DataType::Float32);
+  cpu_tensor.fill_(1.0f);
+
+  testing::internal::CaptureStderr();
+  {
+    ScopedTraceContext trace("run.forward", 4242);
+    Tensor partial = cpu_tensor.to(partial_device);
+    (void)(partial + partial);
+  }
+  const std::string stderr_output = testing::internal::GetCapturedStderr();
+
+  const auto snapshot = Profiler::get().snapshot();
+  const auto transfer = snapshot.stats.find("transfer.h2d");
+  ASSERT_NE(transfer, snapshot.stats.end());
+  EXPECT_NE(transfer->second.last_shape.find("trace_id=4242"), std::string::npos);
+  EXPECT_NE(transfer->second.last_shape.find("span=run.forward"),
+            std::string::npos);
+
+  const auto dispatch = snapshot.stats.find("dispatch.resolve.cpu_fallback.Add");
+  ASSERT_NE(dispatch, snapshot.stats.end());
+  EXPECT_NE(dispatch->second.last_shape.find("trace_id=4242"), std::string::npos);
+  EXPECT_NE(dispatch->second.last_shape.find("span=run.forward"),
+            std::string::npos);
+
+  const auto fallback =
+      snapshot.stats.find("dispatch.fallback.reason.feature");
+  ASSERT_NE(fallback, snapshot.stats.end());
+  EXPECT_NE(fallback->second.last_shape.find("trace_id=4242"),
+            std::string::npos);
+  EXPECT_NE(fallback->second.last_shape.find("span=run.forward"),
+            std::string::npos);
+
+  EXPECT_NE(stderr_output.find("[trace_id=4242 span=run.forward]"),
+            std::string::npos);
+  EXPECT_NE(stderr_output.find("dispatch_fallback"), std::string::npos);
 }
