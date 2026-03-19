@@ -18,6 +18,17 @@ except ImportError as e:
 
 
 class TestBindings(unittest.TestCase):
+    def _available_non_cpu_devices(self):
+        devices = []
+        for device_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+            dev = munet.Device(device_type, 0)
+            try:
+                probe = munet.ones([1], device=dev)
+                devices.append(probe.device)
+            except RuntimeError:
+                continue
+        return devices
+
     def test_mse_loss(self):
         pred_np = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
         target_np = np.array([0.0, 0.0, 2.0, 2.0], dtype=np.float32)
@@ -85,6 +96,13 @@ class TestBindings(unittest.TestCase):
         # Check Enums mapped properly
         self.assertEqual(t.device.type, munet.DeviceType.CPU)
         self.assertEqual(t.dtype, munet.DataType.Float32)
+
+    def test_backend_supports_api(self):
+        cpu = munet.Device(munet.DeviceType.CPU, 0)
+        self.assertTrue(munet.supports(cpu, munet.BackendFeature.Matmul, munet.DataType.Float32))
+        self.assertFalse(munet.supports(cpu, munet.BackendFeature.Matmul, munet.DataType.Float16))
+        self.assertTrue(munet.supports(cpu, munet.BackendFeature.RandomFill, munet.DataType.Float16))
+        self.assertFalse(munet.supports(cpu, munet.BackendFeature.RandomFill, munet.DataType.Int32))
 
     def test_numpy_buffer_protocol(self):
         """Test zero-copy memory sharing between C++ and NumPy."""
@@ -601,6 +619,97 @@ class TestBindings(unittest.TestCase):
             y_dst = np.array(dst.forward(x).detach(), copy=False)
             self.assertTrue(np.allclose(y_src, y_dst, atol=1e-6))
 
+    def test_tensor_factories_and_numpy_roundtrip_preserve_dtype(self):
+        half = munet.ones([2, 2], dtype=munet.DataType.Float16)
+        self.assertEqual(half.dtype, munet.DataType.Float16)
+        self.assertEqual(np.array(half.detach(), copy=False).dtype, np.float16)
+        self.assertTrue(np.allclose(np.array(half.detach(), copy=False), np.ones((2, 2), dtype=np.float16)))
+
+        ints = munet.zeros([3], dtype=munet.DataType.Int32)
+        munet.copy_from_numpy(ints, np.array([1, 2, 3], dtype=np.int32))
+        self.assertEqual(ints.dtype, munet.DataType.Int32)
+        self.assertEqual(np.array(ints.detach(), copy=False).dtype, np.int32)
+        self.assertTrue(np.array_equal(np.array(ints.detach(), copy=False), np.array([1, 2, 3], dtype=np.int32)))
+
+        arr16 = np.array([[1.5, -2.0]], dtype=np.float16)
+        from_np = munet.from_numpy(arr16)
+        self.assertEqual(from_np.dtype, munet.DataType.Float16)
+        self.assertEqual(np.array(from_np.detach(), copy=False).dtype, np.float16)
+        self.assertTrue(np.allclose(np.array(from_np.detach(), copy=False), arr16))
+
+    def test_model_serialization_preserves_dtype_policy(self):
+        opts = munet.TensorOptions()
+        opts.dtype = munet.DataType.Float16
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 4, options=opts),
+            munet.nn.BatchNorm2d(4, options=opts),
+            munet.nn.LayerNorm(4, options=opts),
+        ])
+
+        np.array(model.named_parameters()["1.running_mean"], copy=False)[:] = np.array(
+            [0.5, -1.0, 1.5, -2.0], dtype=np.float32
+        )
+        np.array(model.named_parameters()["1.running_var"], copy=False)[:] = np.array(
+            [1.25, 0.75, 2.0, 3.0], dtype=np.float32
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "dtype_model.npz")
+            munet.save(model, path)
+            loaded = munet.load(path)
+
+            named = loaded.named_parameters()
+            self.assertEqual(named["0.weight"].dtype, munet.DataType.Float16)
+            self.assertEqual(named["0.bias"].dtype, munet.DataType.Float16)
+            self.assertEqual(named["1.weight"].dtype, munet.DataType.Float16)
+            self.assertEqual(named["1.bias"].dtype, munet.DataType.Float16)
+            self.assertEqual(named["1.running_mean"].dtype, munet.DataType.Float32)
+            self.assertEqual(named["1.running_var"].dtype, munet.DataType.Float32)
+            self.assertTrue(
+                np.allclose(
+                    np.array(named["1.running_mean"].detach(), copy=False),
+                    np.array([0.5, -1.0, 1.5, -2.0], dtype=np.float32),
+                )
+            )
+            self.assertTrue(
+                np.allclose(
+                    np.array(named["1.running_var"].detach(), copy=False),
+                    np.array([1.25, 0.75, 2.0, 3.0], dtype=np.float32),
+                )
+            )
+            self.assertEqual(named["2.weight"].dtype, munet.DataType.Float16)
+            self.assertEqual(named["2.bias"].dtype, munet.DataType.Float16)
+
+    def test_model_serialization_from_non_cpu_device_preserves_dtype(self):
+        devices = self._available_non_cpu_devices()
+        if not devices:
+            print("\nSkipping non-CPU serialization test (no CUDA/Vulkan device available).")
+            return
+
+        opts = munet.TensorOptions()
+        opts.dtype = munet.DataType.Float16
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 4, options=opts),
+            munet.nn.LayerNorm(4, options=opts),
+        ])
+        model.to(devices[0])
+
+        x = munet.ones([2, 4], dtype=munet.DataType.Float16).to(devices[0])
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "non_cpu_dtype_model.npz")
+            munet.save(model, path)
+            loaded = munet.load(path)
+
+            y_ref = np.array(model.forward(x).detach().to(munet.Device(munet.DeviceType.CPU, 0)), copy=False)
+            y_loaded = np.array(
+                loaded.forward(x.to(munet.Device(munet.DeviceType.CPU, 0))).detach(),
+                copy=False,
+            )
+            self.assertEqual(loaded.named_parameters()["0.weight"].dtype, munet.DataType.Float16)
+            self.assertEqual(loaded.named_parameters()["1.weight"].dtype, munet.DataType.Float16)
+            self.assertTrue(np.allclose(y_ref.astype(np.float32), y_loaded.astype(np.float32), atol=5e-2))
+
 
     def test_inference_engine_compile_and_shape_guard(self):
         model = munet.nn.Sequential([
@@ -657,6 +766,35 @@ class TestBindings(unittest.TestCase):
             y_ref = np.array(restored.forward(x).detach(), copy=False)
             y_eng = np.array(eng.run(x).detach(), copy=False)
             self.assertTrue(np.allclose(y_ref, y_eng, atol=1e-6))
+
+    def test_inference_engine_preserves_float16_across_available_devices(self):
+        opts = munet.TensorOptions()
+        opts.dtype = munet.DataType.Float16
+        model = munet.nn.Sequential([
+            munet.nn.Linear(2, 2, options=opts),
+            munet.nn.ReLU(),
+        ])
+
+        x = munet.ones([1, 2], dtype=munet.DataType.Float16)
+        expected = np.array(
+            model.forward(x).detach().to(munet.Device(munet.DeviceType.CPU, 0)),
+            copy=False,
+        )
+
+        for dev in [munet.Device(munet.DeviceType.CPU, 0)] + self._available_non_cpu_devices():
+            eng = munet.inference.Engine()
+            eng.set_device(dev)
+            eng.load(model)
+
+            y = eng.run(x.to(dev)).detach().to(munet.Device(munet.DeviceType.CPU, 0))
+            self.assertEqual(y.dtype, munet.DataType.Float16)
+            self.assertTrue(
+                np.allclose(
+                    np.array(y, copy=False).astype(np.float32),
+                    expected.astype(np.float32),
+                    atol=5e-2,
+                )
+            )
 
 
 
@@ -781,6 +919,72 @@ class TestBindings(unittest.TestCase):
 
             expected = np.array([[[[( -0.1 + 3.0 + 2.0 - 0.4 ) / 4.0]]]], dtype=np.float32)
             self.assertTrue(np.allclose(out, expected, atol=1e-5))
+
+    def test_compile_onnx_preserves_float16_dtype_through_graph_runtime(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper, numpy_helper
+        except Exception:
+            print("\nSkipping ONNX float16 dtype test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "float16_add.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT16, [1, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT16, [1, 2])
+            bias = numpy_helper.from_array(np.array([[0.5, -1.0]], dtype=np.float16), name="bias")
+
+            node = helper.make_node("Add", ["x", "bias"], ["y"])
+            graph = helper.make_graph([node], "float16_add_graph", [x_info], [y_info], [bias])
+            model = helper.make_model(graph, producer_name="munet_float16_add_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x = munet.from_numpy(np.array([[1.5, 2.0]], dtype=np.float16))
+            y = module.forward(x)
+
+            self.assertEqual(y.dtype, munet.DataType.Float16)
+            self.assertEqual(np.array(y.detach(), copy=False).dtype, np.float16)
+            self.assertTrue(
+                np.allclose(
+                    np.array(y.detach(), copy=False),
+                    np.array([[2.0, 1.0]], dtype=np.float16),
+                    atol=1e-3,
+                )
+            )
+
+    def test_compile_onnx_cast_preserves_requested_dtype(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX cast dtype test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "cast_to_float16.onnx")
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT16, [1, 2])
+            cast = helper.make_node("Cast", ["x"], ["y"], to=TensorProto.FLOAT16)
+            graph = helper.make_graph([cast], "cast_to_float16_graph", [x_info], [y_info])
+            model = helper.make_model(graph, producer_name="munet_cast_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, path)
+
+            module = munet.inference.compile_onnx(path)
+            x = munet.from_numpy(np.array([[1.5, -2.25]], dtype=np.float32))
+            y = module.forward(x)
+
+            self.assertEqual(y.dtype, munet.DataType.Float16)
+            self.assertEqual(np.array(y.detach(), copy=False).dtype, np.float16)
+            self.assertTrue(
+                np.allclose(
+                    np.array(y.detach(), copy=False).astype(np.float32),
+                    np.array([[1.5, -2.25]], dtype=np.float32),
+                    atol=1e-3,
+                )
+            )
 
     def test_compile_onnx_binary_ops_add_sub_mul_div(self):
         try:

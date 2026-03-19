@@ -133,6 +133,7 @@ public:
   Tensor log_softmax(int dim = -1) const;
   Tensor sum() const;
   Tensor reshape(Shape new_shape) const;
+  Tensor masked_fill(const Tensor &mask, const ScalarValue &value) const;
   Tensor masked_fill(const Tensor &mask, float value) const;
   ScalarValue item_value() const;
   float item() const;
@@ -152,6 +153,9 @@ public:
   Tensor cross_entropy(const Tensor &target) const;
 
   void uniform_(float low = -1.0f, float high = 1.0f);
+  void fill_(const ScalarValue &value);
+  void fill_(float value) { fill_(make_scalar(value)); }
+  void fill_(int32_t value) { fill_(make_scalar(value)); }
   void step(float lr);
 
   std::shared_ptr<TensorImpl> impl_ = nullptr;

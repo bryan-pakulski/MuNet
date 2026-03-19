@@ -56,6 +56,11 @@ class DebugBackend : public Backend {
 public:
   DebugBackend(std::shared_ptr<Backend> base) : base_(base) {}
 
+  const char *name() const override { return base_->name(); }
+  bool supports(BackendFeature feature, DataType dtype) const override {
+    return base_->supports(feature, dtype);
+  }
+
   double get_last_kernel_time_us() override {
     return base_->get_last_kernel_time_us();
   }

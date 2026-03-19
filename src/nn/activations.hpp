@@ -21,9 +21,9 @@ class Tanh : public Module {
 public:
   Tensor forward(Tensor x) override {
     Tensor two({1}, x.device(), x.dtype(), false);
-    two.uniform_(2.0f, 2.0f);
+    two.fill_(2.0f);
     Tensor one({1}, x.device(), x.dtype(), false);
-    one.uniform_(1.0f, 1.0f);
+    one.fill_(1.0f);
     return (x * two).sigmoid() * two - one;
   }
 };
@@ -32,7 +32,7 @@ class GELU : public Module {
 public:
   Tensor forward(Tensor x) override {
     Tensor c({1}, x.device(), x.dtype(), false);
-    c.uniform_(1.702f, 1.702f);
+    c.fill_(1.702f);
     return x * (x * c).sigmoid();
   }
 };
@@ -47,6 +47,8 @@ public:
   Tensor forward(Tensor x) override {
     if (!training_ || p_ == 0.0f)
       return x;
+    if (!is_floating(x.dtype()))
+      throw std::runtime_error("Dropout requires floating-point tensors");
 
     Device cpu{DeviceType::CPU, 0};
     Tensor mask_cpu(x.shape(), cpu, x.dtype(), false);
@@ -55,9 +57,11 @@ public:
     std::bernoulli_distribution keep(keep_prob);
     std::mt19937 rng(std::random_device{}());
 
-    float *m = static_cast<float *>(mask_cpu.data());
     for (size_t i = 0; i < mask_cpu.size(); ++i) {
-      m[i] = keep(rng) ? (1.0f / keep_prob) : 0.0f;
+      write_scalar_to_buffer(static_cast<char *>(mask_cpu.data()) +
+                                 i * dtype_size(mask_cpu.dtype()),
+                             mask_cpu.dtype(),
+                             keep(rng) ? (1.0 / keep_prob) : 0.0);
     }
 
     Tensor mask = (x.device().type == DeviceType::CPU) ? mask_cpu
@@ -75,7 +79,7 @@ public:
 
   Tensor forward(Tensor x) override {
     Tensor slope({1}, x.device(), x.dtype(), false);
-    slope.uniform_(negative_slope_, negative_slope_);
+    slope.fill_(negative_slope_);
     return x.relu() + (x - x.relu()) * slope;
   }
 

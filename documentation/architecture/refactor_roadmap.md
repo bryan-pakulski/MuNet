@@ -13,7 +13,7 @@ The recent header split made the codebase easier to navigate, but the next stage
 ## Current implementation status
 
 - [x] Phase 0 - Baseline guardrails and inventory
-- [~] Phase 1 - Dtype foundation and tensor options (some groundwork landed early; phase not closed)
+- [x] Phase 1 - Dtype foundation and tensor options
 - [ ] Phase 2 - Op dispatch and op file decomposition
 - [ ] Phase 3 - Backend capability split and registry cleanup
 - [ ] Phase 4 - Autograd hardening
@@ -97,22 +97,34 @@ Mixed precision support depends on having a real dtype model. Right now dtype ex
   - `Tensor::to(TensorOptions)`
 - [~] Remove scalar helpers that hard-code `float` semantics from the public tensor interface.
 - [~] Add typed scalar utility helpers for constants, fills, and host/device transfers.
-- [ ] Define policy for:
+  - Landed core scalar buffer conversion helpers and typed tensor fill/masked-fill paths.
+- [x] Define policy for:
   - parameter dtype
   - buffer dtype
   - accumulation dtype
   - serialization dtype fidelity
+  - Current implementation direction:
+    - module parameters follow the explicitly requested `TensorOptions::dtype`
+    - normalization running-stat buffers default to `accumulation_type(AccumulationOp::Normalization, dtype)`
+    - module-wide `to(DataType)` / `to(TensorOptions)` conversions preserve parameter-vs-buffer `requires_grad` semantics
+    - optimizer state follows `optimizer_state_type(parameter_dtype)`
+    - serialization keeps tensor dtype fidelity during save/load and reconstructs built-in modules from saved dtype metadata
+    - future fp32 master weights and grad-scaling metadata belong to optimizer/trainer checkpoints, not module-only save/load
 
 ### Validation checklist
 
-- [~] Tensors can be created, cloned, moved, and copied while preserving dtype correctly.
+- [x] Tensors can be created, cloned, moved, and copied while preserving dtype correctly.
 - [x] Scalar creation and `item()`-style access work for all supported dtypes or fail explicitly when unsupported.
-- [~] Promotion and accumulation rules are tested and documented.
+- [x] Promotion and accumulation rules are tested and documented.
+  - Core dtype metadata (`DTypeInfo`), explicit accumulation policy coverage, and typed scalar regression coverage are now in place.
 
 ### Exit criteria
 
-- [ ] Dtype decisions live in one place, not spread through ops and kernels.
-- [ ] Future fp16 work no longer requires editing the tensor API shape itself.
+- [x] Dtype decisions live in one place, not spread through ops and kernels.
+  - Accumulation, optimizer-state, backend-capability, autograd accumulation, and ONNX graph-runtime dtype handling now route through shared dtype helpers instead of isolated float32-only paths.
+- [x] Future fp16 work no longer requires editing the tensor API shape itself.
+
+Phase 1 follow-up items are complete. Any finer-grained per-op/per-shape dispatch or backend capability refinement belongs to Phase 2 / Phase 3 work rather than keeping Phase 1 open.
 
 ## Phase 2 - Op dispatch and op file decomposition
 

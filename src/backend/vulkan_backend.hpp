@@ -14,6 +14,11 @@ public:
   VulkanBackend(int device_index = 0);
   ~VulkanBackend() override;
 
+  const char *name() const override { return "vulkan"; }
+  bool supports(BackendFeature feature, DataType dtype) const override {
+    return supports_backend_feature_dtype(feature, dtype);
+  }
+
   void *allocate(size_t bytes) override;
   void deallocate(void *ptr) override;
   void memset(void *ptr, int value, size_t bytes) override;

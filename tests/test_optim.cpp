@@ -126,3 +126,22 @@ TEST_P(OptimTest, SGDStepConsistency) {
 
   EXPECT_NEAR(w.item(), 0.95f, 1e-6);
 }
+
+TEST(OptimPolicyTest, AdamSupportsFloat16ParametersUsingTypedStateFallback) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor x({1}, cpu, DataType::Float16, true);
+  x.fill_(1.0f);
+
+  auto opt = std::make_shared<optim::Adam>(std::vector<Tensor>{x}, 0.1f);
+  Tensor grad({1}, cpu, DataType::Float16, false);
+  grad.fill_(0.5f);
+
+  for (int i = 0; i < 8; ++i) {
+    x.impl_->grad = grad.impl_;
+    opt->step();
+  }
+
+  ScalarValue updated = x.item_value();
+  EXPECT_EQ(updated.dtype, DataType::Float16);
+  EXPECT_LT(updated.as_float(), 1.0f);
+}

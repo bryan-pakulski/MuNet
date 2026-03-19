@@ -12,10 +12,25 @@ TEST(TensorDTypeTest, DTypeUtilitiesProvidePromotionAndAccumulationRules) {
   EXPECT_TRUE(is_low_precision(DataType::Float16));
   EXPECT_TRUE(is_integral(DataType::Int32));
   EXPECT_EQ(dtype_name(DataType::Float16), "float16");
+  DTypeInfo float16_info = dtype_info(DataType::Float16);
+  EXPECT_EQ(float16_info.name, std::string("float16"));
+  EXPECT_EQ(float16_info.size_bytes, 2u);
+  EXPECT_TRUE(float16_info.floating);
+  EXPECT_TRUE(float16_info.low_precision);
   EXPECT_EQ(promote_types(DataType::Int32, DataType::Float16),
             DataType::Float16);
+  EXPECT_EQ(accumulation_type(AccumulationOp::Elementwise, DataType::Float16),
+            DataType::Float32);
+  EXPECT_EQ(accumulation_type(AccumulationOp::Reduction, DataType::Float16),
+            DataType::Float32);
   EXPECT_EQ(accumulation_type(AccumulationOp::Matmul, DataType::Float16),
             DataType::Float32);
+  EXPECT_EQ(accumulation_type(AccumulationOp::Convolution, DataType::Float16),
+            DataType::Float32);
+  EXPECT_EQ(accumulation_type(AccumulationOp::Normalization, DataType::Float16),
+            DataType::Float32);
+  EXPECT_EQ(accumulation_type(AccumulationOp::Reduction, DataType::Int32),
+            DataType::Int32);
 }
 
 TEST(TensorDTypeTest, TensorOptionsAndDTypeConversionRoundTrip) {
@@ -58,6 +73,63 @@ TEST(TensorDTypeTest, ItemValueSupportsInt32AndFloat16) {
   EXPECT_NEAR(half_value.as_float(), 1.25f, 1e-3f);
 }
 
+TEST(TensorDTypeTest, FillAndMaskedFillSupportTypedScalars) {
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor ints({4}, cpu, DataType::Int32);
+  ints.fill_(7);
+  const int32_t *filled = static_cast<const int32_t *>(ints.data());
+  EXPECT_EQ(filled[0], 7);
+  EXPECT_EQ(filled[3], 7);
+
+  Tensor mask({4}, cpu, DataType::Int32);
+  int32_t *mask_ptr = static_cast<int32_t *>(mask.data());
+  mask_ptr[0] = 0;
+  mask_ptr[1] = 1;
+  mask_ptr[2] = 0;
+  mask_ptr[3] = 1;
+
+  Tensor masked = ints.masked_fill(mask, make_scalar(int32_t{-3}));
+  const int32_t *masked_ptr = static_cast<const int32_t *>(masked.data());
+  EXPECT_EQ(masked_ptr[0], 7);
+  EXPECT_EQ(masked_ptr[1], -3);
+  EXPECT_EQ(masked_ptr[2], 7);
+  EXPECT_EQ(masked_ptr[3], -3);
+}
+
+TEST(TensorDTypeTest, Float16MatmulAndSumUseTypedFallbacks) {
+  Device cpu{DeviceType::CPU, 0};
+
+  Tensor a({2, 3}, cpu, DataType::Float16);
+  Tensor b({3, 2}, cpu, DataType::Float16);
+  Tensor a32({2, 3}, cpu, DataType::Float32);
+  Tensor b32({3, 2}, cpu, DataType::Float32);
+
+  float *a32_ptr = static_cast<float *>(a32.data());
+  float *b32_ptr = static_cast<float *>(b32.data());
+  a32_ptr[0] = 1.0f;  a32_ptr[1] = 2.0f;  a32_ptr[2] = 3.0f;
+  a32_ptr[3] = 4.0f;  a32_ptr[4] = 5.0f;  a32_ptr[5] = 6.0f;
+  b32_ptr[0] = 7.0f;  b32_ptr[1] = 8.0f;
+  b32_ptr[2] = 9.0f;  b32_ptr[3] = 10.0f;
+  b32_ptr[4] = 11.0f; b32_ptr[5] = 12.0f;
+
+  a = a32.to(DataType::Float16);
+  b = b32.to(DataType::Float16);
+
+  Tensor out = a.matmul(b);
+  EXPECT_EQ(out.dtype(), DataType::Float16);
+
+  Tensor out32 = out.to(DataType::Float32);
+  const float *out_ptr = static_cast<const float *>(out32.data());
+  EXPECT_NEAR(out_ptr[0], 58.0f, 1e-2f);
+  EXPECT_NEAR(out_ptr[1], 64.0f, 1e-2f);
+  EXPECT_NEAR(out_ptr[2], 139.0f, 1e-1f);
+  EXPECT_NEAR(out_ptr[3], 154.0f, 1e-1f);
+
+  Tensor total = out.sum().to(DataType::Float32);
+  EXPECT_NEAR(static_cast<float *>(total.data())[0], 415.0f, 5e-1f);
+}
+
 class TensorTest : public ::testing::TestWithParam<Device> {
 protected:
   Device dev() { return GetParam(); }
@@ -93,6 +165,68 @@ TEST_P(TensorTest, DeviceMovePreservesDTypeAndRequiresGrad) {
   ScalarValue roundtrip = moved.to(cpu).item_value();
   EXPECT_EQ(roundtrip.dtype, DataType::Float16);
   EXPECT_NEAR(roundtrip.as_float(), 2.5f, 1e-3f);
+}
+
+TEST_P(TensorTest, ClonePreservesOptionsAndStorageIndependence) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor base({2}, cpu, DataType::Float32, true);
+  float *base_ptr = static_cast<float *>(base.data());
+  base_ptr[0] = 1.0f;
+  base_ptr[1] = -3.5f;
+
+  Tensor original = base.to(DataType::Float16).to(dev());
+  Tensor cloned = original.clone();
+
+  EXPECT_EQ(cloned.dtype(), DataType::Float16);
+  EXPECT_EQ(cloned.device(), dev());
+  EXPECT_TRUE(cloned.requires_grad());
+  EXPECT_EQ(cloned.options().dtype, DataType::Float16);
+  EXPECT_EQ(cloned.options().device, dev());
+  EXPECT_NE(cloned.data(), original.data());
+
+  Tensor clone_cpu = cloned.to(cpu).to(DataType::Float32);
+  const float *clone_ptr = static_cast<const float *>(clone_cpu.data());
+  EXPECT_NEAR(clone_ptr[0], 1.0f, 1e-3f);
+  EXPECT_NEAR(clone_ptr[1], -3.5f, 1e-3f);
+
+  Tensor replacement({2}, cpu, DataType::Float16);
+  replacement.fill_(make_scalar(5.0, DataType::Float16));
+  cloned.impl_->backend().copy(replacement.data(), cloned.data(), cloned.bytes(),
+                               replacement.device(), cloned.device());
+
+  Tensor updated_clone = cloned.to(cpu).to(DataType::Float32);
+  Tensor original_roundtrip = original.to(cpu).to(DataType::Float32);
+  const float *updated_clone_ptr = static_cast<const float *>(updated_clone.data());
+  const float *original_ptr = static_cast<const float *>(original_roundtrip.data());
+  EXPECT_NEAR(updated_clone_ptr[0], 5.0f, 1e-3f);
+  EXPECT_NEAR(updated_clone_ptr[1], 5.0f, 1e-3f);
+  EXPECT_NEAR(original_ptr[0], 1.0f, 1e-3f);
+  EXPECT_NEAR(original_ptr[1], -3.5f, 1e-3f);
+}
+
+TEST_P(TensorTest, ToOptionsAppliesDTypeDeviceAndRequiresGradTogether) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor base({2}, cpu, DataType::Float32, true);
+  float *base_ptr = static_cast<float *>(base.data());
+  base_ptr[0] = 4.25f;
+  base_ptr[1] = -1.75f;
+
+  TensorOptions target;
+  target.device = dev();
+  target.dtype = DataType::Float16;
+  target.requires_grad = false;
+
+  Tensor converted = base.to(target);
+  EXPECT_EQ(converted.device(), dev());
+  EXPECT_EQ(converted.dtype(), DataType::Float16);
+  EXPECT_FALSE(converted.requires_grad());
+  EXPECT_EQ(converted.options().dtype, DataType::Float16);
+  EXPECT_EQ(converted.options().device, dev());
+
+  Tensor roundtrip = converted.to(cpu).to(DataType::Float32);
+  const float *roundtrip_ptr = static_cast<const float *>(roundtrip.data());
+  EXPECT_NEAR(roundtrip_ptr[0], 4.25f, 1e-3f);
+  EXPECT_NEAR(roundtrip_ptr[1], -1.75f, 1e-3f);
 }
 
 TEST_P(TensorTest, Addition) {
@@ -153,6 +287,29 @@ TEST_P(TensorTest, MaskedFill) {
   EXPECT_FLOAT_EQ(o[1], -5.0f);
   EXPECT_FLOAT_EQ(o[2], 3.0f);
   EXPECT_FLOAT_EQ(o[3], -5.0f);
+}
+
+TEST(TensorDTypeTest, Float16SoftmaxBackwardUsesTypedFallback) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor base({1, 3}, cpu, DataType::Float32, true);
+  float *base_ptr = static_cast<float *>(base.data());
+  base_ptr[0] = 1.0f;
+  base_ptr[1] = 2.0f;
+  base_ptr[2] = -1.0f;
+
+  Tensor x = base.to(DataType::Float16).detach();
+  x.set_requires_grad(true);
+  Tensor y = x.softmax(-1);
+  EXPECT_EQ(y.dtype(), DataType::Float16);
+
+  Tensor loss = y.sum();
+  EXPECT_NO_THROW(loss.backward());
+  ASSERT_TRUE(x.has_grad());
+  Tensor grad = x.grad().to(DataType::Float32);
+  const float *grad_ptr = static_cast<const float *>(grad.data());
+  EXPECT_NEAR(grad_ptr[0], 0.0f, 2e-2f);
+  EXPECT_NEAR(grad_ptr[1], 0.0f, 2e-2f);
+  EXPECT_NEAR(grad_ptr[2], 0.0f, 2e-2f);
 }
 
 TEST_P(TensorTest, SoftmaxDimValidation) {

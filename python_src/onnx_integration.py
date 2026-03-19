@@ -1,6 +1,19 @@
 """MuNet ONNX integration helpers loaded by bindings at import time."""
 
 
+def _munet_dtype_from_numpy(arr, munet_module):
+    import numpy as np
+
+    dt = np.asarray(arr).dtype
+    if dt == np.float32:
+        return munet_module.DataType.Float32
+    if dt == np.float16:
+        return munet_module.DataType.Float16
+    if dt == np.int32:
+        return munet_module.DataType.Int32
+    raise RuntimeError(f"Unsupported NumPy dtype for MuNet interop: {dt}")
+
+
 class ONNXEngine:
     """ONNX Runtime-backed inference helper exposed as munet.inference.ONNXEngine.
 
@@ -71,13 +84,11 @@ class ONNXEngine:
 
     def _to_numpy(self, x):
         if isinstance(x, self._m.Tensor):
-            return (
-                x.detach()
-                .to(self._m.Device(self._m.DeviceType.CPU, 0))
-                .numpy()
-                .astype(self._np.float32, copy=False)
-            )
-        return self._np.asarray(x, dtype=self._np.float32)
+            return x.detach().to(self._m.Device(self._m.DeviceType.CPU, 0)).numpy()
+
+        arr = self._np.asarray(x)
+        _munet_dtype_from_numpy(arr, self._m)
+        return arr
 
     def run(self, input_data, output_device=None):
         out_dev = output_device if output_device is not None else self._device
@@ -95,7 +106,9 @@ class ONNXEngine:
         outs = self._session.run(None, feed)
         tensors = []
         for arr in outs:
-            t = self._m.from_numpy(self._np.asarray(arr, dtype=self._np.float32))
+            arr = self._np.asarray(arr)
+            _munet_dtype_from_numpy(arr, self._m)
+            t = self._m.from_numpy(arr)
             if out_dev.type != self._m.DeviceType.CPU:
                 t = t.to(out_dev)
             tensors.append(t)
@@ -111,7 +124,7 @@ class ONNXEngine:
 # - unsupported: currently not lowered.
 ONNX_NATIVE_CONVERSION_MAP = {
     "Identity": {"status": "pass_through", "munet": "stream_identity"},
-    "Cast": {"status": "pass_through", "munet": "stream_cast_noop"},
+    "Cast": {"status": "lowered", "munet": "graph/cast"},
     "Constant": {"status": "pass_through", "munet": "const_capture"},
     "Gemm": {"status": "lowered", "munet": "nn.Linear"},
     "MatMul": {"status": "lowered", "munet": "nn.Linear"},
@@ -162,7 +175,7 @@ class _ConversionContext:
         self.debug = debug
 
         self.consts = {
-            init.name: numpy_helper.to_array(init).astype(np_module.float32)
+            init.name: numpy_helper.to_array(init)
             for init in graph.initializer
         }
         self.unsupported_ops = set()
@@ -187,7 +200,8 @@ class _ConversionContext:
         arr = self.consts.get(name)
         if arr is None:
             return None
-        return self.munet.from_numpy(self.np.asarray(arr, dtype=self.np.float32))
+        _munet_dtype_from_numpy(arr, self.munet)
+        return self.munet.from_numpy(self.np.asarray(arr))
 
     def get_attr(self, node, name, default=None):
         for a in node.attribute:
@@ -208,7 +222,7 @@ def _capture_constant_node(node, ctx):
     v = None
     for a in node.attribute:
         if a.name == "value" and a.type == ctx.onnx.AttributeProto.TENSOR:
-            v = ctx.numpy_helper.to_array(a.t).astype(ctx.np.float32)
+            v = ctx.numpy_helper.to_array(a.t)
             break
     if v is not None and len(node.output) > 0:
         ctx.consts[node.output[0]] = v
@@ -405,10 +419,33 @@ class _ONNXGraphModule:
                 return a.s.decode("utf-8")
         return default
 
+    def _numpy_dtype_for_munet_dtype(self, dtype):
+        if dtype == self._m.DataType.Float32:
+            return self._np.float32
+        if dtype == self._m.DataType.Float16:
+            return self._np.float16
+        if dtype == self._m.DataType.Int32:
+            return self._np.int32
+        raise RuntimeError(f"Unsupported MuNet tensor dtype in ONNX graph runtime: {dtype}")
+
+    def _tensor_numpy_dtype(self, tensor):
+        return self._numpy_dtype_for_munet_dtype(tensor.dtype)
+
+    def _munet_dtype_from_onnx_tensor_type(self, tensor_type):
+        tp = self._onnx.TensorProto
+        if tensor_type == tp.FLOAT:
+            return self._m.DataType.Float32
+        if tensor_type == tp.FLOAT16:
+            return self._m.DataType.Float16
+        if tensor_type == tp.INT32:
+            return self._m.DataType.Int32
+        raise RuntimeError(f"Unsupported ONNX tensor dtype in graph runtime: {tensor_type}")
+
     def _as_tensor(self, v, ref_device=None):
         if isinstance(v, self._m.Tensor):
             return v
-        arr = self._np.asarray(v, dtype=self._np.float32)
+        arr = self._np.asarray(v)
+        _munet_dtype_from_numpy(arr, self._m)
         t = self._m.from_numpy(arr)
         if ref_device is not None and ref_device.type != self._m.DeviceType.CPU:
             t = t.to(ref_device)
@@ -421,7 +458,12 @@ class _ONNXGraphModule:
         return self._np.asarray(v)
 
     def _from_numpy_like(self, arr, like=None):
-        t = self._m.from_numpy(self._np.asarray(arr, dtype=self._np.float32))
+        arr_np = self._np.asarray(arr)
+        if like is not None and isinstance(like, self._m.Tensor):
+            arr_np = arr_np.astype(self._tensor_numpy_dtype(like), copy=False)
+        else:
+            _munet_dtype_from_numpy(arr_np, self._m)
+        t = self._m.from_numpy(arr_np)
         if like is not None and isinstance(like, self._m.Tensor):
             if like.device.type != self._m.DeviceType.CPU:
                 t = t.to(like.device)
@@ -455,7 +497,15 @@ class _ONNXGraphModule:
             if op == "Identity":
                 out = ins[0]
             elif op == "Cast":
-                out = ins[0]
+                target_dtype = self._munet_dtype_from_onnx_tensor_type(
+                    int(self._get_attr(node, "to"))
+                )
+                if isinstance(ins[0], self._m.Tensor):
+                    out = self._as_tensor(ins[0]).to(target_dtype)
+                else:
+                    out = self._as_numpy(ins[0]).astype(
+                        self._numpy_dtype_for_munet_dtype(target_dtype), copy=False
+                    )
             elif op == "Conv":
                 data = self._as_tensor(ins[0])
                 W = self._as_tensor(ins[1], data.device)
@@ -562,17 +612,23 @@ class _ONNXGraphModule:
             elif op == "ConstantOfShape":
                 shp = self._as_numpy(ins[0]).astype(self._np.int64).reshape(-1).tolist()
                 value = 0.0
+                value_dtype = self._np.float32
                 for a in node.attribute:
                     if a.name == "value" and a.type == self._onnx.AttributeProto.TENSOR:
                         v = self._onnx_numpy_helper.to_array(a.t)
                         value = float(v.reshape(-1)[0]) if v.size > 0 else 0.0
-                out = self._from_numpy_like(self._np.full(shp, value, dtype=self._np.float32))
+                        try:
+                            _munet_dtype_from_numpy(v, self._m)
+                            value_dtype = v.dtype
+                        except RuntimeError:
+                            value_dtype = self._np.float32
+                out = self._from_numpy_like(self._np.full(shp, value, dtype=value_dtype))
             elif op == "Expand":
-                data_np = self._as_numpy(ins[0]).astype(self._np.float32)
+                data_np = self._as_numpy(ins[0])
                 shape = [int(v) for v in self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1).tolist()]
                 out = self._from_numpy_like(self._np.broadcast_to(data_np, shape).copy(), ins[0])
             elif op == "Tile":
-                data_np = self._as_numpy(ins[0]).astype(self._np.float32)
+                data_np = self._as_numpy(ins[0])
                 reps = [int(v) for v in self._as_numpy(ins[1]).astype(self._np.int64).reshape(-1).tolist()]
                 out = self._from_numpy_like(self._np.tile(data_np, reps), ins[0])
             elif op == "Gather":
@@ -581,7 +637,7 @@ class _ONNXGraphModule:
                 axis = int(self._get_attr(node, "axis", 0))
                 gathered = self._np.take(data_np, idx_np, axis=axis)
                 if isinstance(ins[0], self._m.Tensor):
-                    out = self._from_numpy_like(gathered.astype(self._np.float32), ins[0])
+                    out = self._from_numpy_like(gathered, ins[0])
                 else:
                     out = gathered
             elif op == "Shape":
@@ -606,7 +662,7 @@ class _ONNXGraphModule:
                     idx = self._np.cumsum(split)[:-1]
                     parts = self._np.split(arr, idx, axis=axis)
                 for out_name, part in zip(node.output, parts):
-                    env[out_name] = self._m.from_numpy(self._np.asarray(part, dtype=self._np.float32))
+                    env[out_name] = self._from_numpy_like(part, ins[0] if isinstance(ins[0], self._m.Tensor) else None)
                 continue
             elif op == "Resize":
                 data = self._as_tensor(ins[0])
@@ -626,12 +682,12 @@ class _ONNXGraphModule:
                 else:
                     raise ValueError("Resize requires scales input")
             elif op == "Pow":
-                a = self._as_numpy(ins[0]).astype(self._np.float32)
-                b = self._as_numpy(ins[1]).astype(self._np.float32)
-                out = self._from_numpy_like(self._np.power(a, b).astype(self._np.float32), ins[0])
+                a = self._as_numpy(ins[0])
+                b = self._as_numpy(ins[1])
+                out = self._from_numpy_like(self._np.power(a, b), ins[0])
             elif op == "Floor":
-                arr = self._as_numpy(ins[0]).astype(self._np.float32)
-                out = self._from_numpy_like(self._np.floor(arr).astype(self._np.float32), ins[0])
+                arr = self._as_numpy(ins[0])
+                out = self._from_numpy_like(self._np.floor(arr), ins[0])
             else:
                 raise ValueError(f"Unsupported op in graph runtime: {op}")
 

@@ -14,69 +14,6 @@
 namespace munet {
 namespace {
 
-void write_scalar_to_buffer(void *dst, DataType dtype, double value) {
-  switch (dtype) {
-  case DataType::Float32: {
-    float converted = static_cast<float>(value);
-    std::memcpy(dst, &converted, sizeof(converted));
-    return;
-  }
-  case DataType::Float16: {
-    uint16_t converted = float_to_half_bits(static_cast<float>(value));
-    std::memcpy(dst, &converted, sizeof(converted));
-    return;
-  }
-  case DataType::Int32: {
-    int32_t converted = static_cast<int32_t>(value);
-    std::memcpy(dst, &converted, sizeof(converted));
-    return;
-  }
-  default:
-    throw std::runtime_error("Unsupported scalar dtype write");
-  }
-}
-
-ScalarValue read_scalar_from_buffer(const void *src, DataType dtype) {
-  ScalarValue out;
-  out.dtype = dtype;
-  switch (dtype) {
-  case DataType::Float32: {
-    float value = 0.0f;
-    std::memcpy(&value, src, sizeof(value));
-    out.value = value;
-    return out;
-  }
-  case DataType::Float16: {
-    uint16_t value = 0;
-    std::memcpy(&value, src, sizeof(value));
-    out.value = half_bits_to_float(value);
-    return out;
-  }
-  case DataType::Int32: {
-    int32_t value = 0;
-    std::memcpy(&value, src, sizeof(value));
-    out.value = static_cast<double>(value);
-    return out;
-  }
-  default:
-    throw std::runtime_error("Unsupported scalar dtype read");
-  }
-}
-
-void convert_buffer_dtype(const void *src, DataType src_dtype, void *dst,
-                          DataType dst_dtype, size_t count) {
-  const char *src_bytes = static_cast<const char *>(src);
-  char *dst_bytes = static_cast<char *>(dst);
-  const size_t src_size = dtype_size(src_dtype);
-  const size_t dst_size = dtype_size(dst_dtype);
-
-  for (size_t i = 0; i < count; ++i) {
-    ScalarValue scalar =
-        read_scalar_from_buffer(src_bytes + i * src_size, src_dtype);
-    write_scalar_to_buffer(dst_bytes + i * dst_size, dst_dtype, scalar.value);
-  }
-}
-
 Tensor convert_tensor_dtype_cpu(const Tensor &input, DataType target_dtype) {
   Tensor out(input.shape(), Device{DeviceType::CPU, 0}, target_dtype,
              input.requires_grad());
@@ -290,8 +227,12 @@ Tensor Tensor::reshape(Shape new_shape) const {
   return ops::reshape(*this, new_shape);
 }
 
-Tensor Tensor::masked_fill(const Tensor &mask, float value) const {
+Tensor Tensor::masked_fill(const Tensor &mask, const ScalarValue &value) const {
   return ops::masked_fill(*this, mask, value);
+}
+
+Tensor Tensor::masked_fill(const Tensor &mask, float value) const {
+  return masked_fill(mask, make_scalar(value));
 }
 
 ScalarValue Tensor::item_value() const {
@@ -345,6 +286,27 @@ void Tensor::uniform_(float low, float high) {
     throw std::runtime_error("uniform_ only supports floating-point tensors");
   }
   impl_->backend().fill_uniform(*impl_->storage, low, high, size());
+}
+
+void Tensor::fill_(const ScalarValue &value) {
+  if (size() == 0)
+    return;
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor cpu_out(shape(), cpu, dtype(), requires_grad());
+  char *cpu_bytes = static_cast<char *>(cpu_out.data());
+  const size_t element_size = dtype_size(dtype());
+  for (size_t i = 0; i < size(); ++i) {
+    write_scalar_to_buffer(cpu_bytes + i * element_size, dtype(), value.value);
+  }
+
+  if (device().type == DeviceType::CPU) {
+    impl_->backend().copy(cpu_out.data(), data(), bytes(), cpu, device());
+    return;
+  }
+
+  BackendManager::get(device())->copy(cpu_out.data(), data(), bytes(), cpu,
+                                      device());
 }
 
 Tensor Tensor::transpose(int dim0, int dim1) const {

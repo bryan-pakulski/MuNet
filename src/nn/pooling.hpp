@@ -18,7 +18,7 @@ public:
     Tensor flat = x.reshape({B * C, HW});
     Tensor weights({HW, 1}, x.device(), x.dtype(), false);
     float scale = 1.0f / static_cast<float>(HW);
-    weights.uniform_(scale, scale);
+    weights.fill_(scale);
 
     Tensor out = flat.matmul(weights);
     return out.reshape({B, C, 1, 1});

@@ -61,3 +61,26 @@ TEST(BackendManagerTest, ReRegisteringBackendTypeClearsCachedInstances) {
   EXPECT_NE(first, second);
   EXPECT_EQ(generation, 2);
 }
+
+TEST(BackendManagerTest, ExposesBackendCapabilitySurface) {
+  auto backend = BackendManager::get(Device{DeviceType::CPU, 0});
+  ASSERT_NE(backend, nullptr);
+  EXPECT_STREQ(backend->name(), "cpu");
+  EXPECT_TRUE(backend->supports(BackendFeature::Matmul, DataType::Float32));
+  EXPECT_FALSE(backend->supports(BackendFeature::Matmul, DataType::Float16));
+  EXPECT_TRUE(backend->supports(BackendFeature::RandomFill, DataType::Float16));
+  EXPECT_FALSE(backend->supports(BackendFeature::RandomFill, DataType::Int32));
+}
+
+TEST(BackendManagerTest, CapabilityDTypePolicyLivesInOnePlace) {
+  EXPECT_TRUE(supports_backend_feature_dtype(BackendFeature::ElementwiseBinary,
+                                            DataType::Float32));
+  EXPECT_FALSE(supports_backend_feature_dtype(BackendFeature::ElementwiseBinary,
+                                             DataType::Float16));
+  EXPECT_TRUE(supports_backend_feature_dtype(BackendFeature::RandomFill,
+                                            DataType::Float16));
+  EXPECT_FALSE(supports_backend_feature_dtype(BackendFeature::RandomFill,
+                                             DataType::Int32));
+  EXPECT_TRUE(supports_backend_feature_dtype(BackendFeature::Reduction,
+                                            DataType::Float32));
+}
