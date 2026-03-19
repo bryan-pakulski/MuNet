@@ -472,6 +472,39 @@ TEST(BackendManagerTest, ProfilingCapturesDispatchPathMarkers) {
             snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("dispatch.resolve.backend.Matmul"),
             snapshot.stats.end());
+  const auto feature_reason = snapshot.stats.find("dispatch.fallback.reason.feature");
+  ASSERT_NE(feature_reason, snapshot.stats.end());
+  EXPECT_NE(feature_reason->second.last_shape.find("op=Add"), std::string::npos);
+  EXPECT_NE(feature_reason->second.last_shape.find("reason=feature"),
+            std::string::npos);
+}
+
+TEST(BackendManagerTest, ProfilingCapturesDTypeFallbackReasonMarkers) {
+  ScopedProfileOverride profile(true);
+  Profiler::get().reset();
+
+  const Device cpu{DeviceType::CPU, 0};
+  Tensor a32({2, 2}, cpu, DataType::Float32);
+  Tensor b32({2, 2}, cpu, DataType::Float32);
+  a32.fill_(1.0f);
+  b32.fill_(1.0f);
+
+  Tensor a = a32.to(DataType::Float16);
+  Tensor b = b32.to(DataType::Float16);
+  Profiler::get().reset();
+
+  Tensor c = a.matmul(b);
+  (void)c;
+
+  const auto snapshot = Profiler::get().snapshot();
+  const auto dtype_reason = snapshot.stats.find("dispatch.fallback.reason.dtype");
+  ASSERT_NE(dtype_reason, snapshot.stats.end());
+  EXPECT_NE(dtype_reason->second.last_shape.find("op=Matmul"),
+            std::string::npos);
+  EXPECT_NE(dtype_reason->second.last_shape.find("dtype=float16"),
+            std::string::npos);
+  EXPECT_NE(dtype_reason->second.last_shape.find("reason=dtype"),
+            std::string::npos);
 }
 
 TEST(BackendManagerTest, ProfilingCapturesDirectionalTransferMarkers) {

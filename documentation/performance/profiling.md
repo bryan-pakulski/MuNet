@@ -26,6 +26,8 @@
   - `dispatch.resolve.backend.<Op>`: backend-supported op-dispatch resolution.
   - `dispatch.resolve.cpu_fallback.<Op>`: time spent deciding to fall back to CPU.
   - `dispatch.resolve.metadata_fallback.<Op>`: ops that intentionally bypass backend dispatch.
+  - `dispatch.fallback.reason.*`: fallback counters/details grouped by
+    `dtype`, `shape`, `feature`, or `policy`.
   - `inference.load.*`, `inference.compile.*`, `inference.run.*`: host-side inference engine phases.
 
 ## Best Practices
@@ -38,6 +40,9 @@
 - When a slowdown appears in `inference.*` or `dispatch.resolve.*` rather than a
   backend op row, the bottleneck is likely in orchestration, validation,
   fallback, or host-side data movement rather than kernel execution itself.
+- Use `dispatch.fallback.reason.*` rows to answer *why* a fallback happened;
+  the row count shows frequency and the attached detail string shows the last
+  observed backend/feature/dtype/shape context for that reason.
 - When `module.*` dominates, the hotspot is likely at the model/layer
   composition level; compare parent module spans against child module spans to
   find the slowest block.

@@ -112,7 +112,12 @@ Status legend:
 - Heavy `transfer.dtype_convert` suggests unnecessary precision churn rather
   than pure transport cost.
 
-## [~] 3. Fallback reason accounting
+## [x] 3. Fallback reason accounting
+
+> Status: **Implemented via `dispatch.fallback.reason.dtype`,
+> `dispatch.fallback.reason.shape`, `dispatch.fallback.reason.feature`, and
+> `dispatch.fallback.reason.policy` profiler counters plus structured debug
+> logging for fallback context.**
 
 ### Objectives
 

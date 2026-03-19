@@ -10,6 +10,13 @@ namespace munet {
 namespace ops {
 namespace {
 
+enum class DispatchFallbackReason {
+  DType,
+  Shape,
+  Feature,
+  Policy,
+};
+
 const std::unordered_map<OpId, OpMetadata> &registry() {
   static const std::unordered_map<OpId, OpMetadata> kRegistry = {
       {OpId::Add,
@@ -113,6 +120,77 @@ void record_dispatch_profile(const std::string &path, const OpMetadata &meta,
                          0.0, 0, to_string(tensor.shape()));
 }
 
+const char *dispatch_fallback_reason_name(DispatchFallbackReason reason) {
+  switch (reason) {
+  case DispatchFallbackReason::DType:
+    return "dtype";
+  case DispatchFallbackReason::Shape:
+    return "shape";
+  case DispatchFallbackReason::Feature:
+    return "feature";
+  case DispatchFallbackReason::Policy:
+    return "policy";
+  default:
+    return "unknown";
+  }
+}
+
+DispatchFallbackReason classify_dispatch_fallback(
+    const OpMetadata &meta, const Tensor &tensor, BackendFeature feature,
+    const BackendSupport &support) {
+  if (!supports_backend_feature_dtype(feature, tensor.dtype())) {
+    return DispatchFallbackReason::DType;
+  }
+  if (!supports_backend_feature_shape(feature, tensor.dtype(), &tensor.shape())) {
+    return DispatchFallbackReason::Shape;
+  }
+  if (support.fallback_policy != meta.fallback_policy) {
+    return DispatchFallbackReason::Policy;
+  }
+  return DispatchFallbackReason::Feature;
+}
+
+std::string dispatch_fallback_detail(const OpMetadata &meta, const Tensor &tensor,
+                                     BackendFeature feature,
+                                     const BackendSupport &support,
+                                     DispatchFallbackReason reason) {
+  std::string detail = "op=" + std::string(meta.name);
+  detail += " backend=" + std::string(tensor.impl_->backend().name());
+  detail += " feature=" + std::string(backend_feature_name(feature));
+  detail += " dtype=" + dtype_name(tensor.dtype());
+  detail += " shape=" + to_string(tensor.shape());
+  detail += " reason=" + std::string(dispatch_fallback_reason_name(reason));
+  detail +=
+      " policy=" + std::string(backend_fallback_policy_name(support.fallback_policy));
+  return detail;
+}
+
+void record_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
+                                     BackendFeature feature,
+                                     const BackendSupport &support,
+                                     DispatchFallbackReason reason) {
+  if (!is_profile_enabled()) {
+    return;
+  }
+  Profiler::get().record(
+      "dispatch.fallback.reason." +
+          std::string(dispatch_fallback_reason_name(reason)),
+      0.0, 0.0, 0, dispatch_fallback_detail(meta, tensor, feature, support,
+                                            reason));
+}
+
+void log_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
+                                  BackendFeature feature,
+                                  const BackendSupport &support,
+                                  DispatchFallbackReason reason) {
+  if (!is_debug_enabled()) {
+    return;
+  }
+  MUNET_INFO << "dispatch_fallback "
+             << dispatch_fallback_detail(meta, tensor, feature, support, reason)
+             << std::endl;
+}
+
 } // namespace
 
 const OpMetadata &op_metadata(OpId id) {
@@ -169,18 +247,19 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
 
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
       support.fallback_policy == BackendFallbackPolicy::CPUFallback) {
-    if (is_debug_enabled()) {
-      MUNET_INFO << meta.name << " falling back to CPU from backend '"
-                 << tensor.impl_->backend().name() << "' for feature '"
-                 << backend_feature_name(feature) << "' and dtype "
-                 << dtype_name(tensor.dtype()) << std::endl;
-    }
+    const auto reason =
+        classify_dispatch_fallback(meta, tensor, feature, support);
+    log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
+    record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
     if (timer) {
       record_dispatch_profile("cpu_fallback", meta, tensor, timer->elapsed_us());
     }
     return {meta, false, true, support};
   }
 
+  const auto reason = classify_dispatch_fallback(meta, tensor, feature, support);
+  log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
+  record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
   if (timer) {
     record_dispatch_profile("unsupported", meta, tensor, timer->elapsed_us());
   }
