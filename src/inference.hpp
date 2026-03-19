@@ -2,7 +2,7 @@
 
 #include "autograd/engine.hpp"
 #include "core/module.hpp"
-#include "core/util/profiler.hpp"
+#include "core/util.hpp"
 #include <chrono>
 #include <functional>
 #include <sstream>
@@ -36,8 +36,16 @@ struct EngineConfig {
 
 struct EngineStats {
   size_t runs = 0;
+  double load_to_device_ms = 0.0;
+  double load_eval_ms = 0.0;
   double last_run_ms = 0.0;
+  double last_prepare_input_ms = 0.0;
+  double last_forward_ms = 0.0;
+  double last_output_validation_ms = 0.0;
   double compile_ms = 0.0;
+  double compile_prepare_input_ms = 0.0;
+  double compile_forward_ms = 0.0;
+  double compile_warmup_ms = 0.0;
   std::vector<int> compiled_input_shape{};
   std::vector<int> compiled_output_shape{};
   size_t current_memory_bytes = 0;
@@ -118,13 +126,24 @@ public:
         throw std::runtime_error("Engine::load received null module");
 
       module_ = module;
-      module_->to(config_.device);
-      module_->eval();
+      stats_ = {};
+      {
+        Timer timer;
+        module_->to(config_.device);
+        stats_.load_to_device_ms = timer.elapsed_ms();
+        record_profile_phase("inference.load.to_device",
+                             stats_.load_to_device_ms, {}, 0);
+      }
+      {
+        Timer timer;
+        module_->eval();
+        stats_.load_eval_ms = timer.elapsed_ms();
+        record_profile_phase("inference.load.eval", stats_.load_eval_ms, {}, 0);
+      }
 
       loaded_ = true;
       prepared_ = false;
       compiled_ = false;
-      stats_ = {};
       refresh_memory_stats();
 
       const size_t trainable_count = count_requires_grad_parameters();
@@ -151,7 +170,14 @@ public:
     auto start = std::chrono::high_resolution_clock::now();
     Tensor input;
     try {
-      input = prepare_input(example_input, "compile");
+      {
+        Timer timer;
+        input = prepare_input(example_input, "compile");
+        stats_.compile_prepare_input_ms = timer.elapsed_ms();
+        record_profile_phase("inference.compile.prepare_input",
+                             stats_.compile_prepare_input_ms, input.shape(),
+                             input.bytes());
+      }
       emit_event(EngineEventType::CompileStarted, 0.0, input.shape(), {},
                  stats_.runs, "Compiling inference shape contract");
 
@@ -168,7 +194,15 @@ public:
         use_expected_input_shape_ = false;
       }
 
-      Tensor out = module_->forward(input);
+      Tensor out;
+      {
+        Timer timer;
+        out = module_->forward(input);
+        stats_.compile_forward_ms = timer.elapsed_ms();
+        record_profile_phase("inference.compile.forward",
+                             stats_.compile_forward_ms, input.shape(),
+                             input.bytes());
+      }
       ensure_inference_output(out, "compile");
       compiled_output_shape_ = out.shape();
 
@@ -182,10 +216,16 @@ public:
         use_expected_output_shape_ = false;
       }
 
+      stats_.compile_warmup_ms = 0.0;
       for (int i = 1; i < config_.warmup_runs; ++i) {
+        Timer timer;
         Tensor warmup_out = module_->forward(input);
+        stats_.compile_warmup_ms += timer.elapsed_ms();
         ensure_inference_output(warmup_out, "warmup");
       }
+      record_profile_phase("inference.compile.warmup",
+                           stats_.compile_warmup_ms, input.shape(),
+                           input.bytes());
 
       auto end = std::chrono::high_resolution_clock::now();
       stats_.compile_ms =
@@ -215,7 +255,14 @@ public:
     auto start = std::chrono::high_resolution_clock::now();
     Tensor in;
     try {
-      in = prepare_input(input, "run");
+      {
+        Timer timer;
+        in = prepare_input(input, "run");
+        stats_.last_prepare_input_ms = timer.elapsed_ms();
+        record_profile_phase("inference.run.prepare_input",
+                             stats_.last_prepare_input_ms, in.shape(),
+                             in.bytes());
+      }
       if (config_.strict_shape_check && compiled_) {
         if (use_expected_input_shape_) {
           validate_shape(expected_input_shape_, in.shape(),
@@ -229,8 +276,22 @@ public:
                  "Starting inference run");
 
       detail::InferenceModeGuard no_grad;
-      Tensor out = module_->forward(in);
-      ensure_inference_output(out, "run");
+      Tensor out;
+      {
+        Timer timer;
+        out = module_->forward(in);
+        stats_.last_forward_ms = timer.elapsed_ms();
+        record_profile_phase("inference.run.forward", stats_.last_forward_ms,
+                             in.shape(), in.bytes());
+      }
+      {
+        Timer timer;
+        ensure_inference_output(out, "run");
+        stats_.last_output_validation_ms = timer.elapsed_ms();
+        record_profile_phase("inference.run.validate_output",
+                             stats_.last_output_validation_ms, out.shape(),
+                             out.bytes());
+      }
 
       if (config_.strict_shape_check && compiled_ && use_expected_output_shape_) {
         validate_shape(expected_output_shape_, out.shape(),
@@ -330,6 +391,15 @@ private:
     return std::chrono::duration<double, std::milli>(
                std::chrono::high_resolution_clock::now() - start)
         .count();
+  }
+
+  static void record_profile_phase(const std::string &name, double ms,
+                                   const std::vector<int> &shape,
+                                   size_t bytes) {
+    if (!is_profile_enabled()) {
+      return;
+    }
+    Profiler::get().record(name, ms * 1000.0, 0.0, bytes, to_string(shape));
   }
 
   void refresh_memory_stats() {

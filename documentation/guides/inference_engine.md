@@ -43,7 +43,11 @@ The engine exposes lightweight lifecycle hooks without coupling deployment code 
   - duration in milliseconds
   - profiler current/peak memory snapshots when enabled
   - a human-readable diagnostic message
-- `EngineStats` also records compile/run timings, compiled shapes, and profiler memory snapshots.
+- `EngineStats` also records compile/run timings, compiled shapes, profiler memory
+  snapshots, and host-side phase timings for:
+  - module load transfer/eval
+  - compile input preparation / forward / warmup
+  - run input preparation / forward / output validation
 
 For production-like profiling, keep `capture_profiler_memory=True` and combine engine events with the process-level profiler (`MUNET_PROFILE=1`) when deeper backend timing is required.
 

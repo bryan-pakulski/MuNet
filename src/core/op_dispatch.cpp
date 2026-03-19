@@ -1,5 +1,7 @@
 #include "op_dispatch.hpp"
+#include "core/util.hpp"
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -101,6 +103,16 @@ ForwardNode make_trace_node(const char *op_name,
   return node;
 }
 
+void record_dispatch_profile(const std::string &path, const OpMetadata &meta,
+                             const Tensor &tensor, double cpu_us) {
+  if (!is_profile_enabled()) {
+    return;
+  }
+
+  Profiler::get().record("dispatch.resolve." + path + "." + meta.name, cpu_us,
+                         0.0, 0, to_string(tensor.shape()));
+}
+
 } // namespace
 
 const OpMetadata &op_metadata(OpId id) {
@@ -114,8 +126,15 @@ const OpMetadata &op_metadata(OpId id) {
 
 DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   const auto &meta = op_metadata(id);
+  std::unique_ptr<Timer> timer;
+  if (is_profile_enabled()) {
+    timer = std::make_unique<Timer>();
+  }
 
   if (meta.requires_floating && !is_floating(tensor.dtype())) {
+    if (timer) {
+      record_dispatch_profile("dtype_error", meta, tensor, timer->elapsed_us());
+    }
     throw std::runtime_error(std::string(meta.name) +
                              " requires a floating-point tensor, got " +
                              dtype_name(tensor.dtype()));
@@ -126,6 +145,10 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     support.available = false;
     support.fallback_policy = meta.fallback_policy;
     support.preferred_accumulation_dtype = tensor.dtype();
+    if (timer) {
+      record_dispatch_profile("metadata_fallback", meta, tensor,
+                              timer->elapsed_us());
+    }
     return {meta,
             false,
             meta.fallback_policy == BackendFallbackPolicy::CPUFallback,
@@ -138,14 +161,29 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
                                             &tensor.shape());
 
   if (support.available) {
+    if (timer) {
+      record_dispatch_profile("backend", meta, tensor, timer->elapsed_us());
+    }
     return {meta, true, false, support};
   }
 
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
       support.fallback_policy == BackendFallbackPolicy::CPUFallback) {
+    if (is_debug_enabled()) {
+      MUNET_INFO << meta.name << " falling back to CPU from backend '"
+                 << tensor.impl_->backend().name() << "' for feature '"
+                 << backend_feature_name(feature) << "' and dtype "
+                 << dtype_name(tensor.dtype()) << std::endl;
+    }
+    if (timer) {
+      record_dispatch_profile("cpu_fallback", meta, tensor, timer->elapsed_us());
+    }
     return {meta, false, true, support};
   }
 
+  if (timer) {
+    record_dispatch_profile("unsupported", meta, tensor, timer->elapsed_us());
+  }
   throw std::runtime_error(std::string(meta.name) + ": backend '" +
                            std::string(tensor.impl_->backend().name()) +
                            "' does not support feature '" +

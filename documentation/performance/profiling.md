@@ -13,6 +13,11 @@
 - Compare CPU vs GPU timings to identify launch/queue overhead.
 - CPU backends now report `AvgGPU=0` consistently; GPU backends force a timing
   synchronization while profiling so kernel timings are actually populated.
+- Use the new stack markers to localize overhead outside kernels:
+  - `dispatch.resolve.backend.<Op>`: backend-supported op-dispatch resolution.
+  - `dispatch.resolve.cpu_fallback.<Op>`: time spent deciding to fall back to CPU.
+  - `dispatch.resolve.metadata_fallback.<Op>`: ops that intentionally bypass backend dispatch.
+  - `inference.load.*`, `inference.compile.*`, `inference.run.*`: host-side inference engine phases.
 
 ## Best Practices
 
@@ -21,6 +26,9 @@
 - Use profile mode without debug for lower-overhead measurements, but note that
   GPU timing collection still synchronizes per profiled op so the reported
   timings favor observability over peak-throughput benchmarking.
+- When a slowdown appears in `inference.*` or `dispatch.resolve.*` rather than a
+  backend op row, the bottleneck is likely in orchestration, validation,
+  fallback, or host-side data movement rather than kernel execution itself.
 
 
 ## Vulkan Host-Side Stall Markers

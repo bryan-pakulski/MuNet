@@ -682,8 +682,22 @@ PYBIND11_MODULE(munet, m) {
   py::class_<inference::EngineStats>(inf, "EngineStats")
       .def(py::init<>())
       .def_readonly("runs", &inference::EngineStats::runs)
+      .def_readonly("load_to_device_ms",
+                    &inference::EngineStats::load_to_device_ms)
+      .def_readonly("load_eval_ms", &inference::EngineStats::load_eval_ms)
       .def_readonly("last_run_ms", &inference::EngineStats::last_run_ms)
+      .def_readonly("last_prepare_input_ms",
+                    &inference::EngineStats::last_prepare_input_ms)
+      .def_readonly("last_forward_ms", &inference::EngineStats::last_forward_ms)
+      .def_readonly("last_output_validation_ms",
+                    &inference::EngineStats::last_output_validation_ms)
       .def_readonly("compile_ms", &inference::EngineStats::compile_ms)
+      .def_readonly("compile_prepare_input_ms",
+                    &inference::EngineStats::compile_prepare_input_ms)
+      .def_readonly("compile_forward_ms",
+                    &inference::EngineStats::compile_forward_ms)
+      .def_readonly("compile_warmup_ms",
+                    &inference::EngineStats::compile_warmup_ms)
       .def_readonly("compiled_input_shape",
                     &inference::EngineStats::compiled_input_shape)
       .def_readonly("compiled_output_shape",

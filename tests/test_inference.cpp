@@ -1,12 +1,44 @@
 #include "inference.hpp"
 #include "nn.hpp"
+#include "core/util/profiler.hpp"
 #include "test_utils.hpp"
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <type_traits>
 
 using namespace munet;
 
 namespace {
+class ScopedEnvVar {
+public:
+  ScopedEnvVar(const char *name, const char *value) : name_(name) {
+    const char *existing = std::getenv(name_);
+    if (existing) {
+      had_previous_ = true;
+      previous_ = existing;
+    }
+
+    if (value) {
+      setenv(name_, value, 1);
+    } else {
+      unsetenv(name_);
+    }
+  }
+
+  ~ScopedEnvVar() {
+    if (had_previous_) {
+      setenv(name_, previous_.c_str(), 1);
+    } else {
+      unsetenv(name_);
+    }
+  }
+
+private:
+  const char *name_;
+  bool had_previous_ = false;
+  std::string previous_;
+};
+
 class IdentityLayer : public inference::Module {
 public:
   Tensor forward(Tensor x) override { return x; }
@@ -115,6 +147,8 @@ TEST(InferenceTest, EngineCompileCapturesShapeAndStats) {
   EXPECT_TRUE(engine.is_prepared());
   EXPECT_EQ(engine.compiled_input_shape(), x.shape());
   EXPECT_GE(engine.stats().compile_ms, 0.0);
+  EXPECT_GE(engine.stats().compile_prepare_input_ms, 0.0);
+  EXPECT_GE(engine.stats().compile_forward_ms, 0.0);
 }
 
 TEST(InferenceTest, EngineStrictShapeCheckAfterCompile) {
@@ -286,4 +320,48 @@ TEST(InferenceTest, EngineObserverReceivesLifecycleAndErrorEvents) {
   EXPECT_GE(events[5].peak_memory_bytes, events[5].current_memory_bytes);
   EXPECT_EQ(events.back().type, inference::EngineEventType::Error);
   EXPECT_NE(events.back().message.find("run failed"), std::string::npos);
+}
+
+TEST(InferenceTest, EngineProfilesLifecyclePhasesIntoStatsAndProfiler) {
+  ScopedEnvVar profile("MUNET_PROFILE", "1");
+  Profiler::get().reset();
+
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  engine.set_warmup_runs(2);
+  engine.load(m);
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor x({2, 2}, cpu);
+  x.fill_(1.0f);
+
+  engine.compile(x);
+  (void)engine.run(x);
+
+  const auto stats = engine.stats();
+  EXPECT_GE(stats.load_to_device_ms, 0.0);
+  EXPECT_GE(stats.load_eval_ms, 0.0);
+  EXPECT_GE(stats.compile_prepare_input_ms, 0.0);
+  EXPECT_GE(stats.compile_forward_ms, 0.0);
+  EXPECT_GE(stats.compile_warmup_ms, 0.0);
+  EXPECT_GE(stats.last_prepare_input_ms, 0.0);
+  EXPECT_GE(stats.last_forward_ms, 0.0);
+  EXPECT_GE(stats.last_output_validation_ms, 0.0);
+
+  const auto snapshot = Profiler::get().snapshot();
+  EXPECT_NE(snapshot.stats.find("inference.load.to_device"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("inference.load.eval"), snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("inference.compile.prepare_input"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("inference.compile.forward"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("inference.compile.warmup"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("inference.run.prepare_input"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("inference.run.forward"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("inference.run.validate_output"),
+            snapshot.stats.end());
 }

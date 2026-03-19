@@ -470,3 +470,27 @@ TEST(BackendManagerTest, PartialBackendSurfacesUnsupportedOpsDuringCapabilityChe
               std::string::npos);
   }
 }
+
+TEST(BackendManagerTest, ProfilingCapturesDispatchPathMarkers) {
+  ScopedEnvVar profile("MUNET_PROFILE", "1");
+  Profiler::get().reset();
+
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device partial_device{DeviceType::UNKNOWN, 0};
+  Tensor a({2, 2}, partial_device, DataType::Float32);
+  Tensor b({2, 2}, partial_device, DataType::Float32);
+  a.fill_(1.0f);
+  b.fill_(2.0f);
+
+  (void)(a + b);
+  (void)a.matmul(b);
+
+  const auto snapshot = Profiler::get().snapshot();
+  EXPECT_NE(snapshot.stats.find("dispatch.resolve.cpu_fallback.Add"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.resolve.backend.Matmul"),
+            snapshot.stats.end());
+}
