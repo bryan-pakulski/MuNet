@@ -179,7 +179,7 @@ Phase 1 follow-up items are complete. Any finer-grained per-op/per-shape dispatc
 
 ### Action points
 
-- Split backend responsibilities into capability interfaces such as:
+- [x] Split backend responsibilities into capability interfaces such as:
   - allocation / transfer
   - elementwise math
   - reduction
@@ -187,27 +187,33 @@ Phase 1 follow-up items are complete. Any finer-grained per-op/per-shape dispatc
   - spatial ops
   - normalization
   - optimizer kernels
-- Add capability queries such as:
+- [x] Add capability queries such as:
   - `supports(op, dtype)`
   - `supports(op, dtype, shape)` if shape-dependent kernels matter later
   - preferred accumulation dtype / preferred fallback policy
-- Introduce a `BackendRegistry` abstraction so registration, override, and test replacement are explicit.
-- Keep debug/profiling wrappers as decorators instead of baking them into backend selection paths.
-- Define fallback policy clearly:
+- [x] Introduce a `BackendRegistry` abstraction so registration, override, and test replacement are explicit.
+- [x] Keep debug/profiling wrappers as decorators instead of baking them into backend selection paths.
+- [x] Define fallback policy clearly:
   - CPU fallback
   - explicit unsupported error
   - opt-in conversion fallback for specific ops
 
+### Phase 3 implementation update
+
+- Capability groups now own backend responsibilities while `Backend` remains a thin coordination layer.
+- Dispatch decisions consult backend support metadata before calling kernels, including fallback-policy reporting.
+- Registry overrides can be exercised through isolated `BackendRegistry` instances or through `BackendManager` for integration coverage.
+
 ### Validation checklist
 
-- A backend can implement only a subset of capabilities and still participate safely.
-- Missing kernels are surfaced by capability checks rather than late runtime surprises.
-- Backend overrides are easy to test in isolation.
+- [x] A backend can implement only a subset of capabilities and still participate safely.
+- [x] Missing kernels are surfaced by capability checks rather than late runtime surprises.
+- [x] Backend overrides are easy to test in isolation.
 
 ### Exit criteria
 
-- Backend extensions no longer require growing one giant interface every time.
-- Mixed backend coverage becomes manageable.
+- [x] Backend extensions no longer require growing one giant interface every time.
+- [x] Mixed backend coverage becomes manageable.
 
 ## Phase 4 - Autograd hardening
 

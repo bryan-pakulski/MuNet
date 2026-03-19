@@ -40,13 +40,15 @@ struct OpMetadata {
   const char *trace_name;
   std::optional<BackendFeature> feature;
   bool requires_floating = false;
-  bool allow_cpu_fallback = false;
+  BackendFallbackPolicy fallback_policy =
+      BackendFallbackPolicy::ExplicitUnsupported;
 };
 
 struct DispatchDecision {
   const OpMetadata &metadata;
   bool use_backend = false;
   bool use_cpu_fallback = false;
+  BackendSupport backend_support;
 };
 
 const OpMetadata &op_metadata(OpId id);
