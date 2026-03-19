@@ -10,6 +10,173 @@
 namespace munet {
 namespace ops {
 
+namespace detail {
+
+inline void require_same_dtype(const std::string &op, const Tensor &a,
+                               const Tensor &b) {
+  if (a.dtype() != b.dtype()) {
+    throw std::runtime_error(op + ": dtype mismatch " + dtype_name(a.dtype()) +
+                             " vs " + dtype_name(b.dtype()));
+  }
+}
+
+inline void require_floating_dtype(const std::string &op, const Tensor &a) {
+  if (!is_floating(a.dtype())) {
+    throw std::runtime_error(op + " requires a floating-point tensor, got " +
+                             dtype_name(a.dtype()));
+  }
+}
+
+inline bool backend_supports(const Tensor &tensor, BackendFeature feature) {
+  return tensor.impl_->backend().supports(feature, tensor.dtype());
+}
+
+inline void require_backend_support(const std::string &op, const Tensor &tensor,
+                                    BackendFeature feature) {
+  if (!backend_supports(tensor, feature)) {
+    throw std::runtime_error(op + ": backend '" +
+                             std::string(tensor.impl_->backend().name()) +
+                             "' does not support feature '" +
+                             backend_feature_name(feature) + "' for dtype " +
+                             dtype_name(tensor.dtype()));
+  }
+}
+
+template <typename Fn>
+inline Tensor binary_broadcast_cpu_fallback(const Tensor &a, const Tensor &b,
+                                            const BroadcastInfo &info,
+                                            Fn &&fn) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a_cpu = a.to(cpu);
+  Tensor b_cpu = b.to(cpu);
+  Tensor out_cpu(info.out_shape, cpu, a.dtype());
+
+  const char *ap = static_cast<const char *>(a_cpu.data());
+  const char *bp = static_cast<const char *>(b_cpu.data());
+  char *op = static_cast<char *>(out_cpu.data());
+  const size_t a_stride = dtype_size(a.dtype());
+  const size_t b_stride = dtype_size(b.dtype());
+  const size_t out_stride = dtype_size(out_cpu.dtype());
+  const size_t total = numel(info.out_shape);
+  const int ndim = static_cast<int>(info.out_shape.size());
+
+  for (size_t i = 0; i < total; ++i) {
+    size_t off_a = 0, off_b = 0, curr = i;
+    for (int d = ndim - 1; d >= 0; --d) {
+      size_t coord = curr % info.out_shape[d];
+      off_a += coord * info.strides_a[d];
+      off_b += coord * info.strides_b[d];
+      curr /= info.out_shape[d];
+    }
+
+    const ScalarValue lhs =
+        read_scalar_from_buffer(ap + off_a * a_stride, a.dtype());
+    const ScalarValue rhs =
+        read_scalar_from_buffer(bp + off_b * b_stride, b.dtype());
+    write_scalar_to_buffer(op + i * out_stride, out_cpu.dtype(),
+                           fn(lhs.value, rhs.value));
+  }
+
+  return (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+}
+
+inline Tensor sum_to_shape_cpu_fallback(const Tensor &t,
+                                        const Shape &target_shape) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor t_cpu = t.to(cpu);
+  Tensor out_cpu(target_shape, cpu, t.dtype());
+  out_cpu.fill_(make_scalar(0.0, out_cpu.dtype()));
+
+  const char *ip = static_cast<const char *>(t_cpu.data());
+  char *op = static_cast<char *>(out_cpu.data());
+  const size_t in_stride = dtype_size(t.dtype());
+  const size_t out_stride = dtype_size(out_cpu.dtype());
+
+  int ndim = static_cast<int>(t.shape().size());
+  int out_ndim = static_cast<int>(target_shape.size());
+  Strides out_strides = default_strides(target_shape);
+
+  for (size_t i = 0; i < t_cpu.size(); ++i) {
+    size_t out_off = 0;
+    size_t curr = i;
+    for (int d = ndim - 1; d >= 0; --d) {
+      size_t coord = curr % t.shape()[d];
+      curr /= t.shape()[d];
+
+      int out_d_idx = d - (ndim - out_ndim);
+      if (out_d_idx >= 0 && target_shape[out_d_idx] != 1) {
+        out_off += coord * out_strides[out_d_idx];
+      }
+    }
+
+    const ScalarValue accum =
+        read_scalar_from_buffer(op + out_off * out_stride, out_cpu.dtype());
+    const ScalarValue val =
+        read_scalar_from_buffer(ip + i * in_stride, t.dtype());
+    write_scalar_to_buffer(op + out_off * out_stride, out_cpu.dtype(),
+                           accum.value + val.value);
+  }
+
+  return (t.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(t.device());
+}
+
+inline Tensor matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool transA,
+                                  bool transB) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a_cpu = a.to(cpu);
+  Tensor b_cpu = b.to(cpu);
+
+  int M = transA ? a.shape()[1] : a.shape()[0];
+  int K = transA ? a.shape()[0] : a.shape()[1];
+  int N = transB ? b.shape()[0] : b.shape()[1];
+
+  Tensor out_cpu({M, N}, cpu, a.dtype());
+  const char *ap = static_cast<const char *>(a_cpu.data());
+  const char *bp = static_cast<const char *>(b_cpu.data());
+  char *cp = static_cast<char *>(out_cpu.data());
+  const size_t a_stride = dtype_size(a.dtype());
+  const size_t b_stride = dtype_size(b.dtype());
+  const size_t out_stride = dtype_size(out_cpu.dtype());
+
+  for (int m = 0; m < M; ++m) {
+    for (int n = 0; n < N; ++n) {
+      double sum = 0.0;
+      for (int k = 0; k < K; ++k) {
+        const int a_index = transA ? (k * M + m) : (m * K + k);
+        const int b_index = transB ? (n * K + k) : (k * N + n);
+        const ScalarValue a_val =
+            read_scalar_from_buffer(ap + a_index * a_stride, a.dtype());
+        const ScalarValue b_val =
+            read_scalar_from_buffer(bp + b_index * b_stride, b.dtype());
+        sum += a_val.value * b_val.value;
+      }
+      write_scalar_to_buffer(cp + (m * N + n) * out_stride, out_cpu.dtype(),
+                             sum);
+    }
+  }
+
+  return (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+}
+
+template <typename Fn>
+inline Tensor unary_cpu_fallback(const Tensor &input, Fn &&fn) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor in_cpu = input.to(cpu);
+  Tensor out_cpu(input.shape(), cpu, input.dtype());
+  const char *ip = static_cast<const char *>(in_cpu.data());
+  char *op = static_cast<char *>(out_cpu.data());
+  const size_t stride = dtype_size(input.dtype());
+  for (size_t i = 0; i < in_cpu.size(); ++i) {
+    const ScalarValue value =
+        read_scalar_from_buffer(ip + i * stride, input.dtype());
+    write_scalar_to_buffer(op + i * stride, out_cpu.dtype(), fn(value.value));
+  }
+  return (input.device().type == DeviceType::CPU) ? out_cpu
+                                                  : out_cpu.to(input.device());
+}
+
+} // namespace detail
+
 // 1. Forward Declarations (so structs can see the functions)
 inline Tensor add(const Tensor &a, const Tensor &b);
 inline Tensor sub(const Tensor &a, const Tensor &b);
@@ -17,7 +184,8 @@ inline Tensor mul(const Tensor &a, const Tensor &b);
 inline Tensor div(const Tensor &a, const Tensor &b);
 inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
                          const Tensor &bias, float eps = 1e-5f);
-inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value);
+inline Tensor masked_fill(const Tensor &a, const Tensor &mask,
+                          const ScalarValue &value);
 inline Tensor log_softmax(const Tensor &a, int dim = -1);
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
@@ -69,12 +237,17 @@ struct MaskedFillBackward : public Node {
     Tensor mask_cpu = mask.to(cpu);
     Tensor gi_cpu(input_shape, cpu, grad_out.dtype());
 
-    const float *go = static_cast<const float *>(go_cpu.data());
-    const float *m = static_cast<const float *>(mask_cpu.data());
-    float *gi = static_cast<float *>(gi_cpu.data());
-
     for (size_t i = 0; i < gi_cpu.size(); ++i) {
-      gi[i] = (m[i] != 0.0f) ? 0.0f : go[i];
+      const ScalarValue mask_value = read_scalar_from_buffer(
+          static_cast<const char *>(mask_cpu.data()) + i * dtype_size(mask.dtype()),
+          mask.dtype());
+      const ScalarValue grad_value = read_scalar_from_buffer(
+          static_cast<const char *>(go_cpu.data()) +
+              i * dtype_size(grad_out.dtype()),
+          grad_out.dtype());
+      write_scalar_to_buffer(
+          static_cast<char *>(gi_cpu.data()) + i * dtype_size(gi_cpu.dtype()),
+          gi_cpu.dtype(), mask_value.is_nonzero() ? 0.0 : grad_value.value);
     }
 
     Tensor gi_dev = (grad_out.device().type == DeviceType::CPU)
@@ -84,7 +257,8 @@ struct MaskedFillBackward : public Node {
   }
 };
 
-inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value) {
+inline Tensor masked_fill(const Tensor &a, const Tensor &mask,
+                          const ScalarValue &value) {
   if (a.shape() != mask.shape())
     throw std::runtime_error("masked_fill: input/mask shape mismatch");
   if (a.device() != mask.device())
@@ -95,12 +269,21 @@ inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value) {
   Tensor m_cpu = mask.to(cpu);
   Tensor out_cpu(a.shape(), cpu, a.dtype());
 
-  const float *av = static_cast<const float *>(a_cpu.data());
-  const float *mv = static_cast<const float *>(m_cpu.data());
-  float *ov = static_cast<float *>(out_cpu.data());
+  const char *av = static_cast<const char *>(a_cpu.data());
+  const char *mv = static_cast<const char *>(m_cpu.data());
+  char *ov = static_cast<char *>(out_cpu.data());
+  const size_t a_stride = dtype_size(a.dtype());
+  const size_t mask_stride = dtype_size(mask.dtype());
+  const size_t out_stride = dtype_size(out_cpu.dtype());
 
   for (size_t i = 0; i < out_cpu.size(); ++i) {
-    ov[i] = (mv[i] != 0.0f) ? value : av[i];
+    const ScalarValue mask_value =
+        read_scalar_from_buffer(mv + i * mask_stride, mask.dtype());
+    const ScalarValue input_value =
+        read_scalar_from_buffer(av + i * a_stride, a.dtype());
+    write_scalar_to_buffer(ov + i * out_stride, out_cpu.dtype(),
+                           mask_value.is_nonzero() ? value.value
+                                                   : input_value.value);
   }
 
   Tensor out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
@@ -112,13 +295,22 @@ inline Tensor masked_fill(const Tensor &a, const Tensor &mask, float value) {
     out.impl_->grad_fn = fn;
   }
 
-  record_trace(out, "MaskedFill", {a, mask}, {}, {{"value", value}});
+  if (value.dtype == DataType::Int32) {
+    record_trace(out, "MaskedFill", {a, mask},
+                 {{"value", {value.as_int32()}}});
+  } else {
+    record_trace(out, "MaskedFill", {a, mask}, {}, {{"value", value.as_float()}});
+  }
   return out;
 }
 
 inline Tensor sum_to_shape(const Tensor &t, const Shape &target_shape) {
   if (t.shape() == target_shape)
     return t;
+
+  if (!detail::backend_supports(t, BackendFeature::Reduction)) {
+    return detail::sum_to_shape_cpu_fallback(t, target_shape);
+  }
 
   Tensor out(target_shape, t.device(), t.dtype());
   t.impl_->backend().sum_to_shape(*t.impl_->storage, *out.impl_->storage,
@@ -145,16 +337,14 @@ inline Tensor broadcast_expand(const Tensor &src, int N) {
 
 inline Tensor expand_scalar(const Tensor &scalar, const Shape &target_shape) {
   Tensor out(target_shape, scalar.device(), scalar.dtype());
-  // Use uniform_ to fill the tensor with the scalar value
-  Tensor cpu_scalar = scalar.to(Device{DeviceType::CPU, 0});
-  float val = ((float *)cpu_scalar.data())[0];
-  out.uniform_(val, val);
+  out.fill_(scalar.item_value());
   return out;
 }
 
 inline Tensor add(const Tensor &a, const Tensor &b) {
   if (a.device() != b.device())
     throw std::runtime_error("Add: device mismatch");
+  detail::require_same_dtype("Add", a, b);
 
   auto info = compute_broadcast(a.shape(), a.strides(), b.shape(), b.strides());
   if (!info.can_broadcast) {
@@ -162,9 +352,16 @@ inline Tensor add(const Tensor &a, const Tensor &b) {
                              " vs " + to_string(b.shape()));
   }
 
-  Tensor out(info.out_shape, a.device(), a.dtype());
-  a.impl_->backend().add(*a.impl_->storage, *b.impl_->storage,
-                         *out.impl_->storage, info);
+  Tensor out = detail::backend_supports(a, BackendFeature::ElementwiseBinary)
+                   ? Tensor(info.out_shape, a.device(), a.dtype())
+                   : detail::binary_broadcast_cpu_fallback(
+                         a, b, info, [](double lhs, double rhs) {
+                           return lhs + rhs;
+                         });
+  if (detail::backend_supports(a, BackendFeature::ElementwiseBinary)) {
+    a.impl_->backend().add(*a.impl_->storage, *b.impl_->storage,
+                           *out.impl_->storage, info);
+  }
 
   if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
     auto fn = std::make_shared<AddBackward>(a.shape(), b.shape());
@@ -269,6 +466,9 @@ struct MSELossBackward : public Node {
 };
 
 inline Tensor mse_loss(const Tensor &pred, const Tensor &target) {
+  detail::require_same_dtype("MSELoss", pred, target);
+  detail::require_floating_dtype("MSELoss", pred);
+  detail::require_backend_support("MSELoss", pred, BackendFeature::Loss);
   if (pred.shape() == target.shape()) {
     Tensor out({1}, pred.device(), pred.dtype());
     pred.impl_->backend().mse_loss(*pred.impl_->storage, *target.impl_->storage,
@@ -327,6 +527,9 @@ struct CrossEntropyBackward : public Node {
 };
 
 inline Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
+  detail::require_same_dtype("CrossEntropy", logits, targets);
+  detail::require_floating_dtype("CrossEntropy", logits);
+  detail::require_backend_support("CrossEntropy", logits, BackendFeature::Loss);
   if (logits.shape() != targets.shape()) {
     throw std::runtime_error(
         "CrossEntropy: shape mismatch. Logits=" + to_string(logits.shape()) +
@@ -385,41 +588,71 @@ struct LayerNormBackward : public Node {
     Tensor dx_cpu(x.shape(), cpu, x.dtype());
     Tensor dw_cpu(weight.shape(), cpu, weight.dtype());
     Tensor db_cpu(bias.shape(), cpu, bias.dtype());
-    dw_cpu.uniform_(0.0f, 0.0f);
-    db_cpu.uniform_(0.0f, 0.0f);
+    dw_cpu.fill_(make_scalar(0.0, dw_cpu.dtype()));
+    db_cpu.fill_(make_scalar(0.0, db_cpu.dtype()));
 
-    const float *go = static_cast<const float *>(go_cpu.data());
-    const float *xv = static_cast<const float *>(x_cpu.data());
-    const float *wv = static_cast<const float *>(w_cpu.data());
-    const float *mv = static_cast<const float *>(mean_cpu.data());
-    const float *iv = static_cast<const float *>(inv_std_cpu.data());
+    const char *go = static_cast<const char *>(go_cpu.data());
+    const char *xv = static_cast<const char *>(x_cpu.data());
+    const char *wv = static_cast<const char *>(w_cpu.data());
+    const char *mv = static_cast<const char *>(mean_cpu.data());
+    const char *iv = static_cast<const char *>(inv_std_cpu.data());
 
-    float *dx = static_cast<float *>(dx_cpu.data());
-    float *dw = static_cast<float *>(dw_cpu.data());
-    float *db = static_cast<float *>(db_cpu.data());
+    char *dx = static_cast<char *>(dx_cpu.data());
+    char *dw = static_cast<char *>(dw_cpu.data());
+    char *db = static_cast<char *>(db_cpu.data());
+
+    const size_t go_stride = dtype_size(go_cpu.dtype());
+    const size_t x_stride = dtype_size(x_cpu.dtype());
+    const size_t w_stride = dtype_size(w_cpu.dtype());
+    const size_t acc_stride = dtype_size(mean_cpu.dtype());
+    const size_t dx_stride = dtype_size(dx_cpu.dtype());
+    const size_t dw_stride = dtype_size(dw_cpu.dtype());
+    const size_t db_stride = dtype_size(db_cpu.dtype());
 
     for (int r = 0; r < rows; ++r) {
-      const float mean = mv[r];
-      const float inv = iv[r];
-      float sum_gy = 0.0f;
-      float sum_gy_xhat = 0.0f;
+      const double mean =
+          read_scalar_from_buffer(mv + r * acc_stride, mean_cpu.dtype()).value;
+      const double inv =
+          read_scalar_from_buffer(iv + r * acc_stride, inv_std_cpu.dtype()).value;
+      double sum_gy = 0.0;
+      double sum_gy_xhat = 0.0;
 
       for (int c = 0; c < cols; ++c) {
         int idx = r * cols + c;
-        float xhat = (xv[idx] - mean) * inv;
-        float gy = go[idx] * wv[c];
+        const double x_value =
+            read_scalar_from_buffer(xv + idx * x_stride, x_cpu.dtype()).value;
+        const double go_value =
+            read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+        const double w_value =
+            read_scalar_from_buffer(wv + c * w_stride, w_cpu.dtype()).value;
+        const double xhat = (x_value - mean) * inv;
+        const double gy = go_value * w_value;
         sum_gy += gy;
         sum_gy_xhat += gy * xhat;
-        dw[c] += go[idx] * xhat;
-        db[c] += go[idx];
+
+        const double dw_prev =
+            read_scalar_from_buffer(dw + c * dw_stride, dw_cpu.dtype()).value;
+        const double db_prev =
+            read_scalar_from_buffer(db + c * db_stride, db_cpu.dtype()).value;
+        write_scalar_to_buffer(dw + c * dw_stride, dw_cpu.dtype(),
+                               dw_prev + go_value * xhat);
+        write_scalar_to_buffer(db + c * db_stride, db_cpu.dtype(),
+                               db_prev + go_value);
       }
 
       for (int c = 0; c < cols; ++c) {
         int idx = r * cols + c;
-        float xhat = (xv[idx] - mean) * inv;
-        float gy = go[idx] * wv[c];
-        dx[idx] = (inv / cols) *
-                  (cols * gy - sum_gy - xhat * sum_gy_xhat);
+        const double x_value =
+            read_scalar_from_buffer(xv + idx * x_stride, x_cpu.dtype()).value;
+        const double go_value =
+            read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+        const double w_value =
+            read_scalar_from_buffer(wv + c * w_stride, w_cpu.dtype()).value;
+        const double xhat = (x_value - mean) * inv;
+        const double gy = go_value * w_value;
+        write_scalar_to_buffer(dx + idx * dx_stride, dx_cpu.dtype(),
+                               (inv / cols) *
+                                   (cols * gy - sum_gy - xhat * sum_gy_xhat));
       }
     }
 
@@ -436,6 +669,9 @@ struct LayerNormBackward : public Node {
 
 inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
                          const Tensor &bias, float eps) {
+  detail::require_same_dtype("LayerNorm", x, weight);
+  detail::require_same_dtype("LayerNorm", x, bias);
+  detail::require_floating_dtype("LayerNorm", x);
   if (x.shape().empty())
     throw std::runtime_error("LayerNorm: input must have at least 1 dim");
 
@@ -451,36 +687,57 @@ inline Tensor layer_norm(const Tensor &x, const Tensor &weight,
   Tensor b_cpu = bias.to(cpu);
 
   Tensor out_cpu(x.shape(), cpu, x.dtype());
-  Tensor mean_cpu({rows}, cpu, x.dtype(), false);
-  Tensor inv_std_cpu({rows}, cpu, x.dtype(), false);
+  const DataType acc_dtype =
+      accumulation_type(AccumulationOp::Normalization, x.dtype());
+  Tensor mean_cpu({rows}, cpu, acc_dtype, false);
+  Tensor inv_std_cpu({rows}, cpu, acc_dtype, false);
 
-  const float *xv = static_cast<const float *>(x_cpu.data());
-  const float *wv = static_cast<const float *>(w_cpu.data());
-  const float *bv = static_cast<const float *>(b_cpu.data());
-  float *ov = static_cast<float *>(out_cpu.data());
-  float *mv = static_cast<float *>(mean_cpu.data());
-  float *iv = static_cast<float *>(inv_std_cpu.data());
+  const char *xv = static_cast<const char *>(x_cpu.data());
+  const char *wv = static_cast<const char *>(w_cpu.data());
+  const char *bv = static_cast<const char *>(b_cpu.data());
+  char *ov = static_cast<char *>(out_cpu.data());
+  char *mv = static_cast<char *>(mean_cpu.data());
+  char *iv = static_cast<char *>(inv_std_cpu.data());
+  const size_t x_stride = dtype_size(x_cpu.dtype());
+  const size_t w_stride = dtype_size(w_cpu.dtype());
+  const size_t b_stride = dtype_size(b_cpu.dtype());
+  const size_t out_stride = dtype_size(out_cpu.dtype());
+  const size_t acc_stride = dtype_size(mean_cpu.dtype());
 
   for (int r = 0; r < rows; ++r) {
-    float mean = 0.0f;
-    for (int c = 0; c < cols; ++c)
-      mean += xv[r * cols + c];
+    double mean = 0.0;
+    for (int c = 0; c < cols; ++c) {
+      mean += read_scalar_from_buffer(xv + (r * cols + c) * x_stride,
+                                      x_cpu.dtype())
+                  .value;
+    }
     mean /= cols;
 
-    float var = 0.0f;
+    double var = 0.0;
     for (int c = 0; c < cols; ++c) {
-      float d = xv[r * cols + c] - mean;
+      const double x_value =
+          read_scalar_from_buffer(xv + (r * cols + c) * x_stride, x_cpu.dtype())
+              .value;
+      const double d = x_value - mean;
       var += d * d;
     }
     var /= cols;
 
-    float inv = 1.0f / std::sqrt(var + eps);
-    mv[r] = mean;
-    iv[r] = inv;
+    const double inv = 1.0 / std::sqrt(var + eps);
+    write_scalar_to_buffer(mv + r * acc_stride, mean_cpu.dtype(), mean);
+    write_scalar_to_buffer(iv + r * acc_stride, inv_std_cpu.dtype(), inv);
 
     for (int c = 0; c < cols; ++c) {
-      float xhat = (xv[r * cols + c] - mean) * inv;
-      ov[r * cols + c] = xhat * wv[c] + bv[c];
+      const double x_value =
+          read_scalar_from_buffer(xv + (r * cols + c) * x_stride, x_cpu.dtype())
+              .value;
+      const double w_value =
+          read_scalar_from_buffer(wv + c * w_stride, w_cpu.dtype()).value;
+      const double b_value =
+          read_scalar_from_buffer(bv + c * b_stride, b_cpu.dtype()).value;
+      const double xhat = (x_value - mean) * inv;
+      write_scalar_to_buffer(ov + (r * cols + c) * out_stride, out_cpu.dtype(),
+                             xhat * w_value + b_value);
     }
   }
 
@@ -518,8 +775,16 @@ struct ReluBackward : public Node {
 };
 
 inline Tensor relu(const Tensor &a) {
-  Tensor out(a.shape(), a.device(), a.dtype());
-  a.impl_->backend().relu(*a.impl_->storage, *out.impl_->storage, a.size());
+  Tensor out = detail::backend_supports(a, BackendFeature::UnaryActivation)
+                   ? Tensor(a.shape(), a.device(), a.dtype())
+                   : detail::unary_cpu_fallback(a, [](double v) {
+                       return std::max(v, 0.0);
+                     });
+  if (detail::backend_supports(a, BackendFeature::UnaryActivation)) {
+    a.impl_->backend().relu(*a.impl_->storage, *out.impl_->storage, a.size());
+  } else if (!is_floating(a.dtype()) && a.dtype() != DataType::Int32) {
+    detail::require_backend_support("Relu", a, BackendFeature::UnaryActivation);
+  }
 
   if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<ReluBackward>(a);
@@ -547,8 +812,15 @@ struct SigmoidBackward : public Node {
 };
 
 inline Tensor sigmoid(const Tensor &a) {
-  Tensor out(a.shape(), a.device(), a.dtype());
-  a.impl_->backend().sigmoid(*a.impl_->storage, *out.impl_->storage, a.size());
+  detail::require_floating_dtype("Sigmoid", a);
+  Tensor out = detail::backend_supports(a, BackendFeature::UnaryActivation)
+                   ? Tensor(a.shape(), a.device(), a.dtype())
+                   : detail::unary_cpu_fallback(a, [](double v) {
+                       return 1.0 / (1.0 + std::exp(-v));
+                     });
+  if (detail::backend_supports(a, BackendFeature::UnaryActivation)) {
+    a.impl_->backend().sigmoid(*a.impl_->storage, *out.impl_->storage, a.size());
+  }
 
   if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<SigmoidBackward>(out);
@@ -581,20 +853,32 @@ struct SoftmaxBackward : public Node {
     for (int i = resolved + 1; i < rank; ++i)
       inner *= shape[i];
 
-    const float *go = static_cast<const float *>(go_cpu.data());
-    const float *out = static_cast<const float *>(out_cpu.data());
-    float *gi = static_cast<float *>(gi_cpu.data());
+    const char *go = static_cast<const char *>(go_cpu.data());
+    const char *out = static_cast<const char *>(out_cpu.data());
+    char *gi = static_cast<char *>(gi_cpu.data());
+    const size_t go_stride = dtype_size(go_cpu.dtype());
+    const size_t out_stride = dtype_size(out_cpu.dtype());
+    const size_t gi_stride = dtype_size(gi_cpu.dtype());
 
     for (int o = 0; o < outer; ++o) {
       for (int in = 0; in < inner; ++in) {
-        float dot = 0.0f;
+        double dot = 0.0;
         for (int d = 0; d < dim_size; ++d) {
           int idx = (o * dim_size + d) * inner + in;
-          dot += go[idx] * out[idx];
+          dot += read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype())
+                     .value *
+                 read_scalar_from_buffer(out + idx * out_stride, out_cpu.dtype())
+                     .value;
         }
         for (int d = 0; d < dim_size; ++d) {
           int idx = (o * dim_size + d) * inner + in;
-          gi[idx] = out[idx] * (go[idx] - dot);
+          const double out_value =
+              read_scalar_from_buffer(out + idx * out_stride, out_cpu.dtype())
+                  .value;
+          const double go_value =
+              read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+          write_scalar_to_buffer(gi + idx * gi_stride, gi_cpu.dtype(),
+                                 out_value * (go_value - dot));
         }
       }
     }
@@ -607,6 +891,7 @@ struct SoftmaxBackward : public Node {
 };
 
 inline Tensor softmax(const Tensor &a, int dim = -1) {
+  detail::require_floating_dtype("Softmax", a);
   if (a.shape().empty())
     throw std::runtime_error("Softmax expects non-empty shape");
 
@@ -620,8 +905,47 @@ inline Tensor softmax(const Tensor &a, int dim = -1) {
   int num_classes = a.shape().back();
   int batch_size = a.size() / num_classes;
   Tensor out(a.shape(), a.device(), a.dtype());
-  a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage,
-                             batch_size, num_classes);
+  if (detail::backend_supports(a, BackendFeature::Softmax)) {
+    a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage,
+                               batch_size, num_classes);
+  } else {
+    Device cpu{DeviceType::CPU, 0};
+    Tensor a_cpu = a.to(cpu);
+    Tensor out_cpu(a.shape(), cpu, a.dtype());
+    const char *ip = static_cast<const char *>(a_cpu.data());
+    char *op = static_cast<char *>(out_cpu.data());
+    const size_t stride = dtype_size(a.dtype());
+    for (int b = 0; b < batch_size; ++b) {
+      double max_val = read_scalar_from_buffer(ip + b * num_classes * stride,
+                                               a.dtype())
+                           .value;
+      for (int i = 1; i < num_classes; ++i) {
+        max_val = std::max(
+            max_val,
+            read_scalar_from_buffer(ip + (b * num_classes + i) * stride,
+                                    a.dtype())
+                .value);
+      }
+      double sum_exp = 0.0;
+      for (int i = 0; i < num_classes; ++i) {
+        sum_exp += std::exp(read_scalar_from_buffer(
+                                ip + (b * num_classes + i) * stride, a.dtype())
+                                .value -
+                            max_val);
+      }
+      for (int i = 0; i < num_classes; ++i) {
+        const double prob =
+            std::exp(read_scalar_from_buffer(
+                         ip + (b * num_classes + i) * stride, a.dtype())
+                         .value -
+                     max_val) /
+            sum_exp;
+        write_scalar_to_buffer(op + (b * num_classes + i) * stride,
+                               out_cpu.dtype(), prob);
+      }
+    }
+    out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+  }
 
   if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<SoftmaxBackward>(out, resolved);
@@ -656,22 +980,32 @@ struct LogSoftmaxBackward : public Node {
     for (int i = resolved + 1; i < rank; ++i)
       inner *= shape[i];
 
-    const float *go = static_cast<const float *>(go_cpu.data());
-    const float *lp = static_cast<const float *>(lp_cpu.data());
-    float *gi = static_cast<float *>(gi_cpu.data());
+    const char *go = static_cast<const char *>(go_cpu.data());
+    const char *lp = static_cast<const char *>(lp_cpu.data());
+    char *gi = static_cast<char *>(gi_cpu.data());
+    const size_t go_stride = dtype_size(go_cpu.dtype());
+    const size_t lp_stride = dtype_size(lp_cpu.dtype());
+    const size_t gi_stride = dtype_size(gi_cpu.dtype());
 
     for (int o = 0; o < outer; ++o) {
       for (int in = 0; in < inner; ++in) {
-        float sum_go = 0.0f;
+        double sum_go = 0.0;
         for (int d = 0; d < dim_size; ++d) {
           int idx = (o * dim_size + d) * inner + in;
-          sum_go += go[idx];
+          sum_go +=
+              read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
         }
 
         for (int d = 0; d < dim_size; ++d) {
           int idx = (o * dim_size + d) * inner + in;
-          float p = std::exp(lp[idx]);
-          gi[idx] = go[idx] - p * sum_go;
+          const double p =
+              std::exp(read_scalar_from_buffer(lp + idx * lp_stride,
+                                               lp_cpu.dtype())
+                           .value);
+          const double go_value =
+              read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+          write_scalar_to_buffer(gi + idx * gi_stride, gi_cpu.dtype(),
+                                 go_value - p * sum_go);
         }
       }
     }
@@ -684,15 +1018,21 @@ struct LogSoftmaxBackward : public Node {
 };
 
 inline Tensor log_softmax(const Tensor &a, int dim) {
+  detail::require_floating_dtype("LogSoftmax", a);
   Tensor p = softmax(a, dim);
 
   Device cpu{DeviceType::CPU, 0};
   Tensor p_cpu = p.to(cpu);
   Tensor out_cpu(a.shape(), cpu, a.dtype());
-  const float *pv = static_cast<const float *>(p_cpu.data());
-  float *ov = static_cast<float *>(out_cpu.data());
-  for (size_t i = 0; i < p_cpu.size(); ++i)
-    ov[i] = std::log(std::max(pv[i], 1e-20f));
+  const char *pv = static_cast<const char *>(p_cpu.data());
+  char *ov = static_cast<char *>(out_cpu.data());
+  const size_t stride = dtype_size(a.dtype());
+  for (size_t i = 0; i < p_cpu.size(); ++i) {
+    const double prob =
+        read_scalar_from_buffer(pv + i * stride, p_cpu.dtype()).value;
+    write_scalar_to_buffer(ov + i * stride, out_cpu.dtype(),
+                           std::log(std::max(prob, 1e-20)));
+  }
 
   Tensor out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
 
@@ -711,12 +1051,17 @@ inline Tensor log_softmax(const Tensor &a, int dim) {
 // --- MATMUL ---
 inline Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA,
                               bool transB) {
+  detail::require_same_dtype("Matmul", a, b);
   if (a.shape().size() != 2 || b.shape().size() != 2)
     throw std::runtime_error("Matmul currently requires 2D tensors");
 
   int M = transA ? a.shape()[1] : a.shape()[0];
   int K = transA ? a.shape()[0] : a.shape()[1];
   int N = transB ? b.shape()[0] : b.shape()[1];
+
+  if (!detail::backend_supports(a, BackendFeature::Matmul)) {
+    return detail::matmul_cpu_fallback(a, b, transA, transB);
+  }
 
   Tensor out({M, N}, a.device(), a.dtype());
   a.impl_->backend().matmul(*a.impl_->storage, *b.impl_->storage,
@@ -787,6 +1132,7 @@ struct SubBackward : public Node {
 inline Tensor sub(const Tensor &a, const Tensor &b) {
   if (a.device() != b.device())
     throw std::runtime_error("Sub: device mismatch");
+  detail::require_same_dtype("Sub", a, b);
 
   auto info = compute_broadcast(a.shape(), a.strides(), b.shape(), b.strides());
   if (!info.can_broadcast) {
@@ -794,9 +1140,16 @@ inline Tensor sub(const Tensor &a, const Tensor &b) {
                              " vs " + to_string(b.shape()));
   }
 
-  Tensor out(info.out_shape, a.device(), a.dtype());
-  a.impl_->backend().sub(*a.impl_->storage, *b.impl_->storage,
-                         *out.impl_->storage, info);
+  Tensor out = detail::backend_supports(a, BackendFeature::ElementwiseBinary)
+                   ? Tensor(info.out_shape, a.device(), a.dtype())
+                   : detail::binary_broadcast_cpu_fallback(
+                         a, b, info, [](double lhs, double rhs) {
+                           return lhs - rhs;
+                         });
+  if (detail::backend_supports(a, BackendFeature::ElementwiseBinary)) {
+    a.impl_->backend().sub(*a.impl_->storage, *b.impl_->storage,
+                           *out.impl_->storage, info);
+  }
 
   if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
     auto fn = std::make_shared<SubBackward>(a.shape(), b.shape());
@@ -827,15 +1180,23 @@ struct MulBackward : public Node {
 inline Tensor mul(const Tensor &a, const Tensor &b) {
   if (a.device() != b.device())
     throw std::runtime_error("Mul: device mismatch");
+  detail::require_same_dtype("Mul", a, b);
 
   auto info = compute_broadcast(a.shape(), a.strides(), b.shape(), b.strides());
   if (!info.can_broadcast) {
     throw std::runtime_error("Mul: shape mismatch");
   }
 
-  Tensor out(info.out_shape, a.device(), a.dtype());
-  a.impl_->backend().mul(*a.impl_->storage, *b.impl_->storage,
-                         *out.impl_->storage, info);
+  Tensor out = detail::backend_supports(a, BackendFeature::ElementwiseBinary)
+                   ? Tensor(info.out_shape, a.device(), a.dtype())
+                   : detail::binary_broadcast_cpu_fallback(
+                         a, b, info, [](double lhs, double rhs) {
+                           return lhs * rhs;
+                         });
+  if (detail::backend_supports(a, BackendFeature::ElementwiseBinary)) {
+    a.impl_->backend().mul(*a.impl_->storage, *b.impl_->storage,
+                           *out.impl_->storage, info);
+  }
 
   if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
     auto fn = std::make_shared<MulBackward>(a, b);
@@ -870,15 +1231,24 @@ struct DivBackward : public Node {
 inline Tensor div(const Tensor &a, const Tensor &b) {
   if (a.device() != b.device())
     throw std::runtime_error("Div: device mismatch");
+  detail::require_same_dtype("Div", a, b);
+  detail::require_floating_dtype("Div", a);
 
   auto info = compute_broadcast(a.shape(), a.strides(), b.shape(), b.strides());
   if (!info.can_broadcast) {
     throw std::runtime_error("Div: shape mismatch");
   }
 
-  Tensor out(info.out_shape, a.device(), a.dtype());
-  a.impl_->backend().div(*a.impl_->storage, *b.impl_->storage,
-                         *out.impl_->storage, info);
+  Tensor out = detail::backend_supports(a, BackendFeature::ElementwiseBinary)
+                   ? Tensor(info.out_shape, a.device(), a.dtype())
+                   : detail::binary_broadcast_cpu_fallback(
+                         a, b, info, [](double lhs, double rhs) {
+                           return lhs / rhs;
+                         });
+  if (detail::backend_supports(a, BackendFeature::ElementwiseBinary)) {
+    a.impl_->backend().div(*a.impl_->storage, *b.impl_->storage,
+                           *out.impl_->storage, info);
+  }
 
   if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
     auto fn = std::make_shared<DivBackward>(a, b);
@@ -906,21 +1276,41 @@ struct SumBackward : public Node {
     // the backward pass simple, but ensure FORWARD is fast.
 
     Tensor grad_out_cpu = grads[0].to(Device{DeviceType::CPU, 0});
-    float g = ((float *)grad_out_cpu.data())[0];
+    const ScalarValue g =
+        read_scalar_from_buffer(grad_out_cpu.data(), grad_out_cpu.dtype());
 
-    Tensor cpu_grad_in(shape, Device{DeviceType::CPU, 0}, DataType::Float32);
-    float *dest = (float *)cpu_grad_in.data();
-    for (size_t i = 0; i < numel(shape); ++i)
-      dest[i] = g;
+    Tensor cpu_grad_in(shape, Device{DeviceType::CPU, 0}, grads[0].dtype());
+    cpu_grad_in.fill_(make_scalar(g.value, cpu_grad_in.dtype()));
 
     return {cpu_grad_in.to(dev)};
   }
 };
 
 inline Tensor sum(const Tensor &a) {
-  Tensor out({1}, a.device(), a.dtype());
+  if (!detail::backend_supports(a, BackendFeature::Reduction)) {
+    Device cpu{DeviceType::CPU, 0};
+    Tensor a_cpu = a.to(cpu);
+    Tensor out_cpu({1}, cpu, a.dtype());
+    double total = 0.0;
+    const char *ip = static_cast<const char *>(a_cpu.data());
+    const size_t stride = dtype_size(a.dtype());
+    for (size_t i = 0; i < a_cpu.size(); ++i) {
+      total += read_scalar_from_buffer(ip + i * stride, a.dtype()).value;
+    }
+    write_scalar_to_buffer(out_cpu.data(), out_cpu.dtype(), total);
+    Tensor out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
 
-  // Use Backend!
+    if (GradMode::is_enabled() && a.requires_grad()) {
+      auto fn = std::make_shared<SumBackward>(a.shape(), a.device());
+      link_backward_edges(fn.get(), {a});
+      out.set_requires_grad(true);
+      out.impl_->grad_fn = fn;
+    }
+    record_trace(out, "ReduceSum", {a}, {{"keepdims", {0}}});
+    return out;
+  }
+
+  Tensor out({1}, a.device(), a.dtype());
   a.impl_->backend().sum(*a.impl_->storage, *out.impl_->storage, a.size());
 
   if (GradMode::is_enabled() && a.requires_grad()) {
@@ -997,6 +1387,11 @@ struct Conv2DBackward : public Node {
 };
 inline Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
                      int stride, int padding) {
+  detail::require_same_dtype("Conv2d", in, weight);
+  if (bias.impl_)
+    detail::require_same_dtype("Conv2d", in, bias);
+  detail::require_floating_dtype("Conv2d", in);
+  detail::require_backend_support("Conv2d", in, BackendFeature::Convolution);
   if (in.device() != weight.device() ||
       (bias.impl_ && bias.device() != in.device())) {
     MUNET_ERROR << "conv2d: inputs not on same device: "
@@ -1069,6 +1464,8 @@ struct MaxPool2DBackward : public Node {
 };
 inline Tensor max_pool2d(const Tensor &in, int kernel_size, int stride,
                          int padding) {
+  detail::require_floating_dtype("MaxPool2d", in);
+  detail::require_backend_support("MaxPool2d", in, BackendFeature::Pooling);
   int B = in.shape()[0], C = in.shape()[1], iH = in.shape()[2],
       iW = in.shape()[3];
   int oH = (iH + 2 * padding - kernel_size) / stride + 1;
@@ -1107,6 +1504,8 @@ struct Upsample2DBackward : public Node {
   }
 };
 inline Tensor upsample2d(const Tensor &in, int scale_factor) {
+  detail::require_floating_dtype("Upsample2d", in);
+  detail::require_backend_support("Upsample2d", in, BackendFeature::Pooling);
   int B = in.shape()[0], C = in.shape()[1], iH = in.shape()[2],
       iW = in.shape()[3];
   Tensor out({B, C, iH * scale_factor, iW * scale_factor}, in.device(),
@@ -1154,13 +1553,19 @@ inline Tensor batch_norm(const Tensor &in, Tensor &running_mean,
                          Tensor &running_var, const Tensor &weight,
                          const Tensor &bias, bool training, float momentum,
                          float eps) {
+  detail::require_same_dtype("BatchNorm", in, weight);
+  detail::require_same_dtype("BatchNorm", in, bias);
+  detail::require_floating_dtype("BatchNorm", in);
+  detail::require_backend_support("BatchNorm", in, BackendFeature::BatchNorm);
   int B = in.shape()[0], C = in.shape()[1], H = in.shape()[2],
       W = in.shape()[3];
   Tensor out(in.shape(), in.device(), in.dtype());
 
   // We need to save mean/var for backward if training
-  Tensor save_mean({C}, in.device(), DataType::Float32);
-  Tensor save_var({C}, in.device(), DataType::Float32);
+  const DataType stats_dtype =
+      accumulation_type(AccumulationOp::Normalization, in.dtype());
+  Tensor save_mean({C}, in.device(), stats_dtype);
+  Tensor save_var({C}, in.device(), stats_dtype);
 
   in.impl_->backend().batch_norm(
       *in.impl_->storage, *weight.impl_->storage, *bias.impl_->storage,
@@ -1207,8 +1612,9 @@ inline Tensor transpose(const Tensor &in, int dim0, int dim1) {
 }
 
 inline Tensor zeros(Shape shape, Device device = Device{DeviceType::CPU, 0},
-                    bool requires_grad = false) {
-  Tensor t(shape, device, DataType::Float32, requires_grad);
+                    bool requires_grad = false,
+                    DataType dtype = DataType::Float32) {
+  Tensor t(shape, device, dtype, requires_grad);
   t.impl_->storage->zero_();
   return t;
 }

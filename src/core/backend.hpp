@@ -8,9 +8,83 @@ namespace munet {
 
 class Storage;
 
+enum class BackendFeature {
+  ElementwiseBinary,
+  BroadcastRow,
+  Matmul,
+  UnaryActivation,
+  Softmax,
+  Concat,
+  Loss,
+  Convolution,
+  Pooling,
+  BatchNorm,
+  OptimizerStep,
+  RandomFill,
+  Reduction,
+};
+
+inline bool supports_backend_feature_dtype(BackendFeature feature,
+                                           DataType dtype) {
+  switch (feature) {
+  case BackendFeature::RandomFill:
+    return is_floating(dtype);
+  case BackendFeature::ElementwiseBinary:
+  case BackendFeature::BroadcastRow:
+  case BackendFeature::Matmul:
+  case BackendFeature::UnaryActivation:
+  case BackendFeature::Softmax:
+  case BackendFeature::Concat:
+  case BackendFeature::Loss:
+  case BackendFeature::Convolution:
+  case BackendFeature::Pooling:
+  case BackendFeature::BatchNorm:
+  case BackendFeature::OptimizerStep:
+  case BackendFeature::Reduction:
+    return dtype == DataType::Float32;
+  default:
+    return false;
+  }
+}
+
+inline const char *backend_feature_name(BackendFeature feature) {
+  switch (feature) {
+  case BackendFeature::ElementwiseBinary:
+    return "elementwise_binary";
+  case BackendFeature::BroadcastRow:
+    return "broadcast_row";
+  case BackendFeature::Matmul:
+    return "matmul";
+  case BackendFeature::UnaryActivation:
+    return "unary_activation";
+  case BackendFeature::Softmax:
+    return "softmax";
+  case BackendFeature::Concat:
+    return "concat";
+  case BackendFeature::Loss:
+    return "loss";
+  case BackendFeature::Convolution:
+    return "convolution";
+  case BackendFeature::Pooling:
+    return "pooling";
+  case BackendFeature::BatchNorm:
+    return "batch_norm";
+  case BackendFeature::OptimizerStep:
+    return "optimizer_step";
+  case BackendFeature::RandomFill:
+    return "random_fill";
+  case BackendFeature::Reduction:
+    return "reduction";
+  default:
+    return "unknown";
+  }
+}
+
 class Backend {
 public:
   virtual ~Backend() = default;
+  virtual const char *name() const = 0;
+  virtual bool supports(BackendFeature feature, DataType dtype) const = 0;
 
   virtual void *allocate(size_t bytes) = 0;
   virtual void deallocate(void *ptr) = 0;

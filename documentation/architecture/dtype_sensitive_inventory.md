@@ -118,6 +118,13 @@ Current dtype-sensitive areas:
 - helper constants and masks often assume float-valued scalar construction
 - training/inference modules still need a more explicit dtype policy
 
+Current transition status:
+
+- core NN modules now accept `TensorOptions` for parameter construction
+- normalization running-stat buffers use normalization accumulation dtype rather than blindly matching low-precision parameter dtype
+- serialization preserves model tensor dtype fidelity and reconstructs supported built-ins from saved dtype metadata
+- optimizer state follows `optimizer_state_type(parameter_dtype)`
+
 Why this is dtype-sensitive:
 
 - module constructors are where dtype defaults become user-visible behavior
@@ -133,6 +140,14 @@ Current dtype-sensitive areas:
 - optimizer state tensors are created without a broader policy for model dtype vs state dtype vs master weights
 - future grad-scaling/master-weight behavior has no dedicated abstraction yet
 
+Current transition status:
+
+- backends now expose a coarse capability surface (`BackendFeature` x `DataType`) instead of requiring callers to infer support from implementation details
+- optimizer state now follows `optimizer_state_type(parameter_dtype)`
+- serialization keeps tensor dtype fidelity instead of forcing float32 on save/load
+- mixed parameter/state backend kernels still need broader typed-kernel coverage
+- accepted policy: fp32 master weights and grad-scaling metadata belong to optimizer/trainer checkpoints, not module parameter checkpoints
+
 Why this is dtype-sensitive:
 
 - mixed precision training needs optimizer-state rules, not just dtype conversion APIs
@@ -145,8 +160,8 @@ Why this is dtype-sensitive:
 Current dtype-sensitive areas:
 
 - Python bindings expose `TensorOptions` and dtype conversion APIs
-- some array ingress paths such as `copy_from_numpy` are still specialized for `float`
-- factory defaults remain primarily float-oriented
+- dtype-aware NumPy ingress and tensor factories now preserve `float16` / `int32` where supported
+- helper code outside the core bindings can still diverge from the C++ dtype model unless it shares the same supported-dtype checks
 
 Why this is dtype-sensitive:
 
@@ -166,7 +181,7 @@ Why this is dtype-sensitive:
 - no single dtype inventory existed before this phase
 - most backend/op/module tests still assume float-centric execution
 - no capability/fallback tests exist yet for partial dtype support
-- policy for parameter dtype, buffer dtype, accumulation dtype, and serialization fidelity still needs to be formalized
+- backend capability reporting is still implicit rather than queryable
 
 ## Recommended use in later phases
 

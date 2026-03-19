@@ -48,6 +48,55 @@ TEST(NNTest, ModuleToMovesParametersAndBuffers) {
   EXPECT_FALSE(bn->running_var.requires_grad());
 }
 
+TEST(NNTest, ModuleOptionsControlParameterAndBufferDTypes) {
+  TensorOptions options;
+  options.device = Device{DeviceType::CPU, 0};
+  options.dtype = DataType::Float16;
+
+  nn::Linear linear(4, 2, true, options);
+  EXPECT_EQ(linear.weight.dtype(), DataType::Float16);
+  EXPECT_EQ(linear.bias.dtype(), DataType::Float16);
+  EXPECT_TRUE(linear.weight.requires_grad());
+  EXPECT_TRUE(linear.bias.requires_grad());
+
+  nn::BatchNorm2d bn(3, 1e-5f, 0.1f, options);
+  EXPECT_EQ(bn.weight.dtype(), DataType::Float16);
+  EXPECT_EQ(bn.bias.dtype(), DataType::Float16);
+  EXPECT_EQ(bn.running_mean.dtype(), DataType::Float32);
+  EXPECT_EQ(bn.running_var.dtype(), DataType::Float32);
+  EXPECT_FALSE(bn.running_mean.requires_grad());
+  EXPECT_FALSE(bn.running_var.requires_grad());
+}
+
+TEST(NNTest, ModuleToSupportsDTypeAndTensorOptionsConversions) {
+  auto bn = std::make_shared<nn::BatchNorm2d>(3);
+
+  bn->to(DataType::Float16);
+  EXPECT_EQ(bn->weight.dtype(), DataType::Float16);
+  EXPECT_EQ(bn->bias.dtype(), DataType::Float16);
+  EXPECT_EQ(bn->running_mean.dtype(), DataType::Float16);
+  EXPECT_EQ(bn->running_var.dtype(), DataType::Float16);
+  EXPECT_TRUE(bn->weight.requires_grad());
+  EXPECT_TRUE(bn->bias.requires_grad());
+  EXPECT_FALSE(bn->running_mean.requires_grad());
+  EXPECT_FALSE(bn->running_var.requires_grad());
+
+  TensorOptions options;
+  options.device = Device{DeviceType::CPU, 0};
+  options.dtype = DataType::Float32;
+  options.requires_grad = false;
+  bn->to(options);
+
+  EXPECT_EQ(bn->weight.dtype(), DataType::Float32);
+  EXPECT_EQ(bn->bias.dtype(), DataType::Float32);
+  EXPECT_EQ(bn->running_mean.dtype(), DataType::Float32);
+  EXPECT_EQ(bn->running_var.dtype(), DataType::Float32);
+  EXPECT_TRUE(bn->weight.requires_grad());
+  EXPECT_TRUE(bn->bias.requires_grad());
+  EXPECT_FALSE(bn->running_mean.requires_grad());
+  EXPECT_FALSE(bn->running_var.requires_grad());
+}
+
 TEST(NNTest, BatchNormTrainEval) {
   Device cpu{DeviceType::CPU, 0};
   auto bn = std::make_shared<nn::BatchNorm2d>(1);
@@ -158,6 +207,18 @@ TEST(NNTest, DropoutTrainEvalBehavior) {
   }
 }
 
+TEST(NNTest, DropoutSupportsFloat16ViaTypedMask) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::Dropout dropout(0.25f);
+  Tensor x32({16}, cpu, DataType::Float32);
+  x32.fill_(1.0f);
+  Tensor x = x32.to(DataType::Float16);
+
+  dropout.train(true);
+  Tensor y = dropout.forward(x);
+  EXPECT_EQ(y.dtype(), DataType::Float16);
+}
+
 
 TEST(NNTest, EmbeddingForwardOneHot) {
   Device cpu{DeviceType::CPU, 0};
@@ -218,6 +279,43 @@ TEST(NNTest, GELUForwardBehavior) {
   EXPECT_NEAR(yo[2], 1.9357f, 5e-3f);
 }
 
+
+TEST(NNTest, LayerNormFloat16BackwardUsesTypedFallback) {
+  Device cpu{DeviceType::CPU, 0};
+  TensorOptions options;
+  options.device = cpu;
+  options.dtype = DataType::Float16;
+  nn::LayerNorm ln(4, 1e-5f, options);
+
+  Tensor x32({2, 4}, cpu, DataType::Float32, true);
+  float *xd = static_cast<float *>(x32.data());
+  xd[0] = 1.0f; xd[1] = 2.0f; xd[2] = 3.0f; xd[3] = 4.0f;
+  xd[4] = -1.0f; xd[5] = 0.0f; xd[6] = 1.0f; xd[7] = 2.0f;
+
+  Tensor x = x32.to(DataType::Float16).detach();
+  x.set_requires_grad(true);
+  Tensor y = ln.forward(x);
+  EXPECT_EQ(y.dtype(), DataType::Float16);
+
+  Tensor loss = y.sum();
+  EXPECT_NO_THROW(loss.backward());
+  EXPECT_TRUE(x.has_grad());
+  EXPECT_TRUE(ln.weight.has_grad());
+  EXPECT_TRUE(ln.bias.has_grad());
+
+  Tensor x_grad = x.grad().to(DataType::Float32);
+  Tensor w_grad = ln.weight.grad().to(DataType::Float32);
+  Tensor b_grad = ln.bias.grad().to(DataType::Float32);
+  const float *xg = static_cast<const float *>(x_grad.data());
+  const float *wg = static_cast<const float *>(w_grad.data());
+  const float *bg = static_cast<const float *>(b_grad.data());
+  for (int i = 0; i < 8; ++i)
+    EXPECT_TRUE(std::isfinite(xg[i]));
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_TRUE(std::isfinite(wg[i]));
+    EXPECT_TRUE(std::isfinite(bg[i]));
+  }
+}
 
 TEST(NNTest, LayerNormForwardAndBackward) {
   Device cpu{DeviceType::CPU, 0};
@@ -281,6 +379,35 @@ TEST(NNTest, EmbeddingForwardIndexPath) {
   EXPECT_NEAR(o[3], 1.1f, 1e-6f);
   EXPECT_NEAR(o[4], 4.0f, 1e-6f);
   EXPECT_NEAR(o[5], 4.1f, 1e-6f);
+}
+
+TEST(NNTest, EmbeddingForwardIndexPathSupportsInt32IndicesAndFloat16Weights) {
+  Device cpu{DeviceType::CPU, 0};
+  TensorOptions options;
+  options.dtype = DataType::Float16;
+  nn::Embedding emb(4, 2, options);
+  emb.weight.set_requires_grad(false);
+
+  Tensor weights32({4, 2}, cpu, DataType::Float32);
+  float *w = static_cast<float *>(weights32.data());
+  w[0] = 1.0f; w[1] = 1.5f;
+  w[2] = 2.0f; w[3] = 2.5f;
+  w[4] = 3.0f; w[5] = 3.5f;
+  w[6] = 4.0f; w[7] = 4.5f;
+  emb.weight = weights32.to(DataType::Float16);
+
+  Tensor idx({1, 3}, cpu, DataType::Int32);
+  int32_t *id = static_cast<int32_t *>(idx.data());
+  id[0] = 2; id[1] = 0; id[2] = 3;
+
+  Tensor y = emb.forward(idx).to(DataType::Float32);
+  const float *o = static_cast<const float *>(y.data());
+  EXPECT_NEAR(o[0], 3.0f, 1e-2f);
+  EXPECT_NEAR(o[1], 3.5f, 1e-2f);
+  EXPECT_NEAR(o[2], 1.0f, 1e-2f);
+  EXPECT_NEAR(o[3], 1.5f, 1e-2f);
+  EXPECT_NEAR(o[4], 4.0f, 1e-2f);
+  EXPECT_NEAR(o[5], 4.5f, 1e-2f);
 }
 
 TEST(NNTest, MultiHeadAttentionForwardShape) {

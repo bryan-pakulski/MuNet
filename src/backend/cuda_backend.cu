@@ -899,6 +899,10 @@ void CUDABackend::div(const Storage &a, const Storage &b, Storage &out,
 void CUDABackend::fill_uniform(Storage &out, float low, float high,
                                size_t num_elements) {
   cudaSetDevice(device_index_);
+  if (out.dtype() != DataType::Float32) {
+    throw std::runtime_error(
+        "CUDA fill_uniform currently supports only float32 tensors");
+  }
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
   static uint32_t seed_counter = 0;

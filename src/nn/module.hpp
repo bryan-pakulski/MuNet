@@ -29,5 +29,19 @@ public:
   }
 };
 
+inline TensorOptions parameter_options(const TensorOptions &options) {
+  TensorOptions resolved = options;
+  resolved.requires_grad = true;
+  return resolved;
+}
+
+inline TensorOptions buffer_options(const TensorOptions &options,
+                                    DataType buffer_dtype) {
+  TensorOptions resolved = options;
+  resolved.dtype = buffer_dtype;
+  resolved.requires_grad = false;
+  return resolved;
+}
+
 } // namespace nn
 } // namespace munet

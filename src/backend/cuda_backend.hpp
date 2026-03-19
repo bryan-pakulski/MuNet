@@ -14,6 +14,11 @@ public:
   CUDABackend(int device_index);
   ~CUDABackend() override;
 
+  const char *name() const override { return "cuda"; }
+  bool supports(BackendFeature feature, DataType dtype) const override {
+    return supports_backend_feature_dtype(feature, dtype);
+  }
+
   double get_last_kernel_time_us() override { return last_kernel_us_; }
 
   void *allocate(size_t bytes) override;

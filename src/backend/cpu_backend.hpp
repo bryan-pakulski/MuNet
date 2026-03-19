@@ -115,6 +115,11 @@ private:
   }
 
 public:
+  const char *name() const override { return "cpu"; }
+  bool supports(BackendFeature feature, DataType dtype) const override {
+    return supports_backend_feature_dtype(feature, dtype);
+  }
+
   ~CPUBackend() override {
     for (auto &kv : free_blocks_) {
       for (void *ptr : kv.second) {
@@ -828,13 +833,18 @@ public:
 
   void fill_uniform(Storage &out, float low, float high,
                     size_t num_elements) override {
-    float *ptr = (float *)out.data();
+    if (!is_floating(out.dtype())) {
+      throw std::runtime_error("fill_uniform only supports floating-point tensors");
+    }
+
+    char *ptr = static_cast<char *>(out.data());
+    const size_t element_size = dtype_size(out.dtype());
     // Not strictly thread-safe to share generator, creating local one
     parallel_for(0, num_elements, [&](size_t s, size_t e) {
       std::mt19937 gen(42 + s); // Seed offset by index
       std::uniform_real_distribution<float> dis(low, high);
       for (size_t i = s; i < e; ++i) {
-        ptr[i] = dis(gen);
+        write_scalar_to_buffer(ptr + i * element_size, out.dtype(), dis(gen));
       }
     });
   }

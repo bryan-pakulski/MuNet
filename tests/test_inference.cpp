@@ -1,4 +1,6 @@
 #include "inference.hpp"
+#include "nn.hpp"
+#include "test_utils.hpp"
 #include <gtest/gtest.h>
 #include <type_traits>
 
@@ -8,6 +10,26 @@ namespace {
 class IdentityLayer : public inference::Module {
 public:
   Tensor forward(Tensor x) override { return x; }
+};
+
+class IdentityLayerWithState : public inference::Module {
+public:
+  explicit IdentityLayerWithState(const TensorOptions &options) {
+    weight = Tensor({1}, options.device, options.dtype, true);
+    weight.fill_(1.0f);
+    register_parameter("weight", weight);
+
+    running = Tensor({1}, options.device,
+                     accumulation_type(AccumulationOp::Elementwise, options.dtype),
+                     false);
+    running.fill_(0.0f);
+    register_buffer("running", running);
+  }
+
+  Tensor forward(Tensor x) override { return x; }
+
+  Tensor weight;
+  Tensor running;
 };
 } // namespace
 
@@ -144,4 +166,58 @@ TEST(InferenceTest, EngineCompileWithInvalidExpectedOutputShapeThrows) {
   x.uniform_(0.3f, 0.3f);
 
   EXPECT_THROW(engine.compile(x, {-1, 3}, {-1, 4}), std::runtime_error);
+}
+
+TEST(InferenceTest, EngineLoadPreservesModelWideDTypeConversion) {
+  TensorOptions options;
+  options.device = Device{DeviceType::CPU, 0};
+  options.dtype = DataType::Float16;
+
+  auto m = std::make_shared<IdentityLayerWithState>(options);
+  inference::Engine engine;
+  engine.load(m);
+
+  EXPECT_EQ(m->weight.dtype(), DataType::Float16);
+  EXPECT_EQ(m->running.dtype(), DataType::Float32);
+
+  Tensor x({2, 2}, Device{DeviceType::CPU, 0}, DataType::Float16, false);
+  x.fill_(0.5f);
+  Tensor y = engine.run(x);
+  EXPECT_EQ(y.dtype(), DataType::Float16);
+  EXPECT_EQ(y.shape(), x.shape());
+}
+
+TEST(InferenceTest, EnginePreservesFloat16LinearOutputsAcrossAvailableDevices) {
+  TensorOptions options;
+  options.device = Device{DeviceType::CPU, 0};
+  options.dtype = DataType::Float16;
+
+  auto linear = std::make_shared<nn::Linear>(2, 2, true, options);
+  Tensor weight_cpu({2, 2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  Tensor bias_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  float *w = static_cast<float *>(weight_cpu.data());
+  float *b = static_cast<float *>(bias_cpu.data());
+  w[0] = 1.0f; w[1] = 2.0f;
+  w[2] = -1.0f; w[3] = 0.5f;
+  b[0] = 0.25f; b[1] = -0.75f;
+  linear->weight = weight_cpu.to(DataType::Float16);
+  linear->bias = bias_cpu.to(DataType::Float16);
+
+  Tensor x32({1, 2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  float *x_ptr = static_cast<float *>(x32.data());
+  x_ptr[0] = 3.0f;
+  x_ptr[1] = -2.0f;
+  Tensor x = x32.to(DataType::Float16);
+
+  Tensor expected = linear->forward(x).to(Device{DeviceType::CPU, 0}).to(DataType::Float32);
+
+  for (const Device &device : test::get_available_devices()) {
+    inference::Engine engine;
+    engine.set_device(device);
+    engine.load(linear);
+
+    Tensor y = engine.run(x.to(device)).to(Device{DeviceType::CPU, 0}).to(DataType::Float32);
+    EXPECT_EQ(y.dtype(), DataType::Float32);
+    EXPECT_TRUE(test::all_close(y, expected, 2e-1f)) << device.to_string();
+  }
 }

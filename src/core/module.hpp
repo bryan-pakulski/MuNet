@@ -77,6 +77,39 @@ public:
     }
   }
 
+  virtual void to(DataType dtype) {
+    for (auto &[name, p] : parameters_) {
+      *p = p->to(dtype);
+      if (p->requires_grad()) {
+        p->set_requires_grad(true);
+      }
+    }
+    for (auto &[name, b] : buffers_) {
+      *b = b->to(dtype);
+    }
+    for (auto &[name, m] : modules_) {
+      m->to(dtype);
+    }
+  }
+
+  virtual void to(const TensorOptions &options) {
+    for (auto &[name, p] : parameters_) {
+      TensorOptions parameter_options = options;
+      parameter_options.requires_grad = true;
+      *p = p->to(parameter_options);
+      p->set_requires_grad(true);
+    }
+    for (auto &[name, b] : buffers_) {
+      TensorOptions buffer_options = options;
+      buffer_options.requires_grad = false;
+      *b = b->to(buffer_options);
+      b->set_requires_grad(false);
+    }
+    for (auto &[name, m] : modules_) {
+      m->to(options);
+    }
+  }
+
   void zero_grad() {
     for (auto &p : parameters()) {
       p.zero_grad();

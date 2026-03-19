@@ -15,6 +15,84 @@
 namespace py = pybind11;
 using namespace munet;
 
+namespace {
+
+DataType numpy_dtype_to_data_type(const py::buffer_info &buf) {
+  if (buf.itemsize == static_cast<py::ssize_t>(sizeof(float)) &&
+      buf.format == py::format_descriptor<float>::format()) {
+    return DataType::Float32;
+  }
+  if (buf.itemsize == static_cast<py::ssize_t>(sizeof(int32_t)) &&
+      buf.format == py::format_descriptor<int32_t>::format()) {
+    return DataType::Int32;
+  }
+  if (buf.itemsize == 2 && buf.format.find('e') != std::string::npos) {
+    return DataType::Float16;
+  }
+  throw std::runtime_error("Unsupported NumPy dtype; expected float32, float16, or int32");
+}
+
+std::string numpy_format_for_dtype(DataType dtype) {
+  switch (dtype) {
+  case DataType::Float32:
+    return py::format_descriptor<float>::format();
+  case DataType::Float16:
+    return "e";
+  case DataType::Int32:
+    return py::format_descriptor<int32_t>::format();
+  default:
+    throw std::runtime_error("Unsupported tensor dtype for NumPy conversion");
+  }
+}
+
+py::array ensure_c_contiguous(py::array input) {
+  py::array contiguous = py::array::ensure(input, py::array::c_style);
+  if (!contiguous) {
+    throw std::runtime_error("Expected a NumPy array that can be viewed as contiguous");
+  }
+  return contiguous;
+}
+
+Tensor tensor_from_numpy_array(py::array input) {
+  py::array contiguous = ensure_c_contiguous(std::move(input));
+  py::buffer_info buf = contiguous.request();
+  std::vector<int> shape(buf.shape.begin(), buf.shape.end());
+  DataType dtype = numpy_dtype_to_data_type(buf);
+  Tensor t(shape, Device{DeviceType::CPU, 0}, dtype, false);
+  std::memcpy(t.data(), buf.ptr, t.bytes());
+  return t;
+}
+
+void copy_numpy_array_into_tensor(Tensor &tensor, py::array input) {
+  if (tensor.device().type != DeviceType::CPU) {
+    throw std::runtime_error("Target tensor must be on CPU.");
+  }
+
+  Tensor source = tensor_from_numpy_array(std::move(input));
+  if (source.shape() != tensor.shape()) {
+    throw std::runtime_error("Size mismatch.");
+  }
+
+  Tensor converted = (source.dtype() == tensor.dtype()) ? source
+                                                        : source.to(tensor.dtype());
+  std::memcpy(tensor.data(), converted.data(), tensor.bytes());
+}
+
+Tensor make_scalar_tensor(Device device, DataType dtype, float value) {
+  Tensor scalar({1}, device, dtype, false);
+  scalar.fill_(value);
+  return scalar;
+}
+
+Tensor make_constant_tensor(Shape shape, Device device, DataType dtype,
+                            bool requires_grad, const ScalarValue &value) {
+  Tensor tensor(shape, device, dtype, requires_grad);
+  tensor.fill_(value);
+  return tensor;
+}
+
+} // namespace
+
 // Trampoline for Module to allow python inheritance
 class PyModule : public nn::Module {
 public:
@@ -40,6 +118,23 @@ PYBIND11_MODULE(munet, m) {
       .value("Float32", DataType::Float32)
       .value("Float16", DataType::Float16)
       .value("Int32", DataType::Int32)
+      .export_values();
+
+  py::enum_<BackendFeature>(m, "BackendFeature",
+                            "Coarse-grained backend capability categories.")
+      .value("ElementwiseBinary", BackendFeature::ElementwiseBinary)
+      .value("BroadcastRow", BackendFeature::BroadcastRow)
+      .value("Matmul", BackendFeature::Matmul)
+      .value("UnaryActivation", BackendFeature::UnaryActivation)
+      .value("Softmax", BackendFeature::Softmax)
+      .value("Concat", BackendFeature::Concat)
+      .value("Loss", BackendFeature::Loss)
+      .value("Convolution", BackendFeature::Convolution)
+      .value("Pooling", BackendFeature::Pooling)
+      .value("BatchNorm", BackendFeature::BatchNorm)
+      .value("OptimizerStep", BackendFeature::OptimizerStep)
+      .value("RandomFill", BackendFeature::RandomFill)
+      .value("Reduction", BackendFeature::Reduction)
       .export_values();
 
   py::class_<Device>(
@@ -138,15 +233,7 @@ PYBIND11_MODULE(munet, m) {
            "Converts the tensor using explicit tensor options.")
       .def(
           "copy_from_numpy",
-          [](Tensor &t, py::array_t<float> input) {
-            if (t.device().type != DeviceType::CPU)
-              throw std::runtime_error("Target tensor must be on CPU.");
-            py::buffer_info buf = input.request();
-            size_t bytes = buf.size * sizeof(float);
-            if (bytes != t.bytes())
-              throw std::runtime_error("Size mismatch.");
-            std::memcpy(t.data(), buf.ptr, bytes);
-          },
+          [](Tensor &t, py::array input) { copy_numpy_array_into_tensor(t, input); },
           py::arg("input"), "Copies data from a NumPy array into this tensor.")
       .def(
           "replace_",
@@ -176,29 +263,25 @@ PYBIND11_MODULE(munet, m) {
       .def("__add__", [](const Tensor &a, const Tensor &b) { return a + b; })
       .def("__add__",
            [](const Tensor &a, float b) {
-             Tensor bt({1}, a.device(), a.dtype());
-             bt.uniform_(b, b);
+             Tensor bt = make_scalar_tensor(a.device(), a.dtype(), b);
              return a + bt;
            })
       .def("__sub__", [](const Tensor &a, const Tensor &b) { return a - b; })
       .def("__sub__",
            [](const Tensor &a, float b) {
-             Tensor bt({1}, a.device(), a.dtype());
-             bt.uniform_(b, b);
+             Tensor bt = make_scalar_tensor(a.device(), a.dtype(), b);
              return a - bt;
            })
       .def("__mul__", [](const Tensor &a, const Tensor &b) { return a * b; })
       .def("__mul__",
            [](const Tensor &a, float b) {
-             Tensor bt({1}, a.device(), a.dtype());
-             bt.uniform_(b, b);
+             Tensor bt = make_scalar_tensor(a.device(), a.dtype(), b);
              return a * bt;
            })
       .def("__truediv__", [](const Tensor &a, const Tensor &b) { return a / b; })
       .def("__truediv__",
            [](const Tensor &a, float b) {
-             Tensor bt({1}, a.device(), a.dtype());
-             bt.uniform_(b, b);
+             Tensor bt = make_scalar_tensor(a.device(), a.dtype(), b);
              return a / bt;
            })
       .def("__matmul__",
@@ -208,7 +291,10 @@ PYBIND11_MODULE(munet, m) {
       .def("reshape", &Tensor::reshape, py::arg("shape"),
            "Returns a tensor with the same data and number of elements, but "
            "with the specified shape.")
-      .def("masked_fill", &Tensor::masked_fill, py::arg("mask"), py::arg("value"),
+      .def("masked_fill",
+           py::overload_cast<const Tensor &, float>(&Tensor::masked_fill,
+                                                    py::const_),
+           py::arg("mask"), py::arg("value"),
            "Fills entries where mask is 1 with the given value.")
       .def_static("cat", &Tensor::cat, py::arg("inputs"), py::arg("dim") = 1,
                   "Concatenates tensors along a given dimension.")
@@ -279,7 +365,7 @@ PYBIND11_MODULE(munet, m) {
         }
 
         return py::buffer_info(t.data(), dtype_size(t.dtype()),
-                               py::format_descriptor<float>::format(),
+                               numpy_format_for_dtype(t.dtype()),
                                py_shape.size(), py_shape, py_strides);
       });
 
@@ -288,67 +374,73 @@ PYBIND11_MODULE(munet, m) {
   // ============================================================================
   m.def("cat", &ops::cat, py::arg("tensors"), py::arg("dim") = 1,
         "Concatenates a sequence of tensors along the specified dimension.");
+  m.def(
+      "supports",
+      [](Device device, BackendFeature feature, DataType dtype) {
+        return BackendManager::get(device)->supports(feature, dtype);
+      },
+      py::arg("device"), py::arg("feature"), py::arg("dtype"),
+      "Returns whether the selected backend advertises native support for a "
+      "feature/dtype combination.");
 
   m.def(
       "zeros",
-      [](Shape shape, std::optional<Device> device, bool requires_grad) {
+      [](Shape shape, std::optional<Device> device, bool requires_grad,
+         DataType dtype) {
         Device dev = device.value_or(Device{DeviceType::CPU, 0});
-        Tensor t(shape, dev, DataType::Float32, requires_grad);
-        t.impl_->backend().memset(t.data(), 0, t.bytes());
-        return t;
+        return make_constant_tensor(shape, dev, dtype, requires_grad,
+                                    make_scalar(0.0, dtype));
       },
       py::arg("shape"), py::arg_v("device", py::none(), "None"),
       py::arg("requires_grad") = false,
+      py::arg_v("dtype", DataType::Float32, "munet.DataType.Float32"),
       "Creates a tensor of the specified shape filled with zeros.");
 
   m.def(
       "ones",
-      [](Shape shape, std::optional<Device> device, bool requires_grad) {
+      [](Shape shape, std::optional<Device> device, bool requires_grad,
+         DataType dtype) {
         Device dev = device.value_or(Device{DeviceType::CPU, 0});
-        Tensor t(shape, dev, DataType::Float32, requires_grad);
-        t.uniform_(1.0f, 1.0f);
-        return t;
+        return make_constant_tensor(shape, dev, dtype, requires_grad,
+                                    make_scalar(1.0, dtype));
       },
       py::arg("shape"), py::arg_v("device", py::none(), "None"),
       py::arg("requires_grad") = false,
+      py::arg_v("dtype", DataType::Float32, "munet.DataType.Float32"),
       "Creates a tensor of the specified shape filled with ones.");
 
   m.def(
       "rand",
-      [](Shape shape, std::optional<Device> device, bool requires_grad) {
+      [](Shape shape, std::optional<Device> device, bool requires_grad,
+         DataType dtype) {
         Device dev = device.value_or(Device{DeviceType::CPU, 0});
-        Tensor t(shape, dev, DataType::Float32, requires_grad);
+        if (!is_floating(dtype)) {
+          throw std::runtime_error("rand only supports floating-point dtypes");
+        }
+        Tensor t(shape, dev, dtype, requires_grad);
         t.uniform_(0.0f, 1.0f);
         return t;
       },
       py::arg("shape"), py::arg_v("device", py::none(), "None"),
       py::arg("requires_grad") = false,
+      py::arg_v("dtype", DataType::Float32, "munet.DataType.Float32"),
       "Creates a tensor of the specified shape filled with random values from "
       "U[0, 1).");
 
   m.def(
       "from_numpy",
-      [](py::array_t<float> input) {
-        py::buffer_info buf = input.request();
-        std::vector<int> shape(buf.shape.begin(), buf.shape.end());
-        Tensor t(shape, Device{DeviceType::CPU, 0});
-        std::memcpy(t.data(), buf.ptr, t.bytes());
-        return t;
-      },
+      [](py::array input) { return tensor_from_numpy_array(input); },
       py::arg("input"), "Creates a CPU Tensor from a NumPy array.");
 
   // Alias copy_from_numpy to module level as well
   m.def(
       "copy_from_numpy",
-      [](Tensor &t, py::array_t<float> input) {
-        if (t.device().type != DeviceType::CPU)
-          throw std::runtime_error(
-              "copy_from_numpy: Target tensor must be on CPU.");
-        py::buffer_info buf = input.request();
-        size_t bytes = buf.size * sizeof(float);
-        if (bytes != t.bytes())
-          throw std::runtime_error("copy_from_numpy: Size mismatch.");
-        std::memcpy(t.data(), buf.ptr, bytes);
+      [](Tensor &t, py::array input) {
+        try {
+          copy_numpy_array_into_tensor(t, input);
+        } catch (const std::runtime_error &err) {
+          throw std::runtime_error(std::string("copy_from_numpy: ") + err.what());
+        }
       },
       py::arg("tensor"), py::arg("input"),
       "Copies data from a NumPy array into the given CPU tensor.");
@@ -379,8 +471,13 @@ PYBIND11_MODULE(munet, m) {
       .def("train", &nn::Module::train, py::arg("mode") = true,
            "Sets the module in training mode.")
       .def("eval", &nn::Module::eval, "Sets the module in evaluation mode.")
-      .def("to", &nn::Module::to, py::arg("device"),
+      .def("to", py::overload_cast<Device>(&nn::Module::to), py::arg("device"),
            "Moves all parameters and buffers to the specified device.")
+      .def("to", py::overload_cast<DataType>(&nn::Module::to), py::arg("dtype"),
+           "Converts all parameters and buffers to the specified dtype.")
+      .def("to_options", py::overload_cast<const TensorOptions &>(&nn::Module::to),
+           py::arg("options"),
+           "Converts all parameters and buffers using explicit tensor options.")
       .def("zero_grad", &nn::Module::zero_grad,
            "Clears the gradients of all optimized parameters.")
       .def("__call__", &nn::Module::forward)
@@ -405,8 +502,9 @@ PYBIND11_MODULE(munet, m) {
 
   py::class_<nn::Linear, nn::Module, std::shared_ptr<nn::Linear>>(
       nn, "Linear", "Applies a linear transformation to the incoming data.")
-      .def(py::init<int, int, bool>(), py::arg("in_features"),
-           py::arg("out_features"), py::arg("bias") = true)
+      .def(py::init<int, int, bool, TensorOptions>(), py::arg("in_features"),
+           py::arg("out_features"), py::arg("bias") = true,
+           py::arg("options") = TensorOptions{})
       .def_readonly("weight", &nn::Linear::weight,
                     "The learnable weights of the module.")
       .def_readonly("bias", &nn::Linear::bias,
@@ -414,9 +512,10 @@ PYBIND11_MODULE(munet, m) {
 
   py::class_<nn::Conv2d, nn::Module, std::shared_ptr<nn::Conv2d>>(
       nn, "Conv2d", "Applies a 2D convolution over an input signal.")
-      .def(py::init<int, int, int, int, int>(), py::arg("in_channels"),
+      .def(py::init<int, int, int, int, int, TensorOptions>(), py::arg("in_channels"),
            py::arg("out_channels"), py::arg("kernel_size"),
-           py::arg("stride") = 1, py::arg("padding") = 0)
+           py::arg("stride") = 1, py::arg("padding") = 0,
+           py::arg("options") = TensorOptions{})
       .def_readonly("stride", &nn::Conv2d::stride_)
       .def_readonly("padding", &nn::Conv2d::padding_)
       .def_readonly("weight", &nn::Conv2d::weight)
@@ -424,8 +523,9 @@ PYBIND11_MODULE(munet, m) {
 
   py::class_<nn::BatchNorm2d, nn::Module, std::shared_ptr<nn::BatchNorm2d>>(
       nn, "BatchNorm2d", "Applies Batch Normalization over a 4D input.")
-      .def(py::init<int, float, float>(), py::arg("num_features"),
-           py::arg("eps") = 1e-5f, py::arg("momentum") = 0.1f)
+      .def(py::init<int, float, float, TensorOptions>(), py::arg("num_features"),
+           py::arg("eps") = 1e-5f, py::arg("momentum") = 0.1f,
+           py::arg("options") = TensorOptions{})
       .def_readonly("eps", &nn::BatchNorm2d::eps_)
       .def_readonly("momentum", &nn::BatchNorm2d::momentum_)
       .def_readonly("weight", &nn::BatchNorm2d::weight)
@@ -469,8 +569,8 @@ PYBIND11_MODULE(munet, m) {
   py::class_<nn::Embedding, nn::Module, std::shared_ptr<nn::Embedding>>(
       nn, "Embedding",
       "Embedding lookup for [B,T] token ids and projection for [B,T,V] one-hot/probability inputs.")
-      .def(py::init<int, int>(), py::arg("num_embeddings"),
-           py::arg("embedding_dim"))
+      .def(py::init<int, int, TensorOptions>(), py::arg("num_embeddings"),
+           py::arg("embedding_dim"), py::arg("options") = TensorOptions{})
       .def_readonly("num_embeddings", &nn::Embedding::num_embeddings_)
       .def_readonly("embedding_dim", &nn::Embedding::embedding_dim_)
       .def_readonly("weight", &nn::Embedding::weight);
@@ -478,8 +578,8 @@ PYBIND11_MODULE(munet, m) {
   py::class_<nn::LayerNorm, nn::Module, std::shared_ptr<nn::LayerNorm>>(
       nn, "LayerNorm",
       "Applies Layer Normalization over the last tensor dimension.")
-      .def(py::init<int, float>(), py::arg("normalized_shape"),
-           py::arg("eps") = 1e-5f)
+      .def(py::init<int, float, TensorOptions>(), py::arg("normalized_shape"),
+           py::arg("eps") = 1e-5f, py::arg("options") = TensorOptions{})
       .def_readonly("normalized_shape", &nn::LayerNorm::normalized_shape_)
       .def_readonly("eps", &nn::LayerNorm::eps_)
       .def_readonly("weight", &nn::LayerNorm::weight)
@@ -488,8 +588,9 @@ PYBIND11_MODULE(munet, m) {
   py::class_<nn::MultiHeadAttention, nn::Module, std::shared_ptr<nn::MultiHeadAttention>>(
       nn, "MultiHeadAttention",
       "Applies causal/non-causal multi-head self-attention over [B,T,E].")
-      .def(py::init<int, int, bool>(), py::arg("embed_dim"), py::arg("num_heads"),
-           py::arg("causal") = true)
+      .def(py::init<int, int, bool, TensorOptions>(), py::arg("embed_dim"),
+           py::arg("num_heads"), py::arg("causal") = true,
+           py::arg("options") = TensorOptions{})
       .def_readonly("embed_dim", &nn::MultiHeadAttention::embed_dim_)
       .def_readonly("num_heads", &nn::MultiHeadAttention::num_heads_)
       .def_readonly("causal", &nn::MultiHeadAttention::causal_);
@@ -676,11 +777,54 @@ PYBIND11_MODULE(munet, m) {
 
      req = bool(t.requires_grad)
      target = t.device
-     src = munet.from_numpy(np.asarray(arr, dtype=np.float32))
+     src = munet.from_numpy(np.ascontiguousarray(arr))
+     if src.dtype != t.dtype:
+         src = src.to(t.dtype)
      if target.type != munet.DeviceType.CPU:
          src = src.to(target)
      t.replace_(src)
      t.requires_grad = req
+
+ def _tensor_dtype_name(t):
+     m = __import__("munet")
+     return {m.DataType.Float32: "float32",
+             m.DataType.Float16: "float16",
+             m.DataType.Int32: "int32"}[t.dtype]
+
+ def _dtype_from_name(name):
+     m = __import__("munet")
+     return {"float32": m.DataType.Float32,
+             "float16": m.DataType.Float16,
+             "int32": m.DataType.Int32}[name]
+
+ def _tensor_options_for_dtype(dtype_name):
+     m = __import__("munet")
+     opts = m.TensorOptions()
+     opts.dtype = _dtype_from_name(dtype_name)
+     return opts
+
+ def _direct_named_tensors(module):
+     name = type(module).__name__
+     items = []
+     if name in ('Linear', 'Conv2d', 'Embedding', 'LayerNorm'):
+         items.append(('weight', module.weight))
+         if hasattr(module, 'bias') and getattr(module, 'bias') is not None and getattr(module, 'bias').numel() > 0:
+             items.append(('bias', module.bias))
+     elif name == 'BatchNorm2d':
+         items.extend([
+             ('weight', module.weight),
+             ('bias', module.bias),
+             ('running_mean', module.running_mean),
+             ('running_var', module.running_var),
+         ])
+     return items
+
+ def _iter_named_tensors(module):
+     for name, tensor in _direct_named_tensors(module):
+         yield name, tensor
+     for prefix, submodule in module.named_modules().items():
+         for name, tensor in _direct_named_tensors(submodule):
+             yield f"{prefix}.{name}", tensor
 
  def save(module, filename):
      """
@@ -699,13 +843,13 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name, 'layers': [get_config(child) for child in m]}
          elif name == 'Linear':
              has_bias = hasattr(m, 'bias') and getattr(m, 'bias') is not None and getattr(m, 'bias').numel() > 0
-             return {'type': name, 'in_features': m.weight.shape[0], 'out_features': m.weight.shape[1], 'bias': has_bias}
+             return {'type': name, 'in_features': m.weight.shape[0], 'out_features': m.weight.shape[1], 'bias': has_bias, 'dtype': _tensor_dtype_name(m.weight)}
          elif name == 'Conv2d':
-             return {'type': name, 'in_channels': m.weight.shape[1], 'out_channels': m.weight.shape[0], 'kernel_size': m.weight.shape[2], 'stride': m.stride, 'padding': m.padding}
+             return {'type': name, 'in_channels': m.weight.shape[1], 'out_channels': m.weight.shape[0], 'kernel_size': m.weight.shape[2], 'stride': m.stride, 'padding': m.padding, 'dtype': _tensor_dtype_name(m.weight)}
          elif name == 'MaxPool2d':
              return {'type': name, 'kernel_size': m.kernel_size, 'stride': m.stride, 'padding': m.padding}
          elif name == 'BatchNorm2d':
-             return {'type': name, 'num_features': m.weight.shape[0], 'eps': m.eps, 'momentum': m.momentum}
+             return {'type': name, 'num_features': m.weight.shape[0], 'eps': m.eps, 'momentum': m.momentum, 'dtype': _tensor_dtype_name(m.weight)}
          elif name == 'Upsample':
              return {'type': name, 'scale_factor': m.scale_factor}
          elif name == 'GlobalAvgPool2d':
@@ -717,11 +861,11 @@ PYBIND11_MODULE(munet, m) {
          elif name == 'Dropout':
              return {'type': name, 'p': m.p}
          elif name == 'Embedding':
-             return {'type': name, 'num_embeddings': m.num_embeddings, 'embedding_dim': m.embedding_dim}
+             return {'type': name, 'num_embeddings': m.num_embeddings, 'embedding_dim': m.embedding_dim, 'dtype': _tensor_dtype_name(m.weight)}
          elif name == 'LayerNorm':
-             return {'type': name, 'normalized_shape': m.normalized_shape, 'eps': m.eps}
+             return {'type': name, 'normalized_shape': m.normalized_shape, 'eps': m.eps, 'dtype': _tensor_dtype_name(m.weight)}
          elif name == 'MultiHeadAttention':
-             return {'type': name, 'embed_dim': m.embed_dim, 'num_heads': m.num_heads, 'causal': bool(m.causal)}
+             return {'type': name, 'embed_dim': m.embed_dim, 'num_heads': m.num_heads, 'causal': bool(m.causal), 'dtype': _tensor_dtype_name(m.q_proj.weight)}
          else:
              raise ValueError(
                  f"Unsupported module type for full reconstruction: {name}. "
@@ -738,8 +882,8 @@ PYBIND11_MODULE(munet, m) {
 
      config = get_config(module)
      state = {}
-     for name, p in module.named_parameters().items():
-         state[name] = tensor_to_numpy(p)
+     for name, tensor in _iter_named_tensors(module):
+         state[name] = tensor_to_numpy(tensor)
 
      state['__config__'] = np.array(json.dumps(config))
      state['__format_version__'] = np.array('munet_model_v1')
@@ -759,11 +903,12 @@ PYBIND11_MODULE(munet, m) {
 
      def build_module(cfg):
          t = cfg['type']
+         opts = _tensor_options_for_dtype(cfg.get('dtype', 'float32'))
          if t == 'Sequential': return munet.nn.Sequential([build_module(c) for c in cfg['layers']])
-         elif t == 'Linear': return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'])
-         elif t == 'Conv2d': return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'])
+         elif t == 'Linear': return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'], opts)
+         elif t == 'Conv2d': return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'], opts)
          elif t == 'MaxPool2d': return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
-         elif t == 'BatchNorm2d': return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'])
+         elif t == 'BatchNorm2d': return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'], opts)
          elif t == 'Upsample': return munet.nn.Upsample(cfg['scale_factor'])
          elif t == 'GlobalAvgPool2d': return munet.nn.GlobalAvgPool2d()
          elif t == 'ReLU': return munet.nn.ReLU()
@@ -772,9 +917,9 @@ PYBIND11_MODULE(munet, m) {
          elif t == 'GELU': return munet.nn.GELU()
          elif t == 'LeakyReLU': return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
          elif t == 'Dropout': return munet.nn.Dropout(cfg.get('p', 0.5))
-         elif t == 'Embedding': return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'])
-         elif t == 'LayerNorm': return munet.nn.LayerNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5))
-         elif t == 'MultiHeadAttention': return munet.nn.MultiHeadAttention(cfg['embed_dim'], cfg['num_heads'], cfg.get('causal', True))
+         elif t == 'Embedding': return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'], opts)
+         elif t == 'LayerNorm': return munet.nn.LayerNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5), opts)
+         elif t == 'MultiHeadAttention': return munet.nn.MultiHeadAttention(cfg['embed_dim'], cfg['num_heads'], cfg.get('causal', True), opts)
          elif t == 'Flatten': return munet.nn.Flatten()
          else:
              raise ValueError(f"Unsupported saved module type: {t}")
@@ -783,14 +928,16 @@ PYBIND11_MODULE(munet, m) {
          m = __import__("munet")
          req = bool(t.requires_grad)
          target = t.device
-         src = m.from_numpy(np.asarray(arr, dtype=np.float32))
+         src = m.from_numpy(np.ascontiguousarray(arr))
+         if src.dtype != t.dtype:
+             src = src.to(t.dtype)
          if target.type != m.DeviceType.CPU:
              src = src.to(target)
          t.replace_(src)
          t.requires_grad = req
 
      def apply_state(module, state):
-         for name, p in module.named_parameters().items():
+         for name, p in _iter_named_tensors(module):
              if name in state:
                  copy_numpy_into_tensor(p, state[name])
          return module

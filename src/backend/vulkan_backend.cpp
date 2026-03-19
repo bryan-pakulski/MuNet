@@ -2556,6 +2556,10 @@ void VulkanBackend::batch_norm_backward(const Storage &grad_out,
 
 void VulkanBackend::fill_uniform(Storage &out, float low, float high,
                                  size_t num_elements) {
+  if (out.dtype() != DataType::Float32) {
+    throw std::runtime_error(
+        "Vulkan fill_uniform currently supports only float32 tensors");
+  }
   struct {
     uint32_t N;
     float l;

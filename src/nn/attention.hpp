@@ -7,7 +7,8 @@ namespace nn {
 
 class MultiHeadAttention : public Module {
 public:
-  MultiHeadAttention(int embed_dim, int num_heads, bool causal = true)
+  MultiHeadAttention(int embed_dim, int num_heads, bool causal = true,
+                     TensorOptions options = TensorOptions{})
       : embed_dim_(embed_dim), num_heads_(num_heads), causal_(causal) {
     if (embed_dim_ <= 0 || num_heads_ <= 0 || (embed_dim_ % num_heads_) != 0)
       throw std::runtime_error(
@@ -15,10 +16,18 @@ public:
           "embed_dim % num_heads == 0");
 
     head_dim_ = embed_dim_ / num_heads_;
-    q_proj = register_module("q_proj", std::make_shared<Linear>(embed_dim_, embed_dim_));
-    k_proj = register_module("k_proj", std::make_shared<Linear>(embed_dim_, embed_dim_));
-    v_proj = register_module("v_proj", std::make_shared<Linear>(embed_dim_, embed_dim_));
-    out_proj = register_module("out_proj", std::make_shared<Linear>(embed_dim_, embed_dim_));
+    q_proj = register_module(
+        "q_proj",
+        std::make_shared<Linear>(embed_dim_, embed_dim_, true, options));
+    k_proj = register_module(
+        "k_proj",
+        std::make_shared<Linear>(embed_dim_, embed_dim_, true, options));
+    v_proj = register_module(
+        "v_proj",
+        std::make_shared<Linear>(embed_dim_, embed_dim_, true, options));
+    out_proj = register_module(
+        "out_proj",
+        std::make_shared<Linear>(embed_dim_, embed_dim_, true, options));
   }
 
   Tensor forward(Tensor x) override {
@@ -47,14 +56,16 @@ public:
                    .reshape({BH * T, head_dim_});
 
     Tensor scores = q.matmul(k.transpose(0, 1));
+    if (!is_floating(scores.dtype())) {
+      throw std::runtime_error(
+          "MultiHeadAttention requires floating-point score tensors");
+    }
     Tensor scale({1}, scores.device(), scores.dtype(), false);
-    scale.uniform_(1.0f / std::sqrt(static_cast<float>(head_dim_)),
-                   1.0f / std::sqrt(static_cast<float>(head_dim_)));
+    scale.fill_(1.0f / std::sqrt(static_cast<float>(head_dim_)));
     scores = scores * scale;
 
     Device cpu{DeviceType::CPU, 0};
-    Tensor mask_cpu({BH * T, BH * T}, cpu, scores.dtype(), false);
-    float *m = static_cast<float *>(mask_cpu.data());
+    Tensor mask_cpu({BH * T, BH * T}, cpu, DataType::Int32, false);
     for (int i = 0; i < BH * T; ++i) {
       int bh_i = i / T;
       int t_i = i % T;
@@ -62,13 +73,15 @@ public:
         int bh_j = j / T;
         int t_j = j % T;
         bool masked = (bh_i != bh_j) || (causal_ && t_j > t_i);
-        m[i * (BH * T) + j] = masked ? 1.0f : 0.0f;
+        write_scalar_to_buffer(static_cast<char *>(mask_cpu.data()) +
+                                   (i * (BH * T) + j) * dtype_size(mask_cpu.dtype()),
+                               mask_cpu.dtype(), masked ? 1.0 : 0.0);
       }
     }
     Tensor mask = (scores.device().type == DeviceType::CPU)
                       ? mask_cpu
                       : mask_cpu.to(scores.device());
-    scores = scores.masked_fill(mask, -1e9f);
+    scores = scores.masked_fill(mask, make_scalar(-1e9, scores.dtype()));
 
     Tensor probs = scores.softmax(-1);
     Tensor ctx = probs.matmul(v);

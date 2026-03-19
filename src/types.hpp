@@ -66,10 +66,20 @@ inline DataType promote_types(DataType a, DataType b) {
 }
 
 inline DataType accumulation_type(AccumulationOp op, DataType dtype) {
-  (void)op;
-  if (dtype == DataType::Float16)
-    return DataType::Float32;
-  return dtype;
+  switch (op) {
+  case AccumulationOp::Elementwise:
+  case AccumulationOp::Reduction:
+  case AccumulationOp::Matmul:
+  case AccumulationOp::Convolution:
+  case AccumulationOp::Normalization:
+    return (dtype == DataType::Float16) ? DataType::Float32 : dtype;
+  default:
+    return dtype;
+  }
+}
+
+inline DataType optimizer_state_type(DataType parameter_dtype) {
+  return accumulation_type(AccumulationOp::Elementwise, parameter_dtype);
 }
 
 inline Strides default_strides(const Shape &shape) {
@@ -128,13 +138,48 @@ struct TensorOptions {
   }
 };
 
+struct DTypeInfo {
+  DataType dtype;
+  const char *name;
+  size_t size_bytes;
+  bool floating;
+  bool integral;
+  bool low_precision;
+};
+
 struct ScalarValue {
   DataType dtype = DataType::Float32;
   double value = 0.0;
 
   float as_float() const { return static_cast<float>(value); }
   int32_t as_int32() const { return static_cast<int32_t>(value); }
+  bool is_nonzero() const { return value != 0.0; }
 };
+
+inline DTypeInfo dtype_info(DataType dt) {
+  switch (dt) {
+  case DataType::Float32:
+    return {dt, "float32", 4, true, false, false};
+  case DataType::Float16:
+    return {dt, "float16", 2, true, false, true};
+  case DataType::Int32:
+    return {dt, "int32", 4, false, true, false};
+  default:
+    throw std::runtime_error("Unsupported dtype info query");
+  }
+}
+
+inline ScalarValue make_scalar(float value) {
+  return ScalarValue{DataType::Float32, static_cast<double>(value)};
+}
+
+inline ScalarValue make_scalar(double value, DataType dtype) {
+  return ScalarValue{dtype, value};
+}
+
+inline ScalarValue make_scalar(int32_t value) {
+  return ScalarValue{DataType::Int32, static_cast<double>(value)};
+}
 
 inline uint16_t float_to_half_bits(float value) {
   uint32_t bits = 0;
@@ -206,6 +251,69 @@ inline float half_bits_to_float(uint16_t value) {
   float out = 0.0f;
   std::memcpy(&out, &bits, sizeof(out));
   return out;
+}
+
+inline void write_scalar_to_buffer(void *dst, DataType dtype, double value) {
+  switch (dtype) {
+  case DataType::Float32: {
+    float converted = static_cast<float>(value);
+    std::memcpy(dst, &converted, sizeof(converted));
+    return;
+  }
+  case DataType::Float16: {
+    uint16_t converted = float_to_half_bits(static_cast<float>(value));
+    std::memcpy(dst, &converted, sizeof(converted));
+    return;
+  }
+  case DataType::Int32: {
+    int32_t converted = static_cast<int32_t>(value);
+    std::memcpy(dst, &converted, sizeof(converted));
+    return;
+  }
+  default:
+    throw std::runtime_error("Unsupported scalar dtype write");
+  }
+}
+
+inline ScalarValue read_scalar_from_buffer(const void *src, DataType dtype) {
+  ScalarValue out;
+  out.dtype = dtype;
+  switch (dtype) {
+  case DataType::Float32: {
+    float value = 0.0f;
+    std::memcpy(&value, src, sizeof(value));
+    out.value = value;
+    return out;
+  }
+  case DataType::Float16: {
+    uint16_t value = 0;
+    std::memcpy(&value, src, sizeof(value));
+    out.value = half_bits_to_float(value);
+    return out;
+  }
+  case DataType::Int32: {
+    int32_t value = 0;
+    std::memcpy(&value, src, sizeof(value));
+    out.value = static_cast<double>(value);
+    return out;
+  }
+  default:
+    throw std::runtime_error("Unsupported scalar dtype read");
+  }
+}
+
+inline void convert_buffer_dtype(const void *src, DataType src_dtype, void *dst,
+                                 DataType dst_dtype, size_t count) {
+  const char *src_bytes = static_cast<const char *>(src);
+  char *dst_bytes = static_cast<char *>(dst);
+  const size_t src_size = dtype_size(src_dtype);
+  const size_t dst_size = dtype_size(dst_dtype);
+
+  for (size_t i = 0; i < count; ++i) {
+    ScalarValue scalar =
+        read_scalar_from_buffer(src_bytes + i * src_size, src_dtype);
+    write_scalar_to_buffer(dst_bytes + i * dst_size, dst_dtype, scalar.value);
+  }
 }
 
 inline size_t numel(const Shape &shape) {
