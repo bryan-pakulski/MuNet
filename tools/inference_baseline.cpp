@@ -26,7 +26,8 @@ struct BenchmarkConfig {
   int single_run_iters = 50;
   int batch_run_inputs = 4;
   int batch_run_iters = 20;
-  bool capture_profiler_memory = true;
+  bool capture_profiler_memory = false;
+  bool lean_mode = false;
 };
 
 class BenchmarkMLP : public inference::Module {
@@ -187,6 +188,8 @@ BenchmarkConfig parse_args(int argc, char **argv) {
     } else if (arg == "--capture-profiler-memory") {
       cfg.capture_profiler_memory =
           parse_bool(arg, require_value(arg));
+    } else if (arg == "--lean-mode") {
+      cfg.lean_mode = parse_bool(arg, require_value(arg));
     } else if (arg == "--help") {
       std::cout
           << "MuNet inference baseline benchmark\n"
@@ -201,7 +204,8 @@ BenchmarkConfig parse_args(int argc, char **argv) {
           << "  --single-run-iters <int>\n"
           << "  --batch-run-inputs <int>\n"
           << "  --batch-run-iters <int>\n"
-          << "  --capture-profiler-memory <0|1|false|true>\n";
+          << "  --capture-profiler-memory <0|1|false|true>\n"
+          << "  --lean-mode <0|1|false|true>\n";
       std::exit(0);
     } else {
       throw std::runtime_error("Unknown argument: " + arg);
@@ -263,6 +267,7 @@ int main(int argc, char **argv) {
     engine_cfg.strict_shape_check = true;
     engine_cfg.allow_autograd_inputs = false;
     engine_cfg.capture_profiler_memory = cfg.capture_profiler_memory;
+    engine_cfg.lean_mode = cfg.lean_mode;
     inference::Engine engine(engine_cfg);
 
     const Tensor input = make_input(cfg);
@@ -323,6 +328,8 @@ int main(int argc, char **argv) {
     std::cout << "  \"dtype\": " << quote(dtype_name(cfg.dtype)) << ",\n";
     std::cout << "  \"build_profile_hint\": "
               << quote(build_profile_hint(cfg.device)) << ",\n";
+    std::cout << "  \"lean_mode\": "
+              << (cfg.lean_mode ? "true" : "false") << ",\n";
     std::cout << "  \"shape_contract\": {\n";
     std::cout << "    \"compiled_input_shape\": "
               << to_json_array(compile_stats.compiled_input_shape) << ",\n";

@@ -123,7 +123,9 @@ Current boundary artifact: [Inference Runtime Phase 1 Boundary Split](inference_
 
 ### Phase 2 - Hot-path runtime slimming
 
-**Status:** [ ] not started
+**Status:** [~] in progress
+
+Current runtime-slimming artifact: [Inference Runtime Phase 2 Runtime Slimming](inference_phase2_runtime_slimming.md).
 
 #### Objectives
 
@@ -132,15 +134,15 @@ Current boundary artifact: [Inference Runtime Phase 1 Boundary Split](inference_
 
 #### Action Points
 
-- [ ] Audit `Engine::load`, `compile`, `prepare`, `run`, and `run_batch` for unnecessary work on repeat execution.
-- [ ] Minimize or cache:
+- [x] Audit `Engine::load`, `compile`, `prepare`, `run`, and `run_batch` for unnecessary work on repeat execution.
+- [~] Minimize or cache:
   - backend discovery/lookup
   - shape validation setup that can be compiled once
   - repeated dtype/device checks that can be hoisted
   - metadata allocations for tracing/stat collection
-- [ ] Ensure autograd suppression remains explicit and cheap, with no graph-building residue on inference runs.
-- [ ] Gate debug/profiler hooks so the default runtime path pays near-zero cost when observability is disabled.
-- [ ] Add a “lean mode” execution profile for constrained devices that favors predictable memory use over convenience features.
+- [x] Ensure autograd suppression remains explicit and cheap, with no graph-building residue on inference runs.
+- [x] Gate debug/profiler hooks so the default runtime path pays near-zero cost when observability is disabled.
+- [x] Add a “lean mode” execution profile for constrained devices that favors predictable memory use over convenience features.
 - [ ] Review host-device transfer behavior and remove avoidable copies in model load and input preparation paths.
 
 #### Exit Criteria

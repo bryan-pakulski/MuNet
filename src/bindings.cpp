@@ -681,7 +681,8 @@ PYBIND11_MODULE(munet, m) {
       .def_readwrite("allow_autograd_inputs",
                      &inference::EngineConfig::allow_autograd_inputs)
       .def_readwrite("capture_profiler_memory",
-                     &inference::EngineConfig::capture_profiler_memory);
+                     &inference::EngineConfig::capture_profiler_memory)
+      .def_readwrite("lean_mode", &inference::EngineConfig::lean_mode);
 
   py::class_<inference::EngineStats>(inf, "EngineStats")
       .def(py::init<>())
@@ -731,6 +732,9 @@ PYBIND11_MODULE(munet, m) {
            py::arg("enabled"))
       .def("capture_profiler_memory",
            &inference::Engine::capture_profiler_memory)
+      .def("set_lean_mode", &inference::Engine::set_lean_mode,
+           py::arg("enabled"))
+      .def("lean_mode", &inference::Engine::lean_mode)
       .def("set_observer", &inference::Engine::set_observer,
            py::arg("observer"))
       .def("clear_observer", &inference::Engine::clear_observer)

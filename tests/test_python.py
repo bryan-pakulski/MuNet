@@ -779,6 +779,46 @@ class TestBindings(unittest.TestCase):
         y2 = eng.run(bad)
         self.assertEqual(y2.shape, [2, 2])
 
+    def test_inference_engine_defaults_to_low_overhead_mode_without_diagnostics(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.ReLU(),
+            munet.nn.Linear(8, 2),
+        ])
+
+        eng = munet.inference.Engine()
+        self.assertFalse(eng.capture_profiler_memory())
+        self.assertFalse(eng.lean_mode())
+
+        x = munet.Tensor([2, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.ones((2, 4), dtype=np.float32)
+
+        eng.load(model)
+        eng.compile(x)
+        y = eng.run(x)
+
+        self.assertEqual(y.shape, [2, 2])
+        self.assertEqual(eng.stats().last_compile_trace_id, 0)
+        self.assertEqual(eng.stats().last_run_trace_id, 0)
+        self.assertEqual(eng.stats().current_memory_bytes, 0)
+        self.assertEqual(eng.stats().peak_memory_bytes, 0)
+
+    def test_inference_engine_lean_mode_disables_memory_capture(self):
+        cfg = munet.inference.EngineConfig()
+        cfg.lean_mode = True
+        eng = munet.inference.Engine(cfg)
+        self.assertTrue(eng.lean_mode())
+        self.assertFalse(eng.capture_profiler_memory())
+
+        model = munet.nn.Sequential([munet.nn.Linear(4, 2)])
+        x = munet.ones([1, 4], dtype=munet.DataType.Float32)
+        eng.load(model)
+        y = eng.run(x)
+
+        self.assertEqual(y.shape, [1, 2])
+        self.assertEqual(eng.stats().current_memory_bytes, 0)
+        self.assertEqual(eng.stats().peak_memory_bytes, 0)
+
     def test_inference_engine_from_serialized_model(self):
         model = munet.nn.Sequential([
             munet.nn.Linear(3, 3),

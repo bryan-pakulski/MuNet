@@ -7,6 +7,7 @@
 #include "core/util/timer.hpp"
 #include <chrono>
 #include <functional>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -33,7 +34,8 @@ struct EngineConfig {
   int warmup_runs = 0;
   bool strict_shape_check = true;
   bool allow_autograd_inputs = false;
-  bool capture_profiler_memory = true;
+  bool capture_profiler_memory = false;
+  bool lean_mode = false;
 };
 
 struct EngineStats {
@@ -94,6 +96,19 @@ public:
 private:
   bool previous_;
 };
+
+class OptionalTraceScope {
+public:
+  OptionalTraceScope(bool enabled, std::string span,
+                     std::optional<uint64_t> trace_id = std::nullopt) {
+    if (enabled) {
+      scope_.emplace(std::move(span), trace_id);
+    }
+  }
+
+private:
+  std::optional<ScopedTraceContext> scope_;
+};
 } // namespace detail
 
 class Engine {
@@ -115,10 +130,23 @@ public:
 
   void set_strict_shape_check(bool enabled) { config_.strict_shape_check = enabled; }
   void set_allow_autograd_inputs(bool enabled) { config_.allow_autograd_inputs = enabled; }
-  void set_capture_profiler_memory(bool enabled) { config_.capture_profiler_memory = enabled; }
+  void set_capture_profiler_memory(bool enabled) {
+    config_.capture_profiler_memory = enabled;
+    if (enabled) {
+      config_.lean_mode = false;
+    }
+  }
+
+  void set_lean_mode(bool enabled) {
+    config_.lean_mode = enabled;
+    if (enabled) {
+      config_.capture_profiler_memory = false;
+    }
+  }
 
   bool allow_autograd_inputs() const { return config_.allow_autograd_inputs; }
   bool capture_profiler_memory() const { return config_.capture_profiler_memory; }
+  bool lean_mode() const { return config_.lean_mode; }
 
   void set_observer(EngineObserver observer) { observer_ = std::move(observer); }
   void clear_observer() { observer_ = nullptr; }
@@ -152,13 +180,15 @@ public:
       compiled_ = false;
       refresh_memory_stats();
 
-      const size_t trainable_count = count_requires_grad_parameters();
       std::ostringstream message;
       message << "Module loaded on " << config_.device.to_string()
               << "; gradients will remain disabled during compile/run";
-      if (trainable_count > 0) {
-        message << " (" << trainable_count
-                << " parameter/buffer tensor(s) still marked requires_grad)";
+      if (!config_.lean_mode) {
+        const size_t trainable_count = count_requires_grad_parameters();
+        if (trainable_count > 0) {
+          message << " (" << trainable_count
+                  << " parameter/buffer tensor(s) still marked requires_grad)";
+        }
       }
       emit_event(EngineEventType::LoadCompleted, 0.0, {}, {}, 0,
                  message.str());
@@ -174,13 +204,14 @@ public:
                const std::vector<int> &expected_output_shape = {}) {
     ensure_loaded();
     auto start = std::chrono::high_resolution_clock::now();
-    const uint64_t trace_id = next_trace_id();
+    const bool trace_enabled = should_enable_trace_contexts();
+    const uint64_t trace_id = trace_enabled ? next_trace_id() : 0;
     stats_.last_compile_trace_id = trace_id;
-    ScopedTraceContext compile_trace("compile", trace_id);
+    detail::OptionalTraceScope compile_trace(trace_enabled, "compile", trace_id);
     Tensor input;
     try {
       {
-        ScopedTraceContext phase_trace("prepare_input");
+        detail::OptionalTraceScope phase_trace(trace_enabled, "prepare_input");
         Timer timer;
         input = prepare_input(example_input, "compile");
         stats_.compile_prepare_input_ms = timer.elapsed_ms();
@@ -206,7 +237,7 @@ public:
 
       Tensor out;
       {
-        ScopedTraceContext phase_trace("forward");
+        detail::OptionalTraceScope phase_trace(trace_enabled, "forward");
         Timer timer;
         out = module_->forward(input);
         stats_.compile_forward_ms = timer.elapsed_ms();
@@ -229,7 +260,7 @@ public:
 
       stats_.compile_warmup_ms = 0.0;
       {
-        ScopedTraceContext phase_trace("warmup");
+        detail::OptionalTraceScope phase_trace(trace_enabled, "warmup");
         for (int i = 1; i < config_.warmup_runs; ++i) {
           Timer timer;
           Tensor warmup_out = module_->forward(input);
@@ -267,13 +298,14 @@ public:
     ensure_loaded();
 
     auto start = std::chrono::high_resolution_clock::now();
-    const uint64_t trace_id = next_trace_id();
+    const bool trace_enabled = should_enable_trace_contexts();
+    const uint64_t trace_id = trace_enabled ? next_trace_id() : 0;
     stats_.last_run_trace_id = trace_id;
-    ScopedTraceContext run_trace("run", trace_id);
+    detail::OptionalTraceScope run_trace(trace_enabled, "run", trace_id);
     Tensor in;
     try {
       {
-        ScopedTraceContext phase_trace("prepare_input");
+        detail::OptionalTraceScope phase_trace(trace_enabled, "prepare_input");
         Timer timer;
         in = prepare_input(input, "run");
         stats_.last_prepare_input_ms = timer.elapsed_ms();
@@ -296,7 +328,7 @@ public:
       detail::InferenceModeGuard no_grad;
       Tensor out;
       {
-        ScopedTraceContext phase_trace("forward");
+        detail::OptionalTraceScope phase_trace(trace_enabled, "forward");
         Timer timer;
         out = module_->forward(in);
         stats_.last_forward_ms = timer.elapsed_ms();
@@ -304,7 +336,7 @@ public:
                              in.shape(), in.bytes());
       }
       {
-        ScopedTraceContext phase_trace("validate_output");
+        detail::OptionalTraceScope phase_trace(trace_enabled, "validate_output");
         Timer timer;
         ensure_inference_output(out, "run");
         stats_.last_output_validation_ms = timer.elapsed_ms();
@@ -413,6 +445,10 @@ private:
         .count();
   }
 
+  bool should_enable_trace_contexts() const {
+    return observer_ || is_profile_enabled() || is_debug_enabled();
+  }
+
   static void record_profile_phase(const std::string &name, double ms,
                                    const std::vector<int> &shape,
                                    size_t bytes) {
@@ -423,8 +459,11 @@ private:
   }
 
   void refresh_memory_stats() {
-    if (!config_.capture_profiler_memory)
+    if (!config_.capture_profiler_memory) {
+      stats_.current_memory_bytes = 0;
+      stats_.peak_memory_bytes = 0;
       return;
+    }
     stats_.current_memory_bytes = Profiler::get().current_memory_bytes();
     stats_.peak_memory_bytes = Profiler::get().peak_memory_bytes();
   }

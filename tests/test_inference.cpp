@@ -380,3 +380,44 @@ TEST(InferenceTest, EngineProfilesLifecyclePhasesIntoStatsAndProfiler) {
   EXPECT_NE(module_forward->second.last_shape.find("span=run.forward"),
             std::string::npos);
 }
+
+TEST(InferenceTest, EngineDefaultHotPathLeavesTraceIdsZeroWithoutDiagnostics) {
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  engine.load(m);
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor x({2, 2}, cpu);
+  x.fill_(1.0f);
+
+  engine.compile(x);
+  (void)engine.run(x);
+
+  const auto stats = engine.stats();
+  EXPECT_EQ(stats.last_compile_trace_id, 0u);
+  EXPECT_EQ(stats.last_run_trace_id, 0u);
+  EXPECT_EQ(stats.current_memory_bytes, 0u);
+  EXPECT_EQ(stats.peak_memory_bytes, 0u);
+}
+
+TEST(InferenceTest, EngineLeanModeDisablesProfilerMemoryByDefault) {
+  auto m = std::make_shared<IdentityLayer>();
+  inference::EngineConfig cfg;
+  cfg.lean_mode = true;
+  inference::Engine engine(cfg);
+  engine.load(m);
+
+  EXPECT_TRUE(engine.lean_mode());
+  EXPECT_FALSE(engine.capture_profiler_memory());
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor x({2, 2}, cpu);
+  x.fill_(1.0f);
+
+  engine.compile(x);
+  (void)engine.run(x);
+
+  const auto stats = engine.stats();
+  EXPECT_EQ(stats.current_memory_bytes, 0u);
+  EXPECT_EQ(stats.peak_memory_bytes, 0u);
+}

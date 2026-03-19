@@ -25,6 +25,20 @@ Use `-1` for dynamic dims:
 - You can opt into `allow_autograd_inputs=True` only for debugging/inspection flows; MuNet still hard-fails if the resulting deployment path would surface a grad-tracked output.
 - If a deployment path somehow produces a gradient-tracked output, the engine raises an error instead of silently leaking training behavior into inference.
 
+## Low-overhead defaults and lean mode
+
+MuNet now defaults the inference runtime toward lower overhead:
+
+- `capture_profiler_memory` defaults to `False`
+- trace ids / scoped trace contexts are only activated when observers, profiler mode, or debug logging are enabled
+- `lean_mode=True` further favors predictable deploy execution by keeping optional runtime diagnostics off and skipping non-essential load-time diagnostics
+
+For constrained devices, prefer:
+
+- `eng.set_lean_mode(True)` in Python, or `EngineConfig::lean_mode = true` in C++
+- `capture_profiler_memory=True` only when you are actively collecting memory diagnostics
+- observers only when lifecycle event callbacks are required
+
 ## Strict vs non-strict checks
 
 - strict mode validates compiled/expected shapes at runtime.
