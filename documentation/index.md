@@ -23,5 +23,6 @@ Welcome to MuNet docs. This documentation is structured for interactive/searchab
 
 - [Runtime Architecture](architecture/runtime.md)
 - [Backends](architecture/backends.md)
+- [Refactor Roadmap](architecture/refactor_roadmap.md)
 - [Profiling](performance/profiling.md)
 - [Contributing: Add a New Op](contributing/add_new_op.md)
