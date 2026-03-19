@@ -351,6 +351,21 @@ public:
     refresh_cache_stats();
   }
 
+  void prepare_batch(const std::vector<Tensor> &inputs) {
+    ensure_loaded();
+    for (const auto &input : inputs) {
+      Tensor prepared = prepare_input(input, "prepare_batch");
+      if (config_.strict_shape_check && compiled_) {
+        validate_shape_contract(input_shape_contract_, prepared.shape(),
+                                "Engine: input shape mismatch with compiled shape");
+      }
+    }
+    if (!inputs.empty()) {
+      prepared_ = true;
+    }
+    refresh_memory_stats();
+  }
+
   void set_observer(EngineObserver observer) { observer_ = std::move(observer); }
   void clear_observer() { observer_ = nullptr; }
 
@@ -573,14 +588,20 @@ public:
   }
 
   std::vector<Tensor> run_batch(const std::vector<Tensor> &inputs) {
+    std::vector<Tensor> outputs;
+    run_batch_into(inputs, outputs);
+    return outputs;
+  }
+
+  void run_batch_into(const std::vector<Tensor> &inputs,
+                      std::vector<Tensor> &outputs) {
     ensure_loaded();
 
-    std::vector<Tensor> outputs;
+    outputs.clear();
     outputs.reserve(inputs.size());
     for (const auto &in : inputs) {
       outputs.push_back(run(in));
     }
-    return outputs;
   }
 
   bool is_loaded() const { return loaded_; }

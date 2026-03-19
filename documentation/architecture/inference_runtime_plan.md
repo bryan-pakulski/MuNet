@@ -153,7 +153,7 @@ Current runtime-slimming artifact: [Inference Runtime Phase 2 Runtime Slimming](
 
 ### Phase 3 - Memory and backend policy optimization
 
-**Status:** [~] in progress
+**Status:** [x] completed
 
 Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend Policy](inference_phase3_memory_backend_policy.md).
 
@@ -164,25 +164,25 @@ Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend P
 
 #### Action Points
 
-- [~] Add inference-focused memory policies for:
+- [x] Add inference-focused memory policies for:
   - reusable input/output buffers
   - scratch/workspace reuse
   - optional preallocation during compile/warmup
   - bounded temporary allocations on CPU-only targets
-- [~] Review backend manager behavior so inference startup does not eagerly initialize unused backends.
-- [ ] Separate required backend capabilities for deployment from training-only backend capabilities.
-- [ ] Define fallback policy for constrained systems:
+- [x] Review backend manager behavior so inference startup does not eagerly initialize unused backends.
+- [x] Separate required backend capabilities for deployment from training-only backend capabilities.
+- [x] Define fallback policy for constrained systems:
   - CPU-only execution
   - selective fallback for unsupported accelerated ops
   - explicit failure where fallback would violate runtime guarantees
-- [ ] Evaluate whether static or reduced-feature builds should omit optional conversion, profiling, or debug facilities.
-- [ ] Document hardware-tier recommendations for edge, workstation, and enterprise deployments.
+- [x] Evaluate whether static or reduced-feature builds should omit optional conversion, profiling, or debug facilities.
+- [x] Document hardware-tier recommendations for edge, workstation, and enterprise deployments.
 
 #### Exit Criteria
 
-- [~] Runtime memory reuse policies are implemented and benchmarked.
-- [~] Backend initialization is lazy/selective enough for minimal deployments.
-- [ ] Inference builds can target constrained systems without carrying unnecessary backend/runtime weight.
+- [x] Runtime memory reuse policies are implemented and benchmarked.
+- [x] Backend initialization is lazy/selective enough for minimal deployments.
+- [x] Inference builds can target constrained systems without carrying unnecessary backend/runtime weight.
 
 ### Phase 4 - Serialization and model execution decoupling
 

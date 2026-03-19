@@ -581,3 +581,36 @@ TEST(InferenceTest, EnginePreparedInputCacheCanBeBoundedToSingleEntry) {
   BackendManager::register_backend(DeviceType::UNKNOWN,
                                    [](Device) { return std::make_shared<CPUBackend>(); });
 }
+
+TEST(InferenceTest, EnginePrepareBatchPrepopulatesPreparedInputCache) {
+  auto copy_count = std::make_shared<int>(0);
+  BackendManager::register_backend(DeviceType::UNKNOWN, [copy_count](Device) {
+    return std::make_shared<CountingCopyBackend>(copy_count);
+  });
+
+  inference::EngineConfig cfg;
+  cfg.device = Device{DeviceType::CPU, 0};
+  cfg.prepared_input_cache_entries = 2;
+  inference::Engine engine(cfg);
+  engine.load(std::make_shared<IdentityLayer>());
+
+  Tensor a({2, 2}, Device{DeviceType::UNKNOWN, 0});
+  Tensor b({2, 2}, Device{DeviceType::UNKNOWN, 0});
+  a.fill_(1.0f);
+  b.fill_(2.0f);
+  *copy_count = 0;
+
+  engine.prepare_batch({a, b});
+  EXPECT_EQ(*copy_count, 2);
+  const auto stats_after_prepare = engine.stats();
+  EXPECT_EQ(stats_after_prepare.prepared_input_cache_entries, 2u);
+  EXPECT_EQ(stats_after_prepare.prepared_input_cache_misses, 2u);
+
+  (void)engine.run_batch({a, b});
+  EXPECT_EQ(*copy_count, 2);
+  const auto stats_after_run = engine.stats();
+  EXPECT_EQ(stats_after_run.prepared_input_cache_hits, 2u);
+
+  BackendManager::register_backend(DeviceType::UNKNOWN,
+                                   [](Device) { return std::make_shared<CPUBackend>(); });
+}

@@ -35,6 +35,11 @@ enum class BackendFallbackPolicy {
   ConversionFallback,
 };
 
+enum class BackendFeatureRuntimeRole {
+  DeployRuntime,
+  TrainingOnly,
+};
+
 struct BackendSupport {
   bool available = false;
   BackendFallbackPolicy fallback_policy =
@@ -114,6 +119,34 @@ inline const char *backend_fallback_policy_name(BackendFallbackPolicy policy) {
   default:
     return "unknown";
   }
+}
+
+inline BackendFeatureRuntimeRole
+backend_feature_runtime_role(BackendFeature feature) {
+  switch (feature) {
+  case BackendFeature::OptimizerStep:
+    return BackendFeatureRuntimeRole::TrainingOnly;
+  case BackendFeature::ElementwiseBinary:
+  case BackendFeature::BroadcastRow:
+  case BackendFeature::Matmul:
+  case BackendFeature::UnaryActivation:
+  case BackendFeature::Softmax:
+  case BackendFeature::Concat:
+  case BackendFeature::Loss:
+  case BackendFeature::Convolution:
+  case BackendFeature::Pooling:
+  case BackendFeature::BatchNorm:
+  case BackendFeature::RandomFill:
+  case BackendFeature::Reduction:
+    return BackendFeatureRuntimeRole::DeployRuntime;
+  default:
+    return BackendFeatureRuntimeRole::DeployRuntime;
+  }
+}
+
+inline bool is_training_only_backend_feature(BackendFeature feature) {
+  return backend_feature_runtime_role(feature) ==
+         BackendFeatureRuntimeRole::TrainingOnly;
 }
 
 inline DataType default_backend_accumulation_dtype(BackendFeature feature,

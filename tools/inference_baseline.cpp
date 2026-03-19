@@ -30,6 +30,7 @@ struct BenchmarkConfig {
   bool lean_mode = false;
   int prepared_input_cache_entries = 8;
   size_t prepared_input_cache_max_bytes = 64 * 1024 * 1024;
+  bool preallocate_batch_inputs = false;
 };
 
 class BenchmarkMLP : public inference::Module {
@@ -198,6 +199,8 @@ BenchmarkConfig parse_args(int argc, char **argv) {
     } else if (arg == "--prepared-input-cache-max-bytes") {
       cfg.prepared_input_cache_max_bytes =
           static_cast<size_t>(std::stoull(require_value(arg)));
+    } else if (arg == "--preallocate-batch-inputs") {
+      cfg.preallocate_batch_inputs = parse_bool(arg, require_value(arg));
     } else if (arg == "--help") {
       std::cout
           << "MuNet inference baseline benchmark\n"
@@ -215,7 +218,8 @@ BenchmarkConfig parse_args(int argc, char **argv) {
           << "  --capture-profiler-memory <0|1|false|true>\n"
           << "  --lean-mode <0|1|false|true>\n"
           << "  --prepared-input-cache-entries <int>\n"
-          << "  --prepared-input-cache-max-bytes <int>\n";
+          << "  --prepared-input-cache-max-bytes <int>\n"
+          << "  --preallocate-batch-inputs <0|1|false|true>\n";
       std::exit(0);
     } else {
       throw std::runtime_error("Unknown argument: " + arg);
@@ -324,11 +328,16 @@ int main(int argc, char **argv) {
     }
 
     double batch_wall_ms_total = 0.0;
+    if (cfg.preallocate_batch_inputs) {
+      engine.prepare_batch(batch_inputs);
+    }
+    std::vector<Tensor> batch_outputs;
+    batch_outputs.reserve(batch_inputs.size());
     for (int i = 0; i < cfg.batch_run_iters; ++i) {
       const auto iter_start = std::chrono::high_resolution_clock::now();
-      auto outs = engine.run_batch(batch_inputs);
-      if (!outs.empty()) {
-        synchronize_tensor(outs.back());
+      engine.run_batch_into(batch_inputs, batch_outputs);
+      if (!batch_outputs.empty()) {
+        synchronize_tensor(batch_outputs.back());
       }
       batch_wall_ms_total += elapsed_ms(iter_start);
     }
@@ -348,7 +357,9 @@ int main(int argc, char **argv) {
     std::cout << "    \"prepared_input_cache_entries\": "
               << engine.prepared_input_cache_entries_limit() << ",\n";
     std::cout << "    \"prepared_input_cache_max_bytes\": "
-              << engine.prepared_input_cache_max_bytes_limit() << "\n";
+              << engine.prepared_input_cache_max_bytes_limit() << ",\n";
+    std::cout << "    \"preallocate_batch_inputs\": "
+              << (cfg.preallocate_batch_inputs ? "true" : "false") << "\n";
     std::cout << "  },\n";
     std::cout << "  \"shape_contract\": {\n";
     std::cout << "    \"compiled_input_shape\": "

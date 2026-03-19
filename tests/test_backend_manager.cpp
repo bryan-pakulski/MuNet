@@ -412,6 +412,23 @@ TEST(BackendManagerTest, CapabilityDTypePolicyLivesInOnePlace) {
                                             DataType::Float32));
 }
 
+TEST(BackendManagerTest, SeparatesDeployAndTrainingOnlyBackendFeatures) {
+  EXPECT_FALSE(is_training_only_backend_feature(BackendFeature::Matmul));
+  EXPECT_FALSE(is_training_only_backend_feature(BackendFeature::Convolution));
+  EXPECT_TRUE(is_training_only_backend_feature(BackendFeature::OptimizerStep));
+}
+
+TEST(BackendManagerTest, ConstrainedFallbackPolicyIsDefinedPerFeature) {
+  EXPECT_EQ(backend_feature_default_fallback_policy(BackendFeature::Matmul),
+            BackendFallbackPolicy::CPUFallback);
+  EXPECT_EQ(backend_feature_default_fallback_policy(BackendFeature::RandomFill),
+            BackendFallbackPolicy::CPUFallback);
+  EXPECT_EQ(backend_feature_default_fallback_policy(BackendFeature::Convolution),
+            BackendFallbackPolicy::ExplicitUnsupported);
+  EXPECT_EQ(backend_feature_default_fallback_policy(BackendFeature::OptimizerStep),
+            BackendFallbackPolicy::ExplicitUnsupported);
+}
+
 TEST(BackendRegistryTest, LocalRegistryAllowsIsolatedOverridesAndCacheControl) {
   BackendRegistry registry;
   int generation = 0;

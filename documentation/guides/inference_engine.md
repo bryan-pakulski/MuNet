@@ -38,6 +38,7 @@ For constrained devices, prefer:
 - `eng.set_lean_mode(True)` in Python, or `EngineConfig::lean_mode = true` in C++
 - `capture_profiler_memory=True` only when you are actively collecting memory diagnostics
 - a bounded prepared-input cache (`prepared_input_cache_entries`, `prepared_input_cache_max_bytes`) when repeated host-to-device transfers must stay within a fixed memory budget
+- `prepare_batch([...])` during warmup when you want to pre-populate prepared-input buffers before steady-state batched inference
 - observers only when lifecycle event callbacks are required
 
 ## Strict vs non-strict checks

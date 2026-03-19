@@ -839,6 +839,18 @@ class TestBindings(unittest.TestCase):
         self.assertLessEqual(stats.prepared_input_cache_entries, 1)
         self.assertLessEqual(stats.prepared_input_cache_bytes, 1024)
 
+    def test_inference_engine_prepare_batch_prepopulates_cache(self):
+        cfg = munet.inference.EngineConfig()
+        cfg.prepared_input_cache_entries = 2
+        eng = munet.inference.Engine(cfg)
+        model = munet.nn.Sequential([munet.nn.Linear(4, 2)])
+        eng.load(model)
+
+        a = munet.ones([1, 4], dtype=munet.DataType.Float32)
+        b = munet.ones([1, 4], dtype=munet.DataType.Float32)
+        eng.prepare_batch([a, b])
+        self.assertEqual(eng.stats().prepared_input_cache_misses, 0)
+
     def test_inference_engine_from_serialized_model(self):
         model = munet.nn.Sequential([
             munet.nn.Linear(3, 3),

@@ -779,6 +779,7 @@ PYBIND11_MODULE(munet, m) {
            py::arg("expected_input_shape") = py::none(),
            py::arg("expected_output_shape") = py::none())
       .def("prepare", &inference::Engine::prepare, py::arg("example_input"))
+      .def("prepare_batch", &inference::Engine::prepare_batch, py::arg("inputs"))
       .def("run", &inference::Engine::run, py::arg("input"))
       .def("run_batch", &inference::Engine::run_batch, py::arg("inputs"))
       .def("is_loaded", &inference::Engine::is_loaded)
