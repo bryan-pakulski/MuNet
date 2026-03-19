@@ -1,3 +1,5 @@
+#include "inference.hpp"
+#include "nn.hpp"
 #include "tensor.hpp"
 #include "test_utils.hpp"
 
@@ -804,4 +806,50 @@ TEST(PerformanceTest, OptimizerStepCudaVsVulkan) {
         loss.impl_->backend().synchronize();
       },
       3, 14, "MUNET_PERF_MAX_RATIO_OPTIMIZER_STEP", 5.0);
+}
+
+TEST(PerformanceTest, RepresentativeInferenceEngineMemoryProfile) {
+  if (!perf_tests_enabled()) {
+    GTEST_SKIP() << "Set MUNET_RUN_PERF_TESTS=1 to run performance tests.";
+  }
+
+  Profiler::get().reset();
+
+  TensorOptions options;
+  options.device = Device{DeviceType::CPU, 0};
+  options.dtype = DataType::Float32;
+
+  auto model = std::make_shared<nn::Sequential>();
+  model->add(std::make_shared<nn::Linear>(128, 256, true, options));
+  model->add(std::make_shared<nn::ReLU>());
+  model->add(std::make_shared<nn::Linear>(256, 64, true, options));
+  model->add(std::make_shared<nn::ReLU>());
+  model->add(std::make_shared<nn::Linear>(64, 16, true, options));
+
+  inference::Engine engine;
+  engine.load(model);
+
+  Tensor input({32, 128}, options.device, options.dtype, false);
+  input.uniform_(-1.0f, 1.0f);
+
+  engine.compile(input, {-1, 128}, {-1, 16});
+  const size_t baseline_current = Profiler::get().current_memory_bytes();
+
+  double avg_ms = benchmark_ms(
+      [&]() {
+        Tensor output = engine.run(input);
+        output = output.to(Device{DeviceType::CPU, 0});
+      },
+      2, 12);
+
+  const size_t final_current = Profiler::get().current_memory_bytes();
+  const size_t peak_memory = Profiler::get().peak_memory_bytes();
+
+  EXPECT_GT(avg_ms, 0.0);
+  EXPECT_GE(peak_memory, baseline_current);
+  EXPECT_LE(final_current, peak_memory);
+  EXPECT_LE(final_current,
+            baseline_current + input.size() * dtype_size(input.dtype()) * 8);
+  EXPECT_EQ(engine.stats().compiled_output_shape, (std::vector<int>{32, 16}));
+  EXPECT_GE(engine.stats().peak_memory_bytes, peak_memory);
 }

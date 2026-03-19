@@ -18,7 +18,7 @@ The recent header split made the codebase easier to navigate, but the next stage
 - [x] Phase 3 - Backend capability split and registry cleanup
 - [x] Phase 4 - Autograd hardening
 - [~] Phase 5 - Module, optimizer, and training ergonomics
-- [ ] Phase 6 - Inference and production hardening
+- [x] Phase 6 - Inference and production hardening
 
 ## Primary goals
 
@@ -321,16 +321,31 @@ Phase 1 follow-up items are complete. Any finer-grained per-op/per-shape dispatc
 
 ### Action points
 
-- Separate inference-only graph execution concerns from training/autograd concerns more sharply.
-- Formalize serialization compatibility and versioning expectations.
-- Add stricter error handling and diagnostics for unsupported deployment paths.
-- Add memory/performance test suites for representative model flows.
-- Define observability hooks for profiling/debugging in production-like environments.
+- [x] Separate inference-only graph execution concerns from training/autograd concerns more sharply.
+  - `inference::Engine` now forces `GradMode` off during compile/run and rejects grad-tracked deployment inputs by default so inference execution stays detached even when a reused module still has trainable parameters.
+- [x] Formalize serialization compatibility and versioning expectations.
+  - Serialization artifacts now carry explicit format metadata (`format_name`, `format_revision`, legacy compatibility tag, producer) and fail early on unsupported revisions instead of guessing.
+- [x] Add stricter error handling and diagnostics for unsupported deployment paths.
+  - The inference engine now emits targeted errors for null loads, shape-contract violations, grad-tracked deployment inputs, and unexpected grad-tracked outputs.
+- [x] Add memory/performance test suites for representative model flows.
+  - Added a representative inference-engine memory/perf regression test alongside the existing backend perf suite.
+- [x] Define observability hooks for profiling/debugging in production-like environments.
+  - The engine now exposes observer callbacks for load/compile/run/error lifecycle events with timing, shape, and profiler memory snapshots.
+
+### Phase 6 implementation update
+
+- Inference execution is now intentionally detached from the training/autograd path instead of merely reusing `eval()` semantics.
+- Serialization/load flows now have an explicit compatibility contract that deployment tooling can validate before attempting reconstruction.
+- Engine statistics now include profiler-backed memory snapshots, and lifecycle observers provide lightweight production diagnostics without requiring training-engine coupling.
+- Documentation now describes both the inference/autograd boundary and the serialization compatibility policy.
+- Representative inference memory/performance coverage now exists in the perf suite to catch deployment regressions earlier.
 
 ### Exit criteria
 
-- Inference remains lean while still benefiting from the core refactor.
-- Production diagnostics and compatibility policies are documented.
+- [x] Inference remains lean while still benefiting from the core refactor.
+- [x] Production diagnostics and compatibility policies are documented.
+
+Phase 6 is complete. Any further deployment/export/runtime expansion should be tracked as a new milestone rather than leaving this phase marked in progress.
 
 ## Cross-phase workstreams
 
@@ -379,22 +394,22 @@ If we want the highest leverage path with the least future churn, the recommende
 
 ### Milestone A - Core typed foundation
 
-- [~] Complete Phase 0 and Phase 1.
+- [x] Complete Phase 0 and Phase 1.
 - Outcome: dtype-safe tensor core and test coverage for future fp16 work.
 
 ### Milestone B - Modular execution path
 
-- [ ] Complete Phase 2 and Phase 3.
+- [x] Complete Phase 2 and Phase 3.
 - Outcome: new ops and new backend kernels become local, testable changes.
 
 ### Milestone C - Safe training engine
 
-- [ ] Complete Phase 4 and Phase 5.
+- [~] Complete Phase 4 and Phase 5.
 - Outcome: mixed precision training becomes practical and maintainable.
 
 ### Milestone D - Hardened deployment story
 
-- [ ] Complete Phase 6.
+- [x] Complete Phase 6.
 - Outcome: inference and deployment workflows become predictable and supportable.
 
 ## Definition of success

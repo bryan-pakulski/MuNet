@@ -2,7 +2,7 @@
 
 ## Goal
 
-Provide a stable deploy runtime with shape contracts and warmup/compile behavior.
+Provide a stable deploy runtime with shape contracts, warmup/compile behavior, and diagnostics that stay separate from training/autograd internals.
 
 ## Compile contracts
 
@@ -16,10 +16,36 @@ Use `-1` for dynamic dims:
 - Dynamic batch MLP: `[-1, 4] -> [-1, 2]`
 - Dynamic resolution conv: `[-1, 3, -1, -1] -> [-1, 2, -1, -1]`
 
+## Inference/autograd boundary
+
+`munet.inference.Engine` now enforces an inference-first execution path:
+
+- `compile(...)` and `run(...)` temporarily disable `GradMode`, even if the loaded module still has trainable parameters.
+- Inputs with `requires_grad=True` are rejected by default with a targeted deployment error.
+- You can opt into `allow_autograd_inputs=True` only for debugging/inspection flows; MuNet still hard-fails if the resulting deployment path would surface a grad-tracked output.
+- If a deployment path somehow produces a gradient-tracked output, the engine raises an error instead of silently leaking training behavior into inference.
+
 ## Strict vs non-strict checks
 
 - strict mode validates compiled/expected shapes at runtime.
 - non-strict mode allows mismatches (for experimentation).
+
+## Observability hooks
+
+The engine exposes lightweight lifecycle hooks without coupling deployment code to training internals:
+
+- `set_observer(callback)` receives load / compile / run / error events.
+- Each event includes:
+  - event type
+  - device
+  - run index
+  - input/output shapes when available
+  - duration in milliseconds
+  - profiler current/peak memory snapshots when enabled
+  - a human-readable diagnostic message
+- `EngineStats` also records compile/run timings, compiled shapes, and profiler memory snapshots.
+
+For production-like profiling, keep `capture_profiler_memory=True` and combine engine events with the process-level profiler (`MUNET_PROFILE=1`) when deeper backend timing is required.
 
 ## ONNX native conversion direction
 
@@ -98,7 +124,6 @@ including:
 - `Add`, `Cast`, `Concat`, `Constant`, `Conv`, `Floor`, `MaxPool`, `Mul`,
   `Pow`, `Reshape`, `Resize`, `Shape`, `Sigmoid`, `Slice`, `Split`,
   `Transpose`, `Unsqueeze`.
-
 
 ## Strict ONNX conversion policy
 

@@ -1,9 +1,15 @@
 #pragma once
 
+#include "autograd/engine.hpp"
 #include "core/module.hpp"
+#include "core/util/profiler.hpp"
 #include <chrono>
+#include <functional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace munet {
 namespace inference {
@@ -20,12 +26,12 @@ public:
   }
 };
 
-
-
 struct EngineConfig {
   Device device{DeviceType::CPU, 0};
   int warmup_runs = 0;
   bool strict_shape_check = true;
+  bool allow_autograd_inputs = false;
+  bool capture_profiler_memory = true;
 };
 
 struct EngineStats {
@@ -34,7 +40,47 @@ struct EngineStats {
   double compile_ms = 0.0;
   std::vector<int> compiled_input_shape{};
   std::vector<int> compiled_output_shape{};
+  size_t current_memory_bytes = 0;
+  size_t peak_memory_bytes = 0;
 };
+
+enum class EngineEventType {
+  LoadStarted,
+  LoadCompleted,
+  CompileStarted,
+  CompileCompleted,
+  RunStarted,
+  RunCompleted,
+  Error,
+};
+
+struct EngineEvent {
+  EngineEventType type{EngineEventType::LoadStarted};
+  Device device{DeviceType::CPU, 0};
+  size_t run_index = 0;
+  double duration_ms = 0.0;
+  std::vector<int> input_shape{};
+  std::vector<int> output_shape{};
+  size_t current_memory_bytes = 0;
+  size_t peak_memory_bytes = 0;
+  std::string message{};
+};
+
+using EngineObserver = std::function<void(const EngineEvent &)>;
+
+namespace detail {
+class InferenceModeGuard {
+public:
+  InferenceModeGuard() : previous_(GradMode::is_enabled()) {
+    GradMode::set_enabled(false);
+  }
+
+  ~InferenceModeGuard() { GradMode::set_enabled(previous_); }
+
+private:
+  bool previous_;
+};
+} // namespace detail
 
 class Engine {
 public:
@@ -54,65 +100,111 @@ public:
   }
 
   void set_strict_shape_check(bool enabled) { config_.strict_shape_check = enabled; }
+  void set_allow_autograd_inputs(bool enabled) { config_.allow_autograd_inputs = enabled; }
+  void set_capture_profiler_memory(bool enabled) { config_.capture_profiler_memory = enabled; }
+
+  bool allow_autograd_inputs() const { return config_.allow_autograd_inputs; }
+  bool capture_profiler_memory() const { return config_.capture_profiler_memory; }
+
+  void set_observer(EngineObserver observer) { observer_ = std::move(observer); }
+  void clear_observer() { observer_ = nullptr; }
 
   void load(const std::shared_ptr<core::Module> &module) {
-    if (!module)
-      throw std::runtime_error("Engine::load received null module");
+    emit_event(EngineEventType::LoadStarted, 0.0, {}, {}, 0,
+               "Loading module into inference engine");
 
-    module_ = module;
-    module_->to(config_.device);
-    module_->eval();
+    try {
+      if (!module)
+        throw std::runtime_error("Engine::load received null module");
 
-    loaded_ = true;
-    prepared_ = false;
-    compiled_ = false;
-    stats_ = {};
+      module_ = module;
+      module_->to(config_.device);
+      module_->eval();
+
+      loaded_ = true;
+      prepared_ = false;
+      compiled_ = false;
+      stats_ = {};
+      refresh_memory_stats();
+
+      const size_t trainable_count = count_requires_grad_parameters();
+      std::ostringstream message;
+      message << "Module loaded on " << config_.device.to_string()
+              << "; gradients will remain disabled during compile/run";
+      if (trainable_count > 0) {
+        message << " (" << trainable_count
+                << " parameter/buffer tensor(s) still marked requires_grad)";
+      }
+      emit_event(EngineEventType::LoadCompleted, 0.0, {}, {}, 0,
+                 message.str());
+    } catch (const std::exception &e) {
+      emit_event(EngineEventType::Error, 0.0, {}, {}, 0,
+                 std::string("load failed: ") + e.what());
+      throw;
+    }
   }
 
   void compile(const Tensor &example_input,
                const std::vector<int> &expected_input_shape = {},
                const std::vector<int> &expected_output_shape = {}) {
     ensure_loaded();
-
     auto start = std::chrono::high_resolution_clock::now();
-    Tensor input = to_engine_device(example_input);
-    compiled_input_shape_ = input.shape();
+    Tensor input;
+    try {
+      input = prepare_input(example_input, "compile");
+      emit_event(EngineEventType::CompileStarted, 0.0, input.shape(), {},
+                 stats_.runs, "Compiling inference shape contract");
 
-    if (!expected_input_shape.empty()) {
-      validate_shape(expected_input_shape, compiled_input_shape_,
-                     "Engine: compile expected_input_shape mismatch");
-      expected_input_shape_ = expected_input_shape;
-      use_expected_input_shape_ = true;
-    } else {
-      expected_input_shape_.clear();
-      use_expected_input_shape_ = false;
+      detail::InferenceModeGuard no_grad;
+      compiled_input_shape_ = input.shape();
+
+      if (!expected_input_shape.empty()) {
+        validate_shape(expected_input_shape, compiled_input_shape_,
+                       "Engine: compile expected_input_shape mismatch");
+        expected_input_shape_ = expected_input_shape;
+        use_expected_input_shape_ = true;
+      } else {
+        expected_input_shape_.clear();
+        use_expected_input_shape_ = false;
+      }
+
+      Tensor out = module_->forward(input);
+      ensure_inference_output(out, "compile");
+      compiled_output_shape_ = out.shape();
+
+      if (!expected_output_shape.empty()) {
+        validate_shape(expected_output_shape, compiled_output_shape_,
+                       "Engine: compile expected_output_shape mismatch");
+        expected_output_shape_ = expected_output_shape;
+        use_expected_output_shape_ = true;
+      } else {
+        expected_output_shape_.clear();
+        use_expected_output_shape_ = false;
+      }
+
+      for (int i = 1; i < config_.warmup_runs; ++i) {
+        Tensor warmup_out = module_->forward(input);
+        ensure_inference_output(warmup_out, "warmup");
+      }
+
+      auto end = std::chrono::high_resolution_clock::now();
+      stats_.compile_ms =
+          std::chrono::duration<double, std::milli>(end - start).count();
+      stats_.compiled_input_shape = compiled_input_shape_;
+      stats_.compiled_output_shape = compiled_output_shape_;
+      refresh_memory_stats();
+
+      compiled_ = true;
+      prepared_ = true;
+      emit_event(EngineEventType::CompileCompleted, stats_.compile_ms,
+                 compiled_input_shape_, compiled_output_shape_, stats_.runs,
+                 "Inference compile completed");
+    } catch (const std::exception &e) {
+      emit_event(EngineEventType::Error, elapsed_ms(start),
+                 shape_or_empty(input), {}, stats_.runs,
+                 std::string("compile failed: ") + e.what());
+      throw;
     }
-
-    Tensor out = module_->forward(input);
-    compiled_output_shape_ = out.shape();
-
-    if (!expected_output_shape.empty()) {
-      validate_shape(expected_output_shape, compiled_output_shape_,
-                     "Engine: compile expected_output_shape mismatch");
-      expected_output_shape_ = expected_output_shape;
-      use_expected_output_shape_ = true;
-    } else {
-      expected_output_shape_.clear();
-      use_expected_output_shape_ = false;
-    }
-
-    for (int i = 1; i < config_.warmup_runs; ++i) {
-      (void)module_->forward(input);
-    }
-
-    auto end = std::chrono::high_resolution_clock::now();
-    stats_.compile_ms =
-        std::chrono::duration<double, std::milli>(end - start).count();
-    stats_.compiled_input_shape = compiled_input_shape_;
-    stats_.compiled_output_shape = compiled_output_shape_;
-
-    compiled_ = true;
-    prepared_ = true;
   }
 
   void prepare(const Tensor &example_input) { compile(example_input); }
@@ -120,30 +212,46 @@ public:
   Tensor run(const Tensor &input) {
     ensure_loaded();
 
-    Tensor in = to_engine_device(input);
-    if (config_.strict_shape_check && compiled_) {
-      if (use_expected_input_shape_) {
-        validate_shape(expected_input_shape_, in.shape(),
-                       "Engine: input shape mismatch with expected compiled shape");
-      } else if (in.shape() != compiled_input_shape_) {
-        throw std::runtime_error("Engine: input shape mismatch with compiled shape");
-      }
-    }
-
     auto start = std::chrono::high_resolution_clock::now();
-    Tensor out = module_->forward(in);
+    Tensor in;
+    try {
+      in = prepare_input(input, "run");
+      if (config_.strict_shape_check && compiled_) {
+        if (use_expected_input_shape_) {
+          validate_shape(expected_input_shape_, in.shape(),
+                         "Engine: input shape mismatch with expected compiled shape");
+        } else if (in.shape() != compiled_input_shape_) {
+          throw std::runtime_error("Engine: input shape mismatch with compiled shape");
+        }
+      }
 
-    if (config_.strict_shape_check && compiled_ && use_expected_output_shape_) {
-      validate_shape(expected_output_shape_, out.shape(),
-                     "Engine: output shape mismatch with expected compiled shape");
+      emit_event(EngineEventType::RunStarted, 0.0, in.shape(), {}, stats_.runs + 1,
+                 "Starting inference run");
+
+      detail::InferenceModeGuard no_grad;
+      Tensor out = module_->forward(in);
+      ensure_inference_output(out, "run");
+
+      if (config_.strict_shape_check && compiled_ && use_expected_output_shape_) {
+        validate_shape(expected_output_shape_, out.shape(),
+                       "Engine: output shape mismatch with expected compiled shape");
+      }
+      auto end = std::chrono::high_resolution_clock::now();
+
+      stats_.runs += 1;
+      stats_.last_run_ms =
+          std::chrono::duration<double, std::milli>(end - start).count();
+      refresh_memory_stats();
+      emit_event(EngineEventType::RunCompleted, stats_.last_run_ms, in.shape(),
+                 out.shape(), stats_.runs, "Inference run completed");
+
+      return out;
+    } catch (const std::exception &e) {
+      emit_event(EngineEventType::Error, elapsed_ms(start),
+                 shape_or_empty(in), {}, stats_.runs + 1,
+                 std::string("run failed: ") + e.what());
+      throw;
     }
-    auto end = std::chrono::high_resolution_clock::now();
-
-    stats_.runs += 1;
-    stats_.last_run_ms =
-        std::chrono::duration<double, std::milli>(end - start).count();
-
-    return out;
   }
 
   std::vector<Tensor> run_batch(const std::vector<Tensor> &inputs) {
@@ -169,6 +277,30 @@ private:
     return (input.device() == config_.device) ? input : input.to(config_.device);
   }
 
+  void validate_inference_input(const Tensor &input, const char *stage) const {
+    if (!config_.allow_autograd_inputs && input.requires_grad()) {
+      throw std::runtime_error(std::string("Engine: ") + stage +
+                               " received a tensor with requires_grad=true. "
+                               "Detach inputs or opt into allow_autograd_inputs "
+                               "for debugging-only inspection paths.");
+    }
+  }
+
+  Tensor prepare_input(const Tensor &input, const char *stage) const {
+    Tensor prepared = to_engine_device(input);
+    validate_inference_input(prepared, stage);
+    return prepared;
+  }
+
+  static void ensure_inference_output(const Tensor &output, const char *stage) {
+    if (output.requires_grad()) {
+      throw std::runtime_error(std::string("Engine: ") + stage +
+                               " produced a gradient-tracked tensor. "
+                               "Inference execution must remain detached from "
+                               "autograd.");
+    }
+  }
+
   static void validate_shape(const std::vector<int> &expected,
                              const std::vector<int> &actual,
                              const std::string &err_prefix) {
@@ -189,9 +321,65 @@ private:
       throw std::runtime_error("Engine: no module loaded");
   }
 
+  static std::vector<int> shape_or_empty(const Tensor &tensor) {
+    return tensor.impl_ ? tensor.shape() : std::vector<int>{};
+  }
+
+  static double elapsed_ms(
+      const std::chrono::high_resolution_clock::time_point &start) {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::high_resolution_clock::now() - start)
+        .count();
+  }
+
+  void refresh_memory_stats() {
+    if (!config_.capture_profiler_memory)
+      return;
+    stats_.current_memory_bytes = Profiler::get().current_memory_bytes();
+    stats_.peak_memory_bytes = Profiler::get().peak_memory_bytes();
+  }
+
+  size_t count_requires_grad_parameters() const {
+    if (!module_) {
+      return 0;
+    }
+
+    size_t count = 0;
+    for (const auto &[name, tensor] : module_->named_parameters()) {
+      (void)name;
+      if (tensor.requires_grad()) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  void emit_event(EngineEventType type, double duration_ms,
+                  std::vector<int> input_shape, std::vector<int> output_shape,
+                  size_t run_index, std::string message) const {
+    if (!observer_) {
+      return;
+    }
+
+    EngineEvent event;
+    event.type = type;
+    event.device = config_.device;
+    event.run_index = run_index;
+    event.duration_ms = duration_ms;
+    event.input_shape = std::move(input_shape);
+    event.output_shape = std::move(output_shape);
+    event.message = std::move(message);
+    if (config_.capture_profiler_memory) {
+      event.current_memory_bytes = Profiler::get().current_memory_bytes();
+      event.peak_memory_bytes = Profiler::get().peak_memory_bytes();
+    }
+    observer_(event);
+  }
+
   EngineConfig config_;
   EngineStats stats_;
   std::shared_ptr<core::Module> module_ = nullptr;
+  EngineObserver observer_;
   bool loaded_ = false;
   bool prepared_ = false;
   bool compiled_ = false;
