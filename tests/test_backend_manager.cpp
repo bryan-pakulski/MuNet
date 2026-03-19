@@ -199,6 +199,127 @@ private:
   int sync_calls_ = 0;
 };
 
+class ReusingTimedAddBackend : public Backend,
+                               public BackendAllocationTransferCapability,
+                               public BackendElementwiseCapability {
+public:
+  explicit ReusingTimedAddBackend(int device_index)
+      : device_index_(device_index) {}
+
+  const char *name() const override { return "reusing_timed_add"; }
+
+  BackendAllocationTransferCapability *allocation_transfer_capability() override {
+    return this;
+  }
+  const BackendAllocationTransferCapability *allocation_transfer_capability() const override {
+    return this;
+  }
+
+  BackendElementwiseCapability *elementwise_capability() override { return this; }
+  const BackendElementwiseCapability *elementwise_capability() const override {
+    return this;
+  }
+
+  void *allocate(size_t bytes) override {
+    auto &bucket = free_blocks_[bytes];
+    if (!bucket.empty()) {
+      void *ptr = bucket.back();
+      bucket.pop_back();
+      allocated_sizes_[ptr] = bytes;
+      return ptr;
+    }
+    void *ptr = std::malloc(bytes);
+    allocated_sizes_[ptr] = bytes;
+    return ptr;
+  }
+
+  void deallocate(void *ptr) override {
+    if (!ptr) {
+      return;
+    }
+    const size_t bytes = allocation_size(ptr);
+    if (bytes > 0) {
+      free_blocks_[bytes].push_back(ptr);
+    }
+  }
+
+  void memset(void *ptr, int value, size_t bytes) override {
+    std::memset(ptr, value, bytes);
+  }
+
+  void copy(const void *src, void *dst, size_t bytes, Device, Device) override {
+    std::memcpy(dst, src, bytes);
+  }
+
+  void synchronize() override {
+    ++sync_calls_;
+    last_kernel_time_us_ = 77.0;
+  }
+
+  void all_reduce(Storage &, size_t) override {}
+  double get_last_kernel_time_us() override { return last_kernel_time_us_; }
+  bool reports_gpu_kernel_time() const override { return true; }
+
+  void add(const Storage &a, const Storage &b, Storage &out,
+           const BroadcastInfo &) override {
+    const float *ap = static_cast<const float *>(a.data());
+    const float *bp = static_cast<const float *>(b.data());
+    float *op = static_cast<float *>(out.data());
+    op[0] = ap[0] + bp[0];
+  }
+
+  void sub(const Storage &, const Storage &, Storage &,
+           const BroadcastInfo &) override {
+    throw std::runtime_error("unused");
+  }
+  void mul(const Storage &, const Storage &, Storage &,
+           const BroadcastInfo &) override {
+    throw std::runtime_error("unused");
+  }
+  void div(const Storage &, const Storage &, Storage &,
+           const BroadcastInfo &) override {
+    throw std::runtime_error("unused");
+  }
+  void broadcast_row(const Storage &, Storage &, int, int) override {
+    throw std::runtime_error("unused");
+  }
+  void relu(const Storage &, Storage &, size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void relu_backward(const Storage &, const Storage &, Storage &,
+                     size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void sigmoid(const Storage &, Storage &, size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void sigmoid_backward(const Storage &, const Storage &, Storage &,
+                        size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void softmax(const Storage &, Storage &, int, int) override {
+    throw std::runtime_error("unused");
+  }
+  void softmax_backward(const Storage &, const Storage &, Storage &, int,
+                        int) override {
+    throw std::runtime_error("unused");
+  }
+
+  int sync_calls() const { return sync_calls_; }
+
+private:
+  size_t allocation_size(void *ptr) const {
+    auto it = allocated_sizes_.find(ptr);
+    return it == allocated_sizes_.end() ? 0 : it->second;
+  }
+
+  int device_index_ = 0;
+  double last_kernel_time_us_ = 0.0;
+  int sync_calls_ = 0;
+  std::unordered_map<void *, size_t> allocated_sizes_;
+  std::unordered_map<size_t, std::vector<void *>> free_blocks_;
+};
+
 } // namespace
 
 TEST(BackendManagerTest, CanOverrideBackendFactoryForDeviceType) {
@@ -505,6 +626,59 @@ TEST(BackendManagerTest, ProfilingCapturesDTypeFallbackReasonMarkers) {
             std::string::npos);
   EXPECT_NE(dtype_reason->second.last_shape.find("reason=dtype"),
             std::string::npos);
+}
+
+TEST(BackendManagerTest, ProfilingCapturesAllocatorAndSynchronizationMarkers) {
+  ScopedProfileOverride profile(true);
+  Profiler::get().reset();
+
+  std::shared_ptr<ReusingTimedAddBackend> base_backend;
+  BackendManager::register_backend(DeviceType::UNKNOWN, [&](Device device) {
+    base_backend = std::make_shared<ReusingTimedAddBackend>(device.index);
+    return base_backend;
+  });
+
+  const auto backend = BackendManager::get(Device{DeviceType::UNKNOWN, 7});
+  ASSERT_NE(backend, nullptr);
+
+  void *first = backend->allocate(128);
+  backend->deallocate(first);
+  void *second = backend->allocate(128);
+  ASSERT_EQ(first, second);
+  backend->deallocate(second);
+
+  void *large = backend->allocate(20 * 1024 * 1024);
+  backend->deallocate(large);
+  backend->synchronize();
+
+  const Device test_device{DeviceType::UNKNOWN, 7};
+  Tensor a({1}, test_device, DataType::Float32);
+  Tensor b({1}, test_device, DataType::Float32);
+  a.fill_(2.0f);
+  b.fill_(3.0f);
+  (void)(a + b);
+
+  const auto snapshot = Profiler::get().snapshot();
+  EXPECT_NE(snapshot.stats.find("allocator.reuse_miss.reusing_timed_add"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("allocator.reuse_hit.reusing_timed_add"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("allocator.pool_growth.reusing_timed_add"),
+            snapshot.stats.end());
+  EXPECT_NE(
+      snapshot.stats.find("allocator.large_alloc_slow_path.reusing_timed_add"),
+      snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("allocator.deallocate.reusing_timed_add"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("sync.explicit.reusing_timed_add"),
+            snapshot.stats.end());
+  const auto implicit_sync =
+      snapshot.stats.find("sync.implicit_timing.reusing_timed_add");
+  ASSERT_NE(implicit_sync, snapshot.stats.end());
+  EXPECT_NE(implicit_sync->second.last_shape.find("trigger=add"),
+            std::string::npos);
+  ASSERT_NE(base_backend, nullptr);
+  EXPECT_GE(base_backend->sync_calls(), 2);
 }
 
 TEST(BackendManagerTest, ProfilingCapturesDirectionalTransferMarkers) {

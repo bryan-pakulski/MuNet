@@ -1,7 +1,9 @@
 #include "../storage.hpp"
 #include "cuda_backend.hpp"
+#include "../core/util.hpp"
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
+#include <chrono>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -29,6 +31,27 @@ namespace munet {
 static std::unordered_map<size_t, std::vector<void *>> free_blocks;
 static std::unordered_map<void *, size_t> alloc_sizes;
 static cublasHandle_t cublas_handle_ = nullptr;
+
+namespace {
+
+constexpr size_t kLargeAllocationSlowPathBytes = 16 * 1024 * 1024;
+
+inline auto profile_now() { return std::chrono::high_resolution_clock::now(); }
+
+void record_cuda_profile_event(const char *domain, const char *event,
+                               const std::chrono::high_resolution_clock::time_point &start,
+                               size_t bytes = 0) {
+  if (!is_profile_enabled()) {
+    return;
+  }
+  const auto end = std::chrono::high_resolution_clock::now();
+  const double us =
+      std::chrono::duration<double, std::micro>(end - start).count();
+  Profiler::get().record(std::string(domain) + "." + event + ".cuda", us, 0.0,
+                         bytes);
+}
+
+} // namespace
 
 CUDABackend::CUDABackend(int device_index) : device_index_(device_index) {
   int device_count = 0;
@@ -748,27 +771,38 @@ __global__ void sum_to_shape_kernel(const float *in, float *out, int ndim,
 void *CUDABackend::allocate(size_t bytes) {
   cudaSetDevice(device_index_);
   cudaEventRecord((cudaEvent_t)start_event_);
+  auto alloc_start = profile_now();
   if (!free_blocks[bytes].empty()) {
     void *ptr = free_blocks[bytes].back();
     free_blocks[bytes].pop_back();
+    record_cuda_profile_event("allocator", "reuse_hit", alloc_start, bytes);
     return ptr;
   }
   void *ptr;
   CUDA_CHECK(cudaMalloc(&ptr, bytes));
   alloc_sizes[ptr] = bytes;
   cudaEventRecord((cudaEvent_t)stop_event_);
+  record_cuda_profile_event("allocator", "reuse_miss", alloc_start, bytes);
+  record_cuda_profile_event("allocator", "pool_growth", alloc_start, bytes);
+  if (bytes >= kLargeAllocationSlowPathBytes) {
+    record_cuda_profile_event("allocator", "large_alloc_slow_path", alloc_start,
+                              bytes);
+  }
   return ptr;
 }
 
 void CUDABackend::deallocate(void *ptr) {
   cudaSetDevice(device_index_);
   cudaEventRecord((cudaEvent_t)start_event_);
+  auto free_start = profile_now();
   if (alloc_sizes.count(ptr)) {
     free_blocks[alloc_sizes[ptr]].push_back(ptr);
   } else {
     CUDA_CHECK(cudaFree(ptr));
   }
   cudaEventRecord((cudaEvent_t)stop_event_);
+  record_cuda_profile_event("allocator", "deallocate", free_start,
+                            alloc_sizes.count(ptr) ? alloc_sizes[ptr] : 0);
 }
 
 void CUDABackend::memset(void *ptr, int value, size_t bytes) {
@@ -789,7 +823,9 @@ void CUDABackend::copy(const void *src, void *dst, size_t bytes, Device src_dev,
 
 void CUDABackend::synchronize() {
   cudaSetDevice(device_index_);
+  auto sync_start = profile_now();
   CUDA_CHECK(cudaDeviceSynchronize());
+  record_cuda_profile_event("sync", "explicit", sync_start);
   float ms = 0;
   // This should always succeed under the assumption that every op records
   // events

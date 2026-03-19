@@ -97,6 +97,15 @@ static inline void profile_cpu_event(
   Profiler::get().record(name, us, 0.0, bytes);
 }
 
+static inline void profile_backend_event(
+    const char *domain, const char *event,
+    const std::chrono::high_resolution_clock::time_point &start,
+    size_t bytes = 0) {
+  const std::string name =
+      std::string(domain) + "." + event + ".vulkan";
+  profile_cpu_event(name.c_str(), start, bytes);
+}
+
 static size_t round_up_alloc_size(size_t bytes) {
   if (bytes == 0)
     bytes = 4; // Minimal valid size
@@ -1831,10 +1840,12 @@ VulkanBackend::~VulkanBackend() {
 }
 
 void *VulkanBackend::allocate(size_t bytes) {
+  auto alloc_start = profile_now();
   size_t aligned_size = round_up_alloc_size(bytes);
   if (!free_pool[aligned_size].empty()) {
     uint64_t handle = free_pool[aligned_size].back();
     free_pool[aligned_size].pop_back();
+    profile_backend_event("allocator", "reuse_hit", alloc_start, aligned_size);
     return (void *)handle;
   }
   VkBuffer buffer;
@@ -1847,6 +1858,12 @@ void *VulkanBackend::allocate(size_t bytes) {
   uint64_t handle = (uint64_t)buffer;
   allocation_memory[handle] = memory;
   allocation_sizes[handle] = aligned_size;
+  profile_backend_event("allocator", "reuse_miss", alloc_start, aligned_size);
+  profile_backend_event("allocator", "pool_growth", alloc_start, aligned_size);
+  if (aligned_size >= 16 * 1024 * 1024) {
+    profile_backend_event("allocator", "large_alloc_slow_path", alloc_start,
+                          aligned_size);
+  }
   return (void *)handle;
 }
 
@@ -1854,8 +1871,11 @@ void VulkanBackend::deallocate(void *ptr) {
   // Defer to current batch completion
   if (!ptr)
     return;
+  auto free_start = profile_now();
   uint64_t handle = (uint64_t)ptr;
   deferred_frees[currentFrame].push_back(handle);
+  profile_backend_event("allocator", "deallocate", free_start,
+                        allocation_sizes.count(handle) ? allocation_sizes[handle] : 0);
 }
 
 // --- Batch Management ---
@@ -1895,14 +1915,20 @@ void ensure_recording() {
   VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE,
                            UINT64_MAX));
   profile_cpu_event("vulkan.wait_for_fence", wait_start);
+  profile_backend_event("queue_wait", "in_flight_frame", wait_start);
 
   // Process deferred frees safely now that the GPU is done with this frame
+  auto deferred_flush_start = profile_now();
+  size_t deferred_flush_bytes = 0;
   for (uint64_t handle : deferred_frees[currentFrame]) {
     if (allocation_sizes.count(handle)) {
+      deferred_flush_bytes += allocation_sizes[handle];
       free_pool[allocation_sizes[handle]].push_back(handle);
     }
   }
   deferred_frees[currentFrame].clear();
+  profile_backend_event("allocator", "deferred_free_flush", deferred_flush_start,
+                        deferred_flush_bytes);
 
   // Reset Descriptor Pool logic: wipe the slate clean for this frame
   // Descriptor sets are pre-allocated once and then recycled per frame slot.
@@ -1911,6 +1937,8 @@ void ensure_recording() {
   auto descriptor_reuse_start = profile_now();
   descriptorSetCursor[currentFrame] = 0;
   profile_cpu_event("vulkan.descriptor_set_reuse", descriptor_reuse_start);
+  profile_backend_event("queue_starvation", "descriptor_reuse",
+                        descriptor_reuse_start);
 
   VK_CHECK(vkResetFences(device, 1, &inFlightFences[currentFrame]));
 
@@ -2013,8 +2041,10 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
       VK_CHECK(vkWaitForFences(device, MAX_FRAMES_IN_FLIGHT, inFlightFences,
                                VK_TRUE, UINT64_MAX));
       profile_cpu_event("vulkan.staging_wait_fences", staging_wait_start);
+      profile_backend_event("queue_wait", "staging_reuse", staging_wait_start);
       stagingOffset = 0; // Safe because queue is idle
       if (stagingSize < aligned) {
+        auto growth_start = profile_now();
         if (stagingBuffer) {
           vkUnmapMemory(device, stagingMemory);
           vkDestroyBuffer(device, stagingBuffer, nullptr);
@@ -2030,6 +2060,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
                      stagingBuffer, stagingMemory);
         VK_CHECK(vkMapMemory(device, stagingMemory, 0, stagingSize, 0,
                              &stagingMapped));
+        profile_backend_event("allocator", "pool_growth", growth_start, stagingSize);
       }
     }
     offset = stagingOffset;
@@ -2091,6 +2122,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[submitted_frame],
                              VK_TRUE, UINT64_MAX));
     profile_cpu_event("vulkan.copy_d2h_wait_fence", d2h_wait_start, bytes);
+    profile_backend_event("sync", "readback_wait", d2h_wait_start, bytes);
     auto d2h_memcpy_start = profile_now();
     std::memcpy(dst, (char *)stagingMapped + offset, bytes);
     profile_cpu_event("vulkan.copy_d2h_memcpy", d2h_memcpy_start, bytes);
@@ -2107,6 +2139,7 @@ void VulkanBackend::synchronize() {
   VK_CHECK(vkWaitForFences(device, MAX_FRAMES_IN_FLIGHT, inFlightFences,
                            VK_TRUE, UINT64_MAX));
   profile_cpu_event("vulkan.synchronize_wait_fences", sync_wait_start);
+  profile_backend_event("sync", "explicit", sync_wait_start);
 
   // Only attempt to fetch results if profiling is actually active and work was
   // done
@@ -2121,6 +2154,7 @@ void VulkanBackend::synchronize() {
         device, queryPools[frameToQuery], 0, 2, sizeof(uint64_t) * 2, results,
         sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
     profile_cpu_event("vulkan.query_results", query_start);
+    profile_backend_event("sync", "implicit_timing", query_start);
 
     if (res == VK_SUCCESS) {
       double nanoseconds = (double)(results[1] - results[0]) * timestampPeriod;
@@ -2142,8 +2176,11 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
 
   if (descriptorSetCursor[currentFrame] >=
       frameDescriptorSets[currentFrame].size()) {
+    auto starvation_start = profile_now();
     flush_batch();
     ensure_recording();
+    profile_backend_event("queue_starvation", "descriptor_exhaustion",
+                          starvation_start);
   }
 
   VkDescriptorSet ds = frameDescriptorSets[currentFrame][descriptorSetCursor[currentFrame]++];

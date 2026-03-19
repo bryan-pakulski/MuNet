@@ -8,10 +8,29 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace munet {
 
 namespace {
+
+constexpr size_t kLargeAllocationSlowPathBytes = 16 * 1024 * 1024;
+
+std::string profiler_name(const char *domain, const char *event,
+                          const char *backend_name) {
+  return std::string(domain) + "." + event + "." + backend_name;
+}
+
+void record_backend_profile_event(const char *domain, const char *event,
+                                  const char *backend_name, double cpu_us,
+                                  size_t bytes = 0,
+                                  const std::string &detail = "") {
+  if (!is_profile_enabled()) {
+    return;
+  }
+  Profiler::get().record(profiler_name(domain, event, backend_name), cpu_us, 0.0,
+                         bytes, detail);
+}
 
 // Intercepts all backend calls and enforces a synchronized sanity check
 class DebugBackend : public Backend,
@@ -28,6 +47,21 @@ class DebugBackend : public Backend,
   std::shared_ptr<Backend> base_;
   std::mutex alloc_mtx_;
   std::unordered_map<void *, size_t> alloc_sizes_;
+  std::unordered_map<size_t, size_t> pooled_blocks_by_size_;
+  std::unordered_map<size_t, size_t> peak_blocks_by_size_;
+  std::unordered_set<void *> reusable_ptrs_;
+
+  void record_sync_event(const char *event, double cpu_us,
+                         const std::string &detail = "") const {
+    record_backend_profile_event("sync", event, base_->name(), cpu_us, 0,
+                                 detail);
+  }
+
+  void record_allocator_event(const char *event, double cpu_us, size_t bytes,
+                              const std::string &detail = "") const {
+    record_backend_profile_event("allocator", event, base_->name(), cpu_us, bytes,
+                                 detail);
+  }
 
   bool should_collect_gpu_time() const { return base_->reports_gpu_kernel_time(); }
 
@@ -38,7 +72,10 @@ class DebugBackend : public Backend,
       const bool collect_gpu_time = should_collect_gpu_time();
 
       if (collect_gpu_time && (is_debug_enabled() || is_profile_enabled())) {
+        Timer sync_timer;
         base_->synchronize();
+        record_sync_event("implicit_timing", sync_timer.elapsed_us(),
+                          "trigger=" + name);
         gpu_us = base_->get_last_kernel_time_us();
       }
 
@@ -123,27 +160,62 @@ public:
   }
 
   void *allocate(size_t bytes) override {
+    Timer timer;
     void *ptr = base_->allocate(bytes);
+    bool reuse_hit = false;
+    bool pool_growth = false;
     {
       std::lock_guard<std::mutex> lock(alloc_mtx_);
+      reuse_hit = reusable_ptrs_.erase(ptr) > 0;
       alloc_sizes_[ptr] = bytes;
+      if (reuse_hit) {
+        auto pooled_it = pooled_blocks_by_size_.find(bytes);
+        if (pooled_it != pooled_blocks_by_size_.end() && pooled_it->second > 0) {
+          --pooled_it->second;
+        }
+      } else {
+        size_t &peak_blocks = peak_blocks_by_size_[bytes];
+        size_t live_blocks = 0;
+        for (const auto &[allocated_ptr, allocated_bytes] : alloc_sizes_) {
+          if (allocated_bytes == bytes && reusable_ptrs_.count(allocated_ptr) == 0) {
+            ++live_blocks;
+          }
+        }
+        if (live_blocks > peak_blocks) {
+          peak_blocks = live_blocks;
+          pool_growth = true;
+        }
+      }
     }
     Profiler::get().record_alloc(bytes);
+    const double cpu_us = timer.elapsed_us();
+    record_allocator_event(reuse_hit ? "reuse_hit" : "reuse_miss", cpu_us, bytes);
+    if (pool_growth) {
+      record_allocator_event("pool_growth", cpu_us, bytes);
+    }
+    if (bytes >= kLargeAllocationSlowPathBytes) {
+      record_allocator_event("large_alloc_slow_path", cpu_us, bytes);
+    }
     return ptr;
   }
   void deallocate(void *ptr) override {
     size_t bytes = 0;
+    Timer timer;
     {
       std::lock_guard<std::mutex> lock(alloc_mtx_);
       auto it = alloc_sizes_.find(ptr);
       if (it != alloc_sizes_.end()) {
         bytes = it->second;
-        alloc_sizes_.erase(it);
+        reusable_ptrs_.insert(ptr);
+        pooled_blocks_by_size_[bytes]++;
       }
     }
     if (bytes > 0)
       Profiler::get().record_free(bytes);
     base_->deallocate(ptr);
+    if (bytes > 0) {
+      record_allocator_event("deallocate", timer.elapsed_us(), bytes);
+    }
   }
 
   void memset(void *ptr, int value, size_t bytes) override {
@@ -159,7 +231,11 @@ public:
     base_->copy(src, dst, bytes, src_dev, dst_dev);
     check(transfer_profile_name(src_dev, dst_dev), t.elapsed_us());
   }
-  void synchronize() override { base_->synchronize(); }
+  void synchronize() override {
+    Timer timer;
+    base_->synchronize();
+    record_sync_event("explicit", timer.elapsed_us());
+  }
   void all_reduce(Storage &buffer, size_t num_elements) override {
     MUNET_DEBUG << "all_reduce | " << num_elements << " elements" << std::endl;
     Timer t;

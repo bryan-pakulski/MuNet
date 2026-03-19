@@ -161,7 +161,12 @@ Status legend:
 - If shape reasons dominate, inspect broadcasting/layout assumptions.
 - If feature reasons dominate, prioritize backend feature implementation work.
 
-## [~] 4. Allocator and synchronization visibility
+## [x] 4. Allocator and synchronization visibility
+
+> Status: **Implemented via shared `allocator.*.<backend>`,
+> `sync.*.<backend>`, `queue_wait.*.<backend>`, and
+> `queue_starvation.*.<backend>` profiler namespaces, plus backend-specific
+> Vulkan stall markers and CUDA allocator/sync profiling.**
 
 ### Objectives
 
