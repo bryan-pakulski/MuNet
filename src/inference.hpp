@@ -6,6 +6,7 @@
 #include "core/util/profiler.hpp"
 #include "core/util/timer.hpp"
 #include <chrono>
+#include <array>
 #include <functional>
 #include <optional>
 #include <sstream>
@@ -168,14 +169,14 @@ private:
   std::vector<int> constrained_dims_{};
 };
 
-struct PreparedInputCache {
+struct PreparedInputCacheEntry {
   const TensorImpl *input_impl = nullptr;
   uint64_t input_version = 0;
   Device source_device{DeviceType::UNKNOWN, 0};
   Device target_device{DeviceType::UNKNOWN, 0};
   Tensor prepared{};
 
-  void reset() {
+  void clear() {
     input_impl = nullptr;
     input_version = 0;
     source_device = Device{DeviceType::UNKNOWN, 0};
@@ -189,6 +190,11 @@ struct PreparedInputCache {
            target == target_device;
   }
 
+  bool matches_identity(const Tensor &input, Device target) const {
+    return input.impl_.get() == input_impl && input.device() == source_device &&
+           target == target_device;
+  }
+
   void store(const Tensor &input, Device target, const Tensor &value) {
     input_impl = input.impl_.get();
     input_version = input.version();
@@ -196,6 +202,44 @@ struct PreparedInputCache {
     target_device = target;
     prepared = value;
   }
+};
+
+class PreparedInputCache {
+public:
+  const Tensor *find(const Tensor &input, Device target) const {
+    for (size_t i = 0; i < size_; ++i) {
+      if (entries_[i].matches(input, target)) {
+        return &entries_[i].prepared;
+      }
+    }
+    return nullptr;
+  }
+
+  void reset() {
+    for (auto &entry : entries_) {
+      entry.clear();
+    }
+    size_ = 0;
+    next_slot_ = 0;
+  }
+
+  void store(const Tensor &input, Device target, const Tensor &value) {
+    for (size_t i = 0; i < size_; ++i) {
+      if (entries_[i].matches_identity(input, target)) {
+        entries_[i].store(input, target, value);
+        return;
+      }
+    }
+
+    const size_t slot = (size_ < entries_.size()) ? size_++ : next_slot_;
+    entries_[slot].store(input, target, value);
+    next_slot_ = (slot + 1) % entries_.size();
+  }
+
+private:
+  std::array<PreparedInputCacheEntry, 8> entries_{};
+  size_t size_ = 0;
+  size_t next_slot_ = 0;
 };
 } // namespace detail
 
@@ -257,7 +301,9 @@ public:
       prepared_input_cache_.reset();
       {
         Timer timer;
-        module_->to(config_.device);
+        if (!module_->is_on(config_.device)) {
+          module_->to(config_.device);
+        }
         stats_.load_to_device_ms = timer.elapsed_ms();
         record_profile_phase("inference.load.to_device",
                              stats_.load_to_device_ms, {}, 0);
@@ -490,8 +536,8 @@ private:
     if (input.device() == config_.device) {
       return input;
     }
-    if (prepared_input_cache_.matches(input, config_.device)) {
-      return prepared_input_cache_.prepared;
+    if (const Tensor *cached = prepared_input_cache_.find(input, config_.device)) {
+      return *cached;
     }
 
     Tensor prepared = input.to(config_.device);

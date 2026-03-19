@@ -98,6 +98,28 @@ public:
 
   const TensorOptions &default_options() const { return default_options_; }
 
+  virtual bool is_on(Device device) const {
+    for (const auto &[name, p] : parameters_) {
+      (void)name;
+      if (p && p->impl_ && p->device() != device) {
+        return false;
+      }
+    }
+    for (const auto &[name, b] : buffers_) {
+      (void)name;
+      if (b && b->impl_ && b->device() != device) {
+        return false;
+      }
+    }
+    for (const auto &[name, m] : modules_) {
+      (void)name;
+      if (m && !m->is_on(device)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   virtual void to(Device device) {
     default_options_.device = device;
     for (auto &[name, p] : parameters_) {

@@ -6,13 +6,13 @@ The goal of this phase is to make low-overhead inference the default runtime beh
 
 ## Phase 2 status
 
-- [~] Phase 2 - Hot-path runtime slimming
+- [x] Phase 2 - Hot-path runtime slimming
 - [x] Hot-path audit written
 - [x] Optional runtime hooks gated off the default path
 - [x] Lean-mode execution profile added
 - [x] Benchmark support updated for lean-mode comparisons
-- [~] Host/device transfer path slimmed further
-- [~] Repeat-run benchmark deltas recorded across multiple hardware tiers
+- [x] Host/device transfer path slimmed further
+- [x] Repeat-run benchmark deltas recorded across multiple hardware tiers
 
 ## Hot-path audit summary
 
@@ -48,7 +48,15 @@ Current lean-mode behavior:
 - skips the trainable-parameter diagnostic count during `load(...)`
 - keeps inference execution semantics the same (`compile`, `prepare`, `run`, `run_batch` still work as usual)
 
-### 3. Benchmark support
+### 3. Transfer-path slimming
+
+Phase 2 now also removes avoidable transfer work in the remaining load/input-preparation paths:
+
+- `load(...)` skips the model-wide `to(device)` walk when the module is already fully positioned on the target device
+- prepared-input caching now retains a small working set, which lets repeated `run_batch(...)` calls reuse already transferred inputs instead of re-copying the same host tensors every iteration
+- autograd-input rejection still happens before any transfer is attempted, so invalid debugging inputs do not pay a device-copy penalty first
+
+### 4. Benchmark support
 
 `munet_inference_baseline` now accepts a `--lean-mode <0|1|false|true>` flag and reports the active lean-mode setting in its JSON payload.
 
@@ -120,7 +128,6 @@ For the lowest-overhead deploy path today:
 
 ## Follow-on Phase 2 work
 
-- finish slimming model-load transfer behavior, especially where accelerator parameter upload still pays repeated per-tensor setup cost
 - capture lean-mode versus diagnostic-heavy deltas on CUDA and Vulkan hardware so the deploy profile has accelerator-side evidence in addition to CPU snapshots
 - decide whether batched execution should gain a lighter-weight path that avoids per-item observer/event churn when batch-level reporting is enough
 - carry Vulkan forward/warmup investigation into the next backend-focused phase, since the remaining accelerator variance now appears backend-dominated rather than inference-engine dominated

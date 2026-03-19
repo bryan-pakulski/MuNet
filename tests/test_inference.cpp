@@ -494,3 +494,55 @@ TEST(InferenceTest, EngineRejectsAutogradInputBeforeTransfer) {
   BackendManager::register_backend(DeviceType::UNKNOWN,
                                    [](Device) { return std::make_shared<CPUBackend>(); });
 }
+
+TEST(InferenceTest, EngineCachesPreparedBatchInputsAcrossBatchRuns) {
+  auto copy_count = std::make_shared<int>(0);
+  BackendManager::register_backend(DeviceType::UNKNOWN, [copy_count](Device) {
+    return std::make_shared<CountingCopyBackend>(copy_count);
+  });
+
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  engine.set_device(Device{DeviceType::CPU, 0});
+  engine.load(m);
+
+  Tensor a({2, 2}, Device{DeviceType::UNKNOWN, 0});
+  Tensor b({2, 2}, Device{DeviceType::UNKNOWN, 0});
+  a.fill_(1.0f);
+  b.fill_(2.0f);
+  *copy_count = 0;
+
+  auto first = engine.run_batch({a, b});
+  ASSERT_EQ(first.size(), 2u);
+  EXPECT_EQ(*copy_count, 2);
+
+  auto second = engine.run_batch({a, b});
+  ASSERT_EQ(second.size(), 2u);
+  EXPECT_EQ(*copy_count, 2);
+
+  BackendManager::register_backend(DeviceType::UNKNOWN,
+                                   [](Device) { return std::make_shared<CPUBackend>(); });
+}
+
+TEST(InferenceTest, EngineLoadSkipsTransfersForPrepositionedModule) {
+  auto copy_count = std::make_shared<int>(0);
+  BackendManager::register_backend(DeviceType::UNKNOWN, [copy_count](Device) {
+    return std::make_shared<CountingCopyBackend>(copy_count);
+  });
+
+  TensorOptions options;
+  options.device = Device{DeviceType::UNKNOWN, 0};
+  options.dtype = DataType::Float32;
+
+  auto m = std::make_shared<IdentityLayerWithState>(options);
+  *copy_count = 0;
+
+  inference::Engine engine;
+  engine.set_device(Device{DeviceType::UNKNOWN, 0});
+  engine.load(m);
+
+  EXPECT_EQ(*copy_count, 0);
+
+  BackendManager::register_backend(DeviceType::UNKNOWN,
+                                   [](Device) { return std::make_shared<CPUBackend>(); });
+}
