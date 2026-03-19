@@ -12,68 +12,70 @@ const std::unordered_map<OpId, OpMetadata> &registry() {
   static const std::unordered_map<OpId, OpMetadata> kRegistry = {
       {OpId::Add,
        {OpId::Add, "Add", "Add", BackendFeature::ElementwiseBinary, false,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::Sub,
        {OpId::Sub, "Sub", "Sub", BackendFeature::ElementwiseBinary, false,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::Mul,
        {OpId::Mul, "Mul", "Mul", BackendFeature::ElementwiseBinary, false,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::Div,
        {OpId::Div, "Div", "Div", BackendFeature::ElementwiseBinary, true,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::MaskedFill,
        {OpId::MaskedFill, "MaskedFill", "MaskedFill", std::nullopt, false,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::Matmul,
        {OpId::Matmul, "Matmul", "MatMul", BackendFeature::Matmul, false,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::Relu,
        {OpId::Relu, "Relu", "Relu", BackendFeature::UnaryActivation, false,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::Sigmoid,
        {OpId::Sigmoid, "Sigmoid", "Sigmoid",
-        BackendFeature::UnaryActivation, true, true}},
+        BackendFeature::UnaryActivation, true, BackendFallbackPolicy::CPUFallback}},
       {OpId::Softmax,
        {OpId::Softmax, "Softmax", "Softmax", BackendFeature::Softmax, true,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::LogSoftmax,
        {OpId::LogSoftmax, "LogSoftmax", "LogSoftmax", std::nullopt, true,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::Cat,
        {OpId::Cat, "Concat", "Concat", BackendFeature::Concat, false,
-        false}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Sum,
        {OpId::Sum, "Sum", "ReduceSum", BackendFeature::Reduction, false,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::Reshape,
-       {OpId::Reshape, "Reshape", "Reshape", std::nullopt, false, true}},
+       {OpId::Reshape, "Reshape", "Reshape", std::nullopt, false,
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::Conv2D,
        {OpId::Conv2D, "Conv2d", "Conv", BackendFeature::Convolution, true,
-        false}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::MaxPool2D,
        {OpId::MaxPool2D, "MaxPool2d", "MaxPool", BackendFeature::Pooling,
-        true, false}},
+        true, BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Upsample2D,
        {OpId::Upsample2D, "Upsample2d", "Upsample2d",
-        BackendFeature::Pooling, true, false}},
+        BackendFeature::Pooling, true, BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::BatchNorm,
        {OpId::BatchNorm, "BatchNorm", "BatchNormalization",
-        BackendFeature::BatchNorm, true, false}},
+        BackendFeature::BatchNorm, true, BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::LayerNorm,
        {OpId::LayerNorm, "LayerNorm", "LayerNorm", std::nullopt, true,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::MSELoss,
        {OpId::MSELoss, "MSELoss", "MSELoss", BackendFeature::Loss, true,
-        false}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::CrossEntropy,
        {OpId::CrossEntropy, "CrossEntropy", "CrossEntropy",
-        BackendFeature::Loss, true, false}},
+        BackendFeature::Loss, true, BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Transpose,
        {OpId::Transpose, "Transpose", "Transpose", std::nullopt, false,
-        true}},
+        BackendFallbackPolicy::CPUFallback}},
       {OpId::Zeros,
-       {OpId::Zeros, "Zeros", "Zeros", std::nullopt, false, true}},
+       {OpId::Zeros, "Zeros", "Zeros", std::nullopt, false,
+        BackendFallbackPolicy::CPUFallback}},
   };
   return kRegistry;
 }
@@ -120,27 +122,38 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   }
 
   if (!meta.feature.has_value()) {
-    return {meta, false, meta.allow_cpu_fallback};
+    BackendSupport support;
+    support.available = false;
+    support.fallback_policy = meta.fallback_policy;
+    support.preferred_accumulation_dtype = tensor.dtype();
+    return {meta,
+            false,
+            meta.fallback_policy == BackendFallbackPolicy::CPUFallback,
+            support};
   }
 
   const auto feature = *meta.feature;
-  const bool dtype_supported = supports_backend_feature_dtype(feature, tensor.dtype());
-  const bool backend_supported =
-      dtype_supported && tensor.impl_->backend().supports(feature, tensor.dtype());
+  const auto support =
+      tensor.impl_->backend().query_support(feature, tensor.dtype(),
+                                            &tensor.shape());
 
-  if (backend_supported) {
-    return {meta, true, false};
+  if (support.available) {
+    return {meta, true, false, support};
   }
 
-  if (meta.allow_cpu_fallback) {
-    return {meta, false, true};
+  if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
+      support.fallback_policy == BackendFallbackPolicy::CPUFallback) {
+    return {meta, false, true, support};
   }
 
   throw std::runtime_error(std::string(meta.name) + ": backend '" +
                            std::string(tensor.impl_->backend().name()) +
                            "' does not support feature '" +
                            backend_feature_name(feature) +
-                           "' for dtype " + dtype_name(tensor.dtype()));
+                           "' for dtype " + dtype_name(tensor.dtype()) +
+                           " (fallback policy: " +
+                           backend_fallback_policy_name(support.fallback_policy) +
+                           ")");
 }
 
 void record_registered_trace(

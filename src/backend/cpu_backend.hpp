@@ -72,7 +72,17 @@ private:
   bool stop;
 };
 
-class CPUBackend : public Backend {
+class CPUBackend : public Backend,
+                   public BackendAllocationTransferCapability,
+                   public BackendElementwiseCapability,
+                   public BackendReductionCapability,
+                   public BackendBlasCapability,
+                   public BackendShapeCapability,
+                   public BackendLossCapability,
+                   public BackendSpatialCapability,
+                   public BackendNormalizationCapability,
+                   public BackendOptimizerCapability,
+                   public BackendRandomCapability {
 private:
   // Caching
   std::unordered_map<size_t, std::vector<void *>> free_blocks_;
@@ -116,8 +126,42 @@ private:
 
 public:
   const char *name() const override { return "cpu"; }
-  bool supports(BackendFeature feature, DataType dtype) const override {
-    return supports_backend_feature_dtype(feature, dtype);
+
+  BackendAllocationTransferCapability *allocation_transfer_capability() override {
+    return this;
+  }
+  const BackendAllocationTransferCapability *allocation_transfer_capability() const override {
+    return this;
+  }
+  BackendElementwiseCapability *elementwise_capability() override { return this; }
+  const BackendElementwiseCapability *elementwise_capability() const override {
+    return this;
+  }
+  BackendReductionCapability *reduction_capability() override { return this; }
+  const BackendReductionCapability *reduction_capability() const override {
+    return this;
+  }
+  BackendBlasCapability *blas_capability() override { return this; }
+  const BackendBlasCapability *blas_capability() const override { return this; }
+  BackendShapeCapability *shape_capability() override { return this; }
+  const BackendShapeCapability *shape_capability() const override { return this; }
+  BackendLossCapability *loss_capability() override { return this; }
+  const BackendLossCapability *loss_capability() const override { return this; }
+  BackendSpatialCapability *spatial_capability() override { return this; }
+  const BackendSpatialCapability *spatial_capability() const override { return this; }
+  BackendNormalizationCapability *normalization_capability() override {
+    return this;
+  }
+  const BackendNormalizationCapability *normalization_capability() const override {
+    return this;
+  }
+  BackendOptimizerCapability *optimizer_capability() override { return this; }
+  const BackendOptimizerCapability *optimizer_capability() const override {
+    return this;
+  }
+  BackendRandomCapability *random_capability() override { return this; }
+  const BackendRandomCapability *random_capability() const override {
+    return this;
   }
 
   ~CPUBackend() override {
