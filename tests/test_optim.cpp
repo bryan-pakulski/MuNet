@@ -145,3 +145,109 @@ TEST(OptimPolicyTest, AdamSupportsFloat16ParametersUsingTypedStateFallback) {
   EXPECT_EQ(updated.dtype, DataType::Float16);
   EXPECT_LT(updated.as_float(), 1.0f);
 }
+
+
+TEST(OptimPolicyTest, AdamParameterGroupsExposeStatePolicies) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor low_precision({1}, cpu, DataType::Float16, true);
+  low_precision.fill_(1.0f);
+  Tensor full_precision({1}, cpu, DataType::Float32, true);
+  full_precision.fill_(1.0f);
+
+  optim::OptimizerStatePolicy low_precision_policy;
+  low_precision_policy.model_dtype = DataType::Float16;
+  low_precision_policy.master_weight_dtype =
+      optim::MasterWeightDTypePolicy::Float32;
+  low_precision_policy.state_tensor_dtype =
+      optim::OptimizerStateTensorDTypePolicy::Float32;
+
+  optim::ParameterGroup low_precision_group({low_precision}, 0.05f,
+                                            low_precision_policy,
+                                            "low_precision");
+  optim::ParameterGroup baseline_group({full_precision}, std::nullopt, {},
+                                       "baseline");
+
+  optim::Adam opt({low_precision_group, baseline_group}, 0.01f);
+
+  ASSERT_EQ(opt.parameter_groups().size(), 2u);
+  EXPECT_FLOAT_EQ(opt.parameter_groups()[0].lr.value(), 0.05f);
+  EXPECT_FALSE(opt.parameter_groups()[1].lr.has_value());
+  EXPECT_EQ(opt.state_dtype_for_parameter(0), DataType::Float32);
+  EXPECT_TRUE(opt.has_master_weight_for_parameter(0));
+  EXPECT_EQ(opt.master_weight_dtype_for_parameter(0), DataType::Float32);
+  EXPECT_EQ(opt.state_dtype_for_parameter(1), DataType::Float32);
+  EXPECT_FALSE(opt.has_master_weight_for_parameter(1));
+}
+
+TEST(OptimPolicyTest, AdamParameterGroupsUsePerGroupLearningRates) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor slow({1}, cpu, DataType::Float32, true);
+  slow.fill_(1.0f);
+  Tensor fast({1}, cpu, DataType::Float32, true);
+  fast.fill_(1.0f);
+
+  Tensor grad({1}, cpu, DataType::Float32, false);
+  grad.fill_(1.0f);
+  slow.impl_->grad = grad.impl_;
+  fast.impl_->grad = grad.impl_;
+
+  optim::ParameterGroup slow_group({slow}, 0.01f, {}, "slow");
+  optim::ParameterGroup fast_group({fast}, 0.1f, {}, "fast");
+  optim::Adam opt({slow_group, fast_group}, 1e-3f);
+  opt.step();
+
+  EXPECT_GT(slow.item(), fast.item());
+}
+
+TEST(OptimPolicyTest, GradScalerScalesAndUnscalesOptimizerGradients) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor param({1}, cpu, DataType::Float32, true);
+  param.fill_(1.0f);
+  Tensor grad({1}, cpu, DataType::Float32, false);
+  grad.fill_(8.0f);
+  param.impl_->grad = grad.impl_;
+
+  optim::SGD opt(std::vector<Tensor>{param}, 0.1f);
+  amp::GradScaler scaler(true, 8.0f, 2.0f, 0.5f, 2);
+  scaler.unscale_(opt);
+
+  EXPECT_NEAR(param.grad().item(), 1.0f, 1e-6f);
+
+  scaler.update();
+  EXPECT_FLOAT_EQ(scaler.scale_value(), 8.0f);
+  scaler.update();
+  EXPECT_FLOAT_EQ(scaler.scale_value(), 16.0f);
+  scaler.update({true});
+  EXPECT_FLOAT_EQ(scaler.scale_value(), 8.0f);
+}
+
+TEST(OptimPolicyTest, GradScalerScaleReturnsScaledLossTensor) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor loss({1}, cpu, DataType::Float32, false);
+  loss.fill_(2.0f);
+
+  amp::GradScaler scaler(true, 4.0f);
+  Tensor scaled = scaler.scale(loss);
+  EXPECT_NEAR(scaled.item(), 8.0f, 1e-6f);
+}
+
+TEST(OptimPolicyTest, AutocastGuardRestoresPreviousStateAndPolicies) {
+  EXPECT_FALSE(amp::autocast_enabled());
+
+  amp::AutocastOptions options;
+  options.enabled = true;
+  options.device_type = DeviceType::CUDA;
+  options.compute_dtype = DataType::Float16;
+  options.conversion_policy = amp::AutocastConversionPolicy::PromoteInputs;
+
+  {
+    amp::AutocastGuard guard(options);
+    EXPECT_TRUE(amp::autocast_enabled());
+    EXPECT_TRUE(amp::allows_implicit_conversion(DataType::Float32,
+                                                DataType::Float16));
+    EXPECT_FALSE(amp::allows_output_conversion(DataType::Float32,
+                                               DataType::Float16));
+  }
+
+  EXPECT_FALSE(amp::autocast_enabled());
+}

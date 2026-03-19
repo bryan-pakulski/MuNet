@@ -17,6 +17,7 @@ Welcome to MuNet docs. This documentation is structured for interactive/searchab
 - [Inference Engine Guide](guides/inference_engine.md)
 - [Serialization & Model Loading](guides/serialization.md)
 - [Common Design Patterns](guides/design_patterns.md)
+- [Training Precision & AMP Flows](guides/training_precision.md)
 - [E2E Tutorial](tutorials/e2e_workflow.md)
 
 ## Existing architecture and perf docs

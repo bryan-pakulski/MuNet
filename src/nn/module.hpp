@@ -7,6 +7,8 @@ namespace nn {
 
 class Module : public core::Module {
 public:
+  explicit Module(TensorOptions default_options = TensorOptions{})
+      : core::Module(default_options) {}
   virtual ~Module() = default;
 
   std::shared_ptr<Module> register_module(std::string name,
@@ -41,6 +43,15 @@ inline TensorOptions buffer_options(const TensorOptions &options,
   resolved.dtype = buffer_dtype;
   resolved.requires_grad = false;
   return resolved;
+}
+
+inline core::BufferRegistration accumulation_buffer_registration(
+    AccumulationOp op) {
+  return core::BufferRegistration::accumulation(op);
+}
+
+inline core::BufferRegistration fixed_buffer_registration(DataType dtype) {
+  return core::BufferRegistration::fixed(dtype);
 }
 
 } // namespace nn

@@ -9,7 +9,7 @@ class LayerNorm : public Module {
 public:
   explicit LayerNorm(int normalized_shape, float eps = 1e-5f,
                      TensorOptions options = TensorOptions{})
-      : normalized_shape_(normalized_shape), eps_(eps) {
+      : Module(options), normalized_shape_(normalized_shape), eps_(eps) {
     if (normalized_shape_ <= 0)
       throw std::runtime_error("LayerNorm expects normalized_shape > 0");
 
@@ -40,7 +40,7 @@ class BatchNorm2d : public Module {
 public:
   BatchNorm2d(int num_features, float eps = 1e-5f, float momentum = 0.1f,
               TensorOptions options = TensorOptions{})
-      : eps_(eps), momentum_(momentum) {
+      : Module(options), eps_(eps), momentum_(momentum) {
     Tensor w({num_features}, parameter_options(options));
     w.fill_(1.0f);
     weight = w;
@@ -56,12 +56,14 @@ public:
     Tensor rm({num_features}, buffer_options(options, stats_dtype));
     rm.fill_(0.0f);
     running_mean = rm;
-    register_buffer("running_mean", running_mean);
+    register_buffer("running_mean", running_mean,
+                    accumulation_buffer_registration(AccumulationOp::Normalization));
 
     Tensor rv({num_features}, buffer_options(options, stats_dtype));
     rv.fill_(1.0f);
     running_var = rv;
-    register_buffer("running_var", running_var);
+    register_buffer("running_var", running_var,
+                    accumulation_buffer_registration(AccumulationOp::Normalization));
   }
 
   Tensor forward(Tensor x) override {

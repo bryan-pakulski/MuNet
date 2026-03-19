@@ -9,7 +9,8 @@ namespace nn {
 class Linear : public Module {
 public:
   Linear(int in_features, int out_features, bool bias = true,
-         TensorOptions options = TensorOptions{}) {
+         TensorOptions options = TensorOptions{})
+      : Module(options) {
     Tensor w({in_features, out_features}, parameter_options(options));
     float limit = 1.0f / std::sqrt((float)in_features);
     w.uniform_(-limit, limit);
@@ -39,7 +40,7 @@ class Conv2d : public Module {
 public:
   Conv2d(int in_channels, int out_channels, int kernel_size, int stride = 1,
          int padding = 0, TensorOptions options = TensorOptions{})
-      : stride_(stride), padding_(padding) {
+      : Module(options), stride_(stride), padding_(padding) {
     Tensor w({out_channels, in_channels, kernel_size, kernel_size},
              parameter_options(options));
     float n = in_channels * kernel_size * kernel_size;
@@ -75,7 +76,7 @@ class Embedding : public Module {
 public:
   Embedding(int num_embeddings, int embedding_dim,
             TensorOptions options = TensorOptions{})
-      : num_embeddings_(num_embeddings), embedding_dim_(embedding_dim) {
+      : Module(options), num_embeddings_(num_embeddings), embedding_dim_(embedding_dim) {
     if (num_embeddings_ <= 0 || embedding_dim_ <= 0)
       throw std::runtime_error(
           "Embedding expects positive num_embeddings and embedding_dim");

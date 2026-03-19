@@ -68,14 +68,55 @@ TEST(NNTest, ModuleOptionsControlParameterAndBufferDTypes) {
   EXPECT_FALSE(bn.running_var.requires_grad());
 }
 
+TEST(NNTest, ModuleDefaultOptionsFollowConstructionAndMigration) {
+  TensorOptions options;
+  options.device = Device{DeviceType::CPU, 0};
+  options.dtype = DataType::Float16;
+
+  nn::BatchNorm2d bn(3, 1e-5f, 0.1f, options);
+  EXPECT_EQ(bn.default_options().device, options.device);
+  EXPECT_EQ(bn.default_options().dtype, DataType::Float16);
+  EXPECT_EQ(bn.running_mean.dtype(), DataType::Float32);
+
+  bn.to(DataType::Float32);
+  EXPECT_EQ(bn.default_options().dtype, DataType::Float32);
+  EXPECT_EQ(bn.weight.dtype(), DataType::Float32);
+  EXPECT_EQ(bn.bias.dtype(), DataType::Float32);
+  EXPECT_EQ(bn.running_mean.dtype(), DataType::Float32);
+  EXPECT_EQ(bn.running_var.dtype(), DataType::Float32);
+
+  bn.to(DataType::Float16);
+  EXPECT_EQ(bn.default_options().dtype, DataType::Float16);
+  EXPECT_EQ(bn.weight.dtype(), DataType::Float16);
+  EXPECT_EQ(bn.bias.dtype(), DataType::Float16);
+  EXPECT_EQ(bn.running_mean.dtype(), DataType::Float32);
+  EXPECT_EQ(bn.running_var.dtype(), DataType::Float32);
+}
+
+TEST(NNTest, ParentModuleDefaultsPropagateToNestedModules) {
+  TensorOptions options;
+  options.device = Device{DeviceType::CPU, 0};
+  options.dtype = DataType::Float16;
+
+  auto seq = std::make_shared<nn::Sequential>(options);
+  seq->add(std::make_shared<nn::Linear>(4, 3));
+  seq->add(std::make_shared<nn::Linear>(3, 2));
+
+  auto named = seq->named_parameters();
+  EXPECT_EQ(named.at("0.weight").dtype(), DataType::Float16);
+  EXPECT_EQ(named.at("0.bias").dtype(), DataType::Float16);
+  EXPECT_EQ(named.at("1.weight").dtype(), DataType::Float16);
+  EXPECT_EQ(named.at("1.bias").dtype(), DataType::Float16);
+}
+
 TEST(NNTest, ModuleToSupportsDTypeAndTensorOptionsConversions) {
   auto bn = std::make_shared<nn::BatchNorm2d>(3);
 
   bn->to(DataType::Float16);
   EXPECT_EQ(bn->weight.dtype(), DataType::Float16);
   EXPECT_EQ(bn->bias.dtype(), DataType::Float16);
-  EXPECT_EQ(bn->running_mean.dtype(), DataType::Float16);
-  EXPECT_EQ(bn->running_var.dtype(), DataType::Float16);
+  EXPECT_EQ(bn->running_mean.dtype(), DataType::Float32);
+  EXPECT_EQ(bn->running_var.dtype(), DataType::Float32);
   EXPECT_TRUE(bn->weight.requires_grad());
   EXPECT_TRUE(bn->bias.requires_grad());
   EXPECT_FALSE(bn->running_mean.requires_grad());

@@ -7,6 +7,8 @@ namespace autograd_nodes {
 
 struct BatchNormBackward : public Node {
   Shape input_shape;
+  Tensor saved_mean_owner;
+  Tensor saved_var_owner;
   Device input_device;
   DataType input_dtype;
   Shape weight_shape;
@@ -14,7 +16,8 @@ struct BatchNormBackward : public Node {
   DataType weight_dtype;
   float eps;
   BatchNormBackward(Tensor i, Tensor w, Tensor sm, Tensor sv, float e)
-      : input_shape(i.shape()), input_device(i.device()), input_dtype(i.dtype()),
+      : input_shape(i.shape()), saved_mean_owner(sm), saved_var_owner(sv),
+        input_device(i.device()), input_dtype(i.dtype()),
         weight_shape(w.shape()), weight_device(w.device()),
         weight_dtype(w.dtype()), eps(e) {
     save_tensor(i, "batch_norm_input");
@@ -50,6 +53,8 @@ struct BatchNormBackward : public Node {
 
 struct LayerNormBackward : public Node {
   Shape x_shape;
+  Tensor mean_owner;
+  Tensor inv_std_owner;
   Device x_device;
   DataType x_dtype;
   Shape weight_shape;
@@ -61,7 +66,8 @@ struct LayerNormBackward : public Node {
   int rows, cols;
   LayerNormBackward(Tensor x_, Tensor w_, Tensor b_, Tensor m_, Tensor is_,
                     int r, int c)
-      : x_shape(x_.shape()), x_device(x_.device()), x_dtype(x_.dtype()),
+      : x_shape(x_.shape()), mean_owner(m_), inv_std_owner(is_),
+        x_device(x_.device()), x_dtype(x_.dtype()),
         weight_shape(w_.shape()), weight_device(w_.device()),
         weight_dtype(w_.dtype()), bias_shape(b_.shape()),
         bias_device(b_.device()), bias_dtype(b_.dtype()), rows(r), cols(c) {
