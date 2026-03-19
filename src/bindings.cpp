@@ -52,6 +52,13 @@ PYBIND11_MODULE(munet, m) {
       .def_readwrite("type", &Device::type, "The type of the device.")
       .def_readwrite("index", &Device::index, "The index of the device.");
 
+  py::class_<TensorOptions>(m, "TensorOptions",
+                            "Tensor construction and conversion options.")
+      .def(py::init<>())
+      .def_readwrite("device", &TensorOptions::device)
+      .def_readwrite("dtype", &TensorOptions::dtype)
+      .def_readwrite("requires_grad", &TensorOptions::requires_grad);
+
   // ============================================================================
   // Tensor Core (Moved above factory functions for correct return type parsing)
   // ============================================================================
@@ -62,6 +69,8 @@ PYBIND11_MODULE(munet, m) {
                      "munet.Device(munet.DeviceType.CPU, 0)"),
            py::arg_v("dtype", DataType::Float32, "munet.DataType.Float32"),
            py::arg("requires_grad") = false)
+      .def(py::init<Shape, const TensorOptions &>(), py::arg("shape"),
+           py::arg("options"))
 
       // Properties
       .def_property(
@@ -121,8 +130,12 @@ PYBIND11_MODULE(munet, m) {
                     t.device().to_string() + "'" +
                     (t.requires_grad() ? ", requires_grad=True)" : ")");
            })
-      .def("to", &Tensor::to, py::arg("device"),
+      .def("to", py::overload_cast<Device>(&Tensor::to, py::const_), py::arg("device"),
            "Moves the tensor to the specified device.")
+      .def("to", py::overload_cast<DataType>(&Tensor::to, py::const_), py::arg("dtype"),
+           "Converts the tensor to the specified dtype.")
+      .def("to_options", py::overload_cast<const TensorOptions &>(&Tensor::to, py::const_), py::arg("options"),
+           "Converts the tensor using explicit tensor options.")
       .def(
           "copy_from_numpy",
           [](Tensor &t, py::array_t<float> input) {
