@@ -1,0 +1,156 @@
+#pragma once
+
+#include "../../core/ops/common.hpp"
+
+namespace munet {
+namespace autograd_nodes {
+
+struct ReluBackward : public Node {
+  Tensor saved_input;
+  explicit ReluBackward(Tensor a) : saved_input(std::move(a)) {}
+  std::string name() const override { return "ReluBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_out = grads[0];
+    Tensor grad_in(saved_input.shape(), saved_input.device(), saved_input.dtype());
+    saved_input.impl_->backend().relu_backward(
+        *grad_out.impl_->storage, *saved_input.impl_->storage,
+        *grad_in.impl_->storage, saved_input.size());
+    return {grad_in};
+  }
+};
+
+struct SigmoidBackward : public Node {
+  Tensor saved_out;
+  explicit SigmoidBackward(Tensor o) : saved_out(std::move(o)) {}
+  std::string name() const override { return "SigmoidBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor grad_out = grads[0];
+    Tensor grad_in(saved_out.shape(), saved_out.device(), saved_out.dtype());
+    saved_out.impl_->backend().sigmoid_backward(
+        *grad_out.impl_->storage, *saved_out.impl_->storage,
+        *grad_in.impl_->storage, saved_out.size());
+    return {grad_in};
+  }
+};
+
+struct SoftmaxBackward : public Node {
+  Tensor saved_out;
+  int dim;
+  Shape shape;
+  SoftmaxBackward(Tensor o, int d) : saved_out(std::move(o)), dim(d), shape(saved_out.shape()) {}
+  std::string name() const override { return "SoftmaxBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override;
+};
+
+struct LogSoftmaxBackward : public Node {
+  Tensor saved_log_probs;
+  int dim;
+  Shape shape;
+  LogSoftmaxBackward(Tensor lp, int d)
+      : saved_log_probs(std::move(lp)), dim(d), shape(saved_log_probs.shape()) {}
+  std::string name() const override { return "LogSoftmaxBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override;
+};
+
+inline std::vector<Tensor>
+SoftmaxBackward::apply(const std::vector<Tensor> &grads) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor go_cpu = grads[0].to(cpu);
+  Tensor out_cpu = saved_out.to(cpu);
+  Tensor gi_cpu(shape, cpu, saved_out.dtype());
+
+  int rank = static_cast<int>(shape.size());
+  int resolved = (dim < 0) ? (rank + dim) : dim;
+  int outer = 1;
+  int inner = 1;
+  int dim_size = shape[resolved];
+  for (int i = 0; i < resolved; ++i)
+    outer *= shape[i];
+  for (int i = resolved + 1; i < rank; ++i)
+    inner *= shape[i];
+
+  const char *go = static_cast<const char *>(go_cpu.data());
+  const char *out = static_cast<const char *>(out_cpu.data());
+  char *gi = static_cast<char *>(gi_cpu.data());
+  const size_t go_stride = dtype_size(go_cpu.dtype());
+  const size_t out_stride = dtype_size(out_cpu.dtype());
+  const size_t gi_stride = dtype_size(gi_cpu.dtype());
+
+  for (int o = 0; o < outer; ++o) {
+    for (int in = 0; in < inner; ++in) {
+      double dot = 0.0;
+      for (int d = 0; d < dim_size; ++d) {
+        int idx = (o * dim_size + d) * inner + in;
+        dot += read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value *
+               read_scalar_from_buffer(out + idx * out_stride, out_cpu.dtype()).value;
+      }
+      for (int d = 0; d < dim_size; ++d) {
+        int idx = (o * dim_size + d) * inner + in;
+        const double out_value =
+            read_scalar_from_buffer(out + idx * out_stride, out_cpu.dtype()).value;
+        const double go_value =
+            read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+        write_scalar_to_buffer(gi + idx * gi_stride, gi_cpu.dtype(),
+                               out_value * (go_value - dot));
+      }
+    }
+  }
+
+  Tensor gi_dev = (saved_out.device().type == DeviceType::CPU)
+                      ? gi_cpu
+                      : gi_cpu.to(saved_out.device());
+  return {gi_dev};
+}
+
+inline std::vector<Tensor>
+LogSoftmaxBackward::apply(const std::vector<Tensor> &grads) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor go_cpu = grads[0].to(cpu);
+  Tensor lp_cpu = saved_log_probs.to(cpu);
+  Tensor gi_cpu(shape, cpu, saved_log_probs.dtype());
+
+  int rank = static_cast<int>(shape.size());
+  int resolved = (dim < 0) ? (rank + dim) : dim;
+  int outer = 1;
+  int inner = 1;
+  int dim_size = shape[resolved];
+  for (int i = 0; i < resolved; ++i)
+    outer *= shape[i];
+  for (int i = resolved + 1; i < rank; ++i)
+    inner *= shape[i];
+
+  const char *go = static_cast<const char *>(go_cpu.data());
+  const char *lp = static_cast<const char *>(lp_cpu.data());
+  char *gi = static_cast<char *>(gi_cpu.data());
+  const size_t go_stride = dtype_size(go_cpu.dtype());
+  const size_t lp_stride = dtype_size(lp_cpu.dtype());
+  const size_t gi_stride = dtype_size(gi_cpu.dtype());
+
+  for (int o = 0; o < outer; ++o) {
+    for (int in = 0; in < inner; ++in) {
+      double sum_go = 0.0;
+      for (int d = 0; d < dim_size; ++d) {
+        int idx = (o * dim_size + d) * inner + in;
+        sum_go += read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+      }
+
+      for (int d = 0; d < dim_size; ++d) {
+        int idx = (o * dim_size + d) * inner + in;
+        const double p = std::exp(
+            read_scalar_from_buffer(lp + idx * lp_stride, lp_cpu.dtype()).value);
+        const double go_value =
+            read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+        write_scalar_to_buffer(gi + idx * gi_stride, gi_cpu.dtype(),
+                               go_value - p * sum_go);
+      }
+    }
+  }
+
+  Tensor gi_dev = (saved_log_probs.device().type == DeviceType::CPU)
+                      ? gi_cpu
+                      : gi_cpu.to(saved_log_probs.device());
+  return {gi_dev};
+}
+
+} // namespace autograd_nodes
+} // namespace munet

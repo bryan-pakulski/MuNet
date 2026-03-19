@@ -31,6 +31,16 @@ check_language(CUDA)
 set(MUNET_SOURCES
     src/tensor.cpp
     src/backend/backend_manager.cpp
+    src/core/op_dispatch.cpp
+    src/core/ops/add.cpp
+    src/core/ops/elementwise.cpp
+    src/core/ops/matmul.cpp
+    src/core/ops/activations.cpp
+    src/core/ops/shape.cpp
+    src/core/ops/conv2d.cpp
+    src/core/ops/pooling.cpp
+    src/core/ops/normalization.cpp
+    src/core/ops/loss.cpp
 )
 
 if(CMAKE_CUDA_COMPILER)
