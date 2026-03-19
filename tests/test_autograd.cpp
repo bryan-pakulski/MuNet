@@ -113,3 +113,43 @@ TEST_P(AutogradTest, GradientAccumulatesAcrossMultipleGraphPaths) {
   Tensor grad = x.grad().to({DeviceType::CPU, 0});
   EXPECT_FLOAT_EQ(static_cast<float *>(grad.data())[0], 2.0f);
 }
+
+TEST(AutogradHardeningTest, BackwardRetainGraphControlsRepeatedExecution) {
+  Device dev{DeviceType::CPU, 0};
+  Tensor x({1}, dev, DataType::Float32, true);
+  static_cast<float *>(x.data())[0] = 3.0f;
+
+  Tensor y = x + x;
+  Tensor loss = y.sum();
+
+  EXPECT_NO_THROW(loss.backward(true));
+  ASSERT_TRUE(x.has_grad());
+  EXPECT_FLOAT_EQ(static_cast<float *>(x.grad().data())[0], 2.0f);
+
+  EXPECT_NO_THROW(loss.backward());
+  ASSERT_TRUE(x.has_grad());
+  EXPECT_FLOAT_EQ(static_cast<float *>(x.grad().data())[0], 4.0f);
+
+  try {
+    loss.backward();
+    FAIL() << "Expected released graph error";
+  } catch (const std::runtime_error &err) {
+    EXPECT_NE(std::string(err.what()).find("retain_graph=true"), std::string::npos);
+  }
+}
+
+TEST(AutogradHardeningTest, InPlaceMutationOnSavedTensorThrowsClearly) {
+  Device dev{DeviceType::CPU, 0};
+  Tensor x({1}, dev, DataType::Float32, true);
+  static_cast<float *>(x.data())[0] = 2.0f;
+
+  Tensor y = x * x;
+  x.fill_(3.0f);
+
+  try {
+    y.backward();
+    FAIL() << "Expected in-place mutation detection";
+  } catch (const std::runtime_error &err) {
+    EXPECT_NE(std::string(err.what()).find("In-place mutation"), std::string::npos);
+  }
+}

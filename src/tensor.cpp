@@ -26,12 +26,10 @@ Tensor convert_tensor_dtype_cpu(const Tensor &input, DataType target_dtype) {
 
 // --- Autograd ---
 void Tensor::backward(const Tensor &grad) {
-  if (!impl_->grad_fn)
-    return;
-  Engine::execute(impl_->grad_fn.get(), grad);
+  backward(grad, false);
 }
 
-void Tensor::backward() {
+void Tensor::backward(bool retain_graph) {
   if (!impl_->grad_fn)
     return;
 
@@ -47,7 +45,24 @@ void Tensor::backward() {
   impl_->backend().copy(root_cpu.data(), root_grad.data(), root_grad.bytes(),
                         root_cpu.device(), device());
 
-  Engine::execute(impl_->grad_fn.get(), root_grad);
+  backward(root_grad, retain_graph);
+}
+
+void Tensor::backward(const Tensor &grad, bool retain_graph) {
+  if (!impl_->grad_fn)
+    return;
+  Engine::get_default().execute(
+      BackwardRequest{impl_->grad_fn, grad, retain_graph, false, {}});
+}
+
+void Tensor::backward() { backward(false); }
+
+void Tensor::register_gradient_hook(GradientHook hook) const {
+  if (!impl_ || !impl_->grad_fn) {
+    throw std::runtime_error(
+        "register_gradient_hook() requires a tensor with a grad_fn");
+  }
+  impl_->grad_fn->register_gradient_hook(std::move(hook));
 }
 
 Tensor Tensor::detach() const {
@@ -257,6 +272,7 @@ void Tensor::step(float lr) {
     return;
   }
   impl_->backend().update(*impl_->storage, *impl_->grad->storage, lr, size());
+  impl_->bump_version();
 }
 
 Tensor Tensor::batch_norm(Tensor &running_mean, Tensor &running_var,
@@ -286,6 +302,7 @@ void Tensor::uniform_(float low, float high) {
     throw std::runtime_error("uniform_ only supports floating-point tensors");
   }
   impl_->backend().fill_uniform(*impl_->storage, low, high, size());
+  impl_->bump_version();
 }
 
 void Tensor::fill_(const ScalarValue &value) {
@@ -302,11 +319,13 @@ void Tensor::fill_(const ScalarValue &value) {
 
   if (device().type == DeviceType::CPU) {
     impl_->backend().copy(cpu_out.data(), data(), bytes(), cpu, device());
+    impl_->bump_version();
     return;
   }
 
   BackendManager::get(device())->copy(cpu_out.data(), data(), bytes(), cpu,
                                       device());
+  impl_->bump_version();
 }
 
 Tensor Tensor::transpose(int dim0, int dim1) const {

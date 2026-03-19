@@ -6,15 +6,16 @@ namespace munet {
 namespace autograd_nodes {
 
 struct MaskedFillBackward : public Node {
-  Tensor mask;
   Shape input_shape;
 
-  explicit MaskedFillBackward(Tensor m)
-      : mask(std::move(m)), input_shape(mask.shape()) {}
+  explicit MaskedFillBackward(Tensor m) : input_shape(m.shape()) {
+    save_tensor(m, "masked_fill_mask");
+  }
 
   std::string name() const override { return "MaskedFillBackward"; }
 
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor mask = saved_tensor(0);
     const Tensor &grad_out = grads[0];
     Device cpu{DeviceType::CPU, 0};
     Tensor go_cpu = grad_out.to(cpu);
@@ -55,22 +56,32 @@ struct SubBackward : public Node {
 };
 
 struct MulBackward : public Node {
-  Tensor A, B;
-  MulBackward(Tensor a, Tensor b) : A(std::move(a)), B(std::move(b)) {}
+  Shape shape_a, shape_b;
+  MulBackward(Tensor a, Tensor b) : shape_a(a.shape()), shape_b(b.shape()) {
+    save_tensor(a, "mul_lhs");
+    save_tensor(b, "mul_rhs");
+  }
   std::string name() const override { return "MulBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor A = saved_tensor(0);
+    Tensor B = saved_tensor(1);
     Tensor grad_out = grads[0];
     Tensor da = ops::mul(B, grad_out);
     Tensor db = ops::mul(A, grad_out);
-    return {ops::sum_to_shape(da, A.shape()), ops::sum_to_shape(db, B.shape())};
+    return {ops::sum_to_shape(da, shape_a), ops::sum_to_shape(db, shape_b)};
   }
 };
 
 struct DivBackward : public Node {
-  Tensor A, B;
-  DivBackward(Tensor a, Tensor b) : A(std::move(a)), B(std::move(b)) {}
+  Shape shape_a, shape_b;
+  DivBackward(Tensor a, Tensor b) : shape_a(a.shape()), shape_b(b.shape()) {
+    save_tensor(a, "div_lhs");
+    save_tensor(b, "div_rhs");
+  }
   std::string name() const override { return "DivBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor A = saved_tensor(0);
+    Tensor B = saved_tensor(1);
     Tensor grad_out = grads[0];
     Tensor da = ops::div(grad_out, B);
     Tensor b2 = ops::mul(B, B);
@@ -79,7 +90,7 @@ struct DivBackward : public Node {
     Tensor zeros(db_pos.shape(), db_pos.device(), db_pos.dtype());
     zeros.impl_->storage->zero_();
     Tensor db = ops::sub(zeros, db_pos);
-    return {ops::sum_to_shape(da, A.shape()), ops::sum_to_shape(db, B.shape())};
+    return {ops::sum_to_shape(da, shape_a), ops::sum_to_shape(db, shape_b)};
   }
 };
 

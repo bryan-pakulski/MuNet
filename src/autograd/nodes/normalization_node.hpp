@@ -6,23 +6,38 @@ namespace munet {
 namespace autograd_nodes {
 
 struct BatchNormBackward : public Node {
-  Tensor in, weight, save_mean, save_var;
+  Shape input_shape;
+  Device input_device;
+  DataType input_dtype;
+  Shape weight_shape;
+  Device weight_device;
+  DataType weight_dtype;
   float eps;
   BatchNormBackward(Tensor i, Tensor w, Tensor sm, Tensor sv, float e)
-      : in(std::move(i)), weight(std::move(w)), save_mean(std::move(sm)),
-        save_var(std::move(sv)), eps(e) {}
+      : input_shape(i.shape()), input_device(i.device()), input_dtype(i.dtype()),
+        weight_shape(w.shape()), weight_device(w.device()),
+        weight_dtype(w.dtype()), eps(e) {
+    save_tensor(i, "batch_norm_input");
+    save_tensor(w, "batch_norm_weight");
+    save_tensor(sm, "batch_norm_saved_mean");
+    save_tensor(sv, "batch_norm_saved_var");
+  }
   std::string name() const override { return "BatchNormBackward"; }
 
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor in = saved_tensor(0);
+    Tensor weight = saved_tensor(1);
+    Tensor save_mean = saved_tensor(2);
+    Tensor save_var = saved_tensor(3);
     Tensor grad_out = grads[0];
-    Tensor grad_in(in.shape(), in.device(), in.dtype());
-    Tensor grad_scale(weight.shape(), weight.device(), weight.dtype());
-    Tensor grad_bias(weight.shape(), weight.device(), weight.dtype());
+    Tensor grad_in(input_shape, input_device, input_dtype);
+    Tensor grad_scale(weight_shape, weight_device, weight_dtype);
+    Tensor grad_bias(weight_shape, weight_device, weight_dtype);
 
-    const int B = in.shape()[0];
-    const int C = in.shape()[1];
-    const int H = in.shape()[2];
-    const int W = in.shape()[3];
+    const int B = input_shape[0];
+    const int C = input_shape[1];
+    const int H = input_shape[2];
+    const int W = input_shape[3];
     in.impl_->backend().batch_norm_backward(
         *grad_out.impl_->storage, *in.impl_->storage, *weight.impl_->storage,
         *save_mean.impl_->storage, *save_var.impl_->storage,
@@ -34,25 +49,45 @@ struct BatchNormBackward : public Node {
 };
 
 struct LayerNormBackward : public Node {
-  Tensor x, weight, bias;
-  Tensor mean_cpu, inv_std_cpu;
+  Shape x_shape;
+  Device x_device;
+  DataType x_dtype;
+  Shape weight_shape;
+  Device weight_device;
+  DataType weight_dtype;
+  Shape bias_shape;
+  Device bias_device;
+  DataType bias_dtype;
   int rows, cols;
   LayerNormBackward(Tensor x_, Tensor w_, Tensor b_, Tensor m_, Tensor is_,
                     int r, int c)
-      : x(std::move(x_)), weight(std::move(w_)), bias(std::move(b_)),
-        mean_cpu(std::move(m_)), inv_std_cpu(std::move(is_)), rows(r), cols(c) {}
+      : x_shape(x_.shape()), x_device(x_.device()), x_dtype(x_.dtype()),
+        weight_shape(w_.shape()), weight_device(w_.device()),
+        weight_dtype(w_.dtype()), bias_shape(b_.shape()),
+        bias_device(b_.device()), bias_dtype(b_.dtype()), rows(r), cols(c) {
+    save_tensor(x_, "layer_norm_input");
+    save_tensor(w_, "layer_norm_weight");
+    save_tensor(b_, "layer_norm_bias");
+    save_tensor(m_, "layer_norm_mean");
+    save_tensor(is_, "layer_norm_inv_std");
+  }
 
   std::string name() const override { return "LayerNormBackward"; }
 
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor x = saved_tensor(0);
+    Tensor weight = saved_tensor(1);
+    Tensor bias = saved_tensor(2);
+    Tensor mean_cpu = saved_tensor(3);
+    Tensor inv_std_cpu = saved_tensor(4);
     Device cpu{DeviceType::CPU, 0};
     Tensor go_cpu = grads[0].to(cpu);
     Tensor x_cpu = x.to(cpu);
     Tensor w_cpu = weight.to(cpu);
 
-    Tensor dx_cpu(x.shape(), cpu, x.dtype());
-    Tensor dw_cpu(weight.shape(), cpu, weight.dtype());
-    Tensor db_cpu(bias.shape(), cpu, bias.dtype());
+    Tensor dx_cpu(x_shape, cpu, x_dtype);
+    Tensor dw_cpu(weight_shape, cpu, weight_dtype);
+    Tensor db_cpu(bias_shape, cpu, bias_dtype);
     dw_cpu.fill_(make_scalar(0.0, dw_cpu.dtype()));
     db_cpu.fill_(make_scalar(0.0, db_cpu.dtype()));
 
@@ -123,13 +158,13 @@ struct LayerNormBackward : public Node {
     }
 
     Tensor dx_dev =
-        (x.device().type == DeviceType::CPU) ? dx_cpu : dx_cpu.to(x.device());
-    Tensor dw_dev = (weight.device().type == DeviceType::CPU)
+        (x_device.type == DeviceType::CPU) ? dx_cpu : dx_cpu.to(x_device);
+    Tensor dw_dev = (weight_device.type == DeviceType::CPU)
                         ? dw_cpu
-                        : dw_cpu.to(weight.device());
-    Tensor db_dev = (bias.device().type == DeviceType::CPU)
+                        : dw_cpu.to(weight_device);
+    Tensor db_dev = (bias_device.type == DeviceType::CPU)
                         ? db_cpu
-                        : db_cpu.to(bias.device());
+                        : db_cpu.to(bias_device);
     return {dx_dev, dw_dev, db_dev};
   }
 };

@@ -15,8 +15,8 @@ The recent header split made the codebase easier to navigate, but the next stage
 - [x] Phase 0 - Baseline guardrails and inventory
 - [x] Phase 1 - Dtype foundation and tensor options
 - [x] Phase 2 - Op dispatch and op file decomposition
-- [ ] Phase 3 - Backend capability split and registry cleanup
-- [ ] Phase 4 - Autograd hardening
+- [x] Phase 3 - Backend capability split and registry cleanup
+- [x] Phase 4 - Autograd hardening
 - [ ] Phase 5 - Module, optimizer, and training ergonomics
 - [ ] Phase 6 - Inference and production hardening
 
@@ -237,14 +237,37 @@ Phase 1 follow-up items are complete. Any finer-grained per-op/per-shape dispatc
 
 ### Validation checklist
 
-- In-place mutation errors surface clearly.
-- Repeated backward behavior is predictable and documented.
-- Gradient accumulation remains correct across multiple branches.
+- [x] In-place mutation errors surface clearly.
+- [x] Repeated backward behavior is predictable and documented.
+- [x] Gradient accumulation remains correct across multiple branches.
+
+### Phase 4 implementation update
+
+- The autograd engine now runs as an object-oriented `ExecutionEngine` service with an explicit `BackwardRequest` instead of a single static routine.
+- Backward nodes capture tensors through saved-tensor metadata that records version counters, which makes library-visible in-place mutations fail with clear errors during backward.
+- Graph lifetime is explicit:
+  - `backward(retain_graph=false)` releases saved tensors and marks the graph as spent after execution
+  - `backward(retain_graph=true)` keeps the graph available for another backward pass
+  - attempting to reuse a released graph now raises a targeted error instead of silently behaving differently
+- Dependency discovery, per-node gradient buffers, and execution scheduling are separated inside the engine implementation.
+- Intermediate gradient accumulation now reuses pooled gradient-buffer vectors between backward runs so repeated training steps do not keep reallocating temporary accumulation containers.
+- Extension points now exist for:
+  - higher-order gradients via `BackwardRequest::create_graph`
+  - custom backward nodes by subclassing `Node`
+  - per-node gradient hooks
+  - engine-level gradient processing extensions such as AMP unscale/overflow checks
+
+### Graph lifetime and safety rules
+
+1. Saved tensors are version-checked when a backward node reads them.
+2. MuNet-managed in-place updates bump tensor version counters.
+3. A backward graph is single-use unless `retain_graph=true` is passed.
+4. Repeated backward calls continue accumulating gradients into leaf `.grad` buffers unless the caller clears them.
 
 ### Exit criteria
 
-- Autograd is no longer a bottleneck for optimizer or AMP work.
-- Safety rules are explicit instead of implicit.
+- [x] Autograd is no longer a bottleneck for optimizer or AMP work.
+- [x] Safety rules are explicit instead of implicit.
 
 ## Phase 5 - Module, optimizer, and training ergonomics
 

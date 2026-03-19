@@ -6,11 +6,15 @@ namespace munet {
 namespace autograd_nodes {
 
 struct MatmulBackward : public Node {
-  Tensor A, B;
-  MatmulBackward(Tensor a, Tensor b) : A(std::move(a)), B(std::move(b)) {}
+  MatmulBackward(Tensor a, Tensor b) {
+    save_tensor(a, "matmul_lhs");
+    save_tensor(b, "matmul_rhs");
+  }
   std::string name() const override { return "MatmulBackward"; }
 
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor A = saved_tensor(0);
+    Tensor B = saved_tensor(1);
     Tensor grad_out = grads[0];
     Tensor grad_a;
     Tensor grad_b;
