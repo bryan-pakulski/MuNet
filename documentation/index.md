@@ -28,4 +28,5 @@ Welcome to MuNet docs. This documentation is structured for interactive/searchab
 - [Dtype-Sensitive Inventory](architecture/dtype_sensitive_inventory.md)
 - [Refactor Roadmap](architecture/refactor_roadmap.md)
 - [Profiling](performance/profiling.md)
+- [Observability Roadmap](performance/observability_roadmap.md)
 - [Contributing: Add a New Op](contributing/add_new_op.md)

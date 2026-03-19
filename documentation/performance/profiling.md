@@ -45,3 +45,14 @@ When `MUNET_PROFILE=1` is enabled, Vulkan now emits additional CPU-only profiler
 - `vulkan.query_results`: host cost of reading timestamp query results.
 
 If these markers dominate `%Total` while GPU timings remain low, the slowdown is likely CPU submission/synchronization overhead rather than shader execution.
+
+## Next instrumentation roadmap
+
+The next planned observability work is tracked in the
+[Observability & Profiling Roadmap](observability_roadmap.md), including:
+
+- per-module forward spans
+- directional transfer markers
+- fallback-reason accounting
+- allocator/synchronization visibility
+- correlated trace/span ids

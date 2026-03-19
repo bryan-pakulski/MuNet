@@ -28,6 +28,7 @@ nav:
       - End-to-end Training to Inference: documentation/tutorials/e2e_workflow.md
   - Performance:
       - Profiling: documentation/performance/profiling.md
+      - Observability Roadmap: documentation/performance/observability_roadmap.md
   - Contributing:
       - Add a New Op: documentation/contributing/add_new_op.md
 
