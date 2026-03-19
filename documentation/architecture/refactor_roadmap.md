@@ -14,7 +14,7 @@ The recent header split made the codebase easier to navigate, but the next stage
 
 - [x] Phase 0 - Baseline guardrails and inventory
 - [x] Phase 1 - Dtype foundation and tensor options
-- [ ] Phase 2 - Op dispatch and op file decomposition
+- [x] Phase 2 - Op dispatch and op file decomposition
 - [ ] Phase 3 - Backend capability split and registry cleanup
 - [ ] Phase 4 - Autograd hardening
 - [ ] Phase 5 - Module, optimizer, and training ergonomics
@@ -155,9 +155,13 @@ Phase 1 follow-up items are complete. Any finer-grained per-op/per-shape dispatc
 
 ### Validation checklist
 
-- Adding a new op does not require editing `Tensor` internals beyond an optional forwarding convenience method.
-- An op can report unsupported backend/dtype combinations with a clear message.
-- Trace metadata remains intact after the split.
+- [x] Introduced an op metadata/dispatch registry for the full op surface so backend + dtype capability checks are centralized.
+- [x] Migrated all operators out of the monolithic legacy header into `core/ops/*` headers + implementation files and moved their backward nodes into `autograd/nodes/*`.
+- [x] Removed the temporary legacy-op bridge after the migration was complete.
+- [x] Convenience `Tensor` methods continue to forward through the free-function op layer.
+- [x] An op can report unsupported backend/dtype combinations with a clear message.
+- [x] Trace metadata remains intact after the split.
+- [x] Adding a new op does not require editing `Tensor` internals beyond an optional forwarding convenience method.
 
 ### Exit criteria
 
