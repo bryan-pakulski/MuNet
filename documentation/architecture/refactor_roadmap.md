@@ -12,7 +12,7 @@ The recent header split made the codebase easier to navigate, but the next stage
 
 ## Current implementation status
 
-- [~] Phase 0 - Baseline guardrails and inventory
+- [x] Phase 0 - Baseline guardrails and inventory
 - [~] Phase 1 - Dtype foundation and tensor options (some groundwork landed early; phase not closed)
 - [ ] Phase 2 - Op dispatch and op file decomposition
 - [ ] Phase 3 - Backend capability split and registry cleanup
@@ -53,7 +53,7 @@ The recent header split made the codebase easier to navigate, but the next stage
   - autograd accumulation paths
   - module parameter/buffer initialization
   - optimizers and serialization
-- [~] Add focused tests for the current behavior of:
+- [x] Add focused tests for the current behavior of:
   - tensor dtype preservation
   - backend registration/fallback behavior
   - parameter/buffer device migration
@@ -63,7 +63,7 @@ The recent header split made the codebase easier to navigate, but the next stage
 ### Exit criteria
 
 - [x] Current architecture pain points are documented.
-- [~] Regression coverage exists for the pieces that will be heavily refactored next.
+- [x] Regression coverage exists for the pieces that will be heavily refactored next.
 - [x] Future phases can point to named design decisions instead of re-litigating fundamentals.
 
 ## Phase 1 - Dtype foundation and tensor options

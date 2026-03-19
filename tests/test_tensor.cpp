@@ -78,6 +78,23 @@ TEST_P(TensorTest, CreationAndMetadata) {
   EXPECT_EQ(t.device().type, dev().type);
 }
 
+TEST_P(TensorTest, DeviceMovePreservesDTypeAndRequiresGrad) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor base({1}, cpu, DataType::Float32, true);
+  static_cast<float *>(base.data())[0] = 2.5f;
+
+  Tensor half = base.to(DataType::Float16);
+  Tensor moved = half.to(dev());
+
+  EXPECT_EQ(moved.dtype(), DataType::Float16);
+  EXPECT_TRUE(moved.requires_grad());
+  EXPECT_EQ(moved.device(), dev());
+
+  ScalarValue roundtrip = moved.to(cpu).item_value();
+  EXPECT_EQ(roundtrip.dtype, DataType::Float16);
+  EXPECT_NEAR(roundtrip.as_float(), 2.5f, 1e-3f);
+}
+
 TEST_P(TensorTest, Addition) {
   Tensor a({2}, dev());
   Tensor b({2}, dev());
