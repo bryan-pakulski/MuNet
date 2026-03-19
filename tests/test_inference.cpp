@@ -221,3 +221,69 @@ TEST(InferenceTest, EnginePreservesFloat16LinearOutputsAcrossAvailableDevices) {
     EXPECT_TRUE(test::all_close(y, expected, 2e-1f)) << device.to_string();
   }
 }
+
+TEST(InferenceTest, EngineRunDisablesAutogradGraphConstruction) {
+  TensorOptions options;
+  options.device = Device{DeviceType::CPU, 0};
+  options.dtype = DataType::Float32;
+
+  auto linear = std::make_shared<nn::Linear>(2, 2, true, options);
+  inference::Engine engine;
+  engine.load(linear);
+
+  EXPECT_TRUE(linear->weight.requires_grad());
+  GradMode::set_enabled(true);
+
+  Tensor x({1, 2}, options.device, options.dtype, false);
+  x.fill_(1.0f);
+
+  Tensor y = engine.run(x);
+  EXPECT_FALSE(y.requires_grad());
+  EXPECT_FALSE(y.impl_ && y.impl_->grad_fn);
+  EXPECT_TRUE(GradMode::is_enabled());
+}
+
+TEST(InferenceTest, EngineRejectsAutogradInputsByDefault) {
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  engine.load(m);
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor x({2, 2}, cpu, DataType::Float32, true);
+  x.fill_(0.25f);
+
+  EXPECT_THROW(engine.run(x), std::runtime_error);
+}
+
+TEST(InferenceTest, EngineObserverReceivesLifecycleAndErrorEvents) {
+  auto m = std::make_shared<IdentityLayer>();
+  inference::Engine engine;
+  std::vector<inference::EngineEvent> events;
+  engine.set_observer([&events](const inference::EngineEvent &event) {
+    events.push_back(event);
+  });
+  engine.load(m);
+
+  Device cpu{DeviceType::CPU, 0};
+  Tensor x({2, 3}, cpu);
+  Tensor bad({2, 4}, cpu);
+  x.uniform_(0.1f, 0.1f);
+  bad.uniform_(0.1f, 0.1f);
+
+  engine.compile(x);
+  (void)engine.run(x);
+  EXPECT_THROW((void)engine.run(bad), std::runtime_error);
+
+  ASSERT_GE(events.size(), 6u);
+  EXPECT_EQ(events.front().type, inference::EngineEventType::LoadStarted);
+  EXPECT_EQ(events[1].type, inference::EngineEventType::LoadCompleted);
+  EXPECT_EQ(events[2].type, inference::EngineEventType::CompileStarted);
+  EXPECT_EQ(events[3].type, inference::EngineEventType::CompileCompleted);
+  EXPECT_EQ(events[4].type, inference::EngineEventType::RunStarted);
+  EXPECT_EQ(events[5].type, inference::EngineEventType::RunCompleted);
+  EXPECT_EQ(events[3].output_shape, x.shape());
+  EXPECT_EQ(events[5].input_shape, x.shape());
+  EXPECT_GE(events[5].peak_memory_bytes, events[5].current_memory_bytes);
+  EXPECT_EQ(events.back().type, inference::EngineEventType::Error);
+  EXPECT_NE(events.back().message.find("run failed"), std::string::npos);
+}

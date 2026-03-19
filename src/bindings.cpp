@@ -7,6 +7,7 @@
 #include "tensor.hpp"
 #include <optional>
 #include <pybind11/eval.h>
+#include <pybind11/functional.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -644,12 +645,39 @@ PYBIND11_MODULE(munet, m) {
   // ============================================================================
   auto inf = m.def_submodule("inference", "Inference runtime APIs");
 
+  py::enum_<inference::EngineEventType>(inf, "EngineEventType")
+      .value("LoadStarted", inference::EngineEventType::LoadStarted)
+      .value("LoadCompleted", inference::EngineEventType::LoadCompleted)
+      .value("CompileStarted", inference::EngineEventType::CompileStarted)
+      .value("CompileCompleted", inference::EngineEventType::CompileCompleted)
+      .value("RunStarted", inference::EngineEventType::RunStarted)
+      .value("RunCompleted", inference::EngineEventType::RunCompleted)
+      .value("Error", inference::EngineEventType::Error);
+
+  py::class_<inference::EngineEvent>(inf, "EngineEvent")
+      .def(py::init<>())
+      .def_readonly("type", &inference::EngineEvent::type)
+      .def_readonly("device", &inference::EngineEvent::device)
+      .def_readonly("run_index", &inference::EngineEvent::run_index)
+      .def_readonly("duration_ms", &inference::EngineEvent::duration_ms)
+      .def_readonly("input_shape", &inference::EngineEvent::input_shape)
+      .def_readonly("output_shape", &inference::EngineEvent::output_shape)
+      .def_readonly("current_memory_bytes",
+                    &inference::EngineEvent::current_memory_bytes)
+      .def_readonly("peak_memory_bytes",
+                    &inference::EngineEvent::peak_memory_bytes)
+      .def_readonly("message", &inference::EngineEvent::message);
+
   py::class_<inference::EngineConfig>(inf, "EngineConfig")
       .def(py::init<>())
       .def_readwrite("device", &inference::EngineConfig::device)
       .def_readwrite("warmup_runs", &inference::EngineConfig::warmup_runs)
       .def_readwrite("strict_shape_check",
-                     &inference::EngineConfig::strict_shape_check);
+                     &inference::EngineConfig::strict_shape_check)
+      .def_readwrite("allow_autograd_inputs",
+                     &inference::EngineConfig::allow_autograd_inputs)
+      .def_readwrite("capture_profiler_memory",
+                     &inference::EngineConfig::capture_profiler_memory);
 
   py::class_<inference::EngineStats>(inf, "EngineStats")
       .def(py::init<>())
@@ -659,7 +687,11 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("compiled_input_shape",
                     &inference::EngineStats::compiled_input_shape)
       .def_readonly("compiled_output_shape",
-                    &inference::EngineStats::compiled_output_shape);
+                    &inference::EngineStats::compiled_output_shape)
+      .def_readonly("current_memory_bytes",
+                    &inference::EngineStats::current_memory_bytes)
+      .def_readonly("peak_memory_bytes",
+                    &inference::EngineStats::peak_memory_bytes);
 
   py::class_<inference::Engine>(inf, "Engine")
       .def(py::init<inference::EngineConfig>(), py::arg("config") = inference::EngineConfig{})
@@ -669,6 +701,17 @@ PYBIND11_MODULE(munet, m) {
            py::arg("warmup_runs"))
       .def("set_strict_shape_check", &inference::Engine::set_strict_shape_check,
            py::arg("enabled"))
+      .def("set_allow_autograd_inputs",
+           &inference::Engine::set_allow_autograd_inputs, py::arg("enabled"))
+      .def("allow_autograd_inputs", &inference::Engine::allow_autograd_inputs)
+      .def("set_capture_profiler_memory",
+           &inference::Engine::set_capture_profiler_memory,
+           py::arg("enabled"))
+      .def("capture_profiler_memory",
+           &inference::Engine::capture_profiler_memory)
+      .def("set_observer", &inference::Engine::set_observer,
+           py::arg("observer"))
+      .def("clear_observer", &inference::Engine::clear_observer)
       .def(
           "load",
           [](inference::Engine &self, const std::shared_ptr<nn::Module> &module) {
@@ -808,6 +851,73 @@ PYBIND11_MODULE(munet, m) {
      opts.dtype = _dtype_from_name(dtype_name)
      return opts
 
+
+ SERIALIZATION_FORMAT_NAME = "munet_model"
+ SERIALIZATION_FORMAT_REVISION = 1
+ SERIALIZATION_LEGACY_TAG = "munet_model_v1"
+
+ def serialization_format_info():
+     return {
+         "format_name": SERIALIZATION_FORMAT_NAME,
+         "format_revision": SERIALIZATION_FORMAT_REVISION,
+         "legacy_tag": SERIALIZATION_LEGACY_TAG,
+         "load_compatibility": [
+             {"format_name": SERIALIZATION_FORMAT_NAME, "format_revision": SERIALIZATION_FORMAT_REVISION},
+             {"legacy_tag": SERIALIZATION_LEGACY_TAG},
+         ],
+         "policy": "Forward-compatible loading is not guaranteed across future major format revisions.",
+     }
+
+ def _serialization_metadata_from_state(state):
+     format_name = str(state['__format_name__']) if '__format_name__' in state else None
+     format_revision = int(state['__format_revision__']) if '__format_revision__' in state else None
+     legacy_tag = str(state['__format_version__']) if '__format_version__' in state else None
+     producer = str(state['__producer__']) if '__producer__' in state else None
+     has_config = '__config__' in state
+
+     if format_name is None and legacy_tag == SERIALIZATION_LEGACY_TAG:
+         format_name = SERIALIZATION_FORMAT_NAME
+         format_revision = SERIALIZATION_FORMAT_REVISION
+
+     return {
+         "format_name": format_name,
+         "format_revision": format_revision,
+         "legacy_tag": legacy_tag,
+         "producer": producer,
+         "has_config": has_config,
+     }
+
+ def serialization_metadata(filename):
+     import numpy as np
+     with np.load(filename, allow_pickle=True) as state:
+         return _serialization_metadata_from_state(state)
+
+ def _validate_serialization_metadata(state):
+     metadata = _serialization_metadata_from_state(state)
+     format_name = metadata["format_name"]
+     format_revision = metadata["format_revision"]
+     legacy_tag = metadata["legacy_tag"]
+
+     if format_name != SERIALIZATION_FORMAT_NAME:
+         raise ValueError(
+             f"Unsupported serialization format name: {format_name!r}. "
+             f"Expected {SERIALIZATION_FORMAT_NAME!r}."
+         )
+
+     if format_revision != SERIALIZATION_FORMAT_REVISION:
+         raise ValueError(
+             f"Unsupported serialization format revision: {format_revision!r}. "
+             f"This build supports revision {SERIALIZATION_FORMAT_REVISION}."
+         )
+
+     if legacy_tag not in (None, SERIALIZATION_LEGACY_TAG):
+         raise ValueError(
+             f"Unsupported legacy serialization tag: {legacy_tag!r}. "
+             f"Expected {SERIALIZATION_LEGACY_TAG!r}."
+         )
+
+     return metadata
+
  def _direct_named_tensors(module):
      name = type(module).__name__
      items = []
@@ -891,7 +1001,10 @@ PYBIND11_MODULE(munet, m) {
          state[name] = tensor_to_numpy(tensor)
 
      state['__config__'] = np.array(json.dumps(config))
-     state['__format_version__'] = np.array('munet_model_v1')
+     state['__format_name__'] = np.array(SERIALIZATION_FORMAT_NAME)
+     state['__format_revision__'] = np.array(SERIALIZATION_FORMAT_REVISION)
+     state['__format_version__'] = np.array(SERIALIZATION_LEGACY_TAG)
+     state['__producer__'] = np.array('munet')
      np.savez(filename, **state)
 
  def load(arg, filename=None):
@@ -948,17 +1061,19 @@ PYBIND11_MODULE(munet, m) {
          return module
 
      if filename is None:
-         state = np.load(arg, allow_pickle=True)
-         if '__config__' not in state:
-             raise ValueError("File does not contain architecture config. Use `load(module, filename)` for weights-only restore.")
+         with np.load(arg, allow_pickle=True) as state:
+             _validate_serialization_metadata(state)
+             if '__config__' not in state:
+                 raise ValueError("File does not contain architecture config. Use `load(module, filename)` for weights-only restore.")
 
-         config = json.loads(str(state['__config__']))
-         module = build_module(config)
-         return apply_state(module, state)
+             config = json.loads(str(state['__config__']))
+             module = build_module(config)
+             return apply_state(module, state)
      else:
          module = arg
-         state = np.load(filename, allow_pickle=True)
-         return apply_state(module, state)
+         with np.load(filename, allow_pickle=True) as state:
+             _validate_serialization_metadata(state)
+             return apply_state(module, state)
 
  def load_weights(module, filename):
      """Alias for `load(module, filename)` to explicitly do weights-only restore."""

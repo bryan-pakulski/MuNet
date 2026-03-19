@@ -26,7 +26,7 @@ class Profiler {
   std::map<std::string, OpStats> stats;
   size_t peak_memory = 0;
   size_t current_memory = 0;
-  std::mutex mtx;
+  mutable std::mutex mtx;
   bool printed_at_exit_ = false;
 
   Profiler() = default;
@@ -88,6 +88,16 @@ public:
     std::lock_guard<std::mutex> lock(mtx);
     print_summary_locked(title);
     printed_at_exit_ = true;
+  }
+
+  size_t current_memory_bytes() const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return current_memory;
+  }
+
+  size_t peak_memory_bytes() const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return peak_memory;
   }
 
 private:

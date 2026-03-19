@@ -680,6 +680,44 @@ class TestBindings(unittest.TestCase):
             self.assertEqual(named["2.weight"].dtype, munet.DataType.Float16)
             self.assertEqual(named["2.bias"].dtype, munet.DataType.Float16)
 
+    def test_serialization_metadata_and_format_info(self):
+        info = munet.serialization_format_info()
+        self.assertEqual(info["format_name"], "munet_model")
+        self.assertEqual(info["format_revision"], 1)
+        self.assertEqual(info["legacy_tag"], "munet_model_v1")
+
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 4),
+            munet.nn.ReLU(),
+        ])
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "metadata_model.npz")
+            munet.save(model, path)
+            metadata = munet.serialization_metadata(path)
+            self.assertEqual(metadata["format_name"], "munet_model")
+            self.assertEqual(metadata["format_revision"], 1)
+            self.assertEqual(metadata["legacy_tag"], "munet_model_v1")
+            self.assertTrue(metadata["has_config"])
+
+    def test_model_serialization_rejects_unsupported_revision(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 4),
+            munet.nn.ReLU(),
+        ])
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "bad_revision_model.npz")
+            munet.save(model, path)
+
+            with np.load(path, allow_pickle=True) as state:
+                mutated = {key: state[key] for key in state.files}
+            mutated["__format_revision__"] = np.array(999)
+            np.savez(path, **mutated)
+
+            with self.assertRaises(ValueError):
+                munet.load(path)
+
     def test_model_serialization_from_non_cpu_device_preserves_dtype(self):
         devices = self._available_non_cpu_devices()
         if not devices:
