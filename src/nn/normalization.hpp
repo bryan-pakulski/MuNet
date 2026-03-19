@@ -24,7 +24,7 @@ public:
     register_parameter("bias", bias);
   }
 
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     if (x.shape().empty() || x.shape().back() != normalized_shape_)
       throw std::runtime_error("LayerNorm expects last dim to match "
                                "normalized_shape");
@@ -66,7 +66,7 @@ public:
                     accumulation_buffer_registration(AccumulationOp::Normalization));
   }
 
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     return x.batch_norm(running_mean, running_var, weight, bias, training_,
                         momentum_, eps_);
   }

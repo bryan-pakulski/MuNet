@@ -1,6 +1,8 @@
 #pragma once
 
 #include "tensor.hpp"
+#include "util/profiler.hpp"
+#include "util/timer.hpp"
 #include <map>
 #include <memory>
 #include <optional>
@@ -34,7 +36,19 @@ public:
   virtual ~Module() = default;
 
   // Generic forward for single-tensor modules
-  virtual Tensor forward(Tensor x) = 0;
+  Tensor forward(Tensor x) {
+    if (!is_profile_enabled()) {
+      return forward_impl(std::move(x));
+    }
+
+    const Shape input_shape = x.shape();
+    const size_t input_bytes = x.bytes();
+    Timer timer;
+    Tensor out = forward_impl(std::move(x));
+    Profiler::get().record(module_profile_label(), timer.elapsed_us(), 0.0,
+                           input_bytes, to_string(input_shape));
+    return out;
+  }
 
   virtual std::vector<Tensor> parameters() {
     std::vector<Tensor> params;
@@ -168,6 +182,8 @@ public:
   std::shared_ptr<Module> register_module(std::string name,
                                           std::shared_ptr<Module> m) {
     if (m) {
+      m->parent_ = this;
+      m->registered_name_ = name;
       const TensorOptions unresolved_defaults;
       const TensorOptions &child_defaults = m->default_options();
       if (child_defaults.device == unresolved_defaults.device &&
@@ -181,6 +197,29 @@ public:
   }
 
 protected:
+  virtual Tensor forward_impl(Tensor x) = 0;
+
+  std::string module_profile_label() const {
+    const std::string path = module_path();
+    return path.empty() ? "module.root.forward"
+                        : "module." + path + ".forward";
+  }
+
+  std::string module_path() const {
+    if (!parent_) {
+      return registered_name_;
+    }
+
+    const std::string parent_path = parent_->module_path();
+    if (parent_path.empty()) {
+      return registered_name_;
+    }
+    if (registered_name_.empty()) {
+      return parent_path;
+    }
+    return parent_path + "." + registered_name_;
+  }
+
   DataType resolve_buffer_dtype(const std::string &name,
                                 DataType requested_dtype) const {
     auto it = buffer_registrations_.find(name);
@@ -205,6 +244,8 @@ protected:
   std::map<std::string, Tensor *> buffers_;
   std::map<std::string, BufferRegistration> buffer_registrations_;
   std::map<std::string, std::shared_ptr<Module>> modules_;
+  Module *parent_ = nullptr;
+  std::string registered_name_;
 };
 
 } // namespace core

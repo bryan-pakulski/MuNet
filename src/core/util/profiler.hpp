@@ -22,6 +22,12 @@ struct OpStats {
   std::string last_shape = "";
 };
 
+struct ProfilerSnapshot {
+  std::map<std::string, OpStats> stats;
+  size_t peak_memory_bytes = 0;
+  size_t current_memory_bytes = 0;
+};
+
 class Profiler {
   std::map<std::string, OpStats> stats;
   size_t peak_memory = 0;
@@ -80,8 +86,9 @@ public:
     s.max_gpu_us = std::max(s.max_gpu_us, gpu_us);
     s.bytes_processed += bytes;
     s.count++;
-    if (!shape.empty())
-      s.last_shape = shape;
+    const std::string detail = append_trace_context(std::move(shape));
+    if (!detail.empty())
+      s.last_shape = detail;
   }
 
   void print_summary(const std::string &title = "MuNet Performance Summary") {
@@ -98,6 +105,11 @@ public:
   size_t peak_memory_bytes() const {
     std::lock_guard<std::mutex> lock(mtx);
     return peak_memory;
+  }
+
+  ProfilerSnapshot snapshot() const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return ProfilerSnapshot{stats, peak_memory, current_memory};
   }
 
 private:

@@ -98,7 +98,7 @@ Tensor make_constant_tensor(Shape shape, Device device, DataType dtype,
 class PyModule : public nn::Module {
 public:
   using nn::Module::Module;
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     PYBIND11_OVERRIDE_PURE(Tensor, nn::Module, forward, x);
   }
 };
@@ -658,6 +658,7 @@ PYBIND11_MODULE(munet, m) {
       .def(py::init<>())
       .def_readonly("type", &inference::EngineEvent::type)
       .def_readonly("device", &inference::EngineEvent::device)
+      .def_readonly("trace_id", &inference::EngineEvent::trace_id)
       .def_readonly("run_index", &inference::EngineEvent::run_index)
       .def_readonly("duration_ms", &inference::EngineEvent::duration_ms)
       .def_readonly("input_shape", &inference::EngineEvent::input_shape)
@@ -666,6 +667,7 @@ PYBIND11_MODULE(munet, m) {
                     &inference::EngineEvent::current_memory_bytes)
       .def_readonly("peak_memory_bytes",
                     &inference::EngineEvent::peak_memory_bytes)
+      .def_readonly("span", &inference::EngineEvent::span)
       .def_readonly("message", &inference::EngineEvent::message);
 
   py::class_<inference::EngineConfig>(inf, "EngineConfig")
@@ -682,8 +684,26 @@ PYBIND11_MODULE(munet, m) {
   py::class_<inference::EngineStats>(inf, "EngineStats")
       .def(py::init<>())
       .def_readonly("runs", &inference::EngineStats::runs)
+      .def_readonly("last_compile_trace_id",
+                    &inference::EngineStats::last_compile_trace_id)
+      .def_readonly("last_run_trace_id",
+                    &inference::EngineStats::last_run_trace_id)
+      .def_readonly("load_to_device_ms",
+                    &inference::EngineStats::load_to_device_ms)
+      .def_readonly("load_eval_ms", &inference::EngineStats::load_eval_ms)
       .def_readonly("last_run_ms", &inference::EngineStats::last_run_ms)
+      .def_readonly("last_prepare_input_ms",
+                    &inference::EngineStats::last_prepare_input_ms)
+      .def_readonly("last_forward_ms", &inference::EngineStats::last_forward_ms)
+      .def_readonly("last_output_validation_ms",
+                    &inference::EngineStats::last_output_validation_ms)
       .def_readonly("compile_ms", &inference::EngineStats::compile_ms)
+      .def_readonly("compile_prepare_input_ms",
+                    &inference::EngineStats::compile_prepare_input_ms)
+      .def_readonly("compile_forward_ms",
+                    &inference::EngineStats::compile_forward_ms)
+      .def_readonly("compile_warmup_ms",
+                    &inference::EngineStats::compile_warmup_ms)
       .def_readonly("compiled_input_shape",
                     &inference::EngineStats::compiled_input_shape)
       .def_readonly("compiled_output_shape",

@@ -1,10 +1,25 @@
 #include "nn.hpp"
+#include "core/util/profiler.hpp"
 #include "test_utils.hpp"
 #include <cmath>
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <type_traits>
 
 using namespace munet;
+
+namespace {
+
+class ScopedProfileOverride {
+public:
+  explicit ScopedProfileOverride(bool enabled) {
+    set_profile_enabled_override(enabled);
+  }
+
+  ~ScopedProfileOverride() { set_profile_enabled_override(std::nullopt); }
+};
+
+} // namespace
 
 TEST(NNTest, ModuleInheritsCoreModule) {
   EXPECT_TRUE((std::is_base_of_v<core::Module, nn::Module>));
@@ -30,6 +45,28 @@ TEST(NNTest, ModuleParameters) {
   EXPECT_TRUE(named_modules.count("0"));
   EXPECT_TRUE(named_modules.count("1"));
   EXPECT_TRUE(named_modules.count("2"));
+}
+
+TEST(NNTest, ProfilingCapturesHierarchicalModuleForwardSpans) {
+  ScopedProfileOverride profile(true);
+  Profiler::get().reset();
+
+  auto model = std::make_shared<nn::Sequential>();
+  model->add(std::make_shared<nn::Linear>(4, 4));
+  model->add(std::make_shared<nn::ReLU>());
+  model->add(std::make_shared<nn::Linear>(4, 2));
+
+  Tensor x({1, 4}, Device{DeviceType::CPU, 0});
+  x.fill_(1.0f);
+
+  Tensor y = model->forward(x);
+  EXPECT_EQ(y.shape(), (std::vector<int>{1, 2}));
+
+  const auto snapshot = Profiler::get().snapshot();
+  EXPECT_NE(snapshot.stats.find("module.root.forward"), snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("module.0.forward"), snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("module.1.forward"), snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("module.2.forward"), snapshot.stats.end());
 }
 
 TEST(NNTest, ModuleToMovesParametersAndBuffers) {

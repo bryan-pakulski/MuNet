@@ -1,5 +1,7 @@
 #include "op_dispatch.hpp"
+#include "core/util.hpp"
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -7,6 +9,13 @@
 namespace munet {
 namespace ops {
 namespace {
+
+enum class DispatchFallbackReason {
+  DType,
+  Shape,
+  Feature,
+  Policy,
+};
 
 const std::unordered_map<OpId, OpMetadata> &registry() {
   static const std::unordered_map<OpId, OpMetadata> kRegistry = {
@@ -101,6 +110,87 @@ ForwardNode make_trace_node(const char *op_name,
   return node;
 }
 
+void record_dispatch_profile(const std::string &path, const OpMetadata &meta,
+                             const Tensor &tensor, double cpu_us) {
+  if (!is_profile_enabled()) {
+    return;
+  }
+
+  Profiler::get().record("dispatch.resolve." + path + "." + meta.name, cpu_us,
+                         0.0, 0, to_string(tensor.shape()));
+}
+
+const char *dispatch_fallback_reason_name(DispatchFallbackReason reason) {
+  switch (reason) {
+  case DispatchFallbackReason::DType:
+    return "dtype";
+  case DispatchFallbackReason::Shape:
+    return "shape";
+  case DispatchFallbackReason::Feature:
+    return "feature";
+  case DispatchFallbackReason::Policy:
+    return "policy";
+  default:
+    return "unknown";
+  }
+}
+
+DispatchFallbackReason classify_dispatch_fallback(
+    const OpMetadata &meta, const Tensor &tensor, BackendFeature feature,
+    const BackendSupport &support) {
+  if (!supports_backend_feature_dtype(feature, tensor.dtype())) {
+    return DispatchFallbackReason::DType;
+  }
+  if (!supports_backend_feature_shape(feature, tensor.dtype(), &tensor.shape())) {
+    return DispatchFallbackReason::Shape;
+  }
+  if (support.fallback_policy != meta.fallback_policy) {
+    return DispatchFallbackReason::Policy;
+  }
+  return DispatchFallbackReason::Feature;
+}
+
+std::string dispatch_fallback_detail(const OpMetadata &meta, const Tensor &tensor,
+                                     BackendFeature feature,
+                                     const BackendSupport &support,
+                                     DispatchFallbackReason reason) {
+  std::string detail = "op=" + std::string(meta.name);
+  detail += " backend=" + std::string(tensor.impl_->backend().name());
+  detail += " feature=" + std::string(backend_feature_name(feature));
+  detail += " dtype=" + dtype_name(tensor.dtype());
+  detail += " shape=" + to_string(tensor.shape());
+  detail += " reason=" + std::string(dispatch_fallback_reason_name(reason));
+  detail +=
+      " policy=" + std::string(backend_fallback_policy_name(support.fallback_policy));
+  return detail;
+}
+
+void record_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
+                                     BackendFeature feature,
+                                     const BackendSupport &support,
+                                     DispatchFallbackReason reason) {
+  if (!is_profile_enabled()) {
+    return;
+  }
+  Profiler::get().record(
+      "dispatch.fallback.reason." +
+          std::string(dispatch_fallback_reason_name(reason)),
+      0.0, 0.0, 0, dispatch_fallback_detail(meta, tensor, feature, support,
+                                            reason));
+}
+
+void log_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
+                                  BackendFeature feature,
+                                  const BackendSupport &support,
+                                  DispatchFallbackReason reason) {
+  if (!is_debug_enabled()) {
+    return;
+  }
+  MUNET_INFO << "dispatch_fallback "
+             << dispatch_fallback_detail(meta, tensor, feature, support, reason)
+             << std::endl;
+}
+
 } // namespace
 
 const OpMetadata &op_metadata(OpId id) {
@@ -114,8 +204,15 @@ const OpMetadata &op_metadata(OpId id) {
 
 DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   const auto &meta = op_metadata(id);
+  std::unique_ptr<Timer> timer;
+  if (is_profile_enabled()) {
+    timer = std::make_unique<Timer>();
+  }
 
   if (meta.requires_floating && !is_floating(tensor.dtype())) {
+    if (timer) {
+      record_dispatch_profile("dtype_error", meta, tensor, timer->elapsed_us());
+    }
     throw std::runtime_error(std::string(meta.name) +
                              " requires a floating-point tensor, got " +
                              dtype_name(tensor.dtype()));
@@ -126,6 +223,10 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     support.available = false;
     support.fallback_policy = meta.fallback_policy;
     support.preferred_accumulation_dtype = tensor.dtype();
+    if (timer) {
+      record_dispatch_profile("metadata_fallback", meta, tensor,
+                              timer->elapsed_us());
+    }
     return {meta,
             false,
             meta.fallback_policy == BackendFallbackPolicy::CPUFallback,
@@ -138,14 +239,30 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
                                             &tensor.shape());
 
   if (support.available) {
+    if (timer) {
+      record_dispatch_profile("backend", meta, tensor, timer->elapsed_us());
+    }
     return {meta, true, false, support};
   }
 
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
       support.fallback_policy == BackendFallbackPolicy::CPUFallback) {
+    const auto reason =
+        classify_dispatch_fallback(meta, tensor, feature, support);
+    log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
+    record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
+    if (timer) {
+      record_dispatch_profile("cpu_fallback", meta, tensor, timer->elapsed_us());
+    }
     return {meta, false, true, support};
   }
 
+  const auto reason = classify_dispatch_fallback(meta, tensor, feature, support);
+  log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
+  record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
+  if (timer) {
+    record_dispatch_profile("unsupported", meta, tensor, timer->elapsed_us());
+  }
   throw std::runtime_error(std::string(meta.name) + ": backend '" +
                            std::string(tensor.impl_->backend().name()) +
                            "' does not support feature '" +

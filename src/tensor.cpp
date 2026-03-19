@@ -119,15 +119,8 @@ Tensor Tensor::to(Device dev) const {
   if (device() == dev)
     return *this;
 
-  bool profiling = is_profile_enabled();
-  std::unique_ptr<Timer> timer;
-
   Tensor out(shape(), dev, dtype(), requires_grad());
   size_t byte_count = bytes();
-
-  if (profiling) {
-    timer = std::make_unique<Timer>();
-  }
 
   if (device().type == DeviceType::CUDA || dev.type == DeviceType::CUDA) {
 #ifdef MUNET_USE_CUDA
@@ -148,12 +141,6 @@ Tensor Tensor::to(Device dev) const {
 #endif
   } else {
     impl_->backend().copy(data(), out.data(), byte_count, device(), dev);
-  }
-
-  if (profiling) {
-    double us = timer->elapsed_us();
-    std::string name = "to(" + dev.to_string() + ")";
-    Profiler::get().record(name, us, 0.0, byte_count, to_string(shape()));
   }
 
   if (GradMode::is_enabled() && requires_grad()) {
@@ -180,7 +167,15 @@ Tensor Tensor::to(DataType target_dtype) const {
 
   Device cpu{DeviceType::CPU, 0};
   Tensor cpu_src = (device().type == DeviceType::CPU) ? *this : to(cpu);
-  Tensor cpu_out = convert_tensor_dtype_cpu(cpu_src, target_dtype);
+  Tensor cpu_out;
+  if (is_profile_enabled()) {
+    Timer timer;
+    cpu_out = convert_tensor_dtype_cpu(cpu_src, target_dtype);
+    Profiler::get().record("transfer.dtype_convert", timer.elapsed_us(), 0.0,
+                           cpu_src.bytes(), to_string(cpu_src.shape()));
+  } else {
+    cpu_out = convert_tensor_dtype_cpu(cpu_src, target_dtype);
+  }
   Tensor out = (device().type == DeviceType::CPU) ? cpu_out : cpu_out.to(device());
 
   if (GradMode::is_enabled() && requires_grad()) {

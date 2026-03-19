@@ -25,7 +25,7 @@ public:
     }
   }
 
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     Tensor out = x.matmul(weight);
     if (bias.size() > 0) {
       out = out + bias;
@@ -55,7 +55,7 @@ public:
     register_parameter("bias", bias);
   }
 
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     return x.conv2d(weight, bias, stride_, padding_);
   }
 
@@ -65,7 +65,7 @@ public:
 
 class Flatten : public Module {
 public:
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     int batch_size = x.shape()[0];
     size_t total = x.size();
     return x.reshape({batch_size, (int)(total / batch_size)});
@@ -88,7 +88,7 @@ public:
     register_parameter("weight", weight);
   }
 
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     auto s = x.shape();
 
     if (s.size() == 2 && !weight.requires_grad() && !x.requires_grad()) {

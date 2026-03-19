@@ -15,7 +15,7 @@ public:
     ordered_modules_.push_back(m);
   }
 
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     for (auto &m : ordered_modules_) {
       x = m->forward(x);
     }

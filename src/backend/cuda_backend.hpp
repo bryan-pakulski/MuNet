@@ -64,6 +64,7 @@ public:
   }
 
   double get_last_kernel_time_us() override { return last_kernel_us_; }
+  bool reports_gpu_kernel_time() const override { return true; }
 
   void *allocate(size_t bytes) override;
   void deallocate(void *ptr) override;

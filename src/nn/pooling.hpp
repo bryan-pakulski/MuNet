@@ -7,7 +7,7 @@ namespace nn {
 
 class GlobalAvgPool2d : public Module {
 public:
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     auto s = x.shape();
     if (s.size() != 4)
       throw std::runtime_error("GlobalAvgPool2d expects NCHW input");
@@ -29,7 +29,7 @@ class MaxPool2d : public Module {
 public:
   MaxPool2d(int kernel_size, int stride = 2, int padding = 0)
       : k_(kernel_size), s_(stride), p_(padding) {}
-  Tensor forward(Tensor x) override { return x.max_pool2d(k_, s_, p_); }
+  Tensor forward_impl(Tensor x) override { return x.max_pool2d(k_, s_, p_); }
 
   int k_, s_, p_;
 };
@@ -37,7 +37,7 @@ public:
 class Upsample : public Module {
 public:
   Upsample(int scale_factor) : scale_(scale_factor) {}
-  Tensor forward(Tensor x) override { return x.upsample2d(scale_); }
+  Tensor forward_impl(Tensor x) override { return x.upsample2d(scale_); }
 
   int scale_;
 };
