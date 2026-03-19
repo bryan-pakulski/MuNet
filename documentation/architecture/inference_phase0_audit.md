@@ -6,12 +6,12 @@ It captures the current inference dependency inventory, classifies training/runt
 
 ## Phase 0 status
 
-- [~] Phase 0 - Boundary audit and deploy baseline
+- [x] Phase 0 - Boundary audit and deploy baseline
 - [x] Dependency inventory written
 - [x] Coupling points classified
 - [x] Target build profiles defined
 - [x] Current blockers documented
-- [ ] Baseline latency and memory measurements collected from accelerated hardware
+- [x] Baseline latency and memory measurements collected from accelerated hardware
 
 ## Minimum runtime surface for edge deployments
 
@@ -34,11 +34,11 @@ The current working definition of a minimal MuNet deploy runtime is:
 | Area | Current dependency | Classification | Why it exists today | Phase 0 note |
 | --- | --- | --- | --- | --- |
 | `src/inference.hpp` | `core/module.hpp` | required shared runtime primitive | Inference modules reuse the shared module graph, parameter registration, and device/dtype transfer logic. | This is a valid shared boundary so long as `core::Module` remains training-agnostic. |
-| `src/inference.hpp` | `autograd/engine.hpp` via `GradMode` | training-only leakage | The inference engine disables gradient tracking by reaching into autograd state directly. | This is the clearest public-header leak today and should eventually move behind a slimmer inference-safe guard. |
+| `src/inference.hpp` | `core/grad_mode.hpp` | required shared runtime primitive | The inference engine disables gradient tracking through a narrow shared grad-state primitive. | Phase 1 moved this dependency out of `autograd/engine.hpp`, which removes the full autograd-engine include from the inference public header. |
 | `src/inference.hpp` | trace/profiler timing helpers from `core/util.hpp` | optional observability/debug feature | Compile/run phases emit trace ids, spans, timers, and profiler-backed memory counters. | Useful for diagnostics, but this should stay optional so hot-path deploy builds do not pay for it by default. |
 | `src/inference.hpp` | `EngineStats` memory counters backed by `Profiler` | optional observability/debug feature | The engine reports current/peak memory during load/compile/run. | Good for benchmarking, but a lean runtime may need a lighter-weight or compile-time gated memory accounting path. |
 | `src/inference.hpp` | `load(std::shared_ptr<core::Module>)` | required shared runtime primitive | The engine executes a shared module abstraction so serialized/native-converted models can run through one path. | Acceptable as long as the shared module API does not grow training-only assumptions. |
-| `src/bindings.cpp` | Python `Engine.load(...)` accepts `std::shared_ptr<nn::Module>` | training-only leakage | The Python inference entrypoint is typed in terms of the training namespace even though the C++ engine accepts `core::Module`. | This is a concrete binding-layer coupling that should be removed in a future separation phase. |
+| `src/bindings.cpp` | Python `Engine.load(...)` now casts to `std::shared_ptr<core::Module>` | required shared runtime primitive | The Python inference entrypoint now accepts the shared module base instead of directly naming `nn::Module`. | This removes the direct training-type requirement from the Python inference entrypoint, although the overall extension target is still monolithic. |
 | `src/bindings.cpp` | Python extension target links `munet_training` only | training-only leakage | The monolithic Python module exposes training, serialization, and inference from one compiled extension. | This blocks a truly inference-only Python package today. |
 | serialization helpers in `src/bindings.cpp` | Full reconstruction for built-in `nn::*` module types | deploy convenience API | Deployment needs model loading, but the current ownership model is still centered on training-side module types. | Phase 4 should separate deploy artifact requirements from training/checkpoint concerns more cleanly. |
 | `python_src/onnx_integration.py` | ONNX conversion, coverage reports, downloads, deprecated runtime wrapper | deploy convenience API + optional tooling | These helpers support conversion and inspection workflows around inference deployment. | Useful, but they expand the inference namespace with development-time tooling that may not belong in the leanest runtime package. |
@@ -46,11 +46,10 @@ The current working definition of a minimal MuNet deploy runtime is:
 
 ## Current blockers to a truly inference-only build target
 
-1. **Public inference headers still include autograd state management.** `src/inference.hpp` pulls in `autograd/engine.hpp` to manipulate `GradMode`, which means the inference surface is not yet isolated from autograd internals.
-2. **Python inference loading is typed against training modules.** In the bindings layer, `munet.inference.Engine.load(...)` currently accepts `nn::Module`, which exposes a training-centric surface in the inference namespace.
-3. **The Python package is monolithic.** `pybind11_add_module(munet ...)` links against `munet_training`, so Python consumers cannot build or distribute an inference-only extension today.
-4. **Core remains a broad shared layer.** `munet_core` still packages tensor execution, backend orchestration, and autograd graph primitives together, preventing a hard inference-only link boundary.
-5. **Inference namespace includes developer tooling.** ONNX conversion/reporting/download helpers are valuable, but they enlarge the deploy surface and should eventually be separated from the minimal runtime package.
+1. **The Python package is monolithic.** `pybind11_add_module(munet ...)` links against `munet_training`, so Python consumers cannot build or distribute an inference-only extension today.
+2. **Core remains a broad shared layer.** `munet_core` still packages tensor execution, backend orchestration, and autograd graph primitives together, preventing a hard inference-only link boundary.
+3. **Inference namespace includes developer tooling.** ONNX conversion/reporting/download helpers are valuable, but they enlarge the deploy surface and should eventually be separated from the minimal runtime package.
+4. **Profiler-backed memory accounting is not yet useful for deployment baselines.** CPU, CUDA, and Vulkan sample runs all reported zero-valued current/peak memory counters, so later phases need a more trustworthy deploy-side memory measurement path.
 
 ## Target build profiles
 
@@ -138,7 +137,50 @@ Observed output summary:
 - steady batch-run average: `0.3559 ms` for 2 inputs (`0.1779 ms` per input)
 - engine/profiler memory counters: `0` current / `0` peak in this CPU sample
 
-This establishes the repository-side baseline workflow and a reference CPU measurement. Accelerated device results are still needed from real target hardware.
+This establishes the repository-side baseline workflow and a reference CPU measurement.
+
+## Accelerated baseline snapshots provided from target hardware
+
+Accelerated measurements were captured on an **NVIDIA GeForce RTX 4060 Max-Q** system.
+
+### CUDA (`float16`)
+
+Command used:
+
+```bash
+./build/munet_inference_baseline --device cuda --dtype float16
+```
+
+Observed output summary:
+
+- cold load wall time: `2113.0076 ms`
+- compile time: `175.5584 ms`
+- steady single-run average: `28.0683 ms`
+- steady batch-run average: `114.2237 ms` for 4 inputs (`28.5559 ms` per input)
+- engine/profiler memory counters: `0` current / `0` peak in this sample
+
+### Vulkan (`float16`)
+
+Command used:
+
+```bash
+./build/munet_inference_baseline --device vulkan --dtype float16
+```
+
+Observed output summary:
+
+- cold load wall time: `6063.4427 ms`
+- compile time: `177.8639 ms`
+- steady single-run average: `36.2972 ms`
+- steady batch-run average: `149.2443 ms` for 4 inputs (`37.3111 ms` per input)
+- engine/profiler memory counters: `0` current / `0` peak in this sample
+
+### Initial comparison notes
+
+- cold load is dominated by backend/device bring-up, with Vulkan showing materially higher startup cost than CUDA on the provided machine
+- compile-time forward cost is relatively close between CUDA and Vulkan for this synthetic MLP benchmark
+- steady-state Vulkan throughput is slower than CUDA on the provided run, which makes cold-start reduction a particularly important optimization target for future inference-runtime work
+- zero-valued memory counters indicate the current profiler-backed accounting path is not yet giving useful deployment memory baselines for these accelerator runs and should be revisited in a later phase
 
 ### Accelerator baseline examples
 
@@ -168,12 +210,13 @@ The executable prints a JSON payload containing:
 - average steady-state batch-run timings
 - current/peak memory counters
 
-### What to send back in the next prompt
+### Baseline rerun guidance
 
-For accelerated hardware that is not available in this environment, please run the benchmark locally and send back:
+If later phases need refreshed numbers, rerun the same benchmark commands and compare against the CPU/CUDA/Vulkan snapshots captured in this document.
 
-- the exact command used
-- the full JSON output
-- any device-specific notes (GPU model, driver/runtime quirks, expected concurrency limits)
+Recommended metadata to keep with any future rerun:
 
-That will let the next phase update the plan with real baseline numbers instead of placeholders.
+- exact benchmark command
+- device model and driver/runtime details
+- full JSON output
+- any concurrency, thermal, or power-state notes that might affect cold-start or steady-state behavior

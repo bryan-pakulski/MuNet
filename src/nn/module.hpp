@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../training_guard.hpp"
+
 #include "../core/module.hpp"
 
 namespace munet {

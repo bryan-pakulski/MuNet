@@ -18,6 +18,7 @@ nav:
       - Runtime: documentation/architecture/runtime.md
       - Inference Runtime Separation Plan: documentation/architecture/inference_runtime_plan.md
       - Inference Runtime Phase 0 Audit: documentation/architecture/inference_phase0_audit.md
+      - Inference Runtime Phase 1 Boundary Split: documentation/architecture/inference_phase1_boundary_split.md
       - Backends: documentation/architecture/backends.md
   - API Reference:
       - Python API: documentation/api/python.md

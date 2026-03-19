@@ -45,7 +45,7 @@ The target is a runtime that scales from Raspberry Pi-class edge devices up to e
 
 ### Phase 0 - Boundary audit and deploy baseline
 
-**Status:** [~] in progress
+**Status:** [x] completed
 
 Current audit artifact: [Inference Runtime Phase 0 Audit](inference_phase0_audit.md).
 
@@ -83,12 +83,14 @@ Current audit artifact: [Inference Runtime Phase 0 Audit](inference_phase0_audit
 #### Exit Criteria
 
 - [x] There is a written dependency and overhead inventory for the current inference engine.
-- [ ] Baseline latency/memory measurements exist for at least one CPU-only path and one accelerated path where available.
+- [x] Baseline latency/memory measurements exist for at least one CPU-only path and one accelerated path where available.
 - [x] The project has an agreed definition of the minimum runtime surface that edge deployments must keep.
 
 ### Phase 1 - API and package boundary split
 
-**Status:** [ ] not started
+**Status:** [~] in progress
+
+Current boundary artifact: [Inference Runtime Phase 1 Boundary Split](inference_phase1_boundary_split.md).
 
 #### Objectives
 
@@ -97,27 +99,27 @@ Current audit artifact: [Inference Runtime Phase 0 Audit](inference_phase0_audit
 
 #### Action Points
 
-- [ ] Audit `munet_core`, `munet_inference`, and `munet_training` headers/targets for unwanted transitive dependencies.
-- [ ] Move deploy-safe abstractions behind inference-oriented headers instead of exposing training-oriented includes by default.
+- [x] Audit `munet_core`, `munet_inference`, and `munet_training` headers/targets for unwanted transitive dependencies.
+- [x] Move deploy-safe abstractions behind inference-oriented headers instead of exposing training-oriented includes by default.
 - [ ] Ensure inference-facing module/runtime interfaces depend only on:
   - tensor/runtime primitives
   - serialization/model execution contracts
   - backend capability discovery needed at deploy time
-- [ ] Introduce compile-time guards or build-time checks that fail if inference targets pull in training-only headers/symbols unintentionally.
-- [ ] Define a stable deploy API surface for:
+- [x] Introduce compile-time guards or build-time checks that fail if inference targets pull in training-only headers/symbols unintentionally.
+- [x] Define a stable deploy API surface for:
   - model loading
   - shape contracts
   - warmup/prepare
   - run / run_batch
   - lightweight runtime stats
   - optional observers
-- [ ] Update docs so developers know where new functionality belongs before adding more coupling.
+- [x] Update docs so developers know where new functionality belongs before adding more coupling.
 
 #### Exit Criteria
 
 - [ ] Inference headers and targets present a training-free public API surface.
-- [ ] Build graph checks exist for transitive dependency regressions.
-- [ ] Documentation clearly states the ownership boundary between core, inference, and training layers.
+- [x] Build graph checks exist for transitive dependency regressions.
+- [x] Documentation clearly states the ownership boundary between core, inference, and training layers.
 
 ### Phase 2 - Hot-path runtime slimming
 

@@ -451,12 +451,14 @@ PYBIND11_MODULE(munet, m) {
       py::arg("tensor"), py::arg("input"),
       "Copies data from a NumPy array into the given CPU tensor.");
 
+  py::class_<core::Module, std::shared_ptr<core::Module>>(m, "_CoreModule");
+
   // ============================================================================
   // Neural Network Layers (munet.nn)
   // ============================================================================
   auto nn = m.def_submodule("nn", "Neural Network Modules and Layers");
 
-  py::class_<nn::Module, std::shared_ptr<nn::Module>, PyModule>(
+  py::class_<nn::Module, core::Module, std::shared_ptr<nn::Module>, PyModule>(
       nn, "Module", py::dynamic_attr(),
       "Base class for all neural network modules.")
       .def(py::init<>())
@@ -734,8 +736,8 @@ PYBIND11_MODULE(munet, m) {
       .def("clear_observer", &inference::Engine::clear_observer)
       .def(
           "load",
-          [](inference::Engine &self, const std::shared_ptr<nn::Module> &module) {
-            self.load(std::static_pointer_cast<core::Module>(module));
+          [](inference::Engine &self, py::object module) {
+            self.load(module.cast<std::shared_ptr<core::Module>>());
           },
           py::arg("module"))
       .def("compile",

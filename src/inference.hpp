@@ -1,6 +1,6 @@
 #pragma once
 
-#include "autograd/engine.hpp"
+#include "core/grad_mode.hpp"
 #include "core/module.hpp"
 #include "core/util.hpp"
 #include <chrono>
