@@ -6,12 +6,18 @@ namespace munet {
 namespace autograd_nodes {
 
 struct ReluBackward : public Node {
-  Tensor saved_input;
-  explicit ReluBackward(Tensor a) : saved_input(std::move(a)) {}
+  Shape input_shape;
+  Device input_device;
+  DataType input_dtype;
+  explicit ReluBackward(Tensor a)
+      : input_shape(a.shape()), input_device(a.device()), input_dtype(a.dtype()) {
+    save_tensor(a, "relu_input");
+  }
   std::string name() const override { return "ReluBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor saved_input = saved_tensor(0);
     Tensor grad_out = grads[0];
-    Tensor grad_in(saved_input.shape(), saved_input.device(), saved_input.dtype());
+    Tensor grad_in(input_shape, input_device, input_dtype);
     saved_input.impl_->backend().relu_backward(
         *grad_out.impl_->storage, *saved_input.impl_->storage,
         *grad_in.impl_->storage, saved_input.size());
@@ -20,12 +26,18 @@ struct ReluBackward : public Node {
 };
 
 struct SigmoidBackward : public Node {
-  Tensor saved_out;
-  explicit SigmoidBackward(Tensor o) : saved_out(std::move(o)) {}
+  Shape output_shape;
+  Device output_device;
+  DataType output_dtype;
+  explicit SigmoidBackward(Tensor o)
+      : output_shape(o.shape()), output_device(o.device()), output_dtype(o.dtype()) {
+    save_tensor(o, "sigmoid_output");
+  }
   std::string name() const override { return "SigmoidBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor saved_out = saved_tensor(0);
     Tensor grad_out = grads[0];
-    Tensor grad_in(saved_out.shape(), saved_out.device(), saved_out.dtype());
+    Tensor grad_in(output_shape, output_device, output_dtype);
     saved_out.impl_->backend().sigmoid_backward(
         *grad_out.impl_->storage, *saved_out.impl_->storage,
         *grad_in.impl_->storage, saved_out.size());
@@ -34,30 +46,38 @@ struct SigmoidBackward : public Node {
 };
 
 struct SoftmaxBackward : public Node {
-  Tensor saved_out;
   int dim;
   Shape shape;
-  SoftmaxBackward(Tensor o, int d) : saved_out(std::move(o)), dim(d), shape(saved_out.shape()) {}
+  Device device;
+  DataType dtype;
+  SoftmaxBackward(Tensor o, int d)
+      : dim(d), shape(o.shape()), device(o.device()), dtype(o.dtype()) {
+    save_tensor(o, "softmax_output");
+  }
   std::string name() const override { return "SoftmaxBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override;
 };
 
 struct LogSoftmaxBackward : public Node {
-  Tensor saved_log_probs;
   int dim;
   Shape shape;
+  Device device;
+  DataType dtype;
   LogSoftmaxBackward(Tensor lp, int d)
-      : saved_log_probs(std::move(lp)), dim(d), shape(saved_log_probs.shape()) {}
+      : dim(d), shape(lp.shape()), device(lp.device()), dtype(lp.dtype()) {
+    save_tensor(lp, "log_softmax_output");
+  }
   std::string name() const override { return "LogSoftmaxBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override;
 };
 
 inline std::vector<Tensor>
 SoftmaxBackward::apply(const std::vector<Tensor> &grads) {
+  Tensor saved_out = saved_tensor(0);
   Device cpu{DeviceType::CPU, 0};
   Tensor go_cpu = grads[0].to(cpu);
   Tensor out_cpu = saved_out.to(cpu);
-  Tensor gi_cpu(shape, cpu, saved_out.dtype());
+  Tensor gi_cpu(shape, cpu, dtype);
 
   int rank = static_cast<int>(shape.size());
   int resolved = (dim < 0) ? (rank + dim) : dim;
@@ -96,18 +116,17 @@ SoftmaxBackward::apply(const std::vector<Tensor> &grads) {
     }
   }
 
-  Tensor gi_dev = (saved_out.device().type == DeviceType::CPU)
-                      ? gi_cpu
-                      : gi_cpu.to(saved_out.device());
+  Tensor gi_dev = (device.type == DeviceType::CPU) ? gi_cpu : gi_cpu.to(device);
   return {gi_dev};
 }
 
 inline std::vector<Tensor>
 LogSoftmaxBackward::apply(const std::vector<Tensor> &grads) {
+  Tensor saved_log_probs = saved_tensor(0);
   Device cpu{DeviceType::CPU, 0};
   Tensor go_cpu = grads[0].to(cpu);
   Tensor lp_cpu = saved_log_probs.to(cpu);
-  Tensor gi_cpu(shape, cpu, saved_log_probs.dtype());
+  Tensor gi_cpu(shape, cpu, dtype);
 
   int rank = static_cast<int>(shape.size());
   int resolved = (dim < 0) ? (rank + dim) : dim;
@@ -146,9 +165,7 @@ LogSoftmaxBackward::apply(const std::vector<Tensor> &grads) {
     }
   }
 
-  Tensor gi_dev = (saved_log_probs.device().type == DeviceType::CPU)
-                      ? gi_cpu
-                      : gi_cpu.to(saved_log_probs.device());
+  Tensor gi_dev = (device.type == DeviceType::CPU) ? gi_cpu : gi_cpu.to(device);
   return {gi_dev};
 }
 

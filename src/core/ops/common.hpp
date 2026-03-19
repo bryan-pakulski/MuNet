@@ -215,12 +215,14 @@ inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
   for (size_t i = 0; i < inputs.size(); ++i) {
     const auto &t = inputs[i];
     if (t.impl_->grad_fn) {
-      node->next_edges.push_back({t.impl_->grad_fn, static_cast<int>(i)});
+      node->next_edges.push_back(
+          {t.impl_->grad_fn, static_cast<int>(i), "input_" + std::to_string(i)});
     } else if (t.requires_grad()) {
       auto acc_node = std::make_shared<AccumulateGrad>(t.impl_);
-      node->next_edges.push_back({acc_node, static_cast<int>(i)});
+      node->next_edges.push_back(
+          {acc_node, static_cast<int>(i), "input_" + std::to_string(i)});
     } else {
-      node->next_edges.push_back({nullptr, 0});
+      node->next_edges.push_back({nullptr, 0, "input_" + std::to_string(i)});
     }
   }
 }

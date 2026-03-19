@@ -1,6 +1,8 @@
 #pragma once
 #include "storage.hpp"
 #include "types.hpp"
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -10,6 +12,7 @@ namespace munet {
 
 struct Node;
 class Tensor;
+struct AutogradExtension;
 
 struct ForwardNode {
   std::string op_name;
@@ -29,6 +32,7 @@ struct TensorImpl {
   bool requires_grad = false;
   std::shared_ptr<TensorImpl> grad = nullptr;
   std::shared_ptr<Node> grad_fn = nullptr;
+  uint64_t version_counter = 0;
 
   std::shared_ptr<ForwardNode> trace_node = nullptr;
 
@@ -50,10 +54,13 @@ struct TensorImpl {
   }
 
   Backend &backend() { return storage->backend(); }
+  void bump_version() { ++version_counter; }
 };
 
 class Tensor {
 public:
+  using GradientHook = std::function<Tensor(const Tensor &)>;
+
   Tensor() = default;
 
   Tensor(Shape shape, const TensorOptions &options) {
@@ -88,6 +95,12 @@ public:
 
   bool requires_grad() const { return impl_->requires_grad; }
   void set_requires_grad(bool r) { impl_->requires_grad = r; }
+  uint64_t version() const { return impl_->version_counter; }
+  void bump_version() {
+    if (impl_) {
+      impl_->bump_version();
+    }
+  }
 
   Tensor transpose(int dim0, int dim1) const;
   Tensor permute(const std::vector<int> &dims) const;
@@ -103,13 +116,19 @@ public:
   bool has_grad() const { return impl_->grad != nullptr; }
 
   void zero_grad() {
-    if (impl_->grad)
+    if (impl_->grad) {
       impl_->grad->storage->zero_();
+      impl_->grad->bump_version();
+    }
   }
 
   void backward();
   void backward(const Tensor &grad);
+  void backward(bool retain_graph);
+  void backward(const Tensor &grad, bool retain_graph);
   Tensor detach() const;
+
+  void register_gradient_hook(GradientHook hook) const;
 
   Tensor clone() const {
     Tensor out(shape(), options());
