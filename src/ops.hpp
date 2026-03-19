@@ -1,7 +1,7 @@
 #pragma once
-#include "autograd/autograd.hpp"
+#include "autograd/engine.hpp"
 #include "types.hpp"
-#include "util.hpp"
+#include "core/util.hpp"
 #include <cmath>
 #include <cstdint>
 #include <iostream>

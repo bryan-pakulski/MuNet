@@ -1,7 +1,7 @@
 #include "tensor.hpp"
-#include "autograd/autograd.hpp"
+#include "autograd/engine.hpp"
 #include "ops.hpp"
-#include "util.hpp"
+#include "core/util.hpp"
 
 #include <cstdlib>
 #include <cstring>

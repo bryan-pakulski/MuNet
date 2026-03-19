@@ -1,7 +1,7 @@
-#include "backend.hpp"
+#include "core/backend.hpp"
 #include "backend/cpu_backend.hpp"
 #include "backend/debug_backend.hpp"
-#include "util.hpp"
+#include "core/util.hpp"
 
 #ifdef MUNET_USE_CUDA
 #include "backend/cuda_backend.hpp"

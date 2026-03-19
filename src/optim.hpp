@@ -1,7 +1,7 @@
 #pragma once
 #include "ops.hpp"
 #include "tensor.hpp"
-#include "util.hpp"
+#include "core/util.hpp"
 #include <vector>
 
 namespace munet {
