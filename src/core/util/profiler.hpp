@@ -22,6 +22,12 @@ struct OpStats {
   std::string last_shape = "";
 };
 
+struct ProfilerSnapshot {
+  std::map<std::string, OpStats> stats;
+  size_t peak_memory_bytes = 0;
+  size_t current_memory_bytes = 0;
+};
+
 class Profiler {
   std::map<std::string, OpStats> stats;
   size_t peak_memory = 0;
@@ -98,6 +104,11 @@ public:
   size_t peak_memory_bytes() const {
     std::lock_guard<std::mutex> lock(mtx);
     return peak_memory;
+  }
+
+  ProfilerSnapshot snapshot() const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return ProfilerSnapshot{stats, peak_memory, current_memory};
   }
 
 private:

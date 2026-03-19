@@ -165,6 +165,7 @@ public:
   virtual void synchronize() = 0;
   virtual void all_reduce(Storage &buffer, size_t num_elements) = 0;
   virtual double get_last_kernel_time_us() = 0;
+  virtual bool reports_gpu_kernel_time() const { return false; }
 };
 
 class BackendElementwiseCapability {
@@ -432,6 +433,10 @@ public:
                               "allocation_transfer",
                               "get_last_kernel_time_us")
         ->get_last_kernel_time_us();
+  }
+  bool reports_gpu_kernel_time() const {
+    const auto *cap = allocation_transfer_capability();
+    return cap ? cap->reports_gpu_kernel_time() : false;
   }
 
   void broadcast_row(const Storage &src, Storage &dst, int rows, int cols) {

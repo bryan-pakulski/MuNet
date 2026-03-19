@@ -68,6 +68,7 @@ public:
   void memset(void *ptr, int value, size_t bytes) override;
 
   double get_last_kernel_time_us() override { return last_kernel_us_; }
+  bool reports_gpu_kernel_time() const override { return true; }
 
   void copy(const void *src, void *dst, size_t bytes, Device src_dev,
             Device dst_dev) override;

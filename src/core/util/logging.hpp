@@ -12,24 +12,19 @@ namespace munet {
 #define MUNET_C_GREEN "\033[32m"
 #define MUNET_C_CYAN "\033[36m"
 
-inline bool is_debug_enabled() {
-  static const bool debug = (std::getenv("MUNET_DEBUG") != nullptr);
-  return debug;
+inline bool env_flag_enabled(const char *name) {
+  return std::getenv(name) != nullptr;
 }
 
-inline bool is_profile_enabled() {
-  static const bool profile = (std::getenv("MUNET_PROFILE") != nullptr);
-  return profile;
-}
+inline bool is_debug_enabled() { return env_flag_enabled("MUNET_DEBUG"); }
+
+inline bool is_profile_enabled() { return env_flag_enabled("MUNET_PROFILE"); }
 
 inline int log_level() {
-  static int level = []() {
-    const char *env = std::getenv("MUNET_LOG_LEVEL");
-    if (env)
-      return std::max(0, std::min(3, std::atoi(env)));
-    return is_debug_enabled() ? 3 : 1;
-  }();
-  return level;
+  const char *env = std::getenv("MUNET_LOG_LEVEL");
+  if (env)
+    return std::max(0, std::min(3, std::atoi(env)));
+  return is_debug_enabled() ? 3 : 1;
 }
 
 inline std::ostream &log_stream(const char *label, const char *color,

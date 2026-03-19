@@ -1,5 +1,6 @@
 #include "backend.hpp"
 #include "backend/cpu_backend.hpp"
+#include "core/util/profiler.hpp"
 #include "tensor.hpp"
 #include <gtest/gtest.h>
 #include <cstring>
@@ -11,6 +12,36 @@
 using namespace munet;
 
 namespace {
+
+class ScopedEnvVar {
+public:
+  ScopedEnvVar(const char *name, const char *value) : name_(name) {
+    const char *existing = std::getenv(name_);
+    if (existing) {
+      had_previous_ = true;
+      previous_ = existing;
+    }
+
+    if (value) {
+      setenv(name_, value, 1);
+    } else {
+      unsetenv(name_);
+    }
+  }
+
+  ~ScopedEnvVar() {
+    if (had_previous_) {
+      setenv(name_, previous_.c_str(), 1);
+    } else {
+      unsetenv(name_);
+    }
+  }
+
+private:
+  const char *name_;
+  bool had_previous_ = false;
+  std::string previous_;
+};
 
 class PartialMatmulBackend : public Backend,
                              public BackendAllocationTransferCapability,
@@ -88,6 +119,105 @@ public:
 private:
   int device_index_ = 0;
   int matmul_calls_ = 0;
+};
+
+class TimedAddBackend : public Backend,
+                        public BackendAllocationTransferCapability,
+                        public BackendElementwiseCapability {
+public:
+  TimedAddBackend(int device_index, bool gpu_timing, double kernel_time_us)
+      : device_index_(device_index), gpu_timing_(gpu_timing),
+        kernel_time_us_(kernel_time_us) {}
+
+  const char *name() const override {
+    return gpu_timing_ ? "timed_gpu_add" : "timed_cpu_add";
+  }
+
+  BackendAllocationTransferCapability *allocation_transfer_capability() override {
+    return this;
+  }
+  const BackendAllocationTransferCapability *allocation_transfer_capability() const override {
+    return this;
+  }
+
+  BackendElementwiseCapability *elementwise_capability() override { return this; }
+  const BackendElementwiseCapability *elementwise_capability() const override {
+    return this;
+  }
+
+  void *allocate(size_t bytes) override { return std::malloc(bytes); }
+  void deallocate(void *ptr) override { std::free(ptr); }
+  void memset(void *ptr, int value, size_t bytes) override {
+    std::memset(ptr, value, bytes);
+  }
+  void copy(const void *src, void *dst, size_t bytes, Device, Device) override {
+    std::memcpy(dst, src, bytes);
+  }
+  void synchronize() override {
+    ++sync_calls_;
+    last_kernel_time_us_ = gpu_timing_ ? kernel_time_us_ : 0.0;
+  }
+  void all_reduce(Storage &, size_t) override {}
+  double get_last_kernel_time_us() override { return last_kernel_time_us_; }
+  bool reports_gpu_kernel_time() const override { return gpu_timing_; }
+
+  void add(const Storage &a, const Storage &b, Storage &out,
+           const BroadcastInfo &) override {
+    ++add_calls_;
+    const float *ap = static_cast<const float *>(a.data());
+    const float *bp = static_cast<const float *>(b.data());
+    float *op = static_cast<float *>(out.data());
+    op[0] = ap[0] + bp[0];
+  }
+
+  void sub(const Storage &, const Storage &, Storage &,
+           const BroadcastInfo &) override {
+    throw std::runtime_error("unused");
+  }
+  void mul(const Storage &, const Storage &, Storage &,
+           const BroadcastInfo &) override {
+    throw std::runtime_error("unused");
+  }
+  void div(const Storage &, const Storage &, Storage &,
+           const BroadcastInfo &) override {
+    throw std::runtime_error("unused");
+  }
+  void broadcast_row(const Storage &, Storage &, int, int) override {
+    throw std::runtime_error("unused");
+  }
+  void relu(const Storage &, Storage &, size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void relu_backward(const Storage &, const Storage &, Storage &,
+                     size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void sigmoid(const Storage &, Storage &, size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void sigmoid_backward(const Storage &, const Storage &, Storage &,
+                        size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void softmax(const Storage &, Storage &, int, int) override {
+    throw std::runtime_error("unused");
+  }
+  void softmax_backward(const Storage &, const Storage &, Storage &, int,
+                        int) override {
+    throw std::runtime_error("unused");
+  }
+
+  int device_index() const { return device_index_; }
+  int add_calls() const { return add_calls_; }
+  int sync_calls() const { return sync_calls_; }
+
+private:
+  int device_index_ = 0;
+  bool gpu_timing_ = false;
+  double kernel_time_us_ = 0.0;
+  double last_kernel_time_us_ = 0.0;
+  int add_calls_ = 0;
+  int sync_calls_ = 0;
 };
 
 } // namespace
@@ -221,9 +351,75 @@ TEST(BackendRegistryTest, PartialBackendReportsCapabilitiesAndFallbackMetadata) 
             BackendFallbackPolicy::CPUFallback);
 }
 
+TEST(BackendManagerTest, ProfileWrapperDoesNotReportGpuTimeForCpuBackends) {
+  ScopedEnvVar profile("MUNET_PROFILE", "1");
+  Profiler::get().reset();
+
+  std::shared_ptr<TimedAddBackend> base_backend;
+  BackendManager::register_backend(DeviceType::UNKNOWN, [&](Device device) {
+    base_backend = std::make_shared<TimedAddBackend>(device.index, false, 321.0);
+    return base_backend;
+  });
+
+  const Device test_device{DeviceType::UNKNOWN, 42};
+  Storage a(sizeof(float), test_device, DataType::Float32, {1});
+  Storage b(sizeof(float), test_device, DataType::Float32, {1});
+  Storage out(sizeof(float), test_device, DataType::Float32, {1});
+  *static_cast<float *>(a.data()) = 1.25f;
+  *static_cast<float *>(b.data()) = 2.75f;
+
+  auto backend = BackendManager::get(test_device);
+  auto info =
+      compute_broadcast({1}, default_strides({1}), {1}, default_strides({1}));
+  backend->add(a, b, out, info);
+
+  const auto snapshot = Profiler::get().snapshot();
+  const auto it = snapshot.stats.find("add");
+  ASSERT_NE(it, snapshot.stats.end());
+  EXPECT_GT(it->second.cpu_us, 0.0);
+  EXPECT_DOUBLE_EQ(it->second.gpu_us, 0.0);
+  ASSERT_NE(base_backend, nullptr);
+  EXPECT_EQ(base_backend->sync_calls(), 0);
+  EXPECT_EQ(*static_cast<float *>(out.data()), 4.0f);
+}
+
+TEST(BackendManagerTest, ProfileWrapperSynchronizesGpuBackendsToCaptureGpuTime) {
+  ScopedEnvVar profile("MUNET_PROFILE", "1");
+  Profiler::get().reset();
+
+  std::shared_ptr<TimedAddBackend> base_backend;
+  BackendManager::register_backend(DeviceType::UNKNOWN, [&](Device device) {
+    base_backend = std::make_shared<TimedAddBackend>(device.index, true, 456.0);
+    return base_backend;
+  });
+
+  const Device test_device{DeviceType::UNKNOWN, 43};
+  Storage a(sizeof(float), test_device, DataType::Float32, {1});
+  Storage b(sizeof(float), test_device, DataType::Float32, {1});
+  Storage out(sizeof(float), test_device, DataType::Float32, {1});
+  *static_cast<float *>(a.data()) = 3.0f;
+  *static_cast<float *>(b.data()) = 4.0f;
+
+  auto backend = BackendManager::get(test_device);
+  auto info =
+      compute_broadcast({1}, default_strides({1}), {1}, default_strides({1}));
+  backend->add(a, b, out, info);
+
+  const auto snapshot = Profiler::get().snapshot();
+  const auto it = snapshot.stats.find("add");
+  ASSERT_NE(it, snapshot.stats.end());
+  EXPECT_GT(it->second.cpu_us, 0.0);
+  EXPECT_DOUBLE_EQ(it->second.gpu_us, 456.0);
+  ASSERT_NE(base_backend, nullptr);
+  EXPECT_EQ(base_backend->sync_calls(), 1);
+  EXPECT_EQ(*static_cast<float *>(out.data()), 7.0f);
+}
+
 TEST(BackendManagerTest, PartialBackendSupportsFallbackAndSupportedOpsEndToEnd) {
-  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
-    return std::make_shared<PartialMatmulBackend>(device.index);
+  std::shared_ptr<PartialMatmulBackend> base_backend;
+  BackendManager::register_backend(DeviceType::UNKNOWN, [&](Device device) {
+    base_backend = std::make_shared<PartialMatmulBackend>(device.index);
+    return base_backend;
   });
 
   const Device partial_device{DeviceType::UNKNOWN, 0};
@@ -240,14 +436,12 @@ TEST(BackendManagerTest, PartialBackendSupportsFallbackAndSupportedOpsEndToEnd) 
     EXPECT_FLOAT_EQ(add_ptr[i], 3.0f);
   }
 
-  auto backend =
-      std::dynamic_pointer_cast<PartialMatmulBackend>(BackendManager::get(partial_device));
-  ASSERT_NE(backend, nullptr);
-  EXPECT_EQ(backend->matmul_calls(), 0);
+  ASSERT_NE(base_backend, nullptr);
+  EXPECT_EQ(base_backend->matmul_calls(), 0);
 
   Tensor mm_out = a.matmul(b);
   EXPECT_EQ(mm_out.device(), partial_device);
-  EXPECT_EQ(backend->matmul_calls(), 1);
+  EXPECT_EQ(base_backend->matmul_calls(), 1);
 
   Tensor mm_cpu = mm_out.to(Device{DeviceType::CPU, 0});
   const float *mm_ptr = static_cast<const float *>(mm_cpu.data());

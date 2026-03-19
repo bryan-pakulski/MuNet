@@ -11,12 +11,16 @@
 - Focus first on `%Total` to find top contributors.
 - Check transfer ops (`to(...)`, `copy`) for data movement bottlenecks.
 - Compare CPU vs GPU timings to identify launch/queue overhead.
+- CPU backends now report `AvgGPU=0` consistently; GPU backends force a timing
+  synchronization while profiling so kernel timings are actually populated.
 
 ## Best Practices
 
 - Keep benchmark tensors device-resident during loops.
 - Warm up before measuring.
-- Use profile mode without debug for lower-overhead measurements.
+- Use profile mode without debug for lower-overhead measurements, but note that
+  GPU timing collection still synchronizes per profiled op so the reported
+  timings favor observability over peak-throughput benchmarking.
 
 
 ## Vulkan Host-Side Stall Markers

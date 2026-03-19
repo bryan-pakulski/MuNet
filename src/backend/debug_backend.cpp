@@ -29,17 +29,22 @@ class DebugBackend : public Backend,
   std::mutex alloc_mtx_;
   std::unordered_map<void *, size_t> alloc_sizes_;
 
+  bool should_collect_gpu_time() const { return base_->reports_gpu_kernel_time(); }
+
   void check(const char *name, double cpu_us,
              const Storage *out_storage = nullptr) {
     try {
-      double gpu_us = base_->get_last_kernel_time_us();
+      double gpu_us = 0.0;
+      const bool collect_gpu_time = should_collect_gpu_time();
+
+      if (collect_gpu_time && (is_debug_enabled() || is_profile_enabled())) {
+        base_->synchronize();
+        gpu_us = base_->get_last_kernel_time_us();
+      }
 
       // Full synchronization and NaN checks are expensive and should only run
       // in explicit debug mode, not in profile-only mode.
       if (is_debug_enabled()) {
-        base_->synchronize();
-        gpu_us = base_->get_last_kernel_time_us();
-
         if (out_storage && out_storage->device().type == DeviceType::CPU) {
           float *data = (float *)out_storage->data();
           for (size_t i = 0; i < out_storage->size_bytes() / 4; ++i) {
@@ -112,6 +117,9 @@ public:
 
   double get_last_kernel_time_us() override {
     return base_->get_last_kernel_time_us();
+  }
+  bool reports_gpu_kernel_time() const override {
+    return base_->reports_gpu_kernel_time();
   }
 
   void *allocate(size_t bytes) override {
