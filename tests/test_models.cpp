@@ -33,7 +33,7 @@ public:
                           std::make_shared<nn::Conv2d>(16 + 1, 1, 3, 1, 1));
   }
 
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     auto e1 = std::dynamic_pointer_cast<nn::Conv2d>(enc1)->forward(x).relu();
     auto p1 = pool->forward(e1);
     auto up1 = up->forward(p1);

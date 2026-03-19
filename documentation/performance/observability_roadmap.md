@@ -6,6 +6,9 @@ implementation milestone and reviewed against clear success criteria.
 
 ## 1. Per-module spans in forward passes
 
+> Status: **Implemented for registered `Module::forward(...)` paths via
+> `module.<path>.forward` profiler rows.**
+
 ### Objectives
 
 - Make host-side time attributable to logical modules/layers rather than only

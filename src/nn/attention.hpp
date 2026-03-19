@@ -30,7 +30,7 @@ public:
         std::make_shared<Linear>(embed_dim_, embed_dim_, true, options));
   }
 
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     auto s = x.shape();
     if (s.size() != 3)
       throw std::runtime_error("MultiHeadAttention expects input shape [B,T,E]");

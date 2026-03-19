@@ -41,7 +41,7 @@ private:
 
 class IdentityLayer : public inference::Module {
 public:
-  Tensor forward(Tensor x) override { return x; }
+  Tensor forward_impl(Tensor x) override { return x; }
 };
 
 class IdentityLayerWithState : public inference::Module {
@@ -58,7 +58,7 @@ public:
     register_buffer("running", running);
   }
 
-  Tensor forward(Tensor x) override { return x; }
+  Tensor forward_impl(Tensor x) override { return x; }
 
   Tensor weight;
   Tensor running;

@@ -98,7 +98,7 @@ Tensor make_constant_tensor(Shape shape, Device device, DataType dtype,
 class PyModule : public nn::Module {
 public:
   using nn::Module::Module;
-  Tensor forward(Tensor x) override {
+  Tensor forward_impl(Tensor x) override {
     PYBIND11_OVERRIDE_PURE(Tensor, nn::Module, forward, x);
   }
 };

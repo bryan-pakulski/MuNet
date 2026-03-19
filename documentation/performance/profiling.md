@@ -14,6 +14,7 @@
 - CPU backends now report `AvgGPU=0` consistently; GPU backends force a timing
   synchronization while profiling so kernel timings are actually populated.
 - Use the new stack markers to localize overhead outside kernels:
+  - `module.<path>.forward`: host-side module/layer forward spans.
   - `dispatch.resolve.backend.<Op>`: backend-supported op-dispatch resolution.
   - `dispatch.resolve.cpu_fallback.<Op>`: time spent deciding to fall back to CPU.
   - `dispatch.resolve.metadata_fallback.<Op>`: ops that intentionally bypass backend dispatch.
@@ -29,6 +30,9 @@
 - When a slowdown appears in `inference.*` or `dispatch.resolve.*` rather than a
   backend op row, the bottleneck is likely in orchestration, validation,
   fallback, or host-side data movement rather than kernel execution itself.
+- When `module.*` dominates, the hotspot is likely at the model/layer
+  composition level; compare parent module spans against child module spans to
+  find the slowest block.
 
 
 ## Vulkan Host-Side Stall Markers
