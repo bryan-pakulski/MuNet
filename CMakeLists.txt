@@ -153,9 +153,26 @@ target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_m
 
 add_executable(munet_inference_baseline tools/inference_baseline.cpp)
 target_link_libraries(munet_inference_baseline PRIVATE munet_inference)
+add_test(
+    NAME munet_inference_baseline_cpu_smoke
+    COMMAND munet_inference_baseline
+            --device cpu
+            --dtype float32
+            --batch 4
+            --input-dim 16
+            --hidden-dim 32
+            --output-dim 8
+            --warmup-runs 0
+            --single-run-iters 1
+            --batch-run-inputs 2
+            --batch-run-iters 1
+            --prepared-input-cache-entries 0
+            --prepared-input-cache-max-bytes 0
+)
 
 add_executable(munet_inference_boundary_check tools/inference_boundary_check.cpp)
 target_link_libraries(munet_inference_boundary_check PRIVATE munet_inference)
+add_test(NAME munet_inference_boundary_check COMMAND munet_inference_boundary_check)
 
 include(GoogleTest)
 gtest_discover_tests(munet_tests)

@@ -956,7 +956,7 @@ class TestBindings(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "e2e_model.npz")
             munet.save(model, path)
-            restored = munet.load(path)
+            restored = munet.load_for_inference(path)
 
             eng = munet.inference.Engine()
             eng.load(restored)

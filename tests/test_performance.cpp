@@ -50,7 +50,7 @@ double benchmark_ms(const std::function<void()> &fn, int warmup, int iters) {
          static_cast<double>(iters);
 }
 
-void require_gpu_backends() {
+bool require_gpu_backends(std::string *reason = nullptr) {
 #ifdef MUNET_USE_CUDA
   const bool has_cuda = has_device(DeviceType::CUDA);
 #else
@@ -64,12 +64,19 @@ void require_gpu_backends() {
 #endif
 
   if (!perf_tests_enabled()) {
-    GTEST_SKIP() << "Set MUNET_RUN_PERF_TESTS=1 to run performance tests.";
+    if (reason) {
+      *reason = "Set MUNET_RUN_PERF_TESTS=1 to run performance tests.";
+    }
+    return false;
   }
   if (!has_cuda || !has_vulkan) {
-    GTEST_SKIP() << "Performance comparison requires both CUDA and Vulkan "
-                    "devices in this environment.";
+    if (reason) {
+      *reason =
+          "Performance comparison requires both CUDA and Vulkan devices in this environment.";
+    }
+    return false;
   }
+  return true;
 }
 
 
@@ -106,7 +113,10 @@ void run_perf_ratio_test(const std::string &name,
 } // namespace
 
 TEST(PerformanceTest, ElementwiseAddCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 1 << 20;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
@@ -130,7 +140,10 @@ TEST(PerformanceTest, ElementwiseAddCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, ElementwiseMulCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 1 << 20;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
@@ -154,7 +167,10 @@ TEST(PerformanceTest, ElementwiseMulCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, MatmulCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int M = 256;
   constexpr int K = 256;
@@ -182,7 +198,10 @@ TEST(PerformanceTest, MatmulCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, ReluCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 1 << 22;
   Tensor x_cpu({N}, {DeviceType::CPU, 0});
@@ -202,7 +221,10 @@ TEST(PerformanceTest, ReluCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, SoftmaxCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 512;
   constexpr int C = 512;
@@ -223,7 +245,10 @@ TEST(PerformanceTest, SoftmaxCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, BroadcastAddCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int R = 2048;
   constexpr int C = 1024;
@@ -248,7 +273,10 @@ TEST(PerformanceTest, BroadcastAddCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, SigmoidCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 1 << 22;
   Tensor x_cpu({N}, {DeviceType::CPU, 0});
@@ -268,7 +296,10 @@ TEST(PerformanceTest, SigmoidCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, ReduceSumCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 1 << 22;
   Tensor x_cpu({N}, {DeviceType::CPU, 0});
@@ -287,7 +318,10 @@ TEST(PerformanceTest, ReduceSumCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, MSELossCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 1 << 20;
   Tensor pred_cpu({N}, {DeviceType::CPU, 0});
@@ -312,7 +346,10 @@ TEST(PerformanceTest, MSELossCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, CrossEntropyCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 1024;
   constexpr int C = 128;
@@ -339,7 +376,10 @@ TEST(PerformanceTest, CrossEntropyCudaVsVulkan) {
 
 
 TEST(PerformanceTest, CrossEntropySmallClassCountCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 4096;
   constexpr int C = 16;
@@ -364,7 +404,10 @@ TEST(PerformanceTest, CrossEntropySmallClassCountCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, CrossEntropyLargeClassCountCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 256;
   constexpr int C = 1024;
@@ -389,7 +432,10 @@ TEST(PerformanceTest, CrossEntropyLargeClassCountCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, CrossEntropyBackwardCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 1024;
   constexpr int C = 128;
@@ -422,7 +468,10 @@ TEST(PerformanceTest, CrossEntropyBackwardCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, EndToEndTransferAndCrossEntropyCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 1024;
   constexpr int C = 128;
@@ -445,7 +494,10 @@ TEST(PerformanceTest, EndToEndTransferAndCrossEntropyCudaVsVulkan) {
 
 
 TEST(PerformanceTest, ElementwiseSubCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 1 << 20;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
@@ -469,7 +521,10 @@ TEST(PerformanceTest, ElementwiseSubCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, LogSoftmaxCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 512;
   constexpr int C = 512;
@@ -490,7 +545,10 @@ TEST(PerformanceTest, LogSoftmaxCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, MatmulSmallCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int M = 64;
   constexpr int K = 64;
@@ -518,7 +576,10 @@ TEST(PerformanceTest, MatmulSmallCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, MatmulLargeCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int M = 1024;
   constexpr int K = 1024;
@@ -546,7 +607,10 @@ TEST(PerformanceTest, MatmulLargeCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, SoftmaxLargeClassCountCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 256;
   constexpr int C = 2048;
@@ -568,7 +632,10 @@ TEST(PerformanceTest, SoftmaxLargeClassCountCudaVsVulkan) {
 
 
 TEST(PerformanceTest, TinyAddDispatchOverheadCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 256;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
@@ -592,7 +659,10 @@ TEST(PerformanceTest, TinyAddDispatchOverheadCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, ForwardGraphBuildChainCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 4096;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
@@ -621,7 +691,10 @@ TEST(PerformanceTest, ForwardGraphBuildChainCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, BackwardStepOverheadCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 4096;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
@@ -653,7 +726,10 @@ TEST(PerformanceTest, BackwardStepOverheadCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, CopyOnlyCpuToGpuCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 1 << 22;
   Tensor x_cpu({N}, {DeviceType::CPU, 0});
@@ -669,7 +745,10 @@ TEST(PerformanceTest, CopyOnlyCpuToGpuCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, CopyOnlyGpuToCpuCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 1 << 22;
   Tensor x_cpu({N}, {DeviceType::CPU, 0});
@@ -689,7 +768,10 @@ TEST(PerformanceTest, CopyOnlyGpuToCpuCudaVsVulkan) {
 
 
 TEST(PerformanceTest, Conv2DForwardCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 16, IC = 32, OC = 64, H = 32, W = 32, K = 3;
   Tensor in_cpu({B, IC, H, W}, {DeviceType::CPU, 0});
@@ -714,7 +796,10 @@ TEST(PerformanceTest, Conv2DForwardCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, MaxPool2DCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 32, C = 64, H = 56, W = 56;
   Tensor in_cpu({B, C, H, W}, {DeviceType::CPU, 0});
@@ -734,7 +819,10 @@ TEST(PerformanceTest, MaxPool2DCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, Upsample2DCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 16, C = 64, H = 64, W = 64;
   Tensor in_cpu({B, C, H, W}, {DeviceType::CPU, 0});
@@ -754,7 +842,10 @@ TEST(PerformanceTest, Upsample2DCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, ConcatCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int B = 64, C1 = 32, C2 = 32, H = 28, W = 28;
   Tensor a_cpu({B, C1, H, W}, {DeviceType::CPU, 0});
@@ -779,7 +870,10 @@ TEST(PerformanceTest, ConcatCudaVsVulkan) {
 }
 
 TEST(PerformanceTest, OptimizerStepCudaVsVulkan) {
-  require_gpu_backends();
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
 
   constexpr int N = 1 << 20;
   Tensor p_cpu({N}, {DeviceType::CPU, 0});

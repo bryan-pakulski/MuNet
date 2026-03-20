@@ -213,7 +213,7 @@ Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend P
 
 ### Phase 5 - Validation, benchmarking, and rollout
 
-**Status:** [ ] not started
+**Status:** [x] completed
 
 #### Objectives
 
@@ -222,27 +222,27 @@ Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend P
 
 #### Action Points
 
-- [ ] Add focused tests for:
+- [x] Add focused tests for:
   - inference-only build/link coverage
   - autograd isolation guarantees
   - shape/dtype/device contract enforcement
   - backend fallback behavior on minimal builds
   - serialization/load/run deploy workflows
-- [ ] Add benchmark suites for:
+- [x] Add benchmark suites for:
   - cold-start overhead
   - warm run latency
   - memory reuse effectiveness
   - CPU-only edge scenarios
   - GPU/accelerator server scenarios
-- [ ] Track before/after metrics and publish them in docs.
-- [ ] Add migration notes if any public inference APIs change while the runtime is slimmed down.
-- [ ] Mark completed phases in this document as work lands.
+- [x] Track before/after metrics and publish them in docs.
+- [x] Add migration notes if any public inference APIs change while the runtime is slimmed down.
+- [x] Mark completed phases in this document as work lands.
 
 #### Exit Criteria
 
-- [ ] Automated tests cover the new separation guarantees.
-- [ ] Benchmarks show clear runtime overhead improvements or document tradeoffs explicitly.
-- [ ] The project can continue future inference work on top of a stable, intentionally minimal runtime boundary.
+- [x] Automated tests cover the new separation guarantees.
+- [x] Benchmarks show clear runtime overhead improvements or document tradeoffs explicitly.
+- [x] The project can continue future inference work on top of a stable, intentionally minimal runtime boundary.
 
 ## Cross-cutting rules for all phases
 
