@@ -7,11 +7,13 @@ import munet
 
 
 def build_model():
-    model = munet.nn.Sequential([
-        munet.nn.Linear(16, 32),
-        munet.nn.GELU(),
-        munet.nn.Linear(32, 8),
-    ])
+    model = munet.nn.Sequential(
+        [
+            munet.nn.Linear(16, 32),
+            munet.nn.GELU(),
+            munet.nn.Linear(32, 8),
+        ]
+    )
     model.eval()
     return model
 

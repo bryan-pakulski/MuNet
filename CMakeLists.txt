@@ -1,7 +1,5 @@
-### File: CMakeLists.txt
 cmake_minimum_required(VERSION 3.18)
 project(MuNet LANGUAGES CXX)
-
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -11,16 +9,22 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include(FetchContent)
 
-# optimization flags
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -flto=auto")
-endif()
+option(MUNET_ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(MUNET_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 
 # --- Dependencies ---
-FetchContent_Declare(pybind11 GIT_REPOSITORY https://github.com/pybind/pybind11.git GIT_TAG v2.11.1)
+FetchContent_Declare(
+    pybind11
+    GIT_REPOSITORY https://github.com/pybind/pybind11.git
+    GIT_TAG v2.11.1
+)
 FetchContent_MakeAvailable(pybind11)
 
-FetchContent_Declare(googletest GIT_REPOSITORY https://github.com/google/googletest.git GIT_TAG v1.14.0)
+FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG v1.14.0
+)
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
@@ -44,15 +48,16 @@ set(MUNET_SOURCES
     src/inference_serialization.cpp
 )
 
-set_source_files_properties(src/inference_serialization.cpp PROPERTIES COMPILE_DEFINITIONS MUNET_ENABLE_TRAINING=1)
+set_source_files_properties(
+    src/inference_serialization.cpp
+    PROPERTIES COMPILE_DEFINITIONS MUNET_ENABLE_TRAINING=1
+)
 
 if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
     message(STATUS "CUDA Detected! Enabling GPU Acceleration.")
     add_compile_definitions(MUNET_USE_CUDA)
     find_package(CUDAToolkit REQUIRED)
-
-    # Add our new CUDA backend file
     list(APPEND MUNET_SOURCES src/backend/cuda_backend.cu)
 else()
     message(WARNING "CUDA not found. Building CPU-only.")
@@ -68,15 +73,37 @@ else()
     message(WARNING "Vulkan not found.")
 endif()
 
+# --- Shared compile/link options ---
+add_library(munet_build_flags INTERFACE)
+
+target_compile_features(munet_build_flags INTERFACE cxx_std_17)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    target_compile_options(munet_build_flags INTERFACE -O3 -flto=auto)
+    target_link_options(munet_build_flags INTERFACE -flto=auto)
+endif()
+
+if(MUNET_ENABLE_ASAN)
+    target_compile_options(munet_build_flags INTERFACE -fsanitize=address -fno-omit-frame-pointer)
+    target_link_options(munet_build_flags INTERFACE -fsanitize=address)
+endif()
+
+if(MUNET_ENABLE_UBSAN)
+    target_compile_options(munet_build_flags INTERFACE -fsanitize=undefined -fno-omit-frame-pointer)
+    target_link_options(munet_build_flags INTERFACE -fsanitize=undefined)
+endif()
+
 # --- Backend Modules ---
 add_library(munet_backend_debug OBJECT src/backend/debug_backend.cpp)
 target_include_directories(munet_backend_debug PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(munet_backend_debug PUBLIC munet_build_flags)
 
 # --- Library Layout ---
-# 1) Core runtime (tensor/backends/autograd graph primitives)
+# 1) Core runtime
 add_library(munet_core ${MUNET_SOURCES})
 target_include_directories(munet_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_sources(munet_core PRIVATE $<TARGET_OBJECTS:munet_backend_debug>)
+target_link_libraries(munet_core PUBLIC munet_build_flags)
 
 if(Vulkan_FOUND)
     target_link_libraries(munet_core PUBLIC Vulkan::Vulkan)
@@ -86,21 +113,23 @@ if(CMAKE_CUDA_COMPILER)
     target_link_libraries(munet_core PUBLIC CUDA::cudart CUDA::cublas)
 endif()
 
-# 2) Training API (nn/optim) layered on top of core
+# 2) Training API
 add_library(munet_training INTERFACE)
 target_include_directories(munet_training INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(munet_training INTERFACE munet_core)
+target_link_libraries(munet_training INTERFACE munet_core munet_build_flags)
 target_compile_definitions(munet_training INTERFACE MUNET_ENABLE_TRAINING=1)
 
-# 3) Inference API (edge/deploy-focused surface) layered on top of core
+# 3) Inference API
 add_library(munet_inference INTERFACE)
 target_include_directories(munet_inference INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(munet_inference INTERFACE munet_core)
+target_link_libraries(munet_inference INTERFACE munet_core munet_build_flags)
 target_compile_definitions(munet_inference INTERFACE MUNET_ENABLE_INFERENCE=1 MUNET_EDGE_DEPLOY=1)
 
 set(MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR
-    ${CMAKE_CURRENT_BINARY_DIR}/inference_training_header_probe)
+    ${CMAKE_CURRENT_BINARY_DIR}/inference_training_header_probe
+)
 file(MAKE_DIRECTORY ${MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR})
+
 file(WRITE ${MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR}/CMakeLists.txt [=[
 cmake_minimum_required(VERSION 3.18)
 project(MuNetInferenceTrainingHeaderProbe LANGUAGES CXX)
@@ -108,26 +137,33 @@ add_executable(probe probe.cpp)
 target_include_directories(probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(probe PRIVATE MUNET_ENABLE_INFERENCE=1 MUNET_EDGE_DEPLOY=1)
 ]=])
+
 file(WRITE ${MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR}/probe.cpp [=[
 #include "nn.hpp"
 #include "optim.hpp"
 int main() { return 0; }
 ]=])
-try_compile(MUNET_INFERENCE_REJECTS_TRAINING_HEADERS
+
+try_compile(
+    MUNET_INFERENCE_REJECTS_TRAINING_HEADERS
     ${MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR}/build
     ${MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR}
     probe
-    OUTPUT_VARIABLE MUNET_INFERENCE_TRAINING_HEADER_PROBE_OUTPUT)
+    OUTPUT_VARIABLE MUNET_INFERENCE_TRAINING_HEADER_PROBE_OUTPUT
+)
+
 if(MUNET_INFERENCE_REJECTS_TRAINING_HEADERS)
     message(FATAL_ERROR
-        "munet_inference boundary regression: training headers compiled under inference-only definitions.\n${MUNET_INFERENCE_TRAINING_HEADER_PROBE_OUTPUT}")
+        "munet_inference boundary regression: training headers compiled under inference-only definitions.\n${MUNET_INFERENCE_TRAINING_HEADER_PROBE_OUTPUT}"
+    )
 endif()
 
 # --- Python Bindings ---
 pybind11_add_module(munet src/bindings.cpp)
-target_link_libraries(munet PRIVATE munet_training)
+target_link_libraries(munet PRIVATE munet_training munet_build_flags)
 target_compile_definitions(munet PRIVATE MUNET_PY_HELPER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/python_src")
 
+# Copy helper python file beside the built module in each config build dir
 add_custom_command(TARGET munet POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:munet>/python_src
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -135,27 +171,45 @@ add_custom_command(TARGET munet POST_BUILD
             $<TARGET_FILE_DIR:munet>/python_src/onnx_integration.py
 )
 
-# --- Unit Tests ---
-enable_testing()
-add_executable(munet_tests
-				tests/unified_tests.cpp
-				tests/test_tensor.cpp
-				tests/test_autograd.cpp
-				tests/test_spatial.cpp
-				tests/test_loss.cpp
-				tests/test_models.cpp
-				tests/test_ops.cpp
-        tests/test_optim.cpp
-        tests/test_nn.cpp
-        tests/test_inference.cpp
-        tests/test_backend_manager.cpp
-        tests/test_performance.cpp
+# Copy the produced extension module into top-level build/
+# This gives you build/munet*.so regardless of which split build dir built it.
+add_custom_command(TARGET munet POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/build
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:munet>
+            ${CMAKE_SOURCE_DIR}/build/
 )
 
-target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_main)
+# Optional: also copy helper python file to top-level build/python_src
+add_custom_command(TARGET munet POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/build/python_src
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
+            ${CMAKE_SOURCE_DIR}/build/python_src/onnx_integration.py
+)
+
+# --- Unit Tests ---
+enable_testing()
+
+add_executable(munet_tests
+    tests/unified_tests.cpp
+    tests/test_tensor.cpp
+    tests/test_autograd.cpp
+    tests/test_spatial.cpp
+    tests/test_loss.cpp
+    tests/test_models.cpp
+    tests/test_ops.cpp
+    tests/test_optim.cpp
+    tests/test_nn.cpp
+    tests/test_inference.cpp
+    tests/test_backend_manager.cpp
+    tests/test_performance.cpp
+)
+target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_main munet_build_flags)
 
 add_executable(munet_inference_baseline tools/inference_baseline.cpp)
-target_link_libraries(munet_inference_baseline PRIVATE munet_inference)
+target_link_libraries(munet_inference_baseline PRIVATE munet_inference munet_build_flags)
+
 add_test(
     NAME munet_inference_baseline_cpu_smoke
     COMMAND munet_inference_baseline
@@ -174,8 +228,14 @@ add_test(
 )
 
 add_executable(munet_inference_boundary_check tools/inference_boundary_check.cpp)
-target_link_libraries(munet_inference_boundary_check PRIVATE munet_inference)
+target_link_libraries(munet_inference_boundary_check PRIVATE munet_inference munet_build_flags)
 add_test(NAME munet_inference_boundary_check COMMAND munet_inference_boundary_check)
 
 include(GoogleTest)
-gtest_discover_tests(munet_tests)
+gtest_add_tests(
+    TARGET munet_tests
+    TEST_PREFIX munet_
+    TEST_LIST munet_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    TEST_SUFFIX .cpp
+)

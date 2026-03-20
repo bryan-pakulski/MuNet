@@ -23,12 +23,14 @@ struct MaskedFillBackward : public Node {
     Tensor gi_cpu(input_shape, cpu, grad_out.dtype());
 
     for (size_t i = 0; i < gi_cpu.size(); ++i) {
-      const ScalarValue mask_value = read_scalar_from_buffer(
-          static_cast<const char *>(mask_cpu.data()) + i * dtype_size(mask.dtype()),
-          mask.dtype());
-      const ScalarValue grad_value = read_scalar_from_buffer(
-          static_cast<const char *>(go_cpu.data()) + i * dtype_size(grad_out.dtype()),
-          grad_out.dtype());
+      const ScalarValue mask_value =
+          read_scalar_from_buffer(static_cast<const char *>(mask_cpu.data()) +
+                                      i * dtype_size(mask.dtype()),
+                                  mask.dtype());
+      const ScalarValue grad_value =
+          read_scalar_from_buffer(static_cast<const char *>(go_cpu.data()) +
+                                      i * dtype_size(grad_out.dtype()),
+                                  grad_out.dtype());
       write_scalar_to_buffer(
           static_cast<char *>(gi_cpu.data()) + i * dtype_size(gi_cpu.dtype()),
           gi_cpu.dtype(), mask_value.is_nonzero() ? 0.0 : grad_value.value);
@@ -43,7 +45,8 @@ struct MaskedFillBackward : public Node {
 
 struct SubBackward : public Node {
   Shape shape_a, shape_b;
-  SubBackward(Shape a, Shape b) : shape_a(std::move(a)), shape_b(std::move(b)) {}
+  SubBackward(Shape a, Shape b)
+      : shape_a(std::move(a)), shape_b(std::move(b)) {}
   std::string name() const override { return "SubBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
     Tensor grad_out = grads[0];

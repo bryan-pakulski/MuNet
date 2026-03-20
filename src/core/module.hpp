@@ -223,8 +223,7 @@ protected:
 
   std::string module_profile_label() const {
     const std::string path = module_path();
-    return path.empty() ? "module.root.forward"
-                        : "module." + path + ".forward";
+    return path.empty() ? "module.root.forward" : "module." + path + ".forward";
   }
 
   std::string module_path() const {

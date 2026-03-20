@@ -64,8 +64,9 @@ public:
                              keep(rng) ? (1.0 / keep_prob) : 0.0);
     }
 
-    Tensor mask = (x.device().type == DeviceType::CPU) ? mask_cpu
-                                                        : mask_cpu.to(x.device());
+    Tensor mask = (x.device().type == DeviceType::CPU)
+                      ? mask_cpu
+                      : mask_cpu.to(x.device());
     return x * mask;
   }
 

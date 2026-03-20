@@ -52,7 +52,8 @@ public:
 
   Tensor forward_impl(Tensor x) override {
     if (x.shape().empty() || x.shape().back() != normalized_shape_)
-      throw std::runtime_error("RMSNorm expects last dim to match normalized_shape");
+      throw std::runtime_error(
+          "RMSNorm expects last dim to match normalized_shape");
     Tensor variance = (x * x).mean(-1, true);
     Tensor eps({1}, x.device(), x.dtype());
     eps.fill_(eps_);
@@ -85,14 +86,16 @@ public:
     Tensor rm({num_features}, buffer_options(options, stats_dtype));
     rm.fill_(0.0f);
     running_mean = rm;
-    register_buffer("running_mean", running_mean,
-                    accumulation_buffer_registration(AccumulationOp::Normalization));
+    register_buffer(
+        "running_mean", running_mean,
+        accumulation_buffer_registration(AccumulationOp::Normalization));
 
     Tensor rv({num_features}, buffer_options(options, stats_dtype));
     rv.fill_(1.0f);
     running_var = rv;
-    register_buffer("running_var", running_var,
-                    accumulation_buffer_registration(AccumulationOp::Normalization));
+    register_buffer(
+        "running_var", running_var,
+        accumulation_buffer_registration(AccumulationOp::Normalization));
   }
 
   Tensor forward_impl(Tensor x) override {

@@ -14,10 +14,25 @@ namespace munet {
 
 enum class DeviceType { CPU, CUDA, VULKAN, UNKNOWN };
 enum class DataType { Float32, Float16, Int32 };
-enum class AccumulationOp { Elementwise, Reduction, Matmul, Convolution, Normalization };
+enum class AccumulationOp {
+  Elementwise,
+  Reduction,
+  Matmul,
+  Convolution,
+  Normalization
+};
 
 using Shape = std::vector<int>;
 using Strides = std::vector<int>;
+
+struct GPULayoutInfo {
+  int ndim;
+  int shape[6];
+  int strides[6];
+  int out_strides[6];
+  uint32_t storage_offset;
+  uint32_t total;
+};
 
 inline std::string dtype_name(DataType dt) {
   switch (dt) {
@@ -132,8 +147,8 @@ struct TensorOptions {
   explicit TensorOptions(Device new_device,
                          DataType new_dtype = DataType::Float32,
                          bool new_requires_grad = false)
-      : device(new_device), dtype(new_dtype),
-        requires_grad(new_requires_grad) {}
+      : device(new_device), dtype(new_dtype), requires_grad(new_requires_grad) {
+  }
 
   TensorOptions &with_device(Device new_device) {
     device = new_device;
@@ -252,8 +267,8 @@ inline float half_bits_to_float(uint16_t value) {
         mant <<= 1;
       } while ((mant & 0x0400u) == 0);
       mant &= 0x03ffu;
-      bits = sign | (static_cast<uint32_t>(127 - 15 - shift) << 23) |
-             (mant << 13);
+      bits =
+          sign | (static_cast<uint32_t>(127 - 15 - shift) << 23) | (mant << 13);
     }
   } else if (exp == 0x1fu) {
     bits = sign | 0x7f800000u | (mantissa << 13);

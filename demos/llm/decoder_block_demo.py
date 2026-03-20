@@ -20,7 +20,9 @@ class DecoderBlock(munet.nn.Module):
         h = self.ln1(x)
         x = x + self.attn(h)
         h2 = self.ln2(x)
-        ff = self.fc2(self.gelu(self.fc1(h2.reshape([h2.shape[0] * h2.shape[1], h2.shape[2]]))))
+        ff = self.fc2(
+            self.gelu(self.fc1(h2.reshape([h2.shape[0] * h2.shape[1], h2.shape[2]])))
+        )
         ff = ff.reshape([h2.shape[0], h2.shape[1], h2.shape[2]])
         return x + ff
 
@@ -72,8 +74,8 @@ def main():
     ctx = 8
     xs, ys = [], []
     for i in range(len(ids) - ctx):
-        xs.append(ids[i:i+ctx])
-        ys.append(ids[i+1:i+ctx+1])
+        xs.append(ids[i : i + ctx])
+        ys.append(ids[i + 1 : i + ctx + 1])
     X = np.array(xs, dtype=np.int32)
     Y = np.array(ys, dtype=np.int32)
 

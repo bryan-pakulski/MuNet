@@ -175,7 +175,8 @@ TEST_P(OpsTest, MeanLastDimForwardAndBackward) {
   xp[3] = 4.0f;
   xp[4] = 5.0f;
   xp[5] = 6.0f;
-  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(), dev());
+  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(),
+                          dev());
 
   Tensor y = x.mean(-1, false);
   Tensor y_cpu = y.to({DeviceType::CPU, 0});
@@ -198,7 +199,8 @@ TEST_P(OpsTest, NarrowViewSharesStorageOffset) {
   float *xp = static_cast<float *>(x_cpu.data());
   for (int i = 0; i < 8; ++i)
     xp[i] = static_cast<float>(i);
-  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(), dev());
+  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(),
+                          dev());
 
   Tensor slice = x.narrow(1, 1, 2);
   EXPECT_EQ(slice.shape(), Shape({2, 2}));

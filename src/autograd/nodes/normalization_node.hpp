@@ -67,10 +67,10 @@ struct LayerNormBackward : public Node {
   LayerNormBackward(Tensor x_, Tensor w_, Tensor b_, Tensor m_, Tensor is_,
                     int r, int c)
       : x_shape(x_.shape()), mean_owner(m_), inv_std_owner(is_),
-        x_device(x_.device()), x_dtype(x_.dtype()),
-        weight_shape(w_.shape()), weight_device(w_.device()),
-        weight_dtype(w_.dtype()), bias_shape(b_.shape()),
-        bias_device(b_.device()), bias_dtype(b_.dtype()), rows(r), cols(c) {
+        x_device(x_.device()), x_dtype(x_.dtype()), weight_shape(w_.shape()),
+        weight_device(w_.device()), weight_dtype(w_.dtype()),
+        bias_shape(b_.shape()), bias_device(b_.device()),
+        bias_dtype(b_.dtype()), rows(r), cols(c) {
     save_tensor(x_, "layer_norm_input");
     save_tensor(w_, "layer_norm_weight");
     save_tensor(b_, "layer_norm_bias");
@@ -168,9 +168,8 @@ struct LayerNormBackward : public Node {
     Tensor dw_dev = (weight_device.type == DeviceType::CPU)
                         ? dw_cpu
                         : dw_cpu.to(weight_device);
-    Tensor db_dev = (bias_device.type == DeviceType::CPU)
-                        ? db_cpu
-                        : db_cpu.to(bias_device);
+    Tensor db_dev =
+        (bias_device.type == DeviceType::CPU) ? db_cpu : db_cpu.to(bias_device);
     return {dx_dev, dw_dev, db_dev};
   }
 };

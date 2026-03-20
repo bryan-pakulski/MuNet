@@ -1,6 +1,6 @@
 #include "backend/debug_backend.hpp"
-#include "storage.hpp"
 #include "core/util.hpp"
+#include "storage.hpp"
 
 #include <cmath>
 #include <exception>
@@ -28,8 +28,8 @@ void record_backend_profile_event(const char *domain, const char *event,
   if (!is_profile_enabled()) {
     return;
   }
-  Profiler::get().record(profiler_name(domain, event, backend_name), cpu_us, 0.0,
-                         bytes, detail);
+  Profiler::get().record(profiler_name(domain, event, backend_name), cpu_us,
+                         0.0, bytes, detail);
 }
 
 // Intercepts all backend calls and enforces a synchronized sanity check
@@ -59,11 +59,13 @@ class DebugBackend : public Backend,
 
   void record_allocator_event(const char *event, double cpu_us, size_t bytes,
                               const std::string &detail = "") const {
-    record_backend_profile_event("allocator", event, base_->name(), cpu_us, bytes,
-                                 detail);
+    record_backend_profile_event("allocator", event, base_->name(), cpu_us,
+                                 bytes, detail);
   }
 
-  bool should_collect_gpu_time() const { return base_->reports_gpu_kernel_time(); }
+  bool should_collect_gpu_time() const {
+    return base_->reports_gpu_kernel_time();
+  }
 
   void check(const std::string &name, double cpu_us,
              const Storage *out_storage = nullptr) {
@@ -110,13 +112,17 @@ public:
 
   const char *name() const override { return base_->name(); }
 
-  BackendAllocationTransferCapability *allocation_transfer_capability() override {
+  BackendAllocationTransferCapability *
+  allocation_transfer_capability() override {
     return this;
   }
-  const BackendAllocationTransferCapability *allocation_transfer_capability() const override {
+  const BackendAllocationTransferCapability *
+  allocation_transfer_capability() const override {
     return this;
   }
-  BackendElementwiseCapability *elementwise_capability() override { return this; }
+  BackendElementwiseCapability *elementwise_capability() override {
+    return this;
+  }
   const BackendElementwiseCapability *elementwise_capability() const override {
     return this;
   }
@@ -127,15 +133,20 @@ public:
   BackendBlasCapability *blas_capability() override { return this; }
   const BackendBlasCapability *blas_capability() const override { return this; }
   BackendShapeCapability *shape_capability() override { return this; }
-  const BackendShapeCapability *shape_capability() const override { return this; }
+  const BackendShapeCapability *shape_capability() const override {
+    return this;
+  }
   BackendLossCapability *loss_capability() override { return this; }
   const BackendLossCapability *loss_capability() const override { return this; }
   BackendSpatialCapability *spatial_capability() override { return this; }
-  const BackendSpatialCapability *spatial_capability() const override { return this; }
+  const BackendSpatialCapability *spatial_capability() const override {
+    return this;
+  }
   BackendNormalizationCapability *normalization_capability() override {
     return this;
   }
-  const BackendNormalizationCapability *normalization_capability() const override {
+  const BackendNormalizationCapability *
+  normalization_capability() const override {
     return this;
   }
   BackendOptimizerCapability *optimizer_capability() override { return this; }
@@ -170,14 +181,16 @@ public:
       alloc_sizes_[ptr] = bytes;
       if (reuse_hit) {
         auto pooled_it = pooled_blocks_by_size_.find(bytes);
-        if (pooled_it != pooled_blocks_by_size_.end() && pooled_it->second > 0) {
+        if (pooled_it != pooled_blocks_by_size_.end() &&
+            pooled_it->second > 0) {
           --pooled_it->second;
         }
       } else {
         size_t &peak_blocks = peak_blocks_by_size_[bytes];
         size_t live_blocks = 0;
         for (const auto &[allocated_ptr, allocated_bytes] : alloc_sizes_) {
-          if (allocated_bytes == bytes && reusable_ptrs_.count(allocated_ptr) == 0) {
+          if (allocated_bytes == bytes &&
+              reusable_ptrs_.count(allocated_ptr) == 0) {
             ++live_blocks;
           }
         }
@@ -189,7 +202,8 @@ public:
     }
     Profiler::get().record_alloc(bytes);
     const double cpu_us = timer.elapsed_us();
-    record_allocator_event(reuse_hit ? "reuse_hit" : "reuse_miss", cpu_us, bytes);
+    record_allocator_event(reuse_hit ? "reuse_hit" : "reuse_miss", cpu_us,
+                           bytes);
     if (pool_growth) {
       record_allocator_event("pool_growth", cpu_us, bytes);
     }
@@ -560,17 +574,27 @@ public:
   }
   void mean_last_dim(const Storage &in, Storage &out, int outer_size,
                      int dim_size) override {
-    MUNET_DEBUG << "mean_last_dim | outer=" << outer_size
-                << " dim=" << dim_size << std::endl;
+    MUNET_DEBUG << "mean_last_dim | outer=" << outer_size << " dim=" << dim_size
+                << std::endl;
     Timer t;
     base_->mean_last_dim(in, out, outer_size, dim_size);
     check("mean_last_dim", t.elapsed_us(), &out);
+  }
+
+  void to_contiguous(const Storage &src, Storage &dst, const Shape &shape,
+                     const Strides &strides, size_t offset) override {
+    MUNET_DEBUG << "to_contiguous | " << to_string(shape)
+                << " offset=" << offset << std::endl;
+    Timer t;
+    base_->to_contiguous(src, dst, shape, strides, offset);
+    check("to_contiguous", t.elapsed_us(), &dst);
   }
 };
 
 } // anonymous namespace
 
-std::shared_ptr<Backend> wrap_with_debug_backend(std::shared_ptr<Backend> base) {
+std::shared_ptr<Backend>
+wrap_with_debug_backend(std::shared_ptr<Backend> base) {
   return std::make_shared<DebugBackend>(std::move(base));
 }
 

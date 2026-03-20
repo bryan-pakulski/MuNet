@@ -1,5 +1,5 @@
-#include "nn.hpp"
 #include "core/util/profiler.hpp"
+#include "nn.hpp"
 #include "test_utils.hpp"
 #include <cmath>
 #include <cstdlib>
@@ -198,7 +198,6 @@ TEST(NNTest, BatchNormTrainEval) {
   EXPECT_FLOAT_EQ(((float *)bn->running_mean.data())[0], prev_rm);
 }
 
-
 TEST(NNTest, TanhForwardRange) {
   Device cpu{DeviceType::CPU, 0};
   nn::Tanh tanh;
@@ -216,7 +215,6 @@ TEST(NNTest, TanhForwardRange) {
   }
 }
 
-
 TEST(NNTest, LeakyReLUForwardBehavior) {
   Device cpu{DeviceType::CPU, 0};
   nn::LeakyReLU lrelu(0.1f);
@@ -232,14 +230,16 @@ TEST(NNTest, LeakyReLUForwardBehavior) {
   EXPECT_NEAR(d[1], 3.0f, 1e-5f);
 }
 
-
 TEST(NNTest, GlobalAvgPool2dForward) {
   Device cpu{DeviceType::CPU, 0};
   nn::GlobalAvgPool2d gap;
 
   Tensor x({1, 1, 2, 2}, cpu);
   float *d = static_cast<float *>(x.data());
-  d[0] = 1.0f; d[1] = 2.0f; d[2] = 3.0f; d[3] = 4.0f;
+  d[0] = 1.0f;
+  d[1] = 2.0f;
+  d[2] = 3.0f;
+  d[3] = 4.0f;
 
   Tensor y = gap.forward(x).to(cpu);
   EXPECT_EQ(y.shape()[0], 1);
@@ -297,7 +297,6 @@ TEST(NNTest, DropoutSupportsFloat16ViaTypedMask) {
   EXPECT_EQ(y.dtype(), DataType::Float16);
 }
 
-
 TEST(NNTest, EmbeddingForwardOneHot) {
   Device cpu{DeviceType::CPU, 0};
   nn::Embedding emb(4, 3);
@@ -305,13 +304,21 @@ TEST(NNTest, EmbeddingForwardOneHot) {
   // Make weights deterministic: rows are basis-like vectors.
   float *w = static_cast<float *>(emb.weight.data());
   // row 0
-  w[0] = 1.0f; w[1] = 0.0f; w[2] = 0.0f;
+  w[0] = 1.0f;
+  w[1] = 0.0f;
+  w[2] = 0.0f;
   // row 1
-  w[3] = 0.0f; w[4] = 1.0f; w[5] = 0.0f;
+  w[3] = 0.0f;
+  w[4] = 1.0f;
+  w[5] = 0.0f;
   // row 2
-  w[6] = 0.0f; w[7] = 0.0f; w[8] = 1.0f;
+  w[6] = 0.0f;
+  w[7] = 0.0f;
+  w[8] = 1.0f;
   // row 3
-  w[9] = 1.0f; w[10] = 1.0f; w[11] = 1.0f;
+  w[9] = 1.0f;
+  w[10] = 1.0f;
+  w[11] = 1.0f;
 
   // x: [B=1, T=2, V=4], tokens [2, 3]
   Tensor x({1, 2, 4}, cpu);
@@ -337,7 +344,6 @@ TEST(NNTest, EmbeddingForwardOneHot) {
   EXPECT_NEAR(yd[5], 1.0f, 1e-6f);
 }
 
-
 TEST(NNTest, GELUForwardBehavior) {
   Device cpu{DeviceType::CPU, 0};
   nn::GELU gelu;
@@ -357,7 +363,6 @@ TEST(NNTest, GELUForwardBehavior) {
   EXPECT_NEAR(yo[2], 1.9357f, 5e-3f);
 }
 
-
 TEST(NNTest, LayerNormFloat16BackwardUsesTypedFallback) {
   Device cpu{DeviceType::CPU, 0};
   TensorOptions options;
@@ -367,8 +372,14 @@ TEST(NNTest, LayerNormFloat16BackwardUsesTypedFallback) {
 
   Tensor x32({2, 4}, cpu, DataType::Float32, true);
   float *xd = static_cast<float *>(x32.data());
-  xd[0] = 1.0f; xd[1] = 2.0f; xd[2] = 3.0f; xd[3] = 4.0f;
-  xd[4] = -1.0f; xd[5] = 0.0f; xd[6] = 1.0f; xd[7] = 2.0f;
+  xd[0] = 1.0f;
+  xd[1] = 2.0f;
+  xd[2] = 3.0f;
+  xd[3] = 4.0f;
+  xd[4] = -1.0f;
+  xd[5] = 0.0f;
+  xd[6] = 1.0f;
+  xd[7] = 2.0f;
 
   Tensor x = x32.to(DataType::Float16).detach();
   x.set_requires_grad(true);
@@ -402,9 +413,15 @@ TEST(NNTest, LayerNormForwardAndBackward) {
   Tensor x({2, 4}, cpu, DataType::Float32, true);
   float *xd = static_cast<float *>(x.data());
   // row 0
-  xd[0] = 1.0f; xd[1] = 2.0f; xd[2] = 3.0f; xd[3] = 4.0f;
+  xd[0] = 1.0f;
+  xd[1] = 2.0f;
+  xd[2] = 3.0f;
+  xd[3] = 4.0f;
   // row 1
-  xd[4] = -1.0f; xd[5] = 0.0f; xd[6] = 1.0f; xd[7] = 2.0f;
+  xd[4] = -1.0f;
+  xd[5] = 0.0f;
+  xd[6] = 1.0f;
+  xd[7] = 2.0f;
 
   Tensor y = ln.forward(x).to(cpu);
   const float *yd = static_cast<const float *>(y.data());
@@ -439,8 +456,14 @@ TEST(NNTest, RMSNormForwardAndBackward) {
 
   Tensor x({2, 4}, cpu, DataType::Float32, true);
   float *xd = static_cast<float *>(x.data());
-  xd[0] = 1.0f; xd[1] = 2.0f; xd[2] = 3.0f; xd[3] = 4.0f;
-  xd[4] = -1.0f; xd[5] = 0.0f; xd[6] = 1.0f; xd[7] = 2.0f;
+  xd[0] = 1.0f;
+  xd[1] = 2.0f;
+  xd[2] = 3.0f;
+  xd[3] = 4.0f;
+  xd[4] = -1.0f;
+  xd[5] = 0.0f;
+  xd[6] = 1.0f;
+  xd[7] = 2.0f;
 
   Tensor y = rms.forward(x).to(cpu);
   EXPECT_EQ(y.shape(), (Shape{2, 4}));
@@ -451,21 +474,26 @@ TEST(NNTest, RMSNormForwardAndBackward) {
   EXPECT_TRUE(rms.weight.has_grad());
 }
 
-
 TEST(NNTest, EmbeddingForwardIndexPath) {
   Device cpu{DeviceType::CPU, 0};
   nn::Embedding emb(4, 2);
   emb.weight.set_requires_grad(false); // trigger fast gather path
 
   float *w = static_cast<float *>(emb.weight.data());
-  w[0] = 1.0f; w[1] = 1.1f;
-  w[2] = 2.0f; w[3] = 2.1f;
-  w[4] = 3.0f; w[5] = 3.1f;
-  w[6] = 4.0f; w[7] = 4.1f;
+  w[0] = 1.0f;
+  w[1] = 1.1f;
+  w[2] = 2.0f;
+  w[3] = 2.1f;
+  w[4] = 3.0f;
+  w[5] = 3.1f;
+  w[6] = 4.0f;
+  w[7] = 4.1f;
 
   Tensor idx({1, 3}, cpu);
   float *id = static_cast<float *>(idx.data());
-  id[0] = 2.0f; id[1] = 0.0f; id[2] = 3.0f;
+  id[0] = 2.0f;
+  id[1] = 0.0f;
+  id[2] = 3.0f;
 
   Tensor y = emb.forward(idx).to(cpu);
   const float *o = static_cast<const float *>(y.data());
@@ -486,15 +514,21 @@ TEST(NNTest, EmbeddingForwardIndexPathSupportsInt32IndicesAndFloat16Weights) {
 
   Tensor weights32({4, 2}, cpu, DataType::Float32);
   float *w = static_cast<float *>(weights32.data());
-  w[0] = 1.0f; w[1] = 1.5f;
-  w[2] = 2.0f; w[3] = 2.5f;
-  w[4] = 3.0f; w[5] = 3.5f;
-  w[6] = 4.0f; w[7] = 4.5f;
+  w[0] = 1.0f;
+  w[1] = 1.5f;
+  w[2] = 2.0f;
+  w[3] = 2.5f;
+  w[4] = 3.0f;
+  w[5] = 3.5f;
+  w[6] = 4.0f;
+  w[7] = 4.5f;
   emb.weight = weights32.to(DataType::Float16);
 
   Tensor idx({1, 3}, cpu, DataType::Int32);
   int32_t *id = static_cast<int32_t *>(idx.data());
-  id[0] = 2; id[1] = 0; id[2] = 3;
+  id[0] = 2;
+  id[1] = 0;
+  id[2] = 3;
 
   Tensor y = emb.forward(idx).to(DataType::Float32);
   const float *o = static_cast<const float *>(y.data());
@@ -519,7 +553,6 @@ TEST(NNTest, MultiHeadAttentionForwardShape) {
   EXPECT_EQ(y.shape()[2], 8);
 }
 
-
 TEST(NNTest, MultiHeadAttentionCausalMaskBehavior) {
   Device cpu{DeviceType::CPU, 0};
   nn::MultiHeadAttention mha(4, 2, true);
@@ -527,14 +560,23 @@ TEST(NNTest, MultiHeadAttentionCausalMaskBehavior) {
   Tensor x1({1, 2, 4}, cpu);
   float *d1 = static_cast<float *>(x1.data());
   // token 0
-  d1[0] = 0.1f; d1[1] = 0.2f; d1[2] = 0.3f; d1[3] = 0.4f;
+  d1[0] = 0.1f;
+  d1[1] = 0.2f;
+  d1[2] = 0.3f;
+  d1[3] = 0.4f;
   // token 1
-  d1[4] = 0.5f; d1[5] = 0.6f; d1[6] = 0.7f; d1[7] = 0.8f;
+  d1[4] = 0.5f;
+  d1[5] = 0.6f;
+  d1[6] = 0.7f;
+  d1[7] = 0.8f;
 
   Tensor x2 = x1.clone();
   float *d2 = static_cast<float *>(x2.data());
   // Change only future token heavily
-  d2[4] = 10.0f; d2[5] = -10.0f; d2[6] = 20.0f; d2[7] = -20.0f;
+  d2[4] = 10.0f;
+  d2[5] = -10.0f;
+  d2[6] = 20.0f;
+  d2[7] = -20.0f;
 
   Tensor y1 = mha.forward(x1).to(cpu);
   Tensor y2 = mha.forward(x2).to(cpu);

@@ -2,9 +2,9 @@
 #include "backend/cpu_backend.hpp"
 #include "core/util/profiler.hpp"
 #include "tensor.hpp"
-#include <gtest/gtest.h>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
+#include <gtest/gtest.h>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -40,17 +40,17 @@ public:
 
   const char *name() const override { return "partial_matmul"; }
 
-  BackendAllocationTransferCapability *allocation_transfer_capability() override {
+  BackendAllocationTransferCapability *
+  allocation_transfer_capability() override {
     return this;
   }
-  const BackendAllocationTransferCapability *allocation_transfer_capability() const override {
+  const BackendAllocationTransferCapability *
+  allocation_transfer_capability() const override {
     return this;
   }
 
   BackendBlasCapability *blas_capability() override { return this; }
-  const BackendBlasCapability *blas_capability() const override {
-    return this;
-  }
+  const BackendBlasCapability *blas_capability() const override { return this; }
 
   DataType preferred_accumulation_dtype(BackendFeature feature,
                                         DataType dtype) const override {
@@ -60,8 +60,9 @@ public:
     return Backend::preferred_accumulation_dtype(feature, dtype);
   }
 
-  BackendFallbackPolicy preferred_fallback_policy(BackendFeature feature,
-                                                  DataType dtype) const override {
+  BackendFallbackPolicy
+  preferred_fallback_policy(BackendFeature feature,
+                            DataType dtype) const override {
     if (feature == BackendFeature::ElementwiseBinary) {
       return BackendFallbackPolicy::CPUFallback;
     }
@@ -101,6 +102,24 @@ public:
     }
   }
 
+  void to_contiguous(const Storage &src, Storage &dst, const Shape &shape,
+                     const Strides &strides, size_t offset) override {
+    const char *src_ptr = static_cast<const char *>(src.data());
+    char *dst_ptr = static_cast<char *>(dst.data());
+    size_t elem_size = dtype_size(src.dtype());
+    size_t total = numel(shape);
+    for (size_t linear = 0; linear < total; ++linear) {
+      size_t rem = linear;
+      size_t src_off = offset;
+      for (int d = static_cast<int>(shape.size()) - 1; d >= 0; --d) {
+        src_off += (rem % shape[d]) * strides[d];
+        rem /= shape[d];
+      }
+      std::memcpy(dst_ptr + linear * elem_size, src_ptr + src_off * elem_size,
+                  elem_size);
+    }
+  }
+
   int device_index() const { return device_index_; }
   int matmul_calls() const { return matmul_calls_; }
 
@@ -121,14 +140,18 @@ public:
     return gpu_timing_ ? "timed_gpu_add" : "timed_cpu_add";
   }
 
-  BackendAllocationTransferCapability *allocation_transfer_capability() override {
+  BackendAllocationTransferCapability *
+  allocation_transfer_capability() override {
     return this;
   }
-  const BackendAllocationTransferCapability *allocation_transfer_capability() const override {
+  const BackendAllocationTransferCapability *
+  allocation_transfer_capability() const override {
     return this;
   }
 
-  BackendElementwiseCapability *elementwise_capability() override { return this; }
+  BackendElementwiseCapability *elementwise_capability() override {
+    return this;
+  }
   const BackendElementwiseCapability *elementwise_capability() const override {
     return this;
   }
@@ -156,6 +179,24 @@ public:
     const float *bp = static_cast<const float *>(b.data());
     float *op = static_cast<float *>(out.data());
     op[0] = ap[0] + bp[0];
+  }
+
+  void to_contiguous(const Storage &src, Storage &dst, const Shape &shape,
+                     const Strides &strides, size_t offset) override {
+    const char *src_ptr = static_cast<const char *>(src.data());
+    char *dst_ptr = static_cast<char *>(dst.data());
+    size_t elem_size = dtype_size(src.dtype());
+    size_t total = numel(shape);
+    for (size_t linear = 0; linear < total; ++linear) {
+      size_t rem = linear;
+      size_t src_off = offset;
+      for (int d = static_cast<int>(shape.size()) - 1; d >= 0; --d) {
+        src_off += (rem % shape[d]) * strides[d];
+        rem /= shape[d];
+      }
+      std::memcpy(dst_ptr + linear * elem_size, src_ptr + src_off * elem_size,
+                  elem_size);
+    }
   }
 
   void sub(const Storage &, const Storage &, Storage &,
@@ -235,14 +276,18 @@ public:
 
   const char *name() const override { return "reusing_timed_add"; }
 
-  BackendAllocationTransferCapability *allocation_transfer_capability() override {
+  BackendAllocationTransferCapability *
+  allocation_transfer_capability() override {
     return this;
   }
-  const BackendAllocationTransferCapability *allocation_transfer_capability() const override {
+  const BackendAllocationTransferCapability *
+  allocation_transfer_capability() const override {
     return this;
   }
 
-  BackendElementwiseCapability *elementwise_capability() override { return this; }
+  BackendElementwiseCapability *elementwise_capability() override {
+    return this;
+  }
   const BackendElementwiseCapability *elementwise_capability() const override {
     return this;
   }
@@ -281,6 +326,24 @@ public:
   void synchronize() override {
     ++sync_calls_;
     last_kernel_time_us_ = 77.0;
+  }
+
+  void to_contiguous(const Storage &src, Storage &dst, const Shape &shape,
+                     const Strides &strides, size_t offset) override {
+    const char *src_ptr = static_cast<const char *>(src.data());
+    char *dst_ptr = static_cast<char *>(dst.data());
+    size_t elem_size = dtype_size(src.dtype());
+    size_t total = numel(shape);
+    for (size_t linear = 0; linear < total; ++linear) {
+      size_t rem = linear;
+      size_t src_off = offset;
+      for (int d = static_cast<int>(shape.size()) - 1; d >= 0; --d) {
+        src_off += (rem % shape[d]) * strides[d];
+        rem /= shape[d];
+      }
+      std::memcpy(dst_ptr + linear * elem_size, src_ptr + src_off * elem_size,
+                  elem_size);
+    }
   }
 
   void all_reduce(Storage &, size_t) override {}
@@ -369,8 +432,7 @@ private:
 
 TEST(BackendManagerTest, CanOverrideBackendFactoryForDeviceType) {
   BackendManager::register_backend(
-      DeviceType::CPU,
-      [](Device) { return std::make_shared<CPUBackend>(); });
+      DeviceType::CPU, [](Device) { return std::make_shared<CPUBackend>(); });
 
   auto backend = BackendManager::get(Device{DeviceType::CPU, 0});
   EXPECT_NE(backend, nullptr);
@@ -437,15 +499,15 @@ TEST(BackendManagerTest, ExposesBackendCapabilitySurface) {
 
 TEST(BackendManagerTest, CapabilityDTypePolicyLivesInOnePlace) {
   EXPECT_TRUE(supports_backend_feature_dtype(BackendFeature::ElementwiseBinary,
-                                            DataType::Float32));
+                                             DataType::Float32));
   EXPECT_FALSE(supports_backend_feature_dtype(BackendFeature::ElementwiseBinary,
-                                             DataType::Float16));
+                                              DataType::Float16));
   EXPECT_TRUE(supports_backend_feature_dtype(BackendFeature::RandomFill,
-                                            DataType::Float16));
+                                             DataType::Float16));
   EXPECT_FALSE(supports_backend_feature_dtype(BackendFeature::RandomFill,
-                                             DataType::Int32));
+                                              DataType::Int32));
   EXPECT_TRUE(supports_backend_feature_dtype(BackendFeature::Reduction,
-                                            DataType::Float32));
+                                             DataType::Float32));
 }
 
 TEST(BackendManagerTest, SeparatesDeployAndTrainingOnlyBackendFeatures) {
@@ -459,10 +521,12 @@ TEST(BackendManagerTest, ConstrainedFallbackPolicyIsDefinedPerFeature) {
             BackendFallbackPolicy::CPUFallback);
   EXPECT_EQ(backend_feature_default_fallback_policy(BackendFeature::RandomFill),
             BackendFallbackPolicy::CPUFallback);
-  EXPECT_EQ(backend_feature_default_fallback_policy(BackendFeature::Convolution),
-            BackendFallbackPolicy::ExplicitUnsupported);
-  EXPECT_EQ(backend_feature_default_fallback_policy(BackendFeature::OptimizerStep),
-            BackendFallbackPolicy::ExplicitUnsupported);
+  EXPECT_EQ(
+      backend_feature_default_fallback_policy(BackendFeature::Convolution),
+      BackendFallbackPolicy::ExplicitUnsupported);
+  EXPECT_EQ(
+      backend_feature_default_fallback_policy(BackendFeature::OptimizerStep),
+      BackendFallbackPolicy::ExplicitUnsupported);
 }
 
 TEST(BackendRegistryTest, LocalRegistryAllowsIsolatedOverridesAndCacheControl) {
@@ -485,7 +549,8 @@ TEST(BackendRegistryTest, LocalRegistryAllowsIsolatedOverridesAndCacheControl) {
   EXPECT_EQ(generation, 2);
 }
 
-TEST(BackendRegistryTest, PartialBackendReportsCapabilitiesAndFallbackMetadata) {
+TEST(BackendRegistryTest,
+     PartialBackendReportsCapabilitiesAndFallbackMetadata) {
   BackendRegistry registry;
   registry.register_backend(DeviceType::UNKNOWN, [](Device device) {
     return std::make_shared<PartialMatmulBackend>(device.index);
@@ -505,9 +570,8 @@ TEST(BackendRegistryTest, PartialBackendReportsCapabilitiesAndFallbackMetadata) 
   EXPECT_TRUE(matmul_support.available);
   EXPECT_EQ(matmul_support.preferred_accumulation_dtype, DataType::Float32);
 
-  const auto missing_support =
-      backend->query_support(BackendFeature::ElementwiseBinary,
-                             DataType::Float32);
+  const auto missing_support = backend->query_support(
+      BackendFeature::ElementwiseBinary, DataType::Float32);
   EXPECT_FALSE(missing_support.available);
   EXPECT_EQ(missing_support.fallback_policy,
             BackendFallbackPolicy::CPUFallback);
@@ -519,7 +583,8 @@ TEST(BackendManagerTest, ProfileWrapperDoesNotReportGpuTimeForCpuBackends) {
 
   std::shared_ptr<TimedAddBackend> base_backend;
   BackendManager::register_backend(DeviceType::UNKNOWN, [&](Device device) {
-    base_backend = std::make_shared<TimedAddBackend>(device.index, false, 321.0);
+    base_backend =
+        std::make_shared<TimedAddBackend>(device.index, false, 321.0);
     return base_backend;
   });
 
@@ -545,7 +610,8 @@ TEST(BackendManagerTest, ProfileWrapperDoesNotReportGpuTimeForCpuBackends) {
   EXPECT_EQ(*static_cast<float *>(out.data()), 4.0f);
 }
 
-TEST(BackendManagerTest, ProfileWrapperSynchronizesGpuBackendsToCaptureGpuTime) {
+TEST(BackendManagerTest,
+     ProfileWrapperSynchronizesGpuBackendsToCaptureGpuTime) {
   ScopedProfileOverride profile(true);
   Profiler::get().reset();
 
@@ -577,7 +643,8 @@ TEST(BackendManagerTest, ProfileWrapperSynchronizesGpuBackendsToCaptureGpuTime) 
   EXPECT_EQ(*static_cast<float *>(out.data()), 7.0f);
 }
 
-TEST(BackendManagerTest, PartialBackendSupportsFallbackAndSupportedOpsEndToEnd) {
+TEST(BackendManagerTest,
+     PartialBackendSupportsFallbackAndSupportedOpsEndToEnd) {
   std::shared_ptr<PartialMatmulBackend> base_backend;
   BackendManager::register_backend(DeviceType::UNKNOWN, [&](Device device) {
     base_backend = std::make_shared<PartialMatmulBackend>(device.index);
@@ -612,7 +679,8 @@ TEST(BackendManagerTest, PartialBackendSupportsFallbackAndSupportedOpsEndToEnd) 
   }
 }
 
-TEST(BackendManagerTest, PartialBackendSurfacesUnsupportedOpsDuringCapabilityCheck) {
+TEST(BackendManagerTest,
+     PartialBackendSurfacesUnsupportedOpsDuringCapabilityCheck) {
   BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
     return std::make_shared<PartialMatmulBackend>(device.index);
   });
@@ -655,9 +723,11 @@ TEST(BackendManagerTest, ProfilingCapturesDispatchPathMarkers) {
             snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("dispatch.resolve.backend.Matmul"),
             snapshot.stats.end());
-  const auto feature_reason = snapshot.stats.find("dispatch.fallback.reason.feature");
+  const auto feature_reason =
+      snapshot.stats.find("dispatch.fallback.reason.feature");
   ASSERT_NE(feature_reason, snapshot.stats.end());
-  EXPECT_NE(feature_reason->second.last_shape.find("op=Add"), std::string::npos);
+  EXPECT_NE(feature_reason->second.last_shape.find("op=Add"),
+            std::string::npos);
   EXPECT_NE(feature_reason->second.last_shape.find("reason=feature"),
             std::string::npos);
 }
@@ -680,7 +750,8 @@ TEST(BackendManagerTest, ProfilingCapturesDTypeFallbackReasonMarkers) {
   (void)c;
 
   const auto snapshot = Profiler::get().snapshot();
-  const auto dtype_reason = snapshot.stats.find("dispatch.fallback.reason.dtype");
+  const auto dtype_reason =
+      snapshot.stats.find("dispatch.fallback.reason.dtype");
   ASSERT_NE(dtype_reason, snapshot.stats.end());
   EXPECT_NE(dtype_reason->second.last_shape.find("op=Matmul"),
             std::string::npos);
@@ -775,7 +846,8 @@ TEST(BackendManagerTest, ProfilingCapturesDirectionalTransferMarkers) {
   EXPECT_NE(snapshot.stats.find("transfer.d2d"), snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("transfer.d2h"), snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("transfer.cpu_copy"), snapshot.stats.end());
-  EXPECT_NE(snapshot.stats.find("transfer.dtype_convert"), snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("transfer.dtype_convert"),
+            snapshot.stats.end());
 }
 
 TEST(BackendManagerTest, TraceContextCorrelatesTransferDispatchAndLogs) {
@@ -804,18 +876,20 @@ TEST(BackendManagerTest, TraceContextCorrelatesTransferDispatchAndLogs) {
   const auto snapshot = Profiler::get().snapshot();
   const auto transfer = snapshot.stats.find("transfer.h2d");
   ASSERT_NE(transfer, snapshot.stats.end());
-  EXPECT_NE(transfer->second.last_shape.find("trace_id=4242"), std::string::npos);
+  EXPECT_NE(transfer->second.last_shape.find("trace_id=4242"),
+            std::string::npos);
   EXPECT_NE(transfer->second.last_shape.find("span=run.forward"),
             std::string::npos);
 
-  const auto dispatch = snapshot.stats.find("dispatch.resolve.cpu_fallback.Add");
+  const auto dispatch =
+      snapshot.stats.find("dispatch.resolve.cpu_fallback.Add");
   ASSERT_NE(dispatch, snapshot.stats.end());
-  EXPECT_NE(dispatch->second.last_shape.find("trace_id=4242"), std::string::npos);
+  EXPECT_NE(dispatch->second.last_shape.find("trace_id=4242"),
+            std::string::npos);
   EXPECT_NE(dispatch->second.last_shape.find("span=run.forward"),
             std::string::npos);
 
-  const auto fallback =
-      snapshot.stats.find("dispatch.fallback.reason.feature");
+  const auto fallback = snapshot.stats.find("dispatch.fallback.reason.feature");
   ASSERT_NE(fallback, snapshot.stats.end());
   EXPECT_NE(fallback->second.last_shape.find("trace_id=4242"),
             std::string::npos);

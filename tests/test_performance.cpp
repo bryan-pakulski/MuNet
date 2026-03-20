@@ -71,15 +71,13 @@ bool require_gpu_backends(std::string *reason = nullptr) {
   }
   if (!has_cuda || !has_vulkan) {
     if (reason) {
-      *reason =
-          "Performance comparison requires both CUDA and Vulkan devices in this environment.";
+      *reason = "Performance comparison requires both CUDA and Vulkan devices "
+                "in this environment.";
     }
     return false;
   }
   return true;
 }
-
-
 
 Tensor make_one_hot_targets(int batch, int classes) {
   Tensor targets_cpu({batch, classes}, {DeviceType::CPU, 0});
@@ -91,8 +89,8 @@ Tensor make_one_hot_targets(int batch, int classes) {
   return targets_cpu;
 }
 void run_perf_ratio_test(const std::string &name,
-                         const std::function<void(Device)> &runner,
-                         int warmup, int iters, const char *ratio_env,
+                         const std::function<void(Device)> &runner, int warmup,
+                         int iters, const char *ratio_env,
                          double default_ratio) {
   Device cuda{DeviceType::CUDA, 0};
   Device vk{DeviceType::VULKAN, 0};
@@ -101,8 +99,8 @@ void run_perf_ratio_test(const std::string &name,
   const double vk_ms = benchmark_ms([&]() { runner(vk); }, warmup, iters);
   const double ratio = vk_ms / std::max(cuda_ms, 1e-9);
 
-  std::cout << "[PERF] " << name << " cuda_ms=" << cuda_ms
-            << " vk_ms=" << vk_ms << " ratio=" << ratio << std::endl;
+  std::cout << "[PERF] " << name << " cuda_ms=" << cuda_ms << " vk_ms=" << vk_ms
+            << " ratio=" << ratio << std::endl;
 
   const double max_ratio = get_env_ratio(ratio_env, default_ratio);
   EXPECT_LE(ratio, max_ratio)
@@ -132,8 +130,8 @@ TEST(PerformanceTest, ElementwiseAddCudaVsVulkan) {
   run_perf_ratio_test(
       "ElementwiseAdd",
       [&](Device dev) {
-        Tensor out = (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda)
-                                                     : (a_vk + b_vk);
+        Tensor out =
+            (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda) : (a_vk + b_vk);
         out.impl_->backend().synchronize();
       },
       10, 80, "MUNET_PERF_MAX_RATIO_ADD", 3.0);
@@ -159,8 +157,8 @@ TEST(PerformanceTest, ElementwiseMulCudaVsVulkan) {
   run_perf_ratio_test(
       "ElementwiseMul",
       [&](Device dev) {
-        Tensor out = (dev.type == DeviceType::CUDA) ? (a_cuda * b_cuda)
-                                                     : (a_vk * b_vk);
+        Tensor out =
+            (dev.type == DeviceType::CUDA) ? (a_cuda * b_cuda) : (a_vk * b_vk);
         out.impl_->backend().synchronize();
       },
       10, 80, "MUNET_PERF_MAX_RATIO_MUL", 3.0);
@@ -189,9 +187,8 @@ TEST(PerformanceTest, MatmulCudaVsVulkan) {
   run_perf_ratio_test(
       "Matmul",
       [&](Device dev) {
-        Tensor out =
-            (dev.type == DeviceType::CUDA) ? a_cuda.matmul(b_cuda)
-                                           : a_vk.matmul(b_vk);
+        Tensor out = (dev.type == DeviceType::CUDA) ? a_cuda.matmul(b_cuda)
+                                                    : a_vk.matmul(b_vk);
         out.impl_->backend().synchronize();
       },
       4, 20, "MUNET_PERF_MAX_RATIO_MATMUL", 4.0);
@@ -238,7 +235,7 @@ TEST(PerformanceTest, SoftmaxCudaVsVulkan) {
       "Softmax",
       [&](Device dev) {
         Tensor out = (dev.type == DeviceType::CUDA) ? x_cuda.softmax(-1)
-                                                     : x_vk.softmax(-1);
+                                                    : x_vk.softmax(-1);
         out.impl_->backend().synchronize();
       },
       6, 30, "MUNET_PERF_MAX_RATIO_SOFTMAX", 4.0);
@@ -265,8 +262,8 @@ TEST(PerformanceTest, BroadcastAddCudaVsVulkan) {
   run_perf_ratio_test(
       "BroadcastAdd",
       [&](Device dev) {
-        Tensor out = (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda)
-                                                     : (a_vk + b_vk);
+        Tensor out =
+            (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda) : (a_vk + b_vk);
         out.impl_->backend().synchronize();
       },
       8, 40, "MUNET_PERF_MAX_RATIO_BROADCAST_ADD", 4.0);
@@ -373,7 +370,6 @@ TEST(PerformanceTest, CrossEntropyCudaVsVulkan) {
       },
       6, 30, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY", 4.0);
 }
-
 
 TEST(PerformanceTest, CrossEntropySmallClassCountCudaVsVulkan) {
   std::string reason;
@@ -492,7 +488,6 @@ TEST(PerformanceTest, EndToEndTransferAndCrossEntropyCudaVsVulkan) {
       2, 10, "MUNET_PERF_MAX_RATIO_E2E_CE", 6.0);
 }
 
-
 TEST(PerformanceTest, ElementwiseSubCudaVsVulkan) {
   std::string reason;
   if (!require_gpu_backends(&reason)) {
@@ -513,8 +508,8 @@ TEST(PerformanceTest, ElementwiseSubCudaVsVulkan) {
   run_perf_ratio_test(
       "ElementwiseSub",
       [&](Device dev) {
-        Tensor out = (dev.type == DeviceType::CUDA) ? (a_cuda - b_cuda)
-                                                     : (a_vk - b_vk);
+        Tensor out =
+            (dev.type == DeviceType::CUDA) ? (a_cuda - b_cuda) : (a_vk - b_vk);
         out.impl_->backend().synchronize();
       },
       10, 80, "MUNET_PERF_MAX_RATIO_SUB", 3.0);
@@ -538,7 +533,7 @@ TEST(PerformanceTest, LogSoftmaxCudaVsVulkan) {
       "LogSoftmax",
       [&](Device dev) {
         Tensor out = (dev.type == DeviceType::CUDA) ? x_cuda.log_softmax(-1)
-                                                     : x_vk.log_softmax(-1);
+                                                    : x_vk.log_softmax(-1);
         out.impl_->backend().synchronize();
       },
       6, 30, "MUNET_PERF_MAX_RATIO_LOG_SOFTMAX", 4.5);
@@ -567,9 +562,8 @@ TEST(PerformanceTest, MatmulSmallCudaVsVulkan) {
   run_perf_ratio_test(
       "MatmulSmall",
       [&](Device dev) {
-        Tensor out =
-            (dev.type == DeviceType::CUDA) ? a_cuda.matmul(b_cuda)
-                                           : a_vk.matmul(b_vk);
+        Tensor out = (dev.type == DeviceType::CUDA) ? a_cuda.matmul(b_cuda)
+                                                    : a_vk.matmul(b_vk);
         out.impl_->backend().synchronize();
       },
       8, 40, "MUNET_PERF_MAX_RATIO_MATMUL_SMALL", 4.0);
@@ -598,9 +592,8 @@ TEST(PerformanceTest, MatmulLargeCudaVsVulkan) {
   run_perf_ratio_test(
       "MatmulLarge",
       [&](Device dev) {
-        Tensor out =
-            (dev.type == DeviceType::CUDA) ? a_cuda.matmul(b_cuda)
-                                           : a_vk.matmul(b_vk);
+        Tensor out = (dev.type == DeviceType::CUDA) ? a_cuda.matmul(b_cuda)
+                                                    : a_vk.matmul(b_vk);
         out.impl_->backend().synchronize();
       },
       2, 8, "MUNET_PERF_MAX_RATIO_MATMUL_LARGE", 4.0);
@@ -624,12 +617,11 @@ TEST(PerformanceTest, SoftmaxLargeClassCountCudaVsVulkan) {
       "SoftmaxLargeClassCount",
       [&](Device dev) {
         Tensor out = (dev.type == DeviceType::CUDA) ? x_cuda.softmax(-1)
-                                                     : x_vk.softmax(-1);
+                                                    : x_vk.softmax(-1);
         out.impl_->backend().synchronize();
       },
       4, 20, "MUNET_PERF_MAX_RATIO_SOFTMAX_LARGE_C", 5.0);
 }
-
 
 TEST(PerformanceTest, TinyAddDispatchOverheadCudaVsVulkan) {
   std::string reason;
@@ -651,8 +643,8 @@ TEST(PerformanceTest, TinyAddDispatchOverheadCudaVsVulkan) {
   run_perf_ratio_test(
       "TinyAddDispatchOverhead",
       [&](Device dev) {
-        Tensor out = (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda)
-                                                     : (a_vk + b_vk);
+        Tensor out =
+            (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda) : (a_vk + b_vk);
         out.impl_->backend().synchronize();
       },
       20, 300, "MUNET_PERF_MAX_RATIO_TINY_ADD", 6.0);
@@ -766,7 +758,6 @@ TEST(PerformanceTest, CopyOnlyGpuToCpuCudaVsVulkan) {
       4, 25, "MUNET_PERF_MAX_RATIO_COPY_D2H", 4.0);
 }
 
-
 TEST(PerformanceTest, Conv2DForwardCudaVsVulkan) {
   std::string reason;
   if (!require_gpu_backends(&reason)) {
@@ -812,7 +803,7 @@ TEST(PerformanceTest, MaxPool2DCudaVsVulkan) {
       "MaxPool2D",
       [&](Device dev) {
         Tensor out = (dev.type == DeviceType::CUDA) ? in_cuda.max_pool2d(2, 2)
-                                                     : in_vk.max_pool2d(2, 2);
+                                                    : in_vk.max_pool2d(2, 2);
         out.impl_->backend().synchronize();
       },
       4, 16, "MUNET_PERF_MAX_RATIO_MAXPOOL2D", 5.0);
@@ -835,7 +826,7 @@ TEST(PerformanceTest, Upsample2DCudaVsVulkan) {
       "Upsample2D",
       [&](Device dev) {
         Tensor out = (dev.type == DeviceType::CUDA) ? in_cuda.upsample2d(2)
-                                                     : in_vk.upsample2d(2);
+                                                    : in_vk.upsample2d(2);
         out.impl_->backend().synchronize();
       },
       3, 12, "MUNET_PERF_MAX_RATIO_UPSAMPLE2D", 5.0);

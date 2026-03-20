@@ -146,7 +146,6 @@ TEST(OptimPolicyTest, AdamSupportsFloat16ParametersUsingTypedStateFallback) {
   EXPECT_LT(updated.as_float(), 1.0f);
 }
 
-
 TEST(OptimPolicyTest, AdamParameterGroupsExposeStatePolicies) {
   Device cpu{DeviceType::CPU, 0};
   Tensor low_precision({1}, cpu, DataType::Float16, true);
@@ -161,9 +160,8 @@ TEST(OptimPolicyTest, AdamParameterGroupsExposeStatePolicies) {
   low_precision_policy.state_tensor_dtype =
       optim::OptimizerStateTensorDTypePolicy::Float32;
 
-  optim::ParameterGroup low_precision_group({low_precision}, 0.05f,
-                                            low_precision_policy,
-                                            "low_precision");
+  optim::ParameterGroup low_precision_group(
+      {low_precision}, 0.05f, low_precision_policy, "low_precision");
   optim::ParameterGroup baseline_group({full_precision}, std::nullopt, {},
                                        "baseline");
 
@@ -243,10 +241,10 @@ TEST(OptimPolicyTest, AutocastGuardRestoresPreviousStateAndPolicies) {
   {
     amp::AutocastGuard guard(options);
     EXPECT_TRUE(amp::autocast_enabled());
-    EXPECT_TRUE(amp::allows_implicit_conversion(DataType::Float32,
-                                                DataType::Float16));
-    EXPECT_FALSE(amp::allows_output_conversion(DataType::Float32,
-                                               DataType::Float16));
+    EXPECT_TRUE(
+        amp::allows_implicit_conversion(DataType::Float32, DataType::Float16));
+    EXPECT_FALSE(
+        amp::allows_output_conversion(DataType::Float32, DataType::Float16));
   }
 
   EXPECT_FALSE(amp::autocast_enabled());

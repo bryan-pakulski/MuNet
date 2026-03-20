@@ -64,18 +64,19 @@ Tensor sub(const Tensor &a, const Tensor &b) {
   }
 
   const auto dispatch = resolve_dispatch(OpId::Sub, a);
-  Tensor out = dispatch.use_backend
-                   ? Tensor(info.out_shape, a.device(), a.dtype())
-                   : detail::binary_broadcast_cpu_fallback(
-                         a, b, info,
-                         [](double lhs, double rhs) { return lhs - rhs; });
+  Tensor out =
+      dispatch.use_backend
+          ? Tensor(info.out_shape, a.device(), a.dtype())
+          : detail::binary_broadcast_cpu_fallback(
+                a, b, info, [](double lhs, double rhs) { return lhs - rhs; });
   if (dispatch.use_backend) {
     a.impl_->backend().sub(*a.impl_->storage, *b.impl_->storage,
                            *out.impl_->storage, info);
   }
 
   if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
-    auto fn = std::make_shared<autograd_nodes::SubBackward>(a.shape(), b.shape());
+    auto fn =
+        std::make_shared<autograd_nodes::SubBackward>(a.shape(), b.shape());
     link_backward_edges(fn.get(), {a, b});
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
@@ -94,11 +95,11 @@ Tensor mul(const Tensor &a, const Tensor &b) {
     throw std::runtime_error("Mul: shape mismatch");
 
   const auto dispatch = resolve_dispatch(OpId::Mul, a);
-  Tensor out = dispatch.use_backend
-                   ? Tensor(info.out_shape, a.device(), a.dtype())
-                   : detail::binary_broadcast_cpu_fallback(
-                         a, b, info,
-                         [](double lhs, double rhs) { return lhs * rhs; });
+  Tensor out =
+      dispatch.use_backend
+          ? Tensor(info.out_shape, a.device(), a.dtype())
+          : detail::binary_broadcast_cpu_fallback(
+                a, b, info, [](double lhs, double rhs) { return lhs * rhs; });
   if (dispatch.use_backend) {
     a.impl_->backend().mul(*a.impl_->storage, *b.impl_->storage,
                            *out.impl_->storage, info);
@@ -124,11 +125,11 @@ Tensor div(const Tensor &a, const Tensor &b) {
     throw std::runtime_error("Div: shape mismatch");
 
   const auto dispatch = resolve_dispatch(OpId::Div, a);
-  Tensor out = dispatch.use_backend
-                   ? Tensor(info.out_shape, a.device(), a.dtype())
-                   : detail::binary_broadcast_cpu_fallback(
-                         a, b, info,
-                         [](double lhs, double rhs) { return lhs / rhs; });
+  Tensor out =
+      dispatch.use_backend
+          ? Tensor(info.out_shape, a.device(), a.dtype())
+          : detail::binary_broadcast_cpu_fallback(
+                a, b, info, [](double lhs, double rhs) { return lhs / rhs; });
   if (dispatch.use_backend) {
     a.impl_->backend().div(*a.impl_->storage, *b.impl_->storage,
                            *out.impl_->storage, info);

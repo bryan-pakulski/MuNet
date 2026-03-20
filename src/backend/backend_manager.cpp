@@ -1,6 +1,6 @@
-#include "core/backend.hpp"
 #include "backend/cpu_backend.hpp"
 #include "backend/debug_backend.hpp"
+#include "core/backend.hpp"
 #include "core/util.hpp"
 
 #ifdef MUNET_USE_CUDA
@@ -19,8 +19,8 @@ namespace {
 void register_default_backends(BackendRegistry &registry) {
   static std::once_flag once;
   std::call_once(once, [&registry]() {
-    registry.register_backend(DeviceType::CPU,
-                             [](Device) { return std::make_shared<CPUBackend>(); });
+    registry.register_backend(
+        DeviceType::CPU, [](Device) { return std::make_shared<CPUBackend>(); });
 
 #ifdef MUNET_USE_CUDA
     registry.register_backend(DeviceType::CUDA, [](Device device) {
@@ -49,7 +49,8 @@ int backend_cache_key(Device device) {
 
 } // namespace
 
-void BackendRegistry::register_backend(DeviceType type, BackendFactory factory) {
+void BackendRegistry::register_backend(DeviceType type,
+                                       BackendFactory factory) {
   std::lock_guard<std::mutex> lock(mutex_);
   factories_[type] = std::move(factory);
 

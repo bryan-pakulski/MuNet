@@ -91,14 +91,13 @@ struct EngineEvent {
 
 using EngineObserver = std::function<void(const EngineEvent &)>;
 
-std::shared_ptr<core::Module> load_serialized(
-    const std::string &path,
-    std::optional<Device> device = std::nullopt);
+std::shared_ptr<core::Module>
+load_serialized(const std::string &path,
+                std::optional<Device> device = std::nullopt);
 
-void load_weights_serialized(
-    const std::shared_ptr<core::Module> &module,
-    const std::string &path,
-    std::optional<Device> device = std::nullopt);
+void load_weights_serialized(const std::shared_ptr<core::Module> &module,
+                             const std::string &path,
+                             std::optional<Device> device = std::nullopt);
 
 namespace detail {
 class InferenceModeGuard {
@@ -201,8 +200,8 @@ struct PreparedInputCacheEntry {
 
   bool matches(const Tensor &input, Device target) const {
     return prepared.impl_ && input.impl_.get() == input_impl &&
-           input.version() == input_version && input.device() == source_device &&
-           target == target_device;
+           input.version() == input_version &&
+           input.device() == source_device && target == target_device;
   }
 
   bool matches_identity(const Tensor &input, Device target) const {
@@ -261,8 +260,8 @@ public:
     }
 
     size_t evictions = 0;
-    while (!entries_.empty() &&
-           (entries_.size() >= max_entries_ || current_bytes_ + bytes > max_bytes_)) {
+    while (!entries_.empty() && (entries_.size() >= max_entries_ ||
+                                 current_bytes_ + bytes > max_bytes_)) {
       current_bytes_ -= entries_.front().prepared.impl_
                             ? entries_.front().prepared.bytes()
                             : 0;
@@ -315,8 +314,12 @@ public:
     config_.warmup_runs = warmup_runs;
   }
 
-  void set_strict_shape_check(bool enabled) { config_.strict_shape_check = enabled; }
-  void set_allow_autograd_inputs(bool enabled) { config_.allow_autograd_inputs = enabled; }
+  void set_strict_shape_check(bool enabled) {
+    config_.strict_shape_check = enabled;
+  }
+  void set_allow_autograd_inputs(bool enabled) {
+    config_.allow_autograd_inputs = enabled;
+  }
   void set_capture_profiler_memory(bool enabled) {
     config_.capture_profiler_memory = enabled;
     if (enabled) {
@@ -332,7 +335,9 @@ public:
   }
 
   bool allow_autograd_inputs() const { return config_.allow_autograd_inputs; }
-  bool capture_profiler_memory() const { return config_.capture_profiler_memory; }
+  bool capture_profiler_memory() const {
+    return config_.capture_profiler_memory;
+  }
   bool lean_mode() const { return config_.lean_mode; }
   size_t prepared_input_cache_entries_limit() const {
     return config_.prepared_input_cache_entries;
@@ -365,8 +370,9 @@ public:
     for (const auto &input : inputs) {
       Tensor prepared = prepare_input(input, "prepare_batch");
       if (config_.strict_shape_check && compiled_) {
-        validate_shape_contract(input_shape_contract_, prepared.shape(),
-                                "Engine: input shape mismatch with compiled shape");
+        validate_shape_contract(
+            input_shape_contract_, prepared.shape(),
+            "Engine: input shape mismatch with compiled shape");
       }
     }
     if (!inputs.empty()) {
@@ -375,7 +381,9 @@ public:
     refresh_memory_stats();
   }
 
-  void set_observer(EngineObserver observer) { observer_ = std::move(observer); }
+  void set_observer(EngineObserver observer) {
+    observer_ = std::move(observer);
+  }
   void clear_observer() { observer_ = nullptr; }
 
   void load(const std::string &serialized_path) {
@@ -427,8 +435,7 @@ public:
                   << " parameter/buffer tensor(s) still marked requires_grad)";
         }
       }
-      emit_event(EngineEventType::LoadCompleted, 0.0, {}, {}, 0,
-                 message.str());
+      emit_event(EngineEventType::LoadCompleted, 0.0, {}, {}, 0, message.str());
     } catch (const std::exception &e) {
       emit_event(EngineEventType::Error, 0.0, {}, {}, 0,
                  std::string("load failed: ") + e.what());
@@ -444,7 +451,8 @@ public:
     const bool trace_enabled = should_enable_trace_contexts();
     const uint64_t trace_id = trace_enabled ? next_trace_id() : 0;
     stats_.last_compile_trace_id = trace_id;
-    detail::OptionalTraceScope compile_trace(trace_enabled, "compile", trace_id);
+    detail::OptionalTraceScope compile_trace(trace_enabled, "compile",
+                                             trace_id);
     Tensor input;
     try {
       {
@@ -505,9 +513,8 @@ public:
           ensure_inference_output(warmup_out, "warmup");
         }
       }
-      record_profile_phase("inference.compile.warmup",
-                           stats_.compile_warmup_ms, input.shape(),
-                           input.bytes());
+      record_profile_phase("inference.compile.warmup", stats_.compile_warmup_ms,
+                           input.shape(), input.bytes());
 
       auto end = std::chrono::high_resolution_clock::now();
       stats_.compile_ms =
@@ -551,12 +558,13 @@ public:
                              in.bytes());
       }
       if (config_.strict_shape_check && compiled_) {
-        validate_shape_contract(input_shape_contract_, in.shape(),
-                                "Engine: input shape mismatch with compiled shape");
+        validate_shape_contract(
+            input_shape_contract_, in.shape(),
+            "Engine: input shape mismatch with compiled shape");
       }
 
-      emit_event(EngineEventType::RunStarted, 0.0, in.shape(), {}, stats_.runs + 1,
-                 "Starting inference run");
+      emit_event(EngineEventType::RunStarted, 0.0, in.shape(), {},
+                 stats_.runs + 1, "Starting inference run");
 
       detail::InferenceModeGuard no_grad;
       Tensor out;
@@ -569,7 +577,8 @@ public:
                              in.shape(), in.bytes());
       }
       {
-        detail::OptionalTraceScope phase_trace(trace_enabled, "validate_output");
+        detail::OptionalTraceScope phase_trace(trace_enabled,
+                                               "validate_output");
         Timer timer;
         ensure_inference_output(out, "run");
         stats_.last_output_validation_ms = timer.elapsed_ms();
@@ -579,8 +588,9 @@ public:
       }
 
       if (config_.strict_shape_check && compiled_) {
-        validate_shape_contract(output_shape_contract_, out.shape(),
-                                "Engine: output shape mismatch with compiled shape");
+        validate_shape_contract(
+            output_shape_contract_, out.shape(),
+            "Engine: output shape mismatch with compiled shape");
       }
       auto end = std::chrono::high_resolution_clock::now();
 
@@ -593,9 +603,8 @@ public:
 
       return out;
     } catch (const std::exception &e) {
-      emit_event(EngineEventType::Error, elapsed_ms(start),
-                 shape_or_empty(in), {}, stats_.runs + 1,
-                 std::string("run failed: ") + e.what());
+      emit_event(EngineEventType::Error, elapsed_ms(start), shape_or_empty(in),
+                 {}, stats_.runs + 1, std::string("run failed: ") + e.what());
       throw;
     }
   }
@@ -620,17 +629,22 @@ public:
   bool is_loaded() const { return loaded_; }
   bool is_prepared() const { return prepared_; }
   bool is_compiled() const { return compiled_; }
-  const std::vector<int> &compiled_input_shape() const { return compiled_input_shape_; }
-  const std::vector<int> &compiled_output_shape() const { return compiled_output_shape_; }
+  const std::vector<int> &compiled_input_shape() const {
+    return compiled_input_shape_;
+  }
+  const std::vector<int> &compiled_output_shape() const {
+    return compiled_output_shape_;
+  }
   EngineStats stats() const { return stats_; }
 
 private:
   void validate_inference_input(const Tensor &input, const char *stage) const {
     if (!config_.allow_autograd_inputs && input.requires_grad()) {
-      throw std::runtime_error(std::string("Engine: ") + stage +
-                               " received a tensor with requires_grad=true. "
-                               "Detach inputs or opt into allow_autograd_inputs "
-                               "for debugging-only inspection paths.");
+      throw std::runtime_error(
+          std::string("Engine: ") + stage +
+          " received a tensor with requires_grad=true. "
+          "Detach inputs or opt into allow_autograd_inputs "
+          "for debugging-only inspection paths.");
     }
   }
 
@@ -639,7 +653,8 @@ private:
     if (input.device() == config_.device) {
       return input;
     }
-    if (const Tensor *cached = prepared_input_cache_.find(input, config_.device)) {
+    if (const Tensor *cached =
+            prepared_input_cache_.find(input, config_.device)) {
       stats_.prepared_input_cache_hits += 1;
       refresh_cache_stats();
       return *cached;
@@ -695,8 +710,8 @@ private:
     return tensor.impl_ ? tensor.shape() : std::vector<int>{};
   }
 
-  static double elapsed_ms(
-      const std::chrono::high_resolution_clock::time_point &start) {
+  static double
+  elapsed_ms(const std::chrono::high_resolution_clock::time_point &start) {
     return std::chrono::duration<double, std::milli>(
                std::chrono::high_resolution_clock::now() - start)
         .count();

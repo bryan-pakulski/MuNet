@@ -18,9 +18,10 @@ struct Conv2DBackward : public Node {
   bool has_bias = false;
   int stride, padding;
   Conv2DBackward(Tensor i, Tensor w, Tensor b, int s, int p)
-      : input_shape(i.shape()), input_device(i.device()), input_dtype(i.dtype()),
-        weight_shape(w.shape()), weight_device(w.device()),
-        weight_dtype(w.dtype()), stride(s), padding(p) {
+      : input_shape(i.shape()), input_device(i.device()),
+        input_dtype(i.dtype()), weight_shape(w.shape()),
+        weight_device(w.device()), weight_dtype(w.dtype()), stride(s),
+        padding(p) {
     save_tensor(i, "conv2d_input");
     save_tensor(w, "conv2d_weight");
     if (b.impl_) {
@@ -59,8 +60,8 @@ struct Conv2DBackward : public Node {
     in.impl_->backend().conv2d_backward(
         *grad_out.impl_->storage, *in.impl_->storage, *weight.impl_->storage,
         *grad_in.impl_->storage, *grad_w.impl_->storage,
-        has_bias ? grad_b.impl_->storage.get() : nullptr, B, iC, iH, iW, oC,
-        kH, kW, stride, padding);
+        has_bias ? grad_b.impl_->storage.get() : nullptr, B, iC, iH, iW, oC, kH,
+        kW, stride, padding);
     return {grad_in, grad_w, grad_b};
   }
 };

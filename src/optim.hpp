@@ -1,8 +1,8 @@
 #pragma once
-#include "training_guard.hpp"
+#include "core/util.hpp"
 #include "ops.hpp"
 #include "tensor.hpp"
-#include "core/util.hpp"
+#include "training_guard.hpp"
 #include <cmath>
 #include <cstring>
 #include <optional>
@@ -23,8 +23,7 @@ enum class OptimizerStateTensorDTypePolicy {
 
 struct OptimizerStatePolicy {
   std::optional<DataType> model_dtype;
-  MasterWeightDTypePolicy master_weight_dtype =
-      MasterWeightDTypePolicy::None;
+  MasterWeightDTypePolicy master_weight_dtype = MasterWeightDTypePolicy::None;
   OptimizerStateTensorDTypePolicy state_tensor_dtype =
       OptimizerStateTensorDTypePolicy::OptimizerStateType;
 };
@@ -49,8 +48,9 @@ resolve_master_weight_dtype(DataType parameter_dtype,
   }
 }
 
-inline DataType resolve_optimizer_state_dtype(
-    DataType parameter_dtype, const OptimizerStatePolicy &policy) {
+inline DataType
+resolve_optimizer_state_dtype(DataType parameter_dtype,
+                              const OptimizerStatePolicy &policy) {
   switch (policy.state_tensor_dtype) {
   case OptimizerStateTensorDTypePolicy::MatchParameter:
     return parameter_dtype;
@@ -71,8 +71,10 @@ struct ParameterGroup {
   std::string name;
 
   ParameterGroup() = default;
-  explicit ParameterGroup(std::vector<Tensor> parameters, std::optional<float> lr_ = std::nullopt,
-                          OptimizerStatePolicy policy = {}, std::string group_name = "")
+  explicit ParameterGroup(std::vector<Tensor> parameters,
+                          std::optional<float> lr_ = std::nullopt,
+                          OptimizerStatePolicy policy = {},
+                          std::string group_name = "")
       : params(std::move(parameters)), lr(lr_), state_policy(policy),
         name(std::move(group_name)) {}
 };
@@ -80,8 +82,9 @@ struct ParameterGroup {
 class Optimizer {
 public:
   Optimizer(std::vector<Tensor> params, float lr)
-      : Optimizer(std::vector<ParameterGroup>{ParameterGroup(std::move(params))},
-                  lr) {}
+      : Optimizer(
+            std::vector<ParameterGroup>{ParameterGroup(std::move(params))},
+            lr) {}
 
   Optimizer(std::vector<ParameterGroup> parameter_groups, float lr)
       : parameter_groups_(std::move(parameter_groups)), lr_(lr) {}
@@ -121,8 +124,9 @@ public:
         return;
       }
       Device cpu{DeviceType::CPU, 0};
-      Tensor grad_cpu =
-          (p.grad().device().type == DeviceType::CPU) ? p.grad() : p.grad().to(cpu);
+      Tensor grad_cpu = (p.grad().device().type == DeviceType::CPU)
+                            ? p.grad()
+                            : p.grad().to(cpu);
       const char *bytes = static_cast<const char *>(grad_cpu.data());
       const size_t stride = dtype_size(grad_cpu.dtype());
       for (size_t i = 0; i < grad_cpu.size(); ++i) {
@@ -233,8 +237,8 @@ protected:
     }
 
     Device cpu{DeviceType::CPU, 0};
-    Tensor tensor_cpu = (tensor.device().type == DeviceType::CPU) ? tensor
-                                                                 : tensor.to(cpu);
+    Tensor tensor_cpu =
+        (tensor.device().type == DeviceType::CPU) ? tensor : tensor.to(cpu);
     char *bytes = static_cast<char *>(tensor_cpu.data());
     const size_t stride = dtype_size(tensor_cpu.dtype());
     for (size_t i = 0; i < tensor_cpu.size(); ++i) {
@@ -290,18 +294,17 @@ public:
             p.dtype() == DataType::Float32 &&
             exp_avg_[flat_index].dtype() == DataType::Float32 &&
             exp_avg_sq_[flat_index].dtype() == DataType::Float32) {
-          p.impl_->backend().adam_step(*p.impl_->storage,
-                                       *p.grad().impl_->storage,
-                                       *exp_avg_[flat_index].impl_->storage,
-                                       *exp_avg_sq_[flat_index].impl_->storage,
-                                       lr, beta1_, beta2_, eps_, step_count_,
-                                       p.size());
+          p.impl_->backend().adam_step(
+              *p.impl_->storage, *p.grad().impl_->storage,
+              *exp_avg_[flat_index].impl_->storage,
+              *exp_avg_sq_[flat_index].impl_->storage, lr, beta1_, beta2_, eps_,
+              step_count_, p.size());
           continue;
         }
 
         apply_typed_adam_step(p, p.grad(), exp_avg_[flat_index],
-                              exp_avg_sq_[flat_index], master_weights_[flat_index],
-                              lr);
+                              exp_avg_sq_[flat_index],
+                              master_weights_[flat_index], lr);
       }
     }
   }
@@ -316,7 +319,8 @@ public:
 
   DataType master_weight_dtype_for_parameter(size_t flat_index) const {
     if (!has_master_weight_for_parameter(flat_index)) {
-      throw std::runtime_error("Requested master weight dtype for parameter without master weight");
+      throw std::runtime_error(
+          "Requested master weight dtype for parameter without master weight");
     }
     return master_weights_.at(flat_index).dtype();
   }
@@ -361,11 +365,11 @@ private:
                       ? master_weight
                       : master_weight.to(cpu);
     } else {
-      param_cpu = (param.device().type == DeviceType::CPU) ? param
-                                                           : param.to(cpu);
+      param_cpu =
+          (param.device().type == DeviceType::CPU) ? param : param.to(cpu);
     }
-    Tensor grad_cpu = (grad.device().type == DeviceType::CPU) ? grad
-                                                              : grad.to(cpu);
+    Tensor grad_cpu =
+        (grad.device().type == DeviceType::CPU) ? grad : grad.to(cpu);
     Tensor exp_avg_cpu =
         (exp_avg.device().type == DeviceType::CPU) ? exp_avg : exp_avg.to(cpu);
     Tensor exp_avg_sq_cpu = (exp_avg_sq.device().type == DeviceType::CPU)
@@ -385,16 +389,15 @@ private:
     const float bias_correction2 = 1.0f - std::pow(beta2_, step_count_);
 
     for (size_t j = 0; j < param.size(); ++j) {
-      const float p_val =
-          read_scalar_from_buffer(param_bytes + j * param_stride, param_cpu.dtype())
-              .as_float();
-      const float g_val =
-          read_scalar_from_buffer(grad_bytes + j * grad_stride, grad_cpu.dtype())
-              .as_float();
-      float m_val =
-          read_scalar_from_buffer(exp_avg_bytes + j * exp_avg_stride,
-                                  exp_avg_cpu.dtype())
-              .as_float();
+      const float p_val = read_scalar_from_buffer(
+                              param_bytes + j * param_stride, param_cpu.dtype())
+                              .as_float();
+      const float g_val = read_scalar_from_buffer(grad_bytes + j * grad_stride,
+                                                  grad_cpu.dtype())
+                              .as_float();
+      float m_val = read_scalar_from_buffer(exp_avg_bytes + j * exp_avg_stride,
+                                            exp_avg_cpu.dtype())
+                        .as_float();
       float v_val =
           read_scalar_from_buffer(exp_avg_sq_bytes + j * exp_avg_sq_stride,
                                   exp_avg_sq_cpu.dtype())
@@ -451,7 +454,8 @@ public:
         if (!p.has_grad()) {
           continue;
         }
-        const auto master_dtype = resolve_master_weight_dtype(p.dtype(), policy);
+        const auto master_dtype =
+            resolve_master_weight_dtype(p.dtype(), policy);
         if (!master_dtype.has_value()) {
           p.step(lr);
           continue;
@@ -473,8 +477,8 @@ private:
     Tensor master = param.to(master_dtype);
     Tensor master_cpu =
         (master.device().type == DeviceType::CPU) ? master : master.to(cpu);
-    Tensor grad_cpu = (grad.device().type == DeviceType::CPU) ? grad
-                                                              : grad.to(cpu);
+    Tensor grad_cpu =
+        (grad.device().type == DeviceType::CPU) ? grad : grad.to(cpu);
 
     char *param_bytes = static_cast<char *>(master_cpu.data());
     const char *grad_bytes = static_cast<const char *>(grad_cpu.data());
@@ -483,11 +487,12 @@ private:
 
     for (size_t j = 0; j < param.size(); ++j) {
       const float p_val =
-          read_scalar_from_buffer(param_bytes + j * param_stride, master_cpu.dtype())
+          read_scalar_from_buffer(param_bytes + j * param_stride,
+                                  master_cpu.dtype())
               .as_float();
-      const float g_val =
-          read_scalar_from_buffer(grad_bytes + j * grad_stride, grad_cpu.dtype())
-              .as_float();
+      const float g_val = read_scalar_from_buffer(grad_bytes + j * grad_stride,
+                                                  grad_cpu.dtype())
+                              .as_float();
       write_scalar_to_buffer(param_bytes + j * param_stride, master_cpu.dtype(),
                              p_val - lr * g_val);
     }
@@ -508,12 +513,10 @@ struct LossScaleUpdate {
 class GradScaler {
 public:
   explicit GradScaler(bool enabled = true, float initial_scale = 65536.0f,
-                      float growth_factor = 2.0f,
-                      float backoff_factor = 0.5f,
+                      float growth_factor = 2.0f, float backoff_factor = 0.5f,
                       int growth_interval = 2000)
-      : enabled_(enabled), scale_(initial_scale),
-        growth_factor_(growth_factor), backoff_factor_(backoff_factor),
-        growth_interval_(growth_interval) {}
+      : enabled_(enabled), scale_(initial_scale), growth_factor_(growth_factor),
+        backoff_factor_(backoff_factor), growth_interval_(growth_interval) {}
 
   bool enabled() const { return enabled_; }
   float scale_value() const { return scale_; }
@@ -523,7 +526,8 @@ public:
       return loss;
     }
     if (!is_floating(loss.dtype())) {
-      throw std::runtime_error("GradScaler expects floating-point loss tensors");
+      throw std::runtime_error(
+          "GradScaler expects floating-point loss tensors");
     }
 
     Tensor factor({1}, loss.device(), loss.dtype(), false);
@@ -588,9 +592,9 @@ inline const AutocastOptions &current_autocast_options() {
 
 inline bool autocast_enabled() { return autocast_state().enabled; }
 
-inline bool allows_implicit_conversion(DataType from, DataType to,
-                                       const AutocastOptions &options =
-                                           current_autocast_options()) {
+inline bool allows_implicit_conversion(
+    DataType from, DataType to,
+    const AutocastOptions &options = current_autocast_options()) {
   if (!options.enabled || from == to) {
     return from == to;
   }

@@ -62,11 +62,13 @@ Tensor sum(const Tensor &a) {
       total += read_scalar_from_buffer(ip + i * stride, a.dtype()).value;
     }
     write_scalar_to_buffer(out_cpu.data(), out_cpu.dtype(), total);
-    out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+    out =
+        (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
   }
 
   if (GradMode::is_enabled() && a.requires_grad()) {
-    auto fn = std::make_shared<autograd_nodes::SumBackward>(a.shape(), a.device());
+    auto fn =
+        std::make_shared<autograd_nodes::SumBackward>(a.shape(), a.device());
     link_backward_edges(fn.get(), {a});
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
@@ -96,13 +98,16 @@ Tensor mean(const Tensor &a, int dim, bool keepdim) {
   }
 
   Tensor out(out_shape, a.device(), a.dtype());
-  const bool backend_supported = dispatch.use_backend && resolved == rank - 1 && a.is_contiguous();
+  const bool backend_supported =
+      dispatch.use_backend && resolved == rank - 1 && a.is_contiguous();
   if (backend_supported) {
-    Tensor tmp = keepdim ? out : Tensor(Shape{static_cast<int>(a.size() / a.shape().back())},
-                                        a.device(), a.dtype());
-    a.impl_->backend().mean_last_dim(*a.impl_->storage, *tmp.impl_->storage,
-                                     static_cast<int>(a.size() / a.shape().back()),
-                                     a.shape().back());
+    Tensor tmp =
+        keepdim ? out
+                : Tensor(Shape{static_cast<int>(a.size() / a.shape().back())},
+                         a.device(), a.dtype());
+    a.impl_->backend().mean_last_dim(
+        *a.impl_->storage, *tmp.impl_->storage,
+        static_cast<int>(a.size() / a.shape().back()), a.shape().back());
     if (keepdim) {
       out = tmp;
     } else {
@@ -134,28 +139,32 @@ Tensor mean(const Tensor &a, int dim, bool keepdim) {
           out_dim -= 1;
         }
         out_off += static_cast<size_t>(coord) *
-                   static_cast<size_t>(keepdim ? reduced_strides[d] : default_strides(cpu_out_shape)[out_dim]);
+                   static_cast<size_t>(
+                       keepdim ? reduced_strides[d]
+                               : default_strides(cpu_out_shape)[out_dim]);
       }
       accum[out_off] +=
           read_scalar_from_buffer(sp + linear * elem_size, src.dtype()).value;
     }
     const double inv = 1.0 / static_cast<double>(src_shape[resolved]);
     for (size_t i = 0; i < accum.size(); ++i) {
-      write_scalar_to_buffer(dp + i * elem_size, dst_cpu.dtype(), accum[i] * inv);
+      write_scalar_to_buffer(dp + i * elem_size, dst_cpu.dtype(),
+                             accum[i] * inv);
     }
-    out = (a.device().type == DeviceType::CPU) ? dst_cpu : dst_cpu.to(a.device());
+    out =
+        (a.device().type == DeviceType::CPU) ? dst_cpu : dst_cpu.to(a.device());
   }
 
   if (GradMode::is_enabled() && a.requires_grad()) {
-    auto fn = std::make_shared<autograd_nodes::MeanBackward>(a.shape(), resolved,
-                                                             keepdim, a.device(),
-                                                             a.dtype());
+    auto fn = std::make_shared<autograd_nodes::MeanBackward>(
+        a.shape(), resolved, keepdim, a.device(), a.dtype());
     link_backward_edges(fn.get(), {a});
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
-  record_registered_trace(OpId::Mean, out, {a},
-                          {{"dim", {resolved}}, {"keepdims", {keepdim ? 1 : 0}}});
+  record_registered_trace(
+      OpId::Mean, out, {a},
+      {{"dim", {resolved}}, {"keepdims", {keepdim ? 1 : 0}}});
   return out;
 }
 
@@ -208,7 +217,8 @@ Tensor narrow(const Tensor &in, int dim, int start, int length) {
   out.impl_ = std::make_shared<TensorImpl>(*in.impl_);
   out.impl_->shape[resolved] = length;
   out.impl_->storage_offset =
-      in.impl_->storage_offset + static_cast<size_t>(start) * in.impl_->strides[resolved];
+      in.impl_->storage_offset +
+      static_cast<size_t>(start) * in.impl_->strides[resolved];
 
   if (GradMode::is_enabled() && in.requires_grad()) {
     auto fn = std::make_shared<autograd_nodes::NarrowBackward>(
@@ -217,8 +227,9 @@ Tensor narrow(const Tensor &in, int dim, int start, int length) {
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;
   }
-  record_registered_trace(OpId::Narrow, out, {in},
-                          {{"dim", {resolved}}, {"start", {start}}, {"length", {length}}});
+  record_registered_trace(
+      OpId::Narrow, out, {in},
+      {{"dim", {resolved}}, {"start", {start}}, {"length", {length}}});
   return out;
 }
 

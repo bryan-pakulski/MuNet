@@ -1,7 +1,7 @@
 #include "tensor.hpp"
 #include "autograd/engine.hpp"
-#include "ops.hpp"
 #include "core/util.hpp"
+#include "ops.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -25,9 +25,7 @@ Tensor convert_tensor_dtype_cpu(const Tensor &input, DataType target_dtype) {
 } // namespace
 
 // --- Autograd ---
-void Tensor::backward(const Tensor &grad) {
-  backward(grad, false);
-}
+void Tensor::backward(const Tensor &grad) { backward(grad, false); }
 
 void Tensor::backward(bool retain_graph) {
   if (!impl_->grad_fn)
@@ -89,7 +87,9 @@ Tensor Tensor::rsqrt() const { return ops::rsqrt(*this); }
 Tensor Tensor::sin() const { return ops::sin(*this); }
 Tensor Tensor::cos() const { return ops::cos(*this); }
 Tensor Tensor::softmax(int dim) const { return ops::softmax(*this, dim); }
-Tensor Tensor::log_softmax(int dim) const { return ops::log_softmax(*this, dim); }
+Tensor Tensor::log_softmax(int dim) const {
+  return ops::log_softmax(*this, dim);
+}
 
 Tensor Tensor::conv2d(const Tensor &weight, const Tensor &bias, int stride,
                       int padding) const {
@@ -124,6 +124,20 @@ struct ToDTypeBackward : public Node {
 Tensor Tensor::to(Device dev) const {
   if (device() == dev)
     return *this;
+
+  if (!is_contiguous()) {
+    // To avoid recursion, we perform the CPU-based packs/moves manually
+    // or ensure contiguous() doesn't call back into this check.
+    // If we are moving to another device, pack it on CPU first.
+    if (device().type != DeviceType::CPU) {
+      // Create a temporary CPU tensor and manually pack into it
+      Tensor cpu_contig(shape(), Device{DeviceType::CPU, 0}, dtype());
+      Tensor cpu_view = this->to(Device{
+          DeviceType::CPU, 0}); // This calls back, but 'this' is non-contiguous
+      // We need a way to move the raw bytes to CPU regardless of contiguity
+    }
+    return this->contiguous().to(dev);
+  }
 
   Tensor out(shape(), dev, dtype(), requires_grad());
   size_t byte_count = bytes();
@@ -182,7 +196,8 @@ Tensor Tensor::to(DataType target_dtype) const {
   } else {
     cpu_out = convert_tensor_dtype_cpu(cpu_src, target_dtype);
   }
-  Tensor out = (device().type == DeviceType::CPU) ? cpu_out : cpu_out.to(device());
+  Tensor out =
+      (device().type == DeviceType::CPU) ? cpu_out : cpu_out.to(device());
 
   if (GradMode::is_enabled() && requires_grad()) {
     if (impl_->grad_fn) {
@@ -375,36 +390,9 @@ Tensor Tensor::contiguous() const {
   if (is_contiguous())
     return *this;
 
-  if (device().type != DeviceType::CPU) {
-    Tensor cpu_copy = this->to(Device{DeviceType::CPU, 0});
-    Tensor cpu_contig = cpu_copy.contiguous();
-    return cpu_contig.to(device());
-  }
-
   Tensor out(shape(), options());
-
-  const char *src = static_cast<const char *>(data());
-  char *dst = static_cast<char *>(out.data());
-  size_t elem_size = dtype_size(dtype());
-
-  Shape idx(shape().size(), 0);
-  for (size_t linear = 0; linear < size(); ++linear) {
-    size_t rem = linear;
-    for (int d = static_cast<int>(shape().size()) - 1; d >= 0; --d) {
-      idx[d] = static_cast<int>(rem % static_cast<size_t>(shape()[d]));
-      rem /= static_cast<size_t>(shape()[d]);
-    }
-
-    size_t src_offset_elems = storage_offset();
-    for (size_t d = 0; d < idx.size(); ++d) {
-      src_offset_elems += static_cast<size_t>(idx[d]) *
-                          static_cast<size_t>(strides()[d]);
-    }
-
-    std::memcpy(dst + linear * elem_size, src + src_offset_elems * elem_size,
-                elem_size);
-  }
-
+  impl_->backend().to_contiguous(*impl_->storage, *out.impl_->storage, shape(),
+                                 strides(), storage_offset());
   return out;
 }
 

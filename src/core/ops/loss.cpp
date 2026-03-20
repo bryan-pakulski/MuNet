@@ -38,9 +38,9 @@ Tensor mse_loss(const Tensor &pred, const Tensor &target) {
     }
   }
 
-  throw std::runtime_error("MSELoss: shape mismatch. Pred=" +
-                           to_string(pred.shape()) +
-                           " Target=" + to_string(target.shape()));
+  throw std::runtime_error(
+      "MSELoss: shape mismatch. Pred=" + to_string(pred.shape()) +
+      " Target=" + to_string(target.shape()));
 }
 
 Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
@@ -48,9 +48,9 @@ Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
   detail::require_same_dtype(op_metadata(OpId::CrossEntropy).name, logits,
                              targets);
   if (logits.shape() != targets.shape()) {
-    throw std::runtime_error("CrossEntropy: shape mismatch. Logits=" +
-                             to_string(logits.shape()) +
-                             " Targets=" + to_string(targets.shape()));
+    throw std::runtime_error(
+        "CrossEntropy: shape mismatch. Logits=" + to_string(logits.shape()) +
+        " Targets=" + to_string(targets.shape()));
   }
 
   const int batch_size = logits.shape().empty() ? 1 : logits.shape()[0];

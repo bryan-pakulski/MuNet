@@ -47,8 +47,8 @@ inline TensorOptions buffer_options(const TensorOptions &options,
   return resolved;
 }
 
-inline core::BufferRegistration accumulation_buffer_registration(
-    AccumulationOp op) {
+inline core::BufferRegistration
+accumulation_buffer_registration(AccumulationOp op) {
   return core::BufferRegistration::accumulation(op);
 }
 

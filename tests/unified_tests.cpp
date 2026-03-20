@@ -26,13 +26,13 @@ INSTANTIATE_TEST_SUITE_P(AllBackends, BackendTest,
                            return name;
                          });
 
-INSTANTIATE_TEST_SUITE_P(AllBackends, BroadcastTest,                        
+INSTANTIATE_TEST_SUITE_P(AllBackends, BroadcastTest,
                          ::testing::ValuesIn(test::get_available_devices()),
-                         [](const ::testing::TestParamInfo<Device> &info) { 
-                           std::string name = info.param.to_string();       
+                         [](const ::testing::TestParamInfo<Device> &info) {
+                           std::string name = info.param.to_string();
                            std::replace(name.begin(), name.end(), ':', '_');
-                           return name;                                     
-                         });                                                
+                           return name;
+                         });
 
 TEST_P(BackendTest, ElementwiseAdd) {
   Tensor a({2, 2}, dev());

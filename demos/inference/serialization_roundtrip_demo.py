@@ -8,11 +8,13 @@ import munet
 
 
 def make_model():
-    return munet.nn.Sequential([
-        munet.nn.Linear(6, 12),
-        munet.nn.GELU(),
-        munet.nn.Linear(12, 3),
-    ])
+    return munet.nn.Sequential(
+        [
+            munet.nn.Linear(6, 12),
+            munet.nn.GELU(),
+            munet.nn.Linear(12, 3),
+        ]
+    )
 
 
 def main():

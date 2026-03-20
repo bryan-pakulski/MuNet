@@ -134,7 +134,8 @@ TEST(AutogradHardeningTest, BackwardRetainGraphControlsRepeatedExecution) {
     loss.backward();
     FAIL() << "Expected released graph error";
   } catch (const std::runtime_error &err) {
-    EXPECT_NE(std::string(err.what()).find("retain_graph=true"), std::string::npos);
+    EXPECT_NE(std::string(err.what()).find("retain_graph=true"),
+              std::string::npos);
   }
 }
 
@@ -150,6 +151,7 @@ TEST(AutogradHardeningTest, InPlaceMutationOnSavedTensorThrowsClearly) {
     y.backward();
     FAIL() << "Expected in-place mutation detection";
   } catch (const std::runtime_error &err) {
-    EXPECT_NE(std::string(err.what()).find("In-place mutation"), std::string::npos);
+    EXPECT_NE(std::string(err.what()).find("In-place mutation"),
+              std::string::npos);
   }
 }

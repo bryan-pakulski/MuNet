@@ -89,9 +89,9 @@ Tensor layer_norm(const Tensor &x, const Tensor &weight, const Tensor &bias,
   for (int r = 0; r < rows; ++r) {
     double mean = 0.0;
     for (int c = 0; c < cols; ++c) {
-      mean += read_scalar_from_buffer(xv + (r * cols + c) * x_stride,
-                                      x_cpu.dtype())
-                  .value;
+      mean +=
+          read_scalar_from_buffer(xv + (r * cols + c) * x_stride, x_cpu.dtype())
+              .value;
     }
     mean /= cols;
 

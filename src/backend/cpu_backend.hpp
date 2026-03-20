@@ -1,7 +1,7 @@
 #pragma once
 #include "core/backend.hpp"
-#include "storage.hpp"
 #include "core/util.hpp"
+#include "storage.hpp"
 #include <algorithm>
 #include <cmath>
 #include <condition_variable>
@@ -127,13 +127,17 @@ private:
 public:
   const char *name() const override { return "cpu"; }
 
-  BackendAllocationTransferCapability *allocation_transfer_capability() override {
+  BackendAllocationTransferCapability *
+  allocation_transfer_capability() override {
     return this;
   }
-  const BackendAllocationTransferCapability *allocation_transfer_capability() const override {
+  const BackendAllocationTransferCapability *
+  allocation_transfer_capability() const override {
     return this;
   }
-  BackendElementwiseCapability *elementwise_capability() override { return this; }
+  BackendElementwiseCapability *elementwise_capability() override {
+    return this;
+  }
   const BackendElementwiseCapability *elementwise_capability() const override {
     return this;
   }
@@ -144,15 +148,20 @@ public:
   BackendBlasCapability *blas_capability() override { return this; }
   const BackendBlasCapability *blas_capability() const override { return this; }
   BackendShapeCapability *shape_capability() override { return this; }
-  const BackendShapeCapability *shape_capability() const override { return this; }
+  const BackendShapeCapability *shape_capability() const override {
+    return this;
+  }
   BackendLossCapability *loss_capability() override { return this; }
   const BackendLossCapability *loss_capability() const override { return this; }
   BackendSpatialCapability *spatial_capability() override { return this; }
-  const BackendSpatialCapability *spatial_capability() const override { return this; }
+  const BackendSpatialCapability *spatial_capability() const override {
+    return this;
+  }
   BackendNormalizationCapability *normalization_capability() override {
     return this;
   }
-  const BackendNormalizationCapability *normalization_capability() const override {
+  const BackendNormalizationCapability *
+  normalization_capability() const override {
     return this;
   }
   BackendOptimizerCapability *optimizer_capability() override { return this; }
@@ -867,7 +876,6 @@ public:
     // 2. Normalize
     parallel_for(0, B * C * spatial, [&](size_t start, size_t end) {
       for (size_t i = start; i < end; ++i) {
-        int s_idx = i % spatial;
         int tmp = i / spatial;
         int c = tmp % C;
         float mu = training ? sm[c] : rm[c];
@@ -932,7 +940,8 @@ public:
   void fill_uniform(Storage &out, float low, float high,
                     size_t num_elements) override {
     if (!is_floating(out.dtype())) {
-      throw std::runtime_error("fill_uniform only supports floating-point tensors");
+      throw std::runtime_error(
+          "fill_uniform only supports floating-point tensors");
     }
 
     char *ptr = static_cast<char *>(out.data());
@@ -1044,6 +1053,25 @@ public:
         op[row] = static_cast<float>(total / static_cast<double>(dim_size));
       }
     });
+  }
+
+  void to_contiguous(const Storage &src, Storage &dst, const Shape &shape,
+                     const Strides &strides, size_t offset) override {
+    const char *src_ptr = static_cast<const char *>(src.data());
+    char *dst_ptr = static_cast<char *>(dst.data());
+    size_t elem_size = dtype_size(src.dtype());
+    size_t total = numel(shape);
+
+    for (size_t linear = 0; linear < total; ++linear) {
+      size_t rem = linear;
+      size_t src_off = offset;
+      for (int d = static_cast<int>(shape.size()) - 1; d >= 0; --d) {
+        src_off += (rem % shape[d]) * strides[d];
+        rem /= shape[d];
+      }
+      std::memcpy(dst_ptr + linear * elem_size, src_ptr + src_off * elem_size,
+                  elem_size);
+    }
   }
 };
 } // namespace munet

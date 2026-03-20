@@ -1,7 +1,7 @@
 #include "vulkan_backend.hpp"
+#include "core/util.hpp"
 #include "cpu_backend.hpp"
 #include "storage.hpp"
-#include "core/util.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -87,10 +87,10 @@ static inline std::chrono::high_resolution_clock::time_point profile_now() {
   return std::chrono::high_resolution_clock::now();
 }
 
-static inline void profile_cpu_event(
-    const char *name,
-    const std::chrono::high_resolution_clock::time_point &start,
-    size_t bytes = 0) {
+static inline void
+profile_cpu_event(const char *name,
+                  const std::chrono::high_resolution_clock::time_point &start,
+                  size_t bytes = 0) {
   if (!is_profile_enabled())
     return;
   const auto end = std::chrono::high_resolution_clock::now();
@@ -103,8 +103,7 @@ static inline void profile_backend_event(
     const char *domain, const char *event,
     const std::chrono::high_resolution_clock::time_point &start,
     size_t bytes = 0) {
-  const std::string name =
-      std::string(domain) + "." + event + ".vulkan";
+  const std::string name = std::string(domain) + "." + event + ".vulkan";
   profile_cpu_event(name.c_str(), start, bytes);
 }
 
@@ -177,8 +176,6 @@ static std::vector<uint32_t> compileShader(const std::string &name,
   return buffer;
 }
 
-
-
 static void allocate_frame_descriptor_sets(int frame) {
   std::vector<VkDescriptorSetLayout> layouts(MAX_DESCRIPTORS_PER_FRAME,
                                              descriptorSetLayout);
@@ -214,8 +211,8 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 
   if (device_index_ < 0 || device_index_ >= static_cast<int>(deviceCount)) {
     throw std::runtime_error("Requested Vulkan device index out of range: " +
-                             std::to_string(device_index_) +
-                             " (available: " + std::to_string(deviceCount) + ")");
+                             std::to_string(device_index_) + " (available: " +
+                             std::to_string(deviceCount) + ")");
   }
 
   physicalDevice = devices[static_cast<size_t>(device_index_)];
@@ -224,7 +221,7 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
   vkGetPhysicalDeviceProperties(physicalDevice, &props);
   timestampPeriod = props.limits.timestampPeriod;
   MUNET_INFO << "Vulkan backend using device index " << device_index_ << " ("
-            << props.deviceName << ")" << std::endl;
+             << props.deviceName << ")" << std::endl;
 
   uint32_t queueFamilyCount = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
@@ -1815,6 +1812,22 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 								atomicAddFloat(0, sdata[0]);
 				}
    )");
+
+  toContiguousPipeline = createComputePipeline("to_contiguous", R"(
+        #version 450
+        layout(push_constant) uniform P { int ndim; int shape[6]; int strides[6]; uint offset; uint total; } u;
+        void main() {
+            uint idx = gl_GlobalInvocationID.x;
+            if (idx >= u.total) return;
+            uint src_off = u.offset;
+            uint rem = idx;
+            for (int d = u.ndim - 1; d >= 0; --d) {
+                src_off += (rem % u.shape[d]) * u.strides[d];
+                rem /= u.shape[d];
+            }
+            dst[idx] = src[src_off];
+        }
+    )");
 }
 
 VulkanBackend::~VulkanBackend() {
@@ -1851,6 +1864,7 @@ VulkanBackend::~VulkanBackend() {
 
   vkDestroyPipeline(device, uniformPipeline, nullptr);
   vkDestroyPipeline(device, sumPipeline, nullptr);
+  vkDestroyPipeline(device, toContiguousPipeline, nullptr);
 
   vkDestroyPipeline(device, bnCollectPipeline, nullptr);
   vkDestroyPipeline(device, bnUpdatePipeline, nullptr);
@@ -1927,8 +1941,9 @@ void VulkanBackend::deallocate(void *ptr) {
   auto free_start = profile_now();
   uint64_t handle = (uint64_t)ptr;
   deferred_frees[currentFrame].push_back(handle);
-  profile_backend_event("allocator", "deallocate", free_start,
-                        allocation_sizes.count(handle) ? allocation_sizes[handle] : 0);
+  profile_backend_event(
+      "allocator", "deallocate", free_start,
+      allocation_sizes.count(handle) ? allocation_sizes[handle] : 0);
 }
 
 // --- Batch Management ---
@@ -1980,8 +1995,8 @@ void ensure_recording() {
     }
   }
   deferred_frees[currentFrame].clear();
-  profile_backend_event("allocator", "deferred_free_flush", deferred_flush_start,
-                        deferred_flush_bytes);
+  profile_backend_event("allocator", "deferred_free_flush",
+                        deferred_flush_start, deferred_flush_bytes);
 
   // Reset Descriptor Pool logic: wipe the slate clean for this frame
   // Descriptor sets are pre-allocated once and then recycled per frame slot.
@@ -2113,7 +2128,8 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
                      stagingBuffer, stagingMemory);
         VK_CHECK(vkMapMemory(device, stagingMemory, 0, stagingSize, 0,
                              &stagingMapped));
-        profile_backend_event("allocator", "pool_growth", growth_start, stagingSize);
+        profile_backend_event("allocator", "pool_growth", growth_start,
+                              stagingSize);
       }
     }
     offset = stagingOffset;
@@ -2236,11 +2252,12 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                           starvation_start);
   }
 
-  VkDescriptorSet ds = frameDescriptorSets[currentFrame][descriptorSetCursor[currentFrame]++];
+  VkDescriptorSet ds =
+      frameDescriptorSets[currentFrame][descriptorSetCursor[currentFrame]++];
 
   // Update only the bindings used by this kernel to lower CPU overhead.
-  const uint32_t write_count =
-      static_cast<uint32_t>(std::max<size_t>(1, std::min<size_t>(buffers.size(), 8)));
+  const uint32_t write_count = static_cast<uint32_t>(
+      std::max<size_t>(1, std::min<size_t>(buffers.size(), 8)));
 
   VkDescriptorBufferInfo bInfos[8]{};
   VkWriteDescriptorSet writes[8]{};
@@ -2402,26 +2419,30 @@ void VulkanBackend::sqrt(const Storage &in, Storage &out, size_t num_elements) {
                   (N + 255) / 256, 1, 1);
 }
 
-void VulkanBackend::rsqrt(const Storage &in, Storage &out, size_t num_elements) {
+void VulkanBackend::rsqrt(const Storage &in, Storage &out,
+                          size_t num_elements) {
   Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
   Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
   copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
   CPUBackend().rsqrt(cpu_in, cpu_out, num_elements);
-  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(), out.device());
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
+       out.device());
 }
 void VulkanBackend::sin(const Storage &in, Storage &out, size_t num_elements) {
   Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
   Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
   copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
   CPUBackend().sin(cpu_in, cpu_out, num_elements);
-  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(), out.device());
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
+       out.device());
 }
 void VulkanBackend::cos(const Storage &in, Storage &out, size_t num_elements) {
   Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
   Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
   copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
   CPUBackend().cos(cpu_in, cpu_out, num_elements);
-  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(), out.device());
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
+       out.device());
 }
 void VulkanBackend::softmax(const Storage &in, Storage &out, int batch_size,
                             int num_classes) {
@@ -2704,13 +2725,14 @@ void VulkanBackend::sum(const Storage &in, Storage &out, size_t num_elements) {
                   (num_elements + 255) / 256, 1, 1);
 }
 
-void VulkanBackend::mean_last_dim(const Storage &in, Storage &out, int outer_size,
-                                  int dim_size) {
+void VulkanBackend::mean_last_dim(const Storage &in, Storage &out,
+                                  int outer_size, int dim_size) {
   Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
   Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
   copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
   CPUBackend().mean_last_dim(cpu_in, cpu_out, outer_size, dim_size);
-  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(), out.device());
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
+       out.device());
 }
 
 void VulkanBackend::concat(const std::vector<Storage *> &inputs, Storage &out,
@@ -2837,6 +2859,27 @@ void VulkanBackend::sum_to_shape(const Storage &in, Storage &out,
 
   dispatch_kernel(sumToShapePipeline, {in.data(), out.data()}, &pc, sizeof(pc),
                   (pc.N + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::to_contiguous(const Storage &src, Storage &dst,
+                                  const Shape &shape, const Strides &strides,
+                                  size_t offset) {
+  struct {
+    int ndim;
+    int shape[6];
+    int strides[6];
+    uint32_t offset;
+    uint32_t total;
+  } pc;
+  pc.ndim = static_cast<int>(shape.size());
+  pc.total = static_cast<uint32_t>(numel(shape));
+  pc.offset = static_cast<uint32_t>(offset);
+  for (int i = 0; i < pc.ndim; ++i) {
+    pc.shape[i] = shape[i];
+    pc.strides[i] = strides[i];
+  }
+  dispatch_kernel(toContiguousPipeline, {src.data(), dst.data()}, &pc,
+                  sizeof(pc), (pc.total + 255) / 256, 1, 1);
 }
 
 } // namespace munet

@@ -26,13 +26,17 @@ public:
 
   const char *name() const override { return "cuda"; }
 
-  BackendAllocationTransferCapability *allocation_transfer_capability() override {
+  BackendAllocationTransferCapability *
+  allocation_transfer_capability() override {
     return this;
   }
-  const BackendAllocationTransferCapability *allocation_transfer_capability() const override {
+  const BackendAllocationTransferCapability *
+  allocation_transfer_capability() const override {
     return this;
   }
-  BackendElementwiseCapability *elementwise_capability() override { return this; }
+  BackendElementwiseCapability *elementwise_capability() override {
+    return this;
+  }
   const BackendElementwiseCapability *elementwise_capability() const override {
     return this;
   }
@@ -43,15 +47,20 @@ public:
   BackendBlasCapability *blas_capability() override { return this; }
   const BackendBlasCapability *blas_capability() const override { return this; }
   BackendShapeCapability *shape_capability() override { return this; }
-  const BackendShapeCapability *shape_capability() const override { return this; }
+  const BackendShapeCapability *shape_capability() const override {
+    return this;
+  }
   BackendLossCapability *loss_capability() override { return this; }
   const BackendLossCapability *loss_capability() const override { return this; }
   BackendSpatialCapability *spatial_capability() override { return this; }
-  const BackendSpatialCapability *spatial_capability() const override { return this; }
+  const BackendSpatialCapability *spatial_capability() const override {
+    return this;
+  }
   BackendNormalizationCapability *normalization_capability() override {
     return this;
   }
-  const BackendNormalizationCapability *normalization_capability() const override {
+  const BackendNormalizationCapability *
+  normalization_capability() const override {
     return this;
   }
   BackendOptimizerCapability *optimizer_capability() override { return this; }
@@ -166,6 +175,8 @@ public:
   void adam_step(Storage &params, const Storage &grads, Storage &exp_avg,
                  Storage &exp_avg_sq, float lr, float beta1, float beta2,
                  float eps, int step, size_t num_elements) override;
+  void to_contiguous(const Storage &src, Storage &dst, const Shape &shape,
+                     const Strides &strides, size_t offset) override;
 };
 
 } // namespace munet

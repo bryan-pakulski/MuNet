@@ -89,7 +89,8 @@ struct MeanBackward : public Node {
         // Skip the reduced coordinate in grad_out, which is always 0.
       }
       const double value =
-          read_scalar_from_buffer(go + out_off * elem_size, grad_out.dtype()).value /
+          read_scalar_from_buffer(go + out_off * elem_size, grad_out.dtype())
+              .value /
           static_cast<double>(reduce_size);
       write_scalar_to_buffer(gi + linear * elem_size, dtype, value);
     }
@@ -124,8 +125,8 @@ struct NarrowBackward : public Node {
   DataType dtype;
   NarrowBackward(Shape shape, int dim_, int start_, int length_, Device device,
                  DataType dt)
-      : input_shape(std::move(shape)), dim(dim_), start(start_), length(length_),
-        dev(device), dtype(dt) {}
+      : input_shape(std::move(shape)), dim(dim_), start(start_),
+        length(length_), dev(device), dtype(dt) {}
   std::string name() const override { return "NarrowBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
     Device cpu{DeviceType::CPU, 0};
@@ -147,7 +148,8 @@ struct NarrowBackward : public Node {
       for (size_t d = 0; d < out_shape.size(); ++d) {
         const int coord = static_cast<int>(curr / out_strides[d]);
         curr %= static_cast<size_t>(out_strides[d]);
-        const int input_coord = (static_cast<int>(d) == dim) ? (start + coord) : coord;
+        const int input_coord =
+            (static_cast<int>(d) == dim) ? (start + coord) : coord;
         dst_off += static_cast<size_t>(input_coord) * in_strides[d];
       }
       const ScalarValue value =

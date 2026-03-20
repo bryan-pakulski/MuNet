@@ -9,7 +9,8 @@ class MultiHeadAttention : public Module {
 public:
   MultiHeadAttention(int embed_dim, int num_heads, bool causal = true,
                      TensorOptions options = TensorOptions{})
-      : Module(options), embed_dim_(embed_dim), num_heads_(num_heads), causal_(causal) {
+      : Module(options), embed_dim_(embed_dim), num_heads_(num_heads),
+        causal_(causal) {
     if (embed_dim_ <= 0 || num_heads_ <= 0 || (embed_dim_ % num_heads_) != 0)
       throw std::runtime_error(
           "MultiHeadAttention expects embed_dim > 0, num_heads > 0 and "
@@ -33,9 +34,11 @@ public:
   Tensor forward_impl(Tensor x) override {
     auto s = x.shape();
     if (s.size() != 3)
-      throw std::runtime_error("MultiHeadAttention expects input shape [B,T,E]");
+      throw std::runtime_error(
+          "MultiHeadAttention expects input shape [B,T,E]");
     if (s[2] != embed_dim_)
-      throw std::runtime_error("MultiHeadAttention expects last dim == embed_dim");
+      throw std::runtime_error(
+          "MultiHeadAttention expects last dim == embed_dim");
 
     int B = s[0], T = s[1], E = s[2];
     int BH = B * num_heads_;
@@ -45,13 +48,16 @@ public:
     Tensor k2d = std::dynamic_pointer_cast<Linear>(k_proj)->forward(x2d);
     Tensor v2d = std::dynamic_pointer_cast<Linear>(v_proj)->forward(x2d);
 
-    Tensor q = q2d.reshape({B, T, num_heads_, head_dim_}).permute({0, 2, 1, 3})
+    Tensor q = q2d.reshape({B, T, num_heads_, head_dim_})
+                   .permute({0, 2, 1, 3})
                    .contiguous()
                    .reshape({BH * T, head_dim_});
-    Tensor k = k2d.reshape({B, T, num_heads_, head_dim_}).permute({0, 2, 1, 3})
+    Tensor k = k2d.reshape({B, T, num_heads_, head_dim_})
+                   .permute({0, 2, 1, 3})
                    .contiguous()
                    .reshape({BH * T, head_dim_});
-    Tensor v = v2d.reshape({B, T, num_heads_, head_dim_}).permute({0, 2, 1, 3})
+    Tensor v = v2d.reshape({B, T, num_heads_, head_dim_})
+                   .permute({0, 2, 1, 3})
                    .contiguous()
                    .reshape({BH * T, head_dim_});
 
@@ -74,7 +80,8 @@ public:
         int t_j = j % T;
         bool masked = (bh_i != bh_j) || (causal_ && t_j > t_i);
         write_scalar_to_buffer(static_cast<char *>(mask_cpu.data()) +
-                                   (i * (BH * T) + j) * dtype_size(mask_cpu.dtype()),
+                                   (i * (BH * T) + j) *
+                                       dtype_size(mask_cpu.dtype()),
                                mask_cpu.dtype(), masked ? 1.0 : 0.0);
       }
     }
@@ -87,9 +94,9 @@ public:
     Tensor ctx = probs.matmul(v);
 
     Tensor merged = ctx.reshape({B, num_heads_, T, head_dim_})
-                      .permute({0, 2, 1, 3})
-                      .contiguous()
-                      .reshape({B * T, E});
+                        .permute({0, 2, 1, 3})
+                        .contiguous()
+                        .reshape({B * T, E});
 
     Tensor out2d = std::dynamic_pointer_cast<Linear>(out_proj)->forward(merged);
     return out2d.reshape({B, T, E});

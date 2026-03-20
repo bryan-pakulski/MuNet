@@ -10,7 +10,8 @@ struct ReluBackward : public Node {
   Device input_device;
   DataType input_dtype;
   explicit ReluBackward(Tensor a)
-      : input_shape(a.shape()), input_device(a.device()), input_dtype(a.dtype()) {
+      : input_shape(a.shape()), input_device(a.device()),
+        input_dtype(a.dtype()) {
     save_tensor(a, "relu_input");
   }
   std::string name() const override { return "ReluBackward"; }
@@ -30,7 +31,8 @@ struct SigmoidBackward : public Node {
   Device output_device;
   DataType output_dtype;
   explicit SigmoidBackward(Tensor o)
-      : output_shape(o.shape()), output_device(o.device()), output_dtype(o.dtype()) {
+      : output_shape(o.shape()), output_device(o.device()),
+        output_dtype(o.dtype()) {
     save_tensor(o, "sigmoid_output");
   }
   std::string name() const override { return "SigmoidBackward"; }
@@ -45,13 +47,13 @@ struct SigmoidBackward : public Node {
   }
 };
 
-
 struct ExpBackward : public Node {
   Shape output_shape;
   Device output_device;
   DataType output_dtype;
   explicit ExpBackward(Tensor o)
-      : output_shape(o.shape()), output_device(o.device()), output_dtype(o.dtype()) {
+      : output_shape(o.shape()), output_device(o.device()),
+        output_dtype(o.dtype()) {
     save_tensor(o, "exp_output");
   }
   std::string name() const override { return "ExpBackward"; }
@@ -85,7 +87,8 @@ struct SqrtBackward : public Node {
   Device output_device;
   DataType output_dtype;
   explicit SqrtBackward(Tensor o)
-      : output_shape(o.shape()), output_device(o.device()), output_dtype(o.dtype()) {
+      : output_shape(o.shape()), output_device(o.device()),
+        output_dtype(o.dtype()) {
     save_tensor(o, "sqrt_output");
   }
   std::string name() const override { return "SqrtBackward"; }
@@ -186,13 +189,16 @@ SoftmaxBackward::apply(const std::vector<Tensor> &grads) {
       double dot = 0.0;
       for (int d = 0; d < dim_size; ++d) {
         int idx = (o * dim_size + d) * inner + in;
-        dot += read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value *
-               read_scalar_from_buffer(out + idx * out_stride, out_cpu.dtype()).value;
+        dot += read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype())
+                   .value *
+               read_scalar_from_buffer(out + idx * out_stride, out_cpu.dtype())
+                   .value;
       }
       for (int d = 0; d < dim_size; ++d) {
         int idx = (o * dim_size + d) * inner + in;
         const double out_value =
-            read_scalar_from_buffer(out + idx * out_stride, out_cpu.dtype()).value;
+            read_scalar_from_buffer(out + idx * out_stride, out_cpu.dtype())
+                .value;
         const double go_value =
             read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
         write_scalar_to_buffer(gi + idx * gi_stride, gi_cpu.dtype(),
@@ -235,13 +241,15 @@ LogSoftmaxBackward::apply(const std::vector<Tensor> &grads) {
       double sum_go = 0.0;
       for (int d = 0; d < dim_size; ++d) {
         int idx = (o * dim_size + d) * inner + in;
-        sum_go += read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+        sum_go +=
+            read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
       }
 
       for (int d = 0; d < dim_size; ++d) {
         int idx = (o * dim_size + d) * inner + in;
         const double p = std::exp(
-            read_scalar_from_buffer(lp + idx * lp_stride, lp_cpu.dtype()).value);
+            read_scalar_from_buffer(lp + idx * lp_stride, lp_cpu.dtype())
+                .value);
         const double go_value =
             read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
         write_scalar_to_buffer(gi + idx * gi_stride, gi_cpu.dtype(),

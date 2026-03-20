@@ -76,7 +76,8 @@ class Embedding : public Module {
 public:
   Embedding(int num_embeddings, int embedding_dim,
             TensorOptions options = TensorOptions{})
-      : Module(options), num_embeddings_(num_embeddings), embedding_dim_(embedding_dim) {
+      : Module(options), num_embeddings_(num_embeddings),
+        embedding_dim_(embedding_dim) {
     if (num_embeddings_ <= 0 || embedding_dim_ <= 0)
       throw std::runtime_error(
           "Embedding expects positive num_embeddings and embedding_dim");
@@ -107,10 +108,10 @@ public:
 
       for (int b = 0; b < B; ++b) {
         for (int t = 0; t < T; ++t) {
-          int token = static_cast<int>(read_scalar_from_buffer(
-                                           idx + (b * T + t) * idx_stride,
-                                           x_cpu.dtype())
-                                           .value);
+          int token = static_cast<int>(
+              read_scalar_from_buffer(idx + (b * T + t) * idx_stride,
+                                      x_cpu.dtype())
+                  .value);
           if (token < 0 || token >= num_embeddings_)
             throw std::runtime_error("Embedding index out of range");
 
@@ -126,7 +127,7 @@ public:
       }
 
       return (x.device().type == DeviceType::CPU) ? out_cpu
-                                                   : out_cpu.to(x.device());
+                                                  : out_cpu.to(x.device());
     }
 
     if (s.size() != 3)

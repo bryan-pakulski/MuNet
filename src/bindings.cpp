@@ -1,7 +1,7 @@
 #include "autograd/engine.hpp"
 #include "inference.hpp"
-#include "nn/module.hpp"
 #include "nn.hpp"
+#include "nn/module.hpp"
 #include "ops.hpp"
 #include "optim.hpp"
 #include "tensor.hpp"
@@ -30,7 +30,8 @@ DataType numpy_dtype_to_data_type(const py::buffer_info &buf) {
   if (buf.itemsize == 2 && buf.format.find('e') != std::string::npos) {
     return DataType::Float16;
   }
-  throw std::runtime_error("Unsupported NumPy dtype; expected float32, float16, or int32");
+  throw std::runtime_error(
+      "Unsupported NumPy dtype; expected float32, float16, or int32");
 }
 
 std::string numpy_format_for_dtype(DataType dtype) {
@@ -49,7 +50,8 @@ std::string numpy_format_for_dtype(DataType dtype) {
 py::array ensure_c_contiguous(py::array input) {
   py::array contiguous = py::array::ensure(input, py::array::c_style);
   if (!contiguous) {
-    throw std::runtime_error("Expected a NumPy array that can be viewed as contiguous");
+    throw std::runtime_error(
+        "Expected a NumPy array that can be viewed as contiguous");
   }
   return contiguous;
 }
@@ -74,8 +76,8 @@ void copy_numpy_array_into_tensor(Tensor &tensor, py::array input) {
     throw std::runtime_error("Size mismatch.");
   }
 
-  Tensor converted = (source.dtype() == tensor.dtype()) ? source
-                                                        : source.to(tensor.dtype());
+  Tensor converted =
+      (source.dtype() == tensor.dtype()) ? source : source.to(tensor.dtype());
   std::memcpy(tensor.data(), converted.data(), tensor.bytes());
 }
 
@@ -226,15 +228,19 @@ PYBIND11_MODULE(munet, m) {
                     t.device().to_string() + "'" +
                     (t.requires_grad() ? ", requires_grad=True)" : ")");
            })
-      .def("to", py::overload_cast<Device>(&Tensor::to, py::const_), py::arg("device"),
-           "Moves the tensor to the specified device.")
-      .def("to", py::overload_cast<DataType>(&Tensor::to, py::const_), py::arg("dtype"),
-           "Converts the tensor to the specified dtype.")
-      .def("to_options", py::overload_cast<const TensorOptions &>(&Tensor::to, py::const_), py::arg("options"),
+      .def("to", py::overload_cast<Device>(&Tensor::to, py::const_),
+           py::arg("device"), "Moves the tensor to the specified device.")
+      .def("to", py::overload_cast<DataType>(&Tensor::to, py::const_),
+           py::arg("dtype"), "Converts the tensor to the specified dtype.")
+      .def("to_options",
+           py::overload_cast<const TensorOptions &>(&Tensor::to, py::const_),
+           py::arg("options"),
            "Converts the tensor using explicit tensor options.")
       .def(
           "copy_from_numpy",
-          [](Tensor &t, py::array input) { copy_numpy_array_into_tensor(t, input); },
+          [](Tensor &t, py::array input) {
+            copy_numpy_array_into_tensor(t, input);
+          },
           py::arg("input"), "Copies data from a NumPy array into this tensor.")
       .def(
           "replace_",
@@ -286,7 +292,8 @@ PYBIND11_MODULE(munet, m) {
              Tensor bt = make_scalar_tensor(a.device(), a.dtype(), b);
              return a * bt;
            })
-      .def("__truediv__", [](const Tensor &a, const Tensor &b) { return a / b; })
+      .def("__truediv__",
+           [](const Tensor &a, const Tensor &b) { return a / b; })
       .def("__truediv__",
            [](const Tensor &a, float b) {
              Tensor bt = make_scalar_tensor(a.device(), a.dtype(), b);
@@ -296,7 +303,8 @@ PYBIND11_MODULE(munet, m) {
            [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
       .def("sum", &Tensor::sum,
            "Returns the sum of all elements in the tensor.")
-      .def("mean", &Tensor::mean, py::arg("dim") = -1, py::arg("keepdim") = false,
+      .def("mean", &Tensor::mean, py::arg("dim") = -1,
+           py::arg("keepdim") = false,
            "Returns the mean reduced along the specified dimension.")
       .def("reshape", &Tensor::reshape, py::arg("shape"),
            "Returns a tensor with the same data and number of elements, but "
@@ -329,10 +337,12 @@ PYBIND11_MODULE(munet, m) {
       .def("exp", &Tensor::exp, "Applies exp element-wise.")
       .def("log", &Tensor::log, "Applies natural log element-wise.")
       .def("sqrt", &Tensor::sqrt, "Applies square root element-wise.")
-      .def("rsqrt", &Tensor::rsqrt, "Applies reciprocal square root element-wise.")
+      .def("rsqrt", &Tensor::rsqrt,
+           "Applies reciprocal square root element-wise.")
       .def("sin", &Tensor::sin, "Applies sine element-wise.")
       .def("cos", &Tensor::cos, "Applies cosine element-wise.")
-      .def("softmax", &Tensor::softmax, py::arg("dim") = -1, "Applies softmax along a dimension.")
+      .def("softmax", &Tensor::softmax, py::arg("dim") = -1,
+           "Applies softmax along a dimension.")
       .def("log_softmax", &Tensor::log_softmax, py::arg("dim") = -1,
            "Applies log-softmax along a dimension.")
       .def("conv2d", &Tensor::conv2d, py::arg("weight"),
@@ -381,8 +391,9 @@ PYBIND11_MODULE(munet, m) {
               static_cast<py::ssize_t>(t.strides()[i]) * element_size;
         }
 
-        auto *base_ptr = static_cast<char *>(t.data()) +
-                         static_cast<py::ssize_t>(t.storage_offset()) * element_size;
+        auto *base_ptr =
+            static_cast<char *>(t.data()) +
+            static_cast<py::ssize_t>(t.storage_offset()) * element_size;
         return py::buffer_info(base_ptr, dtype_size(t.dtype()),
                                numpy_format_for_dtype(t.dtype()),
                                py_shape.size(), py_shape, py_strides);
@@ -458,7 +469,8 @@ PYBIND11_MODULE(munet, m) {
         try {
           copy_numpy_array_into_tensor(t, input);
         } catch (const std::runtime_error &err) {
-          throw std::runtime_error(std::string("copy_from_numpy: ") + err.what());
+          throw std::runtime_error(std::string("copy_from_numpy: ") +
+                                   err.what());
         }
       },
       py::arg("tensor"), py::arg("input"),
@@ -483,12 +495,13 @@ PYBIND11_MODULE(munet, m) {
            py::arg("prefix") = "",
            "Returns an iterator over module parameters, yielding both the name "
            "of the parameter as well as the parameter itself.")
-      .def("named_modules",
-           [](nn::Module &self, const std::string &prefix) {
-             return self.named_modules_typed(prefix);
-           },
-           py::arg("prefix") = "",
-           "Returns an iterator over all nn modules in the network.")
+      .def(
+          "named_modules",
+          [](nn::Module &self, const std::string &prefix) {
+            return self.named_modules_typed(prefix);
+          },
+          py::arg("prefix") = "",
+          "Returns an iterator over all nn modules in the network.")
       .def("train", &nn::Module::train, py::arg("mode") = true,
            "Sets the module in training mode.")
       .def("eval", &nn::Module::eval, "Sets the module in evaluation mode.")
@@ -496,7 +509,8 @@ PYBIND11_MODULE(munet, m) {
            "Moves all parameters and buffers to the specified device.")
       .def("to", py::overload_cast<DataType>(&nn::Module::to), py::arg("dtype"),
            "Converts all parameters and buffers to the specified dtype.")
-      .def("to_options", py::overload_cast<const TensorOptions &>(&nn::Module::to),
+      .def("to_options",
+           py::overload_cast<const TensorOptions &>(&nn::Module::to),
            py::arg("options"),
            "Converts all parameters and buffers using explicit tensor options.")
       .def("zero_grad", &nn::Module::zero_grad,
@@ -533,10 +547,10 @@ PYBIND11_MODULE(munet, m) {
 
   py::class_<nn::Conv2d, nn::Module, std::shared_ptr<nn::Conv2d>>(
       nn, "Conv2d", "Applies a 2D convolution over an input signal.")
-      .def(py::init<int, int, int, int, int, TensorOptions>(), py::arg("in_channels"),
-           py::arg("out_channels"), py::arg("kernel_size"),
-           py::arg("stride") = 1, py::arg("padding") = 0,
-           py::arg("options") = TensorOptions{})
+      .def(py::init<int, int, int, int, int, TensorOptions>(),
+           py::arg("in_channels"), py::arg("out_channels"),
+           py::arg("kernel_size"), py::arg("stride") = 1,
+           py::arg("padding") = 0, py::arg("options") = TensorOptions{})
       .def_readonly("stride", &nn::Conv2d::stride_)
       .def_readonly("padding", &nn::Conv2d::padding_)
       .def_readonly("weight", &nn::Conv2d::weight)
@@ -544,9 +558,9 @@ PYBIND11_MODULE(munet, m) {
 
   py::class_<nn::BatchNorm2d, nn::Module, std::shared_ptr<nn::BatchNorm2d>>(
       nn, "BatchNorm2d", "Applies Batch Normalization over a 4D input.")
-      .def(py::init<int, float, float, TensorOptions>(), py::arg("num_features"),
-           py::arg("eps") = 1e-5f, py::arg("momentum") = 0.1f,
-           py::arg("options") = TensorOptions{})
+      .def(py::init<int, float, float, TensorOptions>(),
+           py::arg("num_features"), py::arg("eps") = 1e-5f,
+           py::arg("momentum") = 0.1f, py::arg("options") = TensorOptions{})
       .def_readonly("eps", &nn::BatchNorm2d::eps_)
       .def_readonly("momentum", &nn::BatchNorm2d::momentum_)
       .def_readonly("weight", &nn::BatchNorm2d::weight)
@@ -571,8 +585,7 @@ PYBIND11_MODULE(munet, m) {
       .def(py::init<>());
 
   py::class_<nn::GELU, nn::Module, std::shared_ptr<nn::GELU>>(
-      nn, "GELU",
-      "Applies a fast GELU approximation: x * sigmoid(1.702*x).")
+      nn, "GELU", "Applies a fast GELU approximation: x * sigmoid(1.702*x).")
       .def(py::init<>());
 
   py::class_<nn::LeakyReLU, nn::Module, std::shared_ptr<nn::LeakyReLU>>(
@@ -589,7 +602,8 @@ PYBIND11_MODULE(munet, m) {
 
   py::class_<nn::Embedding, nn::Module, std::shared_ptr<nn::Embedding>>(
       nn, "Embedding",
-      "Embedding lookup for [B,T] token ids and projection for [B,T,V] one-hot/probability inputs.")
+      "Embedding lookup for [B,T] token ids and projection for [B,T,V] "
+      "one-hot/probability inputs.")
       .def(py::init<int, int, TensorOptions>(), py::arg("num_embeddings"),
            py::arg("embedding_dim"), py::arg("options") = TensorOptions{})
       .def_readonly("num_embeddings", &nn::Embedding::num_embeddings_)
@@ -615,7 +629,8 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("eps", &nn::RMSNorm::eps_)
       .def_readonly("weight", &nn::RMSNorm::weight);
 
-  py::class_<nn::MultiHeadAttention, nn::Module, std::shared_ptr<nn::MultiHeadAttention>>(
+  py::class_<nn::MultiHeadAttention, nn::Module,
+             std::shared_ptr<nn::MultiHeadAttention>>(
       nn, "MultiHeadAttention",
       "Applies causal/non-causal multi-head self-attention over [B,T,E].")
       .def(py::init<int, int, bool, TensorOptions>(), py::arg("embed_dim"),
@@ -625,8 +640,10 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("num_heads", &nn::MultiHeadAttention::num_heads_)
       .def_readonly("causal", &nn::MultiHeadAttention::causal_);
 
-  py::class_<nn::GlobalAvgPool2d, nn::Module, std::shared_ptr<nn::GlobalAvgPool2d>>(
-      nn, "GlobalAvgPool2d", "Applies global average pooling over spatial dimensions.")
+  py::class_<nn::GlobalAvgPool2d, nn::Module,
+             std::shared_ptr<nn::GlobalAvgPool2d>>(
+      nn, "GlobalAvgPool2d",
+      "Applies global average pooling over spatial dimensions.")
       .def(py::init<>());
 
   py::class_<nn::MaxPool2d, nn::Module, std::shared_ptr<nn::MaxPool2d>>(
@@ -753,7 +770,8 @@ PYBIND11_MODULE(munet, m) {
                     &inference::EngineStats::prepared_input_cache_evictions);
 
   py::class_<inference::Engine>(inf, "Engine")
-      .def(py::init<inference::EngineConfig>(), py::arg("config") = inference::EngineConfig{})
+      .def(py::init<inference::EngineConfig>(),
+           py::arg("config") = inference::EngineConfig{})
       .def("set_device", &inference::Engine::set_device, py::arg("device"))
       .def("device", &inference::Engine::device)
       .def("set_warmup_runs", &inference::Engine::set_warmup_runs,
@@ -764,19 +782,20 @@ PYBIND11_MODULE(munet, m) {
            &inference::Engine::set_allow_autograd_inputs, py::arg("enabled"))
       .def("allow_autograd_inputs", &inference::Engine::allow_autograd_inputs)
       .def("set_capture_profiler_memory",
-           &inference::Engine::set_capture_profiler_memory,
-           py::arg("enabled"))
+           &inference::Engine::set_capture_profiler_memory, py::arg("enabled"))
       .def("capture_profiler_memory",
            &inference::Engine::capture_profiler_memory)
       .def("set_lean_mode", &inference::Engine::set_lean_mode,
            py::arg("enabled"))
       .def("lean_mode", &inference::Engine::lean_mode)
       .def("set_prepared_input_cache_entries",
-           &inference::Engine::set_prepared_input_cache_entries, py::arg("entries"))
+           &inference::Engine::set_prepared_input_cache_entries,
+           py::arg("entries"))
       .def("prepared_input_cache_entries_limit",
            &inference::Engine::prepared_input_cache_entries_limit)
       .def("set_prepared_input_cache_max_bytes",
-           &inference::Engine::set_prepared_input_cache_max_bytes, py::arg("bytes"))
+           &inference::Engine::set_prepared_input_cache_max_bytes,
+           py::arg("bytes"))
       .def("prepared_input_cache_max_bytes_limit",
            &inference::Engine::prepared_input_cache_max_bytes_limit)
       .def("clear_prepared_input_cache",
@@ -790,18 +809,21 @@ PYBIND11_MODULE(munet, m) {
             self.load(module.cast<std::shared_ptr<core::Module>>());
           },
           py::arg("module"))
-      .def("compile",
-           [](inference::Engine &self, const Tensor &example_input,
-              const std::optional<std::vector<int>> &expected_input_shape,
-              const std::optional<std::vector<int>> &expected_output_shape) {
-             self.compile(example_input, expected_input_shape.value_or(std::vector<int>{}),
-                          expected_output_shape.value_or(std::vector<int>{}));
-           },
-           py::arg("example_input"),
-           py::arg("expected_input_shape") = py::none(),
-           py::arg("expected_output_shape") = py::none())
+      .def(
+          "compile",
+          [](inference::Engine &self, const Tensor &example_input,
+             const std::optional<std::vector<int>> &expected_input_shape,
+             const std::optional<std::vector<int>> &expected_output_shape) {
+            self.compile(example_input,
+                         expected_input_shape.value_or(std::vector<int>{}),
+                         expected_output_shape.value_or(std::vector<int>{}));
+          },
+          py::arg("example_input"),
+          py::arg("expected_input_shape") = py::none(),
+          py::arg("expected_output_shape") = py::none())
       .def("prepare", &inference::Engine::prepare, py::arg("example_input"))
-      .def("prepare_batch", &inference::Engine::prepare_batch, py::arg("inputs"))
+      .def("prepare_batch", &inference::Engine::prepare_batch,
+           py::arg("inputs"))
       .def("run", &inference::Engine::run, py::arg("input"))
       .def("run_batch", &inference::Engine::run_batch, py::arg("inputs"))
       .def("is_loaded", &inference::Engine::is_loaded)
@@ -826,7 +848,8 @@ PYBIND11_MODULE(munet, m) {
            "Computes the global L2 norm of all gradients.")
       .def("clip_grad_norm", &optim::Optimizer::clip_grad_norm,
            py::arg("max_norm"),
-           "Clips gradients to the provided global L2 norm and returns the pre-clip norm.")
+           "Clips gradients to the provided global L2 norm and returns the "
+           "pre-clip norm.")
       .def("apply_weight_decay", &optim::Optimizer::apply_weight_decay,
            py::arg("weight_decay"),
            "Applies simple decoupled weight decay to all managed parameters.")

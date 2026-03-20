@@ -196,7 +196,8 @@ Tensor softmax(const Tensor &a, int dim) {
   if (resolved < 0 || resolved >= rank)
     throw std::runtime_error("Softmax: dim out of range");
   if (resolved != rank - 1)
-    throw std::runtime_error("Softmax currently supports only the last dimension");
+    throw std::runtime_error(
+        "Softmax currently supports only the last dimension");
 
   const int num_classes = a.shape().back();
   const int batch_size = a.size() / num_classes;
@@ -211,9 +212,9 @@ Tensor softmax(const Tensor &a, int dim) {
     char *op = static_cast<char *>(out_cpu.data());
     const size_t stride = dtype_size(a.dtype());
     for (int b = 0; b < batch_size; ++b) {
-      double max_val = read_scalar_from_buffer(ip + b * num_classes * stride,
-                                               a.dtype())
-                           .value;
+      double max_val =
+          read_scalar_from_buffer(ip + b * num_classes * stride, a.dtype())
+              .value;
       for (int i = 1; i < num_classes; ++i) {
         max_val = std::max(max_val,
                            read_scalar_from_buffer(
@@ -238,7 +239,8 @@ Tensor softmax(const Tensor &a, int dim) {
                                out_cpu.dtype(), prob);
       }
     }
-    out = (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+    out =
+        (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
   }
 
   if (GradMode::is_enabled() && a.requires_grad()) {
@@ -272,7 +274,8 @@ Tensor log_softmax(const Tensor &a, int dim) {
   const int rank = static_cast<int>(a.shape().size());
   const int resolved = (dim < 0) ? (rank + dim) : dim;
   if (GradMode::is_enabled() && a.requires_grad()) {
-    auto fn = std::make_shared<autograd_nodes::LogSoftmaxBackward>(out, resolved);
+    auto fn =
+        std::make_shared<autograd_nodes::LogSoftmaxBackward>(out, resolved);
     link_backward_edges(fn.get(), {a});
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;

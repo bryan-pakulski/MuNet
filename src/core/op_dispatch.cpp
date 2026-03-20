@@ -41,8 +41,8 @@ const std::unordered_map<OpId, OpMetadata> &registry() {
        {OpId::Relu, "Relu", "Relu", BackendFeature::UnaryActivation, false,
         BackendFallbackPolicy::CPUFallback}},
       {OpId::Sigmoid,
-       {OpId::Sigmoid, "Sigmoid", "Sigmoid",
-        BackendFeature::UnaryActivation, true, BackendFallbackPolicy::CPUFallback}},
+       {OpId::Sigmoid, "Sigmoid", "Sigmoid", BackendFeature::UnaryActivation,
+        true, BackendFallbackPolicy::CPUFallback}},
       {OpId::Exp,
        {OpId::Exp, "Exp", "Exp", BackendFeature::UnaryActivation, true,
         BackendFallbackPolicy::CPUFallback}},
@@ -83,14 +83,15 @@ const std::unordered_map<OpId, OpMetadata> &registry() {
        {OpId::Conv2D, "Conv2d", "Conv", BackendFeature::Convolution, true,
         BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::MaxPool2D,
-       {OpId::MaxPool2D, "MaxPool2d", "MaxPool", BackendFeature::Pooling,
-        true, BackendFallbackPolicy::ExplicitUnsupported}},
+       {OpId::MaxPool2D, "MaxPool2d", "MaxPool", BackendFeature::Pooling, true,
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Upsample2D,
-       {OpId::Upsample2D, "Upsample2d", "Upsample2d",
-        BackendFeature::Pooling, true, BackendFallbackPolicy::ExplicitUnsupported}},
+       {OpId::Upsample2D, "Upsample2d", "Upsample2d", BackendFeature::Pooling,
+        true, BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::BatchNorm,
        {OpId::BatchNorm, "BatchNorm", "BatchNormalization",
-        BackendFeature::BatchNorm, true, BackendFallbackPolicy::ExplicitUnsupported}},
+        BackendFeature::BatchNorm, true,
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::LayerNorm,
        {OpId::LayerNorm, "LayerNorm", "LayerNorm", std::nullopt, true,
         BackendFallbackPolicy::CPUFallback}},
@@ -99,7 +100,8 @@ const std::unordered_map<OpId, OpMetadata> &registry() {
         BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::CrossEntropy,
        {OpId::CrossEntropy, "CrossEntropy", "CrossEntropy",
-        BackendFeature::Loss, true, BackendFallbackPolicy::ExplicitUnsupported}},
+        BackendFeature::Loss, true,
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Transpose,
        {OpId::Transpose, "Transpose", "Transpose", std::nullopt, false,
         BackendFallbackPolicy::CPUFallback}},
@@ -113,18 +115,17 @@ const std::unordered_map<OpId, OpMetadata> &registry() {
   return kRegistry;
 }
 
-ForwardNode make_trace_node(const char *op_name,
-                            const std::vector<Tensor> &inputs,
-                            const std::unordered_map<std::string,
-                                                     std::vector<int>> &int_attrs,
-                            const std::unordered_map<std::string, float>
-                                &float_attrs) {
+ForwardNode make_trace_node(
+    const char *op_name, const std::vector<Tensor> &inputs,
+    const std::unordered_map<std::string, std::vector<int>> &int_attrs,
+    const std::unordered_map<std::string, float> &float_attrs) {
   ForwardNode node;
   node.op_name = op_name;
   for (const auto &tensor : inputs) {
     if (tensor.name().empty()) {
       tensor.impl_->name =
-          "tensor_" + std::to_string(reinterpret_cast<uintptr_t>(tensor.impl_.get()));
+          "tensor_" +
+          std::to_string(reinterpret_cast<uintptr_t>(tensor.impl_.get()));
     }
     node.input_names.push_back(tensor.name());
     node.inputs.push_back(tensor);
@@ -159,13 +160,15 @@ const char *dispatch_fallback_reason_name(DispatchFallbackReason reason) {
   }
 }
 
-DispatchFallbackReason classify_dispatch_fallback(
-    const OpMetadata &meta, const Tensor &tensor, BackendFeature feature,
-    const BackendSupport &support) {
+DispatchFallbackReason
+classify_dispatch_fallback(const OpMetadata &meta, const Tensor &tensor,
+                           BackendFeature feature,
+                           const BackendSupport &support) {
   if (!supports_backend_feature_dtype(feature, tensor.dtype())) {
     return DispatchFallbackReason::DType;
   }
-  if (!supports_backend_feature_shape(feature, tensor.dtype(), &tensor.shape())) {
+  if (!supports_backend_feature_shape(feature, tensor.dtype(),
+                                      &tensor.shape())) {
     return DispatchFallbackReason::Shape;
   }
   if (support.fallback_policy != meta.fallback_policy) {
@@ -174,7 +177,8 @@ DispatchFallbackReason classify_dispatch_fallback(
   return DispatchFallbackReason::Feature;
 }
 
-std::string dispatch_fallback_detail(const OpMetadata &meta, const Tensor &tensor,
+std::string dispatch_fallback_detail(const OpMetadata &meta,
+                                     const Tensor &tensor,
                                      BackendFeature feature,
                                      const BackendSupport &support,
                                      DispatchFallbackReason reason) {
@@ -184,12 +188,13 @@ std::string dispatch_fallback_detail(const OpMetadata &meta, const Tensor &tenso
   detail += " dtype=" + dtype_name(tensor.dtype());
   detail += " shape=" + to_string(tensor.shape());
   detail += " reason=" + std::string(dispatch_fallback_reason_name(reason));
-  detail +=
-      " policy=" + std::string(backend_fallback_policy_name(support.fallback_policy));
+  detail += " policy=" +
+            std::string(backend_fallback_policy_name(support.fallback_policy));
   return detail;
 }
 
-void record_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
+void record_dispatch_fallback_reason(const OpMetadata &meta,
+                                     const Tensor &tensor,
                                      BackendFeature feature,
                                      const BackendSupport &support,
                                      DispatchFallbackReason reason) {
@@ -199,8 +204,8 @@ void record_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tenso
   Profiler::get().record(
       "dispatch.fallback.reason." +
           std::string(dispatch_fallback_reason_name(reason)),
-      0.0, 0.0, 0, dispatch_fallback_detail(meta, tensor, feature, support,
-                                            reason));
+      0.0, 0.0, 0,
+      dispatch_fallback_detail(meta, tensor, feature, support, reason));
 }
 
 void log_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
@@ -251,16 +256,14 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
       record_dispatch_profile("metadata_fallback", meta, tensor,
                               timer->elapsed_us());
     }
-    return {meta,
-            false,
+    return {meta, false,
             meta.fallback_policy == BackendFallbackPolicy::CPUFallback,
             support};
   }
 
   const auto feature = *meta.feature;
-  const auto support =
-      tensor.impl_->backend().query_support(feature, tensor.dtype(),
-                                            &tensor.shape());
+  const auto support = tensor.impl_->backend().query_support(
+      feature, tensor.dtype(), &tensor.shape());
 
   if (support.available) {
     if (timer) {
@@ -276,25 +279,25 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
     record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
     if (timer) {
-      record_dispatch_profile("cpu_fallback", meta, tensor, timer->elapsed_us());
+      record_dispatch_profile("cpu_fallback", meta, tensor,
+                              timer->elapsed_us());
     }
     return {meta, false, true, support};
   }
 
-  const auto reason = classify_dispatch_fallback(meta, tensor, feature, support);
+  const auto reason =
+      classify_dispatch_fallback(meta, tensor, feature, support);
   log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
   record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
   if (timer) {
     record_dispatch_profile("unsupported", meta, tensor, timer->elapsed_us());
   }
-  throw std::runtime_error(std::string(meta.name) + ": backend '" +
-                           std::string(tensor.impl_->backend().name()) +
-                           "' does not support feature '" +
-                           backend_feature_name(feature) +
-                           "' for dtype " + dtype_name(tensor.dtype()) +
-                           " (fallback policy: " +
-                           backend_fallback_policy_name(support.fallback_policy) +
-                           ")");
+  throw std::runtime_error(
+      std::string(meta.name) + ": backend '" +
+      std::string(tensor.impl_->backend().name()) +
+      "' does not support feature '" + backend_feature_name(feature) +
+      "' for dtype " + dtype_name(tensor.dtype()) + " (fallback policy: " +
+      backend_fallback_policy_name(support.fallback_policy) + ")");
 }
 
 void record_registered_trace(

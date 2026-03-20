@@ -8,11 +8,13 @@ import munet
 
 
 def make_model():
-    return munet.nn.Sequential([
-        munet.nn.Linear(4, 16),
-        munet.nn.GELU(),
-        munet.nn.Linear(16, 2),
-    ])
+    return munet.nn.Sequential(
+        [
+            munet.nn.Linear(4, 16),
+            munet.nn.GELU(),
+            munet.nn.Linear(16, 2),
+        ]
+    )
 
 
 def make_dataset(n=128):
@@ -54,7 +56,9 @@ def main():
         engine.load(restored)
 
         sample = munet.from_numpy(x_np[:8])
-        engine.compile(sample, expected_input_shape=[-1, 4], expected_output_shape=[-1, 2])
+        engine.compile(
+            sample, expected_input_shape=[-1, 4], expected_output_shape=[-1, 2]
+        )
         out = engine.run(sample)
 
         # Dynamic batch size
@@ -73,17 +77,22 @@ def main():
         print("max abs diff vs direct forward:", float(np.max(np.abs(out_np - ref_np))))
 
     # Dynamic resolution showcase with conv model
-    conv = munet.nn.Sequential([
-        munet.nn.Conv2d(3, 4, 3, padding=1),
-        munet.nn.ReLU(),
-        munet.nn.Conv2d(4, 2, 1),
-    ])
+    conv = munet.nn.Sequential(
+        [
+            munet.nn.Conv2d(3, 4, 3, padding=1),
+            munet.nn.ReLU(),
+            munet.nn.Conv2d(4, 2, 1),
+        ]
+    )
     conv_engine = munet.inference.Engine()
     conv_engine.load(conv)
 
     img_64 = munet.from_numpy(np.random.randn(1, 3, 64, 64).astype(np.float32))
-    conv_engine.compile(img_64, expected_input_shape=[-1, 3, -1, -1],
-                        expected_output_shape=[-1, 2, -1, -1])
+    conv_engine.compile(
+        img_64,
+        expected_input_shape=[-1, 3, -1, -1],
+        expected_output_shape=[-1, 2, -1, -1],
+    )
 
     img_128 = munet.from_numpy(np.random.randn(2, 3, 128, 128).astype(np.float32))
     y_128 = conv_engine.run(img_128)

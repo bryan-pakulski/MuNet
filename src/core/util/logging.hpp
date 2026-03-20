@@ -57,9 +57,7 @@ inline uint64_t next_trace_id() {
   return next_id.fetch_add(1);
 }
 
-inline uint64_t current_trace_id() {
-  return trace_context_state().trace_id;
-}
+inline uint64_t current_trace_id() { return trace_context_state().trace_id; }
 
 inline std::string join_trace_spans(const std::vector<std::string> &spans,
                                     size_t limit = std::string::npos) {

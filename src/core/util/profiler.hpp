@@ -145,7 +145,8 @@ private:
       return a.total_us > b.total_us;
     });
 
-    std::cerr << MUNET_C_GREEN << "\n--- " << title << " ---\n" << MUNET_C_RESET;
+    std::cerr << MUNET_C_GREEN << "\n--- " << title << " ---\n"
+              << MUNET_C_RESET;
     std::cerr << "Total CPU(us): " << std::fixed << std::setprecision(1)
               << total_cpu << " | Total GPU(us): " << total_gpu << "\n";
     std::cerr << std::left << std::setw(32) << "Op [Last Shape]" << std::setw(8)
@@ -167,8 +168,8 @@ private:
           r.name + (s.last_shape.empty() ? "" : " " + s.last_shape);
       std::cerr << std::left << std::setw(32) << label.substr(0, 31)
                 << std::setw(8) << s.count << std::setw(12) << std::fixed
-                << std::setprecision(1) << avg_cpu << std::setw(12)
-                << avg_gpu << std::setw(12) << s.max_gpu_us << std::setw(12)
+                << std::setprecision(1) << avg_cpu << std::setw(12) << avg_gpu
+                << std::setw(12) << s.max_gpu_us << std::setw(12)
                 << std::setprecision(3) << bandwidth << std::setw(10)
                 << std::setprecision(1) << pct << std::endl;
     }

@@ -28,13 +28,13 @@ struct SavedTensor {
   Tensor unpack() const {
     auto locked = impl.lock();
     if (!locked) {
-      throw std::runtime_error("Saved tensor for backward is no longer available");
+      throw std::runtime_error(
+          "Saved tensor for backward is no longer available");
     }
     if (locked->version_counter != version) {
       const std::string name = debug_name.empty() ? "saved tensor" : debug_name;
-      throw std::runtime_error(
-          "In-place mutation detected for " + name +
-          " after it was captured for backward");
+      throw std::runtime_error("In-place mutation detected for " + name +
+                               " after it was captured for backward");
     }
 
     Tensor restored;
@@ -172,7 +172,8 @@ class ExecutionEngine {
 public:
   void execute(const BackwardRequest &request) {
     if (!request.root_node) {
-      throw std::runtime_error("backward() requires a valid autograd root node");
+      throw std::runtime_error(
+          "backward() requires a valid autograd root node");
     }
     if (request.create_graph) {
       throw std::runtime_error(
@@ -220,7 +221,8 @@ public:
       for (const auto &extension : request.extensions) {
         if (extension) {
           extension->on_node_ready(*task, accumulated_grad);
-          accumulated_grad = extension->process_gradient(*task, accumulated_grad);
+          accumulated_grad =
+              extension->process_gradient(*task, accumulated_grad);
         }
       }
 
@@ -292,7 +294,8 @@ private:
     return accumulated_grad;
   }
 
-  void schedule_next_edges(const Node &task, const std::vector<Tensor> &output_grads,
+  void schedule_next_edges(const Node &task,
+                           const std::vector<Tensor> &output_grads,
                            GraphState &state) {
     for (size_t i = 0; i < task.next_edges.size(); ++i) {
       const auto &edge = task.next_edges[i];
@@ -304,9 +307,8 @@ private:
       if (i < output_grads.size() && output_grads[i].impl_) {
         auto grad_buffer_it = state.grad_buffers.find(parent);
         if (grad_buffer_it == state.grad_buffers.end()) {
-          grad_buffer_it = state.grad_buffers
-                               .emplace(parent, pool_.acquire())
-                               .first;
+          grad_buffer_it =
+              state.grad_buffers.emplace(parent, pool_.acquire()).first;
         }
         grad_buffer_it->second.push_back(output_grads[i]);
 

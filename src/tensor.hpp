@@ -65,15 +65,15 @@ public:
 
   Tensor(Shape shape, const TensorOptions &options) {
     impl_ = std::make_shared<TensorImpl>(std::move(shape), options.device,
-                                         options.dtype,
-                                         options.requires_grad);
+                                         options.dtype, options.requires_grad);
   }
 
   Tensor(Shape shape, Device dev = Device{DeviceType::CPU, 0},
          DataType dtype = DataType::Float32, bool requires_grad = false)
-      : Tensor(std::move(shape),
-               TensorOptions{}.with_device(dev).with_dtype(dtype).with_requires_grad(
-                   requires_grad)) {}
+      : Tensor(std::move(shape), TensorOptions{}
+                                     .with_device(dev)
+                                     .with_dtype(dtype)
+                                     .with_requires_grad(requires_grad)) {}
 
   const Shape &shape() const { return impl_->shape; }
   const Strides &strides() const { return impl_->strides; }
@@ -82,14 +82,21 @@ public:
   Device device() const { return impl_->storage->device(); }
   DataType dtype() const { return impl_->storage->dtype(); }
   TensorOptions options() const {
-    return TensorOptions{}.with_device(device()).with_dtype(dtype()).with_requires_grad(
-        requires_grad());
+    return TensorOptions{}
+        .with_device(device())
+        .with_dtype(dtype())
+        .with_requires_grad(requires_grad());
   }
-  void *data() { return impl_->storage->data(); }
-  const void *data() const { return impl_->storage->data(); }
+  void *data() {
+    return static_cast<char *>(impl_->storage->data()) +
+           storage_offset() * dtype_size(dtype());
+  }
+  const void *data() const {
+    return static_cast<const char *>(impl_->storage->data()) +
+           storage_offset() * dtype_size(dtype());
+  }
   size_t size() const { return numel(impl_->shape); }
-  size_t bytes() const { return impl_->storage->size_bytes(); }
-
+  size_t bytes() const { return size() * dtype_size(dtype()); }
   const std::string &name() const { return impl_->name; }
   void set_name(const std::string &name) { impl_->name = name; }
 

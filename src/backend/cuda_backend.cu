@@ -1,10 +1,10 @@
+#include "../core/util.hpp"
 #include "../storage.hpp"
 #include "cpu_backend.hpp"
 #include "cuda_backend.hpp"
-#include "../core/util.hpp"
+#include <chrono>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
-#include <chrono>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -22,7 +22,7 @@
   do {                                                                         \
     cublasStatus_t status = call;                                              \
     if (status != CUBLAS_STATUS_SUCCESS) {                                     \
-      throw std::runtime_error(std::string("cuBLAS Error: ") +                \
+      throw std::runtime_error(std::string("cuBLAS Error: ") +                 \
                                std::to_string(status));                        \
     }                                                                          \
   } while (0)
@@ -39,9 +39,10 @@ constexpr size_t kLargeAllocationSlowPathBytes = 16 * 1024 * 1024;
 
 inline auto profile_now() { return std::chrono::high_resolution_clock::now(); }
 
-void record_cuda_profile_event(const char *domain, const char *event,
-                               const std::chrono::high_resolution_clock::time_point &start,
-                               size_t bytes = 0) {
+void record_cuda_profile_event(
+    const char *domain, const char *event,
+    const std::chrono::high_resolution_clock::time_point &start,
+    size_t bytes = 0) {
   if (!is_profile_enabled()) {
     return;
   }
@@ -59,8 +60,8 @@ CUDABackend::CUDABackend(int device_index) : device_index_(device_index) {
   CUDA_CHECK(cudaGetDeviceCount(&device_count));
   if (device_index_ < 0 || device_index_ >= device_count) {
     throw std::runtime_error("Requested CUDA device index out of range: " +
-                             std::to_string(device_index_) +
-                             " (available: " + std::to_string(device_count) + ")");
+                             std::to_string(device_index_) + " (available: " +
+                             std::to_string(device_count) + ")");
   }
 
   CUDA_CHECK(cudaSetDevice(device_index_));
@@ -787,6 +788,21 @@ __global__ void sum_to_shape_kernel(const float *in, float *out, int ndim,
   atomicAdd(&out[out_off], in[i]);
 }
 
+__global__ void to_contiguous_kernel(const float *src, float *dst,
+                                     GPULayoutInfo info) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= info.total)
+    return;
+
+  size_t src_off = info.storage_offset;
+  size_t rem = idx;
+  for (int d = info.ndim - 1; d >= 0; --d) {
+    src_off += (rem % info.shape[d]) * info.strides[d];
+    rem /= info.shape[d];
+  }
+  dst[idx] = src[src_off];
+}
+
 void *CUDABackend::allocate(size_t bytes) {
   cudaSetDevice(device_index_);
   cudaEventRecord((cudaEvent_t)start_event_);
@@ -1283,8 +1299,8 @@ void CUDABackend::sqrt(const Storage &in, Storage &out, size_t num_elements) {
   int threads = 256;
   int blocks = (num_elements + threads - 1) / threads;
   cudaEventRecord((cudaEvent_t)start_event_);
-  sqrt_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
-                                   num_elements);
+  sqrt_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                   (float *)out.data(), num_elements);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }
@@ -1557,6 +1573,25 @@ void CUDABackend::sum_to_shape(const Storage &in, Storage &out,
   CUDA_CHECK(cudaFree(d_in_shape));
   CUDA_CHECK(cudaFree(d_out_shape));
   CUDA_CHECK(cudaFree(d_out_strides));
+}
+
+void CUDABackend::to_contiguous(const Storage &src, Storage &dst,
+                                const Shape &shape, const Strides &strides,
+                                size_t offset) {
+  cudaSetDevice(device_index_);
+  GPULayoutInfo info;
+  info.ndim = shape.size();
+  info.total = numel(shape);
+  info.storage_offset = offset;
+  for (int i = 0; i < info.ndim; ++i) {
+    info.shape[i] = shape[i];
+    info.strides[i] = strides[i];
+  }
+
+  int threads = 256;
+  int blocks = (info.total + threads - 1) / threads;
+  to_contiguous_kernel<<<blocks, threads>>>((const float *)src.data(),
+                                            (float *)dst.data(), info);
 }
 
 } // namespace munet

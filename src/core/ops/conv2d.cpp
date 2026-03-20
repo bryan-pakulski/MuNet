@@ -11,8 +11,10 @@ Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
   if (bias.impl_) {
     detail::require_same_dtype(op_metadata(OpId::Conv2D).name, in, bias);
   }
-  if (in.device() != weight.device() || (bias.impl_ && bias.device() != in.device())) {
-    MUNET_ERROR << "conv2d: inputs not on same device: " << in.device().to_string()
+  if (in.device() != weight.device() ||
+      (bias.impl_ && bias.device() != in.device())) {
+    MUNET_ERROR << "conv2d: inputs not on same device: "
+                << in.device().to_string()
                 << " != " << weight.device().to_string() << std::endl;
     throw std::runtime_error("Conv2d: inputs must be on same device");
   }
@@ -22,8 +24,8 @@ Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
 
   if (in.shape().size() != 4 || weight.shape().size() != 4) {
     MUNET_ERROR << "conv2d: inputs must be 4D, in.shape: "
-                << to_string(in.shape()) << " weight shape: "
-                << to_string(weight.shape()) << std::endl;
+                << to_string(in.shape())
+                << " weight shape: " << to_string(weight.shape()) << std::endl;
     throw std::runtime_error("Conv2d: inputs must be 4D (NCHW)");
   }
 
@@ -50,9 +52,8 @@ Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
                              *out.impl_->storage, B, iC, iH, iW, oC, kH, kW,
                              stride, padding);
 
-  if (GradMode::is_enabled() &&
-      (in.requires_grad() || weight.requires_grad() ||
-       (bias.impl_ && bias.requires_grad()))) {
+  if (GradMode::is_enabled() && (in.requires_grad() || weight.requires_grad() ||
+                                 (bias.impl_ && bias.requires_grad()))) {
     auto fn = std::make_shared<autograd_nodes::Conv2DBackward>(in, weight, bias,
                                                                stride, padding);
     std::vector<Tensor> inputs = {in, weight};

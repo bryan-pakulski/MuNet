@@ -1,13 +1,13 @@
-#include "inference.hpp"
 #include "backend/cpu_backend.hpp"
-#include "nn.hpp"
 #include "core/util/profiler.hpp"
+#include "inference.hpp"
+#include "nn.hpp"
 #include "test_utils.hpp"
-#include <gtest/gtest.h>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <type_traits>
 
 using namespace munet;
@@ -34,9 +34,9 @@ public:
     weight.fill_(1.0f);
     register_parameter("weight", weight);
 
-    running = Tensor({1}, options.device,
-                     accumulation_type(AccumulationOp::Elementwise, options.dtype),
-                     false);
+    running = Tensor(
+        {1}, options.device,
+        accumulation_type(AccumulationOp::Elementwise, options.dtype), false);
     running.fill_(0.0f);
     register_buffer("running", running);
   }
@@ -104,7 +104,8 @@ std::vector<uint8_t> encode_unicode_scalar_npy(const std::string &value) {
 
 std::vector<uint8_t> encode_bool_scalar_npy(bool value) {
   std::vector<uint8_t> out = {0x93, 'N', 'U', 'M', 'P', 'Y', 0x01, 0x00};
-  std::string header_str = "{'descr': '|b1', 'fortran_order': False, 'shape': (), }";
+  std::string header_str =
+      "{'descr': '|b1', 'fortran_order': False, 'shape': (), }";
   size_t header_len = header_str.size() + 1;
   while ((10 + header_len) % 16 != 0) {
     ++header_len;
@@ -119,7 +120,8 @@ std::vector<uint8_t> encode_bool_scalar_npy(bool value) {
 
 std::vector<uint8_t> encode_int64_scalar_npy(int64_t value) {
   std::vector<uint8_t> out = {0x93, 'N', 'U', 'M', 'P', 'Y', 0x01, 0x00};
-  std::string header_str = "{'descr': '<i8', 'fortran_order': False, 'shape': (), }";
+  std::string header_str =
+      "{'descr': '<i8', 'fortran_order': False, 'shape': (), }";
   size_t header_len = header_str.size() + 1;
   while ((10 + header_len) % 16 != 0) {
     ++header_len;
@@ -129,7 +131,8 @@ std::vector<uint8_t> encode_int64_scalar_npy(int64_t value) {
   append_u16_le(out, static_cast<uint16_t>(header_str.size()));
   out.insert(out.end(), header_str.begin(), header_str.end());
   for (int i = 0; i < 8; ++i) {
-    out.push_back(static_cast<uint8_t>((static_cast<uint64_t>(value) >> (8 * i)) & 0xff));
+    out.push_back(
+        static_cast<uint8_t>((static_cast<uint64_t>(value) >> (8 * i)) & 0xff));
   }
   return out;
 }
@@ -143,12 +146,15 @@ std::string npy_descr_for_tensor(const Tensor &tensor) {
   case DataType::Int32:
     return "<i4";
   default:
-    throw std::runtime_error("Unsupported tensor dtype in test artifact writer");
+    throw std::runtime_error(
+        "Unsupported tensor dtype in test artifact writer");
   }
 }
 
 std::vector<uint8_t> encode_tensor_npy(const Tensor &tensor) {
-  Tensor cpu = tensor.device().type == DeviceType::CPU ? tensor : tensor.to(Device{DeviceType::CPU, 0});
+  Tensor cpu = tensor.device().type == DeviceType::CPU
+                   ? tensor
+                   : tensor.to(Device{DeviceType::CPU, 0});
   std::vector<uint8_t> out = {0x93, 'N', 'U', 'M', 'P', 'Y', 0x01, 0x00};
   std::ostringstream header;
   header << "{'descr': '" << npy_descr_for_tensor(cpu)
@@ -177,10 +183,9 @@ std::vector<uint8_t> encode_tensor_npy(const Tensor &tensor) {
   return out;
 }
 
-std::filesystem::path write_npz_artifact(
-    const std::string &base_name,
-    const std::string &config_json,
-    const std::map<std::string, Tensor> &tensors) {
+std::filesystem::path
+write_npz_artifact(const std::string &base_name, const std::string &config_json,
+                   const std::map<std::string, Tensor> &tensors) {
   std::vector<std::string> tensor_names;
   tensor_names.reserve(tensors.size());
   for (const auto &entry : tensors) {
@@ -199,17 +204,26 @@ std::filesystem::path write_npz_artifact(
 
   std::vector<std::pair<std::string, std::vector<uint8_t>>> entries;
   entries.push_back({"__config__.npy", encode_unicode_scalar_npy(config_json)});
-  entries.push_back({"__format_name__.npy", encode_unicode_scalar_npy("munet_model")});
+  entries.push_back(
+      {"__format_name__.npy", encode_unicode_scalar_npy("munet_model")});
   entries.push_back({"__format_revision__.npy", encode_int64_scalar_npy(1)});
-  entries.push_back({"__format_version__.npy", encode_unicode_scalar_npy("munet_model_v1")});
+  entries.push_back(
+      {"__format_version__.npy", encode_unicode_scalar_npy("munet_model_v1")});
   entries.push_back({"__producer__.npy", encode_unicode_scalar_npy("munet")});
-  entries.push_back({"__artifact_kind__.npy", encode_unicode_scalar_npy("deploy_model")});
-  entries.push_back({"__artifact_scope__.npy", encode_unicode_scalar_npy("runtime_only")});
-  entries.push_back({"__default_load_mode__.npy", encode_unicode_scalar_npy("eval")});
-  entries.push_back({"__contains_training_state__.npy", encode_bool_scalar_npy(false)});
-  entries.push_back({"__recommended_loader__.npy", encode_unicode_scalar_npy("load_for_inference")});
-  entries.push_back({"__compile_contract_policy__.npy", encode_unicode_scalar_npy("external")});
-  entries.push_back({"__tensor_names__.npy", encode_unicode_scalar_npy(manifest.str())});
+  entries.push_back(
+      {"__artifact_kind__.npy", encode_unicode_scalar_npy("deploy_model")});
+  entries.push_back(
+      {"__artifact_scope__.npy", encode_unicode_scalar_npy("runtime_only")});
+  entries.push_back(
+      {"__default_load_mode__.npy", encode_unicode_scalar_npy("eval")});
+  entries.push_back(
+      {"__contains_training_state__.npy", encode_bool_scalar_npy(false)});
+  entries.push_back({"__recommended_loader__.npy",
+                     encode_unicode_scalar_npy("load_for_inference")});
+  entries.push_back({"__compile_contract_policy__.npy",
+                     encode_unicode_scalar_npy("external")});
+  entries.push_back(
+      {"__tensor_names__.npy", encode_unicode_scalar_npy(manifest.str())});
   for (const auto &entry : tensors) {
     entries.push_back({entry.first + ".npy", encode_tensor_npy(entry.second)});
   }
@@ -218,7 +232,8 @@ std::filesystem::path write_npz_artifact(
   const auto path = dir / (base_name + ".npz");
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   if (!out) {
-    throw std::runtime_error("Unable to create test artifact: " + path.string());
+    throw std::runtime_error("Unable to create test artifact: " +
+                             path.string());
   }
 
   struct CentralDirectoryEntry {
@@ -230,7 +245,8 @@ std::filesystem::path write_npz_artifact(
   uint32_t offset = 0;
 
   for (const auto &entry : entries) {
-    directory.push_back({entry.first, offset, static_cast<uint32_t>(entry.second.size())});
+    directory.push_back(
+        {entry.first, offset, static_cast<uint32_t>(entry.second.size())});
     std::vector<uint8_t> header;
     append_u32_le(header, 0x04034b50U);
     append_u16_le(header, 20);
@@ -243,10 +259,14 @@ std::filesystem::path write_npz_artifact(
     append_u32_le(header, static_cast<uint32_t>(entry.second.size()));
     append_u16_le(header, static_cast<uint16_t>(entry.first.size()));
     append_u16_le(header, 0);
-    out.write(reinterpret_cast<const char *>(header.data()), static_cast<std::streamsize>(header.size()));
-    out.write(entry.first.data(), static_cast<std::streamsize>(entry.first.size()));
-    out.write(reinterpret_cast<const char *>(entry.second.data()), static_cast<std::streamsize>(entry.second.size()));
-    offset += static_cast<uint32_t>(header.size() + entry.first.size() + entry.second.size());
+    out.write(reinterpret_cast<const char *>(header.data()),
+              static_cast<std::streamsize>(header.size()));
+    out.write(entry.first.data(),
+              static_cast<std::streamsize>(entry.first.size()));
+    out.write(reinterpret_cast<const char *>(entry.second.data()),
+              static_cast<std::streamsize>(entry.second.size()));
+    offset += static_cast<uint32_t>(header.size() + entry.first.size() +
+                                    entry.second.size());
   }
 
   const uint32_t central_directory_offset = offset;
@@ -269,8 +289,10 @@ std::filesystem::path write_npz_artifact(
     append_u16_le(header, 0);
     append_u32_le(header, 0);
     append_u32_le(header, entry.local_offset);
-    out.write(reinterpret_cast<const char *>(header.data()), static_cast<std::streamsize>(header.size()));
-    out.write(entry.name.data(), static_cast<std::streamsize>(entry.name.size()));
+    out.write(reinterpret_cast<const char *>(header.data()),
+              static_cast<std::streamsize>(header.size()));
+    out.write(entry.name.data(),
+              static_cast<std::streamsize>(entry.name.size()));
     offset += static_cast<uint32_t>(header.size() + entry.name.size());
   }
 
@@ -284,7 +306,8 @@ std::filesystem::path write_npz_artifact(
   append_u32_le(eocd, central_directory_size);
   append_u32_le(eocd, central_directory_offset);
   append_u16_le(eocd, 0);
-  out.write(reinterpret_cast<const char *>(eocd.data()), static_cast<std::streamsize>(eocd.size()));
+  out.write(reinterpret_cast<const char *>(eocd.data()),
+            static_cast<std::streamsize>(eocd.size()));
   out.close();
   return path;
 }
@@ -306,7 +329,6 @@ TEST(InferenceTest, TrainCallKeepsEvalMode) {
   auto y = m->forward(x);
   EXPECT_EQ(y.size(), x.size());
 }
-
 
 TEST(InferenceTest, EngineLoadPrepareRunAndStats) {
   auto m = std::make_shared<IdentityLayer>();
@@ -357,7 +379,6 @@ TEST(InferenceTest, EngineRunBatch) {
   EXPECT_EQ(engine.stats().runs, 2u);
 }
 
-
 TEST(InferenceTest, EngineCompileCapturesShapeAndStats) {
   auto m = std::make_shared<IdentityLayer>();
   inference::Engine engine;
@@ -394,7 +415,6 @@ TEST(InferenceTest, EngineStrictShapeCheckAfterCompile) {
   engine.set_strict_shape_check(false);
   EXPECT_NO_THROW((void)engine.run(bad));
 }
-
 
 TEST(InferenceTest, EngineCompileWithDynamicInputShape) {
   auto m = std::make_shared<IdentityLayer>();
@@ -457,9 +477,12 @@ TEST(InferenceTest, EnginePreservesFloat16LinearOutputsAcrossAvailableDevices) {
   Tensor bias_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
   float *w = static_cast<float *>(weight_cpu.data());
   float *b = static_cast<float *>(bias_cpu.data());
-  w[0] = 1.0f; w[1] = 2.0f;
-  w[2] = -1.0f; w[3] = 0.5f;
-  b[0] = 0.25f; b[1] = -0.75f;
+  w[0] = 1.0f;
+  w[1] = 2.0f;
+  w[2] = -1.0f;
+  w[3] = 0.5f;
+  b[0] = 0.25f;
+  b[1] = -0.75f;
   linear->weight = weight_cpu.to(DataType::Float16);
   linear->bias = bias_cpu.to(DataType::Float16);
 
@@ -469,14 +492,17 @@ TEST(InferenceTest, EnginePreservesFloat16LinearOutputsAcrossAvailableDevices) {
   x_ptr[1] = -2.0f;
   Tensor x = x32.to(DataType::Float16);
 
-  Tensor expected = linear->forward(x).to(Device{DeviceType::CPU, 0}).to(DataType::Float32);
+  Tensor expected =
+      linear->forward(x).to(Device{DeviceType::CPU, 0}).to(DataType::Float32);
 
   for (const Device &device : test::get_available_devices()) {
     inference::Engine engine;
     engine.set_device(device);
     engine.load(linear);
 
-    Tensor y = engine.run(x.to(device)).to(Device{DeviceType::CPU, 0}).to(DataType::Float32);
+    Tensor y = engine.run(x.to(device))
+                   .to(Device{DeviceType::CPU, 0})
+                   .to(DataType::Float32);
     EXPECT_EQ(y.dtype(), DataType::Float32);
     EXPECT_TRUE(test::all_close(y, expected, 2e-1f)) << device.to_string();
   }
@@ -600,16 +626,14 @@ TEST(InferenceTest, EngineProfilesLifecyclePhasesIntoStatsAndProfiler) {
             snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("inference.run.prepare_input"),
             snapshot.stats.end());
-  EXPECT_NE(snapshot.stats.find("inference.run.forward"),
-            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("inference.run.forward"), snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("inference.run.validate_output"),
             snapshot.stats.end());
   const auto compile_forward = snapshot.stats.find("inference.compile.forward");
   ASSERT_NE(compile_forward, snapshot.stats.end());
-  EXPECT_NE(
-      compile_forward->second.last_shape.find("trace_id=" +
-                                              std::to_string(stats.last_compile_trace_id)),
-      std::string::npos);
+  EXPECT_NE(compile_forward->second.last_shape.find(
+                "trace_id=" + std::to_string(stats.last_compile_trace_id)),
+            std::string::npos);
   EXPECT_NE(compile_forward->second.last_shape.find("span=compile.forward"),
             std::string::npos);
   const auto run_forward = snapshot.stats.find("inference.run.forward");
@@ -698,8 +722,9 @@ TEST(InferenceTest, EngineCachesTransferredInputAcrossCompileAndRun) {
   EXPECT_EQ(copies_after_mutation, copies_before_mutation + 1);
   EXPECT_EQ(*copy_count, copies_after_mutation + 1);
 
-  BackendManager::register_backend(DeviceType::UNKNOWN,
-                                   [](Device) { return std::make_shared<CPUBackend>(); });
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device) {
+    return std::make_shared<CPUBackend>();
+  });
 }
 
 TEST(InferenceTest, EngineRejectsAutogradInputBeforeTransfer) {
@@ -720,8 +745,9 @@ TEST(InferenceTest, EngineRejectsAutogradInputBeforeTransfer) {
   EXPECT_THROW((void)engine.run(x), std::runtime_error);
   EXPECT_EQ(*copy_count, 0);
 
-  BackendManager::register_backend(DeviceType::UNKNOWN,
-                                   [](Device) { return std::make_shared<CPUBackend>(); });
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device) {
+    return std::make_shared<CPUBackend>();
+  });
 }
 
 TEST(InferenceTest, EngineCachesPreparedBatchInputsAcrossBatchRuns) {
@@ -749,8 +775,9 @@ TEST(InferenceTest, EngineCachesPreparedBatchInputsAcrossBatchRuns) {
   ASSERT_EQ(second.size(), 2u);
   EXPECT_EQ(*copy_count, 2);
 
-  BackendManager::register_backend(DeviceType::UNKNOWN,
-                                   [](Device) { return std::make_shared<CPUBackend>(); });
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device) {
+    return std::make_shared<CPUBackend>();
+  });
 }
 
 TEST(InferenceTest, EngineLoadSkipsTransfersForPrepositionedModule) {
@@ -772,8 +799,9 @@ TEST(InferenceTest, EngineLoadSkipsTransfersForPrepositionedModule) {
 
   EXPECT_EQ(*copy_count, 0);
 
-  BackendManager::register_backend(DeviceType::UNKNOWN,
-                                   [](Device) { return std::make_shared<CPUBackend>(); });
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device) {
+    return std::make_shared<CPUBackend>();
+  });
 }
 
 TEST(InferenceTest, EnginePreparedInputCacheCanBeBoundedToSingleEntry) {
@@ -807,8 +835,9 @@ TEST(InferenceTest, EnginePreparedInputCacheCanBeBoundedToSingleEntry) {
   EXPECT_EQ(stats_after_second.prepared_input_cache_entries, 1u);
   EXPECT_GE(stats_after_second.prepared_input_cache_evictions, 3u);
 
-  BackendManager::register_backend(DeviceType::UNKNOWN,
-                                   [](Device) { return std::make_shared<CPUBackend>(); });
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device) {
+    return std::make_shared<CPUBackend>();
+  });
 }
 
 TEST(InferenceTest, EnginePrepareBatchPrepopulatesPreparedInputCache) {
@@ -840,8 +869,9 @@ TEST(InferenceTest, EnginePrepareBatchPrepopulatesPreparedInputCache) {
   const auto stats_after_run = engine.stats();
   EXPECT_EQ(stats_after_run.prepared_input_cache_hits, 2u);
 
-  BackendManager::register_backend(DeviceType::UNKNOWN,
-                                   [](Device) { return std::make_shared<CPUBackend>(); });
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device) {
+    return std::make_shared<CPUBackend>();
+  });
 }
 
 TEST(InferenceTest, LoadSerializedReconstructsDeployModuleInCpp) {
@@ -858,10 +888,9 @@ TEST(InferenceTest, LoadSerializedReconstructsDeployModuleInCpp) {
 
   const std::string config =
       R"({"type":"Sequential","layers":[{"type":"Linear","in_features":2,"out_features":2,"bias":true,"dtype":"float32"},{"type":"ReLU"}]})";
-  const auto path = write_npz_artifact(
-      "munet_cpp_load_serialized_roundtrip",
-      config,
-      {{"0.bias", bias}, {"0.weight", weight}});
+  const auto path =
+      write_npz_artifact("munet_cpp_load_serialized_roundtrip", config,
+                         {{"0.bias", bias}, {"0.weight", weight}});
 
   auto module = inference::load_serialized(path.string());
   ASSERT_TRUE(module);
@@ -882,10 +911,8 @@ TEST(InferenceTest, LoadSerializedReconstructsDeployModuleInCpp) {
 TEST(InferenceTest, LoadSerializedNormalizesModuleForInferenceEval) {
   const std::string config =
       R"({"type":"Sequential","layers":[{"type":"Dropout","p":0.9}]})";
-  const auto path = write_npz_artifact(
-      "munet_cpp_load_serialized_eval_mode",
-      config,
-      {});
+  const auto path =
+      write_npz_artifact("munet_cpp_load_serialized_eval_mode", config, {});
 
   auto module = inference::load_serialized(path.string());
   ASSERT_TRUE(module);
@@ -915,10 +942,9 @@ TEST(InferenceTest, EngineLoadCanAcceptSerializedArtifactPath) {
 
   const std::string config =
       R"({"type":"Linear","in_features":2,"out_features":2,"bias":true,"dtype":"float32"})";
-  const auto path = write_npz_artifact(
-      "munet_cpp_engine_load_serialized",
-      config,
-      {{"bias", bias}, {"weight", weight}});
+  const auto path =
+      write_npz_artifact("munet_cpp_engine_load_serialized", config,
+                         {{"bias", bias}, {"weight", weight}});
 
   inference::Engine engine;
   engine.load(path.string());
@@ -936,7 +962,8 @@ TEST(InferenceTest, EngineLoadCanAcceptSerializedArtifactPath) {
   std::remove(path.string().c_str());
 }
 
-TEST(InferenceTest, LoadWeightsSerializedRestoresExistingModuleAndSetsEvalMode) {
+TEST(InferenceTest,
+     LoadWeightsSerializedRestoresExistingModuleAndSetsEvalMode) {
   Tensor weight({2, 2}, Device{DeviceType::CPU, 0}, DataType::Float32, false);
   Tensor bias({2}, Device{DeviceType::CPU, 0}, DataType::Float32, false);
   auto *w = static_cast<float *>(weight.data());
@@ -950,10 +977,9 @@ TEST(InferenceTest, LoadWeightsSerializedRestoresExistingModuleAndSetsEvalMode) 
 
   const std::string config =
       R"({"type":"Sequential","layers":[{"type":"Dropout","p":0.75},{"type":"Linear","in_features":2,"out_features":2,"bias":true,"dtype":"float32"}]})";
-  const auto path = write_npz_artifact(
-      "munet_cpp_load_weights_serialized",
-      config,
-      {{"1.bias", bias}, {"1.weight", weight}});
+  const auto path =
+      write_npz_artifact("munet_cpp_load_weights_serialized", config,
+                         {{"1.bias", bias}, {"1.weight", weight}});
 
   auto module = std::make_shared<nn::Sequential>();
   module->add(std::make_shared<nn::Dropout>(0.75f));

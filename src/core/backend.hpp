@@ -199,6 +199,9 @@ public:
   virtual void all_reduce(Storage &buffer, size_t num_elements) = 0;
   virtual double get_last_kernel_time_us() = 0;
   virtual bool reports_gpu_kernel_time() const { return false; }
+  virtual void to_contiguous(const Storage &src, Storage &dst,
+                             const Shape &shape, const Strides &strides,
+                             size_t offset) = 0;
 };
 
 class BackendElementwiseCapability {
@@ -298,8 +301,7 @@ public:
   virtual void upsample2d(const Storage &in, Storage &out, int B, int C, int iH,
                           int iW, int scale) = 0;
   virtual void upsample2d_backward(const Storage &grad_out, Storage &grad_in,
-                                   int B, int C, int iH, int iW,
-                                   int scale) = 0;
+                                   int B, int C, int iH, int iW, int scale) = 0;
 };
 
 class BackendNormalizationCapability {
@@ -309,8 +311,7 @@ public:
                           const Storage &bias, Storage &running_mean,
                           Storage &running_var, Storage &save_mean,
                           Storage &save_var, Storage &out, int B, int C, int H,
-                          int W, float momentum, float eps,
-                          bool training) = 0;
+                          int W, float momentum, float eps, bool training) = 0;
   virtual void batch_norm_backward(const Storage &grad_out, const Storage &in,
                                    const Storage &scale,
                                    const Storage &save_mean,
@@ -342,7 +343,8 @@ public:
   virtual ~Backend() = default;
   virtual const char *name() const = 0;
 
-  virtual BackendAllocationTransferCapability *allocation_transfer_capability() {
+  virtual BackendAllocationTransferCapability *
+  allocation_transfer_capability() {
     return nullptr;
   }
   virtual const BackendAllocationTransferCapability *
@@ -390,9 +392,7 @@ public:
     return nullptr;
   }
 
-  virtual BackendOptimizerCapability *optimizer_capability() {
-    return nullptr;
-  }
+  virtual BackendOptimizerCapability *optimizer_capability() { return nullptr; }
   virtual const BackendOptimizerCapability *optimizer_capability() const {
     return nullptr;
   }
@@ -432,8 +432,8 @@ public:
     return default_backend_accumulation_dtype(feature, dtype);
   }
 
-  virtual BackendFallbackPolicy preferred_fallback_policy(
-      BackendFeature feature, DataType dtype) const {
+  virtual BackendFallbackPolicy
+  preferred_fallback_policy(BackendFeature feature, DataType dtype) const {
     (void)dtype;
     return backend_feature_default_fallback_policy(feature);
   }
@@ -471,8 +471,7 @@ public:
   }
   double get_last_kernel_time_us() {
     return require_capability(allocation_transfer_capability(),
-                              "allocation_transfer",
-                              "get_last_kernel_time_us")
+                              "allocation_transfer", "get_last_kernel_time_us")
         ->get_last_kernel_time_us();
   }
   bool reports_gpu_kernel_time() const {
@@ -481,8 +480,7 @@ public:
   }
 
   void broadcast_row(const Storage &src, Storage &dst, int rows, int cols) {
-    require_capability(elementwise_capability(), "elementwise",
-                       "broadcast_row")
+    require_capability(elementwise_capability(), "elementwise", "broadcast_row")
         ->broadcast_row(src, dst, rows, cols);
   }
   void add(const Storage &a, const Storage &b, Storage &out,
@@ -511,8 +509,7 @@ public:
   }
   void relu_backward(const Storage &grad_out, const Storage &input,
                      Storage &grad_in, size_t num_elements) {
-    require_capability(elementwise_capability(), "elementwise",
-                       "relu_backward")
+    require_capability(elementwise_capability(), "elementwise", "relu_backward")
         ->relu_backward(grad_out, input, grad_in, num_elements);
   }
   void sigmoid(const Storage &in, Storage &out, size_t num_elements) {
@@ -590,8 +587,8 @@ public:
                               const Storage &targets, Storage &grad_in,
                               int batch_size, int num_classes, int spatial) {
     require_capability(loss_capability(), "loss", "cross_entropy_backward")
-        ->cross_entropy_backward(grad_out, logits, targets, grad_in,
-                                 batch_size, num_classes, spatial);
+        ->cross_entropy_backward(grad_out, logits, targets, grad_in, batch_size,
+                                 num_classes, spatial);
   }
   void mse_loss(const Storage &pred, const Storage &target, Storage &out_loss,
                 size_t num_elements) {
@@ -619,27 +616,25 @@ public:
         ->conv2d_backward(grad_out, in, weight, grad_in, grad_w, grad_b, B, iC,
                           iH, iW, oC, kH, kW, s, p);
   }
-  void max_pool2d(const Storage &in, Storage &out, int B, int C, int iH,
-                  int iW, int k, int s, int p) {
+  void max_pool2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
+                  int k, int s, int p) {
     require_capability(spatial_capability(), "spatial", "max_pool2d")
         ->max_pool2d(in, out, B, C, iH, iW, k, s, p);
   }
   void max_pool2d_backward(const Storage &grad_out, const Storage &in,
                            Storage &grad_in, int B, int C, int iH, int iW,
                            int k, int s, int p) {
-    require_capability(spatial_capability(), "spatial",
-                       "max_pool2d_backward")
+    require_capability(spatial_capability(), "spatial", "max_pool2d_backward")
         ->max_pool2d_backward(grad_out, in, grad_in, B, C, iH, iW, k, s, p);
   }
-  void upsample2d(const Storage &in, Storage &out, int B, int C, int iH,
-                  int iW, int scale) {
+  void upsample2d(const Storage &in, Storage &out, int B, int C, int iH, int iW,
+                  int scale) {
     require_capability(spatial_capability(), "spatial", "upsample2d")
         ->upsample2d(in, out, B, C, iH, iW, scale);
   }
   void upsample2d_backward(const Storage &grad_out, Storage &grad_in, int B,
                            int C, int iH, int iW, int scale) {
-    require_capability(spatial_capability(), "spatial",
-                       "upsample2d_backward")
+    require_capability(spatial_capability(), "spatial", "upsample2d_backward")
         ->upsample2d_backward(grad_out, grad_in, B, C, iH, iW, scale);
   }
 
@@ -660,8 +655,8 @@ public:
                            int C, int H, int W, float eps) {
     require_capability(normalization_capability(), "normalization",
                        "batch_norm_backward")
-        ->batch_norm_backward(grad_out, in, scale, save_mean, save_var,
-                              grad_in, grad_scale, grad_bias, B, C, H, W, eps);
+        ->batch_norm_backward(grad_out, in, scale, save_mean, save_var, grad_in,
+                              grad_scale, grad_bias, B, C, H, W, eps);
   }
 
   void adam_step(Storage &params, const Storage &grads, Storage &exp_avg,
@@ -677,8 +672,7 @@ public:
         ->update(weight, grad, lr, num_elements);
   }
 
-  void fill_uniform(Storage &out, float low, float high,
-                    size_t num_elements) {
+  void fill_uniform(Storage &out, float low, float high, size_t num_elements) {
     require_capability(random_capability(), "random", "fill_uniform")
         ->fill_uniform(out, low, high, num_elements);
   }
@@ -697,6 +691,12 @@ public:
     require_capability(reduction_capability(), "reduction", "mean_last_dim")
         ->mean_last_dim(in, out, outer_size, dim_size);
   }
+  void to_contiguous(const Storage &src, Storage &dst, const Shape &shape,
+                     const Strides &strides, size_t offset) {
+    require_capability(allocation_transfer_capability(), "allocation_transfer",
+                       "to_contiguous")
+        ->to_contiguous(src, dst, shape, strides, offset);
+  }
 
 protected:
   template <typename Capability>
@@ -708,8 +708,7 @@ protected:
     }
     throw std::runtime_error(std::string("Backend '") + name() +
                              "' does not provide the '" + capability_group +
-                             "' capability required for '" + operation +
-                             "'.");
+                             "' capability required for '" + operation + "'.");
   }
 
 private:

@@ -16,7 +16,9 @@ class TinyLLM(munet.nn.Module):
     Note: this is a pragmatic stepping stone toward a full Transformer stack.
     """
 
-    def __init__(self, vocab_size: int, context_len: int, d_model: int = 32, hidden: int = 64):
+    def __init__(
+        self, vocab_size: int, context_len: int, d_model: int = 32, hidden: int = 64
+    ):
         super().__init__()
         self.vocab_size = vocab_size
         self.context_len = context_len
@@ -65,7 +67,9 @@ def sample_next(model: TinyLLM, context_tokens: np.ndarray, vocab_size: int):
     for t, idx in enumerate(context_tokens):
         x_oh[0, t, idx] = 1.0
 
-    pos_oh = np.zeros((1, context_tokens.shape[0], context_tokens.shape[0]), dtype=np.float32)
+    pos_oh = np.zeros(
+        (1, context_tokens.shape[0], context_tokens.shape[0]), dtype=np.float32
+    )
     for t in range(context_tokens.shape[0]):
         pos_oh[0, t, t] = 1.0
 

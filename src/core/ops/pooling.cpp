@@ -43,7 +43,8 @@ Tensor upsample2d(const Tensor &in, int scale_factor) {
                                  iH, iW, scale_factor);
 
   if (GradMode::is_enabled() && in.requires_grad()) {
-    auto fn = std::make_shared<autograd_nodes::Upsample2DBackward>(in, scale_factor);
+    auto fn =
+        std::make_shared<autograd_nodes::Upsample2DBackward>(in, scale_factor);
     link_backward_edges(fn.get(), {in});
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;

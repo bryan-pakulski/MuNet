@@ -2,8 +2,8 @@
 
 #include "../../autograd/engine.hpp"
 #include "../../core/op_dispatch.hpp"
-#include "../../types.hpp"
 #include "../../core/util.hpp"
+#include "../../types.hpp"
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -36,11 +36,10 @@ inline bool backend_supports(const Tensor &tensor, BackendFeature feature) {
 inline void require_backend_support(const std::string &op, const Tensor &tensor,
                                     BackendFeature feature) {
   if (!backend_supports(tensor, feature)) {
-    throw std::runtime_error(op + ": backend '" +
-                             std::string(tensor.impl_->backend().name()) +
-                             "' does not support feature '" +
-                             backend_feature_name(feature) + "' for dtype " +
-                             dtype_name(tensor.dtype()));
+    throw std::runtime_error(
+        op + ": backend '" + std::string(tensor.impl_->backend().name()) +
+        "' does not support feature '" + backend_feature_name(feature) +
+        "' for dtype " + dtype_name(tensor.dtype()));
   }
 }
 
@@ -81,7 +80,8 @@ inline Tensor binary_broadcast_cpu_fallback(const Tensor &a, const Tensor &b,
                            fn(lhs.value, rhs.value));
   }
 
-  return (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+  return (a.device().type == DeviceType::CPU) ? out_cpu
+                                              : out_cpu.to(a.device());
 }
 
 inline Tensor sum_to_shape_cpu_fallback(const Tensor &t,
@@ -121,7 +121,8 @@ inline Tensor sum_to_shape_cpu_fallback(const Tensor &t,
                            accum.value + val.value);
   }
 
-  return (t.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(t.device());
+  return (t.device().type == DeviceType::CPU) ? out_cpu
+                                              : out_cpu.to(t.device());
 }
 
 inline Tensor matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool transA,
@@ -159,7 +160,8 @@ inline Tensor matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool transA,
     }
   }
 
-  return (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+  return (a.device().type == DeviceType::CPU) ? out_cpu
+                                              : out_cpu.to(a.device());
 }
 
 template <typename Fn>
@@ -215,8 +217,8 @@ inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
   for (size_t i = 0; i < inputs.size(); ++i) {
     const auto &t = inputs[i];
     if (t.impl_->grad_fn) {
-      node->next_edges.push_back(
-          {t.impl_->grad_fn, static_cast<int>(i), "input_" + std::to_string(i)});
+      node->next_edges.push_back({t.impl_->grad_fn, static_cast<int>(i),
+                                  "input_" + std::to_string(i)});
     } else if (t.requires_grad()) {
       auto acc_node = std::make_shared<AccumulateGrad>(t.impl_);
       node->next_edges.push_back(
@@ -236,7 +238,8 @@ inline void record_trace(
   for (const auto &t : inputs) {
     if (t.name().empty()) {
       t.impl_->name =
-          "tensor_" + std::to_string(reinterpret_cast<uintptr_t>(t.impl_.get()));
+          "tensor_" +
+          std::to_string(reinterpret_cast<uintptr_t>(t.impl_.get()));
     }
     fn->input_names.push_back(t.name());
     fn->inputs.push_back(t);
