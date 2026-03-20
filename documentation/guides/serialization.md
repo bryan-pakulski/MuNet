@@ -11,9 +11,12 @@
    - or `munet.load_weights(existing_model, "model.npz")`
 
 3. **Deploy-first inference loading**
-   - `munet.load_for_inference("model.npz", device=...)`
-   - `munet.load_weights_for_inference(existing_model, "model.npz", device=...)`
-   - `munet.inference.load_serialized(...)` / `munet.inference.load_weights_serialized(...)`
+   - Python: `munet.load_for_inference("model.npz", device=...)`
+   - Python: `munet.load_weights_for_inference(existing_model, "model.npz", device=...)`
+   - Python aliases: `munet.inference.load_serialized(...)` / `munet.inference.load_weights_serialized(...)`
+   - C++: `munet::inference::load_serialized("model.npz", device)`
+   - C++: `munet::inference::load_weights_serialized(existing_model, "model.npz", device)`
+   - C++ engine shorthand: `engine.load("model.npz")`
 
 ## Compatibility contract
 
@@ -46,7 +49,7 @@ Use `munet.serialization_format_info()` to inspect the supported format contract
 
 - `munet.save(...)` produces a **deploy artifact**, not a training checkpoint.
 - Deploy artifacts are validated as **runtime-only** payloads: architecture config, tensor payload, and deploy metadata are allowed; training/checkpoint payload keys are rejected.
-- `munet.load_for_inference(...)` and `munet.inference.load_serialized(...)` normalize the loaded module for deployment by:
+- Python `munet.load_for_inference(...)` / `munet.inference.load_serialized(...)` and C++ `munet::inference::load_serialized(...)` normalize the loaded module for deployment by:
   - validating the deploy manifest
   - optionally moving the module to the requested device
   - forcing `eval()` before runtime use

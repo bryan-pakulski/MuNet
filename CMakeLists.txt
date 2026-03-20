@@ -41,7 +41,10 @@ set(MUNET_SOURCES
     src/core/ops/pooling.cpp
     src/core/ops/normalization.cpp
     src/core/ops/loss.cpp
+    src/inference_serialization.cpp
 )
+
+set_source_files_properties(src/inference_serialization.cpp PROPERTIES COMPILE_DEFINITIONS MUNET_ENABLE_TRAINING=1)
 
 if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)

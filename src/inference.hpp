@@ -91,6 +91,15 @@ struct EngineEvent {
 
 using EngineObserver = std::function<void(const EngineEvent &)>;
 
+std::shared_ptr<core::Module> load_serialized(
+    const std::string &path,
+    std::optional<Device> device = std::nullopt);
+
+void load_weights_serialized(
+    const std::shared_ptr<core::Module> &module,
+    const std::string &path,
+    std::optional<Device> device = std::nullopt);
+
 namespace detail {
 class InferenceModeGuard {
 public:
@@ -368,6 +377,10 @@ public:
 
   void set_observer(EngineObserver observer) { observer_ = std::move(observer); }
   void clear_observer() { observer_ = nullptr; }
+
+  void load(const std::string &serialized_path) {
+    load(load_serialized(serialized_path));
+  }
 
   void load(const std::shared_ptr<core::Module> &module) {
     emit_event(EngineEventType::LoadStarted, 0.0, {}, {}, 0,
