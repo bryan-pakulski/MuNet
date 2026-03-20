@@ -685,6 +685,11 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(info["format_name"], "munet_model")
         self.assertEqual(info["format_revision"], 1)
         self.assertEqual(info["legacy_tag"], "munet_model_v1")
+        self.assertEqual(info["artifact_kind"], "deploy_model")
+        self.assertEqual(info["default_load_mode"], "eval")
+        self.assertFalse(info["contains_training_state"])
+        self.assertEqual(info["device_policy"], "caller_specified")
+        self.assertEqual(info["dtype_policy"], "per_tensor")
 
         model = munet.nn.Sequential([
             munet.nn.Linear(4, 4),
@@ -698,6 +703,11 @@ class TestBindings(unittest.TestCase):
             self.assertEqual(metadata["format_name"], "munet_model")
             self.assertEqual(metadata["format_revision"], 1)
             self.assertEqual(metadata["legacy_tag"], "munet_model_v1")
+            self.assertEqual(metadata["artifact_kind"], "deploy_model")
+            self.assertEqual(metadata["default_load_mode"], "eval")
+            self.assertFalse(metadata["contains_training_state"])
+            self.assertEqual(metadata["device_policy"], "caller_specified")
+            self.assertEqual(metadata["dtype_policy"], "per_tensor")
             self.assertTrue(metadata["has_config"])
 
     def test_model_serialization_rejects_unsupported_revision(self):
@@ -717,6 +727,59 @@ class TestBindings(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 munet.load(path)
+
+    def test_load_for_inference_sets_eval_mode(self):
+        model = munet.nn.Sequential([
+            munet.nn.Dropout(0.5),
+        ])
+        model.train(True)
+
+        x = munet.ones([2, 3], dtype=munet.DataType.Float32)
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "deploy_dropout.npz")
+            munet.save(model, path)
+
+            restored = munet.load_for_inference(path)
+            y = np.array(restored.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y, np.ones((2, 3), dtype=np.float32)))
+
+    def test_inference_load_serialized_alias_and_device(self):
+        model = munet.nn.Sequential([
+            munet.nn.Dropout(0.5),
+        ])
+        model.train(True)
+
+        x = munet.ones([1, 3], dtype=munet.DataType.Float32)
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "deploy_alias.npz")
+            munet.save(model, path)
+
+            restored = munet.inference.load_serialized(
+                path,
+                device=munet.Device(munet.DeviceType.CPU, 0),
+            )
+            y = np.array(restored.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y, np.ones((1, 3), dtype=np.float32)))
+
+    def test_load_weights_for_inference_sets_eval_mode(self):
+        src = munet.nn.Sequential([
+            munet.nn.Dropout(0.5),
+        ])
+        dst = munet.nn.Sequential([
+            munet.nn.Dropout(0.5),
+        ])
+        src.train(True)
+        dst.train(True)
+        x = munet.ones([2, 2], dtype=munet.DataType.Float32)
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "deploy_weights_only.npz")
+            munet.save(src, path)
+            munet.load_weights_for_inference(dst, path)
+            y = np.array(dst.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y, np.ones((2, 2), dtype=np.float32)))
 
     def test_model_serialization_from_non_cpu_device_preserves_dtype(self):
         devices = self._available_non_cpu_devices()

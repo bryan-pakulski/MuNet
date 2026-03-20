@@ -899,6 +899,8 @@ def download_yolov5n_onnx(destination_path):
 inference.ONNXEngine = ONNXEngine
 inference.load_onnx = load_onnx
 inference.compile_onnx = compile_onnx
+inference.load_serialized = load_for_inference
+inference.load_weights_serialized = load_weights_for_inference
 inference.report_onnx_unsupported_ops = report_onnx_unsupported_ops
 inference.onnx_native_conversion_map = onnx_native_conversion_map
 inference.onnx_conversion_coverage_report = onnx_conversion_coverage_report
