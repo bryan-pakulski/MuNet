@@ -79,8 +79,12 @@ add_library(munet_build_flags INTERFACE)
 target_compile_features(munet_build_flags INTERFACE cxx_std_17)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    target_compile_options(munet_build_flags INTERFACE -O3 -flto=auto)
-    target_link_options(munet_build_flags INTERFACE -flto=auto)
+    target_compile_options(munet_build_flags INTERFACE -O3)
+    # Only enable LTO if CUDA is NOT being used
+    if(NOT CMAKE_CUDA_COMPILER)
+        target_compile_options(munet_build_flags INTERFACE -flto=auto)
+        target_link_options(munet_build_flags INTERFACE -flto=auto)
+    endif()
 endif()
 
 if(MUNET_ENABLE_ASAN)

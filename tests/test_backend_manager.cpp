@@ -855,6 +855,7 @@ TEST(BackendManagerTest, ProfilingCapturesAllocatorAndSynchronizationMarkers) {
 TEST(BackendManagerTest, ProfilingCapturesDirectionalTransferMarkers) {
   ScopedProfileOverride profile(true);
   Profiler::get().reset();
+  BackendManager::registry().clear_cache(DeviceType::CPU);
 
   BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
     return std::make_shared<PartialMatmulBackend>(device.index);
@@ -892,6 +893,7 @@ TEST(BackendManagerTest, TraceContextCorrelatesTransferDispatchAndLogs) {
   ScopedProfileOverride profile(true);
   ScopedDebugOverride debug(true);
   Profiler::get().reset();
+  BackendManager::registry().clear_cache(DeviceType::CPU);
 
   BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
     return std::make_shared<PartialMatmulBackend>(device.index);

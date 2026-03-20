@@ -52,12 +52,8 @@ struct SavedTensor {
     // Create a new implementation wrapper that shares the same storage.
     // This breaks circular shared_ptr references to the original TensorImpl.
     Tensor restored;
-    restored.impl_ = std::make_shared<TensorImpl>(Shape{}, storage->device(),
-                                                  storage->dtype(), false);
-    restored.impl_->storage = storage;
-    restored.impl_->shape = shape;
-    restored.impl_->strides = strides;
-    restored.impl_->storage_offset = storage_offset;
+    restored.impl_ =
+        std::make_shared<TensorImpl>(storage, shape, strides, storage_offset);
     return restored;
   }
 };

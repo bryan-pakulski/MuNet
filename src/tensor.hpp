@@ -44,6 +44,10 @@ struct TensorImpl {
     storage = std::make_shared<Storage>(bytes, d, dt, shape);
   }
 
+  TensorImpl(std::shared_ptr<Storage> s, Shape sh, Strides st, size_t off)
+      : shape(std::move(sh)), strides(std::move(st)), storage_offset(off),
+        storage(std::move(s)), requires_grad(false) {}
+
   bool is_contiguous() const {
     int expected = 1;
     for (int i = (int)shape.size() - 1; i >= 0; --i) {
