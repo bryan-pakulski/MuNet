@@ -103,6 +103,12 @@ public:
   void sigmoid(const Storage &in, Storage &out, size_t num_elements) override;
   void sigmoid_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, size_t num_elements) override;
+  void exp(const Storage &in, Storage &out, size_t num_elements) override;
+  void log(const Storage &in, Storage &out, size_t num_elements) override;
+  void sqrt(const Storage &in, Storage &out, size_t num_elements) override;
+  void rsqrt(const Storage &in, Storage &out, size_t num_elements) override;
+  void sin(const Storage &in, Storage &out, size_t num_elements) override;
+  void cos(const Storage &in, Storage &out, size_t num_elements) override;
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override;
   void softmax_backward(const Storage &grad_out, const Storage &out,
@@ -157,6 +163,8 @@ public:
   void fill_uniform(Storage &out, float low, float high,
                     size_t num_elements) override;
   void sum(const Storage &in, Storage &out, size_t num_elements) override;
+  void mean_last_dim(const Storage &in, Storage &out, int outer_size,
+                     int dim_size) override;
   void sum_to_shape(const Storage &in, Storage &out, const Shape &in_shape,
                     const Shape &out_shape) override;
   void adam_step(Storage &params, const Storage &grads, Storage &exp_avg,

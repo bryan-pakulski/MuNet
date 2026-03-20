@@ -82,6 +82,12 @@ Tensor Tensor::matmul(const Tensor &other) const {
 
 Tensor Tensor::relu() const { return ops::relu(*this); }
 Tensor Tensor::sigmoid() const { return ops::sigmoid(*this); }
+Tensor Tensor::exp() const { return ops::exp(*this); }
+Tensor Tensor::log() const { return ops::log(*this); }
+Tensor Tensor::sqrt() const { return ops::sqrt(*this); }
+Tensor Tensor::rsqrt() const { return ops::rsqrt(*this); }
+Tensor Tensor::sin() const { return ops::sin(*this); }
+Tensor Tensor::cos() const { return ops::cos(*this); }
 Tensor Tensor::softmax(int dim) const { return ops::softmax(*this, dim); }
 Tensor Tensor::log_softmax(int dim) const { return ops::log_softmax(*this, dim); }
 
@@ -233,8 +239,16 @@ Tensor Tensor::cat(const std::vector<Tensor> &inputs, int dim) {
 
 Tensor Tensor::sum() const { return ops::sum(*this); }
 
+Tensor Tensor::mean(int dim, bool keepdim) const {
+  return ops::mean(*this, dim, keepdim);
+}
+
 Tensor Tensor::reshape(Shape new_shape) const {
   return ops::reshape(*this, new_shape);
+}
+
+Tensor Tensor::narrow(int dim, int start, int length) const {
+  return ops::narrow(*this, dim, start, length);
 }
 
 Tensor Tensor::masked_fill(const Tensor &mask, const ScalarValue &value) const {

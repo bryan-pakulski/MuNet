@@ -221,6 +221,12 @@ public:
                        size_t num_elements) = 0;
   virtual void sigmoid_backward(const Storage &grad_out, const Storage &out,
                                 Storage &grad_in, size_t num_elements) = 0;
+  virtual void exp(const Storage &in, Storage &out, size_t num_elements) = 0;
+  virtual void log(const Storage &in, Storage &out, size_t num_elements) = 0;
+  virtual void sqrt(const Storage &in, Storage &out, size_t num_elements) = 0;
+  virtual void rsqrt(const Storage &in, Storage &out, size_t num_elements) = 0;
+  virtual void sin(const Storage &in, Storage &out, size_t num_elements) = 0;
+  virtual void cos(const Storage &in, Storage &out, size_t num_elements) = 0;
   virtual void softmax(const Storage &in, Storage &out, int batch_size,
                        int num_classes) = 0;
   virtual void softmax_backward(const Storage &grad_out, const Storage &out,
@@ -234,6 +240,8 @@ public:
   virtual void sum_to_shape(const Storage &in, Storage &out,
                             const Shape &in_shape, const Shape &out_shape) = 0;
   virtual void sum(const Storage &in, Storage &out, size_t num_elements) = 0;
+  virtual void mean_last_dim(const Storage &in, Storage &out, int outer_size,
+                             int dim_size) = 0;
 };
 
 class BackendBlasCapability {
@@ -517,6 +525,30 @@ public:
                        "sigmoid_backward")
         ->sigmoid_backward(grad_out, out, grad_in, num_elements);
   }
+  void exp(const Storage &in, Storage &out, size_t num_elements) {
+    require_capability(elementwise_capability(), "elementwise", "exp")
+        ->exp(in, out, num_elements);
+  }
+  void log(const Storage &in, Storage &out, size_t num_elements) {
+    require_capability(elementwise_capability(), "elementwise", "log")
+        ->log(in, out, num_elements);
+  }
+  void sqrt(const Storage &in, Storage &out, size_t num_elements) {
+    require_capability(elementwise_capability(), "elementwise", "sqrt")
+        ->sqrt(in, out, num_elements);
+  }
+  void rsqrt(const Storage &in, Storage &out, size_t num_elements) {
+    require_capability(elementwise_capability(), "elementwise", "rsqrt")
+        ->rsqrt(in, out, num_elements);
+  }
+  void sin(const Storage &in, Storage &out, size_t num_elements) {
+    require_capability(elementwise_capability(), "elementwise", "sin")
+        ->sin(in, out, num_elements);
+  }
+  void cos(const Storage &in, Storage &out, size_t num_elements) {
+    require_capability(elementwise_capability(), "elementwise", "cos")
+        ->cos(in, out, num_elements);
+  }
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) {
     require_capability(elementwise_capability(), "elementwise", "softmax")
@@ -659,6 +691,11 @@ public:
   void sum(const Storage &in, Storage &out, size_t num_elements) {
     require_capability(reduction_capability(), "reduction", "sum")
         ->sum(in, out, num_elements);
+  }
+  void mean_last_dim(const Storage &in, Storage &out, int outer_size,
+                     int dim_size) {
+    require_capability(reduction_capability(), "reduction", "mean_last_dim")
+        ->mean_last_dim(in, out, outer_size, dim_size);
   }
 
 protected:

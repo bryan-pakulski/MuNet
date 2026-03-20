@@ -341,3 +341,46 @@ TEST_P(TensorTest, LogSoftmaxDim) {
   float p2 = std::exp(o[2]);
   EXPECT_NEAR(p0 + p1 + p2, 1.0f, 1e-4f);
 }
+
+
+TEST_P(TensorTest, UnaryMathOpsForward) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor base({3}, cpu, DataType::Float32);
+  float *ptr = static_cast<float *>(base.data());
+  ptr[0] = 1.0f;
+  ptr[1] = 4.0f;
+  ptr[2] = 9.0f;
+
+  Tensor x = base.to(dev());
+  Tensor sqrt_out = x.sqrt().to(cpu);
+  const float *sqrt_ptr = static_cast<const float *>(sqrt_out.data());
+  EXPECT_NEAR(sqrt_ptr[0], 1.0f, 1e-5f);
+  EXPECT_NEAR(sqrt_ptr[1], 2.0f, 1e-5f);
+  EXPECT_NEAR(sqrt_ptr[2], 3.0f, 1e-5f);
+
+  Tensor log_exp = x.log().exp().to(cpu);
+  const float *roundtrip_ptr = static_cast<const float *>(log_exp.data());
+  EXPECT_NEAR(roundtrip_ptr[0], 1.0f, 1e-5f);
+  EXPECT_NEAR(roundtrip_ptr[1], 4.0f, 1e-4f);
+  EXPECT_NEAR(roundtrip_ptr[2], 9.0f, 1e-4f);
+}
+
+TEST_P(TensorTest, UnaryMathOpsBackward) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor base({3}, cpu, DataType::Float32);
+  float *ptr = static_cast<float *>(base.data());
+  ptr[0] = 1.0f;
+  ptr[1] = 4.0f;
+  ptr[2] = 9.0f;
+
+  Tensor x = base.to(dev()).detach();
+  x.set_requires_grad(true);
+  Tensor loss = x.log().sum();
+  loss.backward();
+
+  Tensor grad = x.grad().to(cpu);
+  const float *grad_ptr = static_cast<const float *>(grad.data());
+  EXPECT_NEAR(grad_ptr[0], 1.0f, 1e-5f);
+  EXPECT_NEAR(grad_ptr[1], 0.25f, 1e-5f);
+  EXPECT_NEAR(grad_ptr[2], 1.0f / 9.0f, 1e-5f);
+}

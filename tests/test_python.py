@@ -87,6 +87,53 @@ class TestBindings(unittest.TestCase):
 
         self.assertTrue(np.allclose(grad, expected_grad, atol=1e-4))
 
+    def test_unary_math_ops(self):
+        x = munet.Tensor([3])
+        np.array(x, copy=False)[:] = np.array([1.0, 4.0, 9.0], dtype=np.float32)
+
+        sqrt_out = np.array(x.sqrt().detach(), copy=False)
+        self.assertTrue(np.allclose(sqrt_out, np.array([1.0, 2.0, 3.0], dtype=np.float32)))
+
+        roundtrip = np.array(x.log().exp().detach(), copy=False)
+        self.assertTrue(np.allclose(roundtrip, np.array([1.0, 4.0, 9.0], dtype=np.float32), atol=1e-5))
+
+        trig = munet.Tensor([2])
+        np.array(trig, copy=False)[:] = np.array([0.0, np.pi / 2.0], dtype=np.float32)
+        self.assertTrue(np.allclose(np.array(trig.sin().detach(), copy=False), np.array([0.0, 1.0], dtype=np.float32), atol=1e-5))
+        self.assertTrue(np.allclose(np.array(trig.cos().detach(), copy=False), np.array([1.0, 0.0], dtype=np.float32), atol=1e-5))
+        self.assertTrue(np.allclose(np.array(x.rsqrt().detach(), copy=False), np.array([1.0, 0.5, 1.0 / 3.0], dtype=np.float32), atol=1e-5))
+
+    def test_unary_math_ops_backward(self):
+        x = munet.Tensor([3], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array([1.0, 4.0, 9.0], dtype=np.float32)
+        x.requires_grad = True
+
+        loss = x.log().sum()
+        loss.backward()
+        grad = np.array(x.grad.detach(), copy=False)
+        expected = np.array([1.0, 0.25, 1.0 / 9.0], dtype=np.float32)
+        self.assertTrue(np.allclose(grad, expected, atol=1e-6))
+
+    def test_mean_narrow_and_rmsnorm(self):
+        x = munet.Tensor([2, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array([[1.0, 2.0, 3.0, 4.0], [4.0, 6.0, 8.0, 10.0]], dtype=np.float32)
+        x.requires_grad = True
+
+        mean = x.mean(-1)
+        self.assertTrue(np.allclose(np.array(mean.detach(), copy=False), np.array([2.5, 7.0], dtype=np.float32)))
+
+        narrowed = x.detach().narrow(1, 1, 2)
+        self.assertEqual(narrowed.shape, [2, 2])
+        self.assertEqual(narrowed.storage_offset, 1)
+        self.assertTrue(np.allclose(np.array(narrowed, copy=False), np.array([[2.0, 3.0], [6.0, 8.0]], dtype=np.float32)))
+
+        rms = munet.nn.RMSNorm(4)
+        out = rms(x)
+        loss = out.sum()
+        loss.backward()
+        self.assertIsNotNone(x.grad)
+        self.assertIsNotNone(rms.weight.grad)
+
     def test_tensor_creation(self):
         """Test basic tensor creation and properties mapping."""
         t = munet.Tensor([2, 3], requires_grad=True)

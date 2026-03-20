@@ -2,19 +2,36 @@
 
 #include "../../autograd/nodes/activation_nodes.hpp"
 
+#include <utility>
+
 namespace munet {
 namespace ops {
+namespace {
 
-Tensor relu(const Tensor &a) {
-  const auto dispatch = resolve_dispatch(OpId::Relu, a);
+template <typename BackendFn, typename CpuFn>
+Tensor unary_activation_op(OpId op_id, const Tensor &a, BackendFn &&backend_fn,
+                           CpuFn &&cpu_fn) {
+  const auto dispatch = resolve_dispatch(op_id, a);
   Tensor out = dispatch.use_backend
                    ? Tensor(a.shape(), a.device(), a.dtype())
-                   : detail::unary_cpu_fallback(a, [](double v) {
-                       return std::max(v, 0.0);
-                     });
+                   : detail::unary_cpu_fallback(a, std::forward<CpuFn>(cpu_fn));
   if (dispatch.use_backend) {
-    a.impl_->backend().relu(*a.impl_->storage, *out.impl_->storage, a.size());
-  } else if (!is_floating(a.dtype()) && a.dtype() != DataType::Int32) {
+    backend_fn(*a.impl_->storage, *out.impl_->storage, a.size());
+  }
+  return out;
+}
+
+} // namespace
+
+Tensor relu(const Tensor &a) {
+  Tensor out = unary_activation_op(
+      OpId::Relu, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().relu(in, out_storage, numel);
+      },
+      [](double v) { return std::max(v, 0.0); });
+
+  if (!is_floating(a.dtype()) && a.dtype() != DataType::Int32) {
     detail::require_backend_support(op_metadata(OpId::Relu).name, a,
                                     BackendFeature::UnaryActivation);
   }
@@ -29,15 +46,13 @@ Tensor relu(const Tensor &a) {
 }
 
 Tensor sigmoid(const Tensor &a) {
-  const auto dispatch = resolve_dispatch(OpId::Sigmoid, a);
-  Tensor out = dispatch.use_backend
-                   ? Tensor(a.shape(), a.device(), a.dtype())
-                   : detail::unary_cpu_fallback(a, [](double v) {
-                       return 1.0 / (1.0 + std::exp(-v));
-                     });
-  if (dispatch.use_backend) {
-    a.impl_->backend().sigmoid(*a.impl_->storage, *out.impl_->storage, a.size());
-  }
+  Tensor out = unary_activation_op(
+      OpId::Sigmoid, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().sigmoid(in, out_storage, numel);
+      },
+      [](double v) { return 1.0 / (1.0 + std::exp(-v)); });
+
   if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<autograd_nodes::SigmoidBackward>(out);
     link_backward_edges(fn.get(), {a});
@@ -45,6 +60,129 @@ Tensor sigmoid(const Tensor &a) {
     out.impl_->grad_fn = fn;
   }
   record_registered_trace(OpId::Sigmoid, out, {a});
+  return out;
+}
+
+Tensor exp(const Tensor &a) {
+  Tensor out = unary_activation_op(
+      OpId::Exp, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().exp(in, out_storage, numel);
+      },
+      [](double v) { return std::exp(v); });
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<autograd_nodes::ExpBackward>(out);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_registered_trace(OpId::Exp, out, {a});
+  return out;
+}
+
+Tensor log(const Tensor &a) {
+  Tensor out = unary_activation_op(
+      OpId::Log, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().log(in, out_storage, numel);
+      },
+      [](double v) {
+        if (v <= 0.0) {
+          throw std::runtime_error("Log expects strictly positive values");
+        }
+        return std::log(v);
+      });
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<autograd_nodes::LogBackward>(a);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_registered_trace(OpId::Log, out, {a});
+  return out;
+}
+
+Tensor sqrt(const Tensor &a) {
+  Tensor out = unary_activation_op(
+      OpId::Sqrt, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().sqrt(in, out_storage, numel);
+      },
+      [](double v) {
+        if (v < 0.0) {
+          throw std::runtime_error("Sqrt expects non-negative values");
+        }
+        return std::sqrt(v);
+      });
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<autograd_nodes::SqrtBackward>(out);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_registered_trace(OpId::Sqrt, out, {a});
+  return out;
+}
+
+Tensor rsqrt(const Tensor &a) {
+  Tensor out = unary_activation_op(
+      OpId::Rsqrt, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().rsqrt(in, out_storage, numel);
+      },
+      [](double v) {
+        if (v <= 0.0) {
+          throw std::runtime_error("Rsqrt expects strictly positive values");
+        }
+        return 1.0 / std::sqrt(v);
+      });
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<autograd_nodes::RsqrtBackward>(out);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_registered_trace(OpId::Rsqrt, out, {a});
+  return out;
+}
+
+Tensor sin(const Tensor &a) {
+  Tensor out = unary_activation_op(
+      OpId::Sin, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().sin(in, out_storage, numel);
+      },
+      [](double v) { return std::sin(v); });
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<autograd_nodes::SinBackward>(a);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_registered_trace(OpId::Sin, out, {a});
+  return out;
+}
+
+Tensor cos(const Tensor &a) {
+  Tensor out = unary_activation_op(
+      OpId::Cos, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().cos(in, out_storage, numel);
+      },
+      [](double v) { return std::cos(v); });
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<autograd_nodes::CosBackward>(a);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_registered_trace(OpId::Cos, out, {a});
   return out;
 }
 

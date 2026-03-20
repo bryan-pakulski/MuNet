@@ -440,6 +440,60 @@ public:
     });
   }
 
+  void exp(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::exp(ip[i]);
+    });
+  }
+
+  void log(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::log(ip[i]);
+    });
+  }
+
+  void sqrt(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::sqrt(ip[i]);
+    });
+  }
+
+  void rsqrt(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = 1.0f / std::sqrt(ip[i]);
+    });
+  }
+
+  void sin(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::sin(ip[i]);
+    });
+  }
+
+  void cos(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::cos(ip[i]);
+    });
+  }
+
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
     const float *ip = (const float *)in.data();
@@ -975,6 +1029,21 @@ public:
 
       op[out_off] += ip[i];
     }
+  }
+
+  void mean_last_dim(const Storage &in, Storage &out, int outer_size,
+                     int dim_size) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, static_cast<size_t>(outer_size), [&](size_t s, size_t e) {
+      for (size_t row = s; row < e; ++row) {
+        double total = 0.0;
+        const size_t base = row * static_cast<size_t>(dim_size);
+        for (int col = 0; col < dim_size; ++col)
+          total += ip[base + static_cast<size_t>(col)];
+        op[row] = static_cast<float>(total / static_cast<double>(dim_size));
+      }
+    });
   }
 };
 } // namespace munet

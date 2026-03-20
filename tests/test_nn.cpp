@@ -433,6 +433,24 @@ TEST(NNTest, LayerNormForwardAndBackward) {
   EXPECT_TRUE(ln.bias.has_grad());
 }
 
+TEST(NNTest, RMSNormForwardAndBackward) {
+  Device cpu{DeviceType::CPU, 0};
+  nn::RMSNorm rms(4);
+
+  Tensor x({2, 4}, cpu, DataType::Float32, true);
+  float *xd = static_cast<float *>(x.data());
+  xd[0] = 1.0f; xd[1] = 2.0f; xd[2] = 3.0f; xd[3] = 4.0f;
+  xd[4] = -1.0f; xd[5] = 0.0f; xd[6] = 1.0f; xd[7] = 2.0f;
+
+  Tensor y = rms.forward(x).to(cpu);
+  EXPECT_EQ(y.shape(), (Shape{2, 4}));
+
+  Tensor loss = y.sum();
+  loss.backward();
+  EXPECT_TRUE(x.has_grad());
+  EXPECT_TRUE(rms.weight.has_grad());
+}
+
 
 TEST(NNTest, EmbeddingForwardIndexPath) {
   Device cpu{DeviceType::CPU, 0};

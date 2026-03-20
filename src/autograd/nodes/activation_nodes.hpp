@@ -45,6 +45,91 @@ struct SigmoidBackward : public Node {
   }
 };
 
+
+struct ExpBackward : public Node {
+  Shape output_shape;
+  Device output_device;
+  DataType output_dtype;
+  explicit ExpBackward(Tensor o)
+      : output_shape(o.shape()), output_device(o.device()), output_dtype(o.dtype()) {
+    save_tensor(o, "exp_output");
+  }
+  std::string name() const override { return "ExpBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor saved_out = saved_tensor(0);
+    Tensor grad_out = grads[0];
+    Tensor grad_in = ops::mul(grad_out, saved_out);
+    return {grad_in};
+  }
+};
+
+struct LogBackward : public Node {
+  Shape input_shape;
+  Device input_device;
+  DataType input_dtype;
+  explicit LogBackward(Tensor input)
+      : input_shape(input.shape()), input_device(input.device()),
+        input_dtype(input.dtype()) {
+    save_tensor(input, "log_input");
+  }
+  std::string name() const override { return "LogBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor input = saved_tensor(0);
+    Tensor grad_in = ops::div(grads[0], input);
+    return {grad_in};
+  }
+};
+
+struct SqrtBackward : public Node {
+  Shape output_shape;
+  Device output_device;
+  DataType output_dtype;
+  explicit SqrtBackward(Tensor o)
+      : output_shape(o.shape()), output_device(o.device()), output_dtype(o.dtype()) {
+    save_tensor(o, "sqrt_output");
+  }
+  std::string name() const override { return "SqrtBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor saved_out = saved_tensor(0);
+    Tensor denom({1}, saved_out.device(), saved_out.dtype());
+    denom.fill_(2.0f);
+    Tensor grad_in = ops::div(grads[0], ops::mul(saved_out, denom));
+    return {grad_in};
+  }
+};
+
+struct RsqrtBackward : public Node {
+  explicit RsqrtBackward(Tensor o) { save_tensor(o, "rsqrt_output"); }
+  std::string name() const override { return "RsqrtBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor y = saved_tensor(0);
+    Tensor scale({1}, y.device(), y.dtype());
+    scale.fill_(-0.5f);
+    Tensor grad_in = grads[0] * scale * y * y * y;
+    return {grad_in};
+  }
+};
+
+struct SinBackward : public Node {
+  explicit SinBackward(Tensor input) { save_tensor(input, "sin_input"); }
+  std::string name() const override { return "SinBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor input = saved_tensor(0);
+    return {grads[0] * input.cos()};
+  }
+};
+
+struct CosBackward : public Node {
+  explicit CosBackward(Tensor input) { save_tensor(input, "cos_input"); }
+  std::string name() const override { return "CosBackward"; }
+  std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
+    Tensor input = saved_tensor(0);
+    Tensor scale({1}, input.device(), input.dtype());
+    scale.fill_(-1.0f);
+    return {grads[0] * input.sin() * scale};
+  }
+};
+
 struct SoftmaxBackward : public Node {
   int dim;
   Shape shape;
