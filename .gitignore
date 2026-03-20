@@ -7,3 +7,5 @@ demo/
 __pycache__
 compile_commands.json
 docs/
+*.orig
+*.rej
