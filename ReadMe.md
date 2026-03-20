@@ -84,7 +84,7 @@ The project has a working core runtime + training stack with CPU/CUDA/Vulkan bac
 - Initial inference runtime scaffold: `inference::Engine` with `load`, `prepare` (warmup), `run`, `run_batch`, and basic latency stats.
 
 # Future Plans
-- Transformer stack (LayerNorm + MultiHeadAttention + MLP) and a tiny decoder-only LLM demo.
+- Transformer stack (LayerNorm + MultiHeadAttention + MLP) and a GPT3 LLM demo.
 - Attention-ready tensor ops: softmax, log_softmax, transpose/permute, and masked_fill.
 - Fused Kernels (i.e. conv2d calls 3 kernels -> conv, add (bias) and relu, can merge together)
 - Adaptive Pooling
@@ -92,6 +92,8 @@ The project has a working core runtime + training stack with CPU/CUDA/Vulkan bac
 Serialization:
     - Save and Load of arbitrarily complex models i.e. Costum Modules and Layers extending munet.nn.Module
     - Preserve layers, paramers, buffers, skip connections etc.. as well as forward pass
+    - Interop with torch models (save & load)
+    - Interop with onnx models (save & load)
 
 Multi-GPU RoadMap:
 
@@ -109,89 +111,13 @@ Multi-GPU RoadMap:
 Production Ready Improvements:                                                                                                                                                          
 
  1. Performance (Kernels): Most kernels (especially in Vulkan/CUDA) are "naive." They don't use tiled memory, shared memory optimization, or vendor-tuned libraries like cuDNN or oneDNN.  
- 2. Memory Management: You use a simple caching allocator, but it lacks a memory-fragmentation strategy or a "Memory Arena."                                                               
- 3. Missing Dtypes: You are essentially locked into Float32. Production requires BFloat16, Int8 (quantization), and Float16.                                                               
+ 2. Memory Management: Only using a simple caching allocator, but it lacks a memory-fragmentation strategy or a "Memory Arena."                                                               
+ 3. Missing Dtypes: Production requires BFloat16, Int8, Int4 (quantization), and Float16.                                                               
  4. Error Handling: There is limited validation for tensor strides, broadcast safety, or device-side out-of-memory errors.                                                                 
 
 Inference Engine:
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-Core Autograd Features                                                                                                                                                                 
-
- - In-place Operations: Your engine doesn't track versioning to prevent gradients from being calculated on modified data.                                                                 
- - Higher-Order Gradients: You cannot currently take the gradient of a gradient (needed for specialized GANs or MAML).                                                                    
- - Functionality: Missing detach_() (in-place) and retain_graph.                                                                                                                          
-
-Optimization & Layers                                                                                                                                                                  
-
- - Advanced Optimizers: SGD and Adam are available; AdamW and RMSProp are still pending.                                                                                                             
- - Attention/Transformers: baseline `MultiHeadAttention` and `LayerNorm` exist; optimized fused attention kernels are still needed for production inference.                                                                                                     
- - Dropout: Essential for preventing overfitting in production models. ✅ Implemented in `munet.nn`.                                                                                     
-
-Engineering Infrastructure                                                                                                                                                             
-
- - Data Loading: You need a Dataset and DataLoader with multi-threaded prefetching.                                                                                                       
- - Model Serialization: While you have .npz support, production usually requires a more robust format like Protobuf or ONNX export.                                                       
- - Lazy Execution: Currently, every op is dispatched immediately. Production frameworks often use a JIT (like TorchScript) to fuse kernels (e.g., ReLU(Add(x,y))) into a single GPU pass. 
-
-
-Additional Layers & Operators:
-1. Essential Tensor Operators
-
-     - Division & Power: operator/, pow(), sqrt(), exp(), log(). (Crucial for custom loss functions and variance calculations).
-     - Transposition/Permutation: transpose(dim1, dim2) and permute(dims). (Required for handling different data layouts and attention mechanisms). ✅ `transpose(dim1, dim2)` and `permute(dims)` implemented.
-     - Mean & Variance: mean(dim), var(dim). (Currently you only have sum()).
-     - Slice/Narrow: slice(dim, start, end). (Necessary for splitting tensors or taking sub-sections).
-
-2. Core Neural Network Layers
-
-     - Dropout: nn::Dropout. (Essential for preventing overfitting; requires a training flag to disable during inference). ✅ Implemented in `munet.nn`.
-     - Global Average Pooling: nn::GlobalAvgPool2d. (Used in almost all modern CNNs before the final classifier). ✅ Implemented in `munet.nn`.
-     - LeakyReLU: nn::LeakyReLU. (Standard improvement over basic ReLU to prevent "dying neurons"). ✅ Implemented in `munet.nn`.
-     - Tanh: nn::Tanh. (Standard activation for Recurrent Neural Networks). ✅ Implemented in `munet.nn`.
-     - GELU: nn::GELU. (Common Transformer MLP activation; fast approximation). ✅ Implemented in `munet.nn`.
-     - LayerNorm: nn::LayerNorm. (The standard normalization layer for Transformers/NLP, which is easier to implement than BatchNorm for variable sequences). ✅ Implemented in `munet.nn` (CPU-fallback kernel with autograd support).
-
-3. Advanced Modules
-
-     - Embedding: nn::Embedding. (Mapping integer IDs to vectors; the foundation of all NLP models). ✅ Implemented in `munet.nn` (one-hot/probability input variant).
-     - RNN/LSTM: nn::LSTM or nn::GRU. (To handle sequential or time-series data).
-     - Padding Layers: nn::ZeroPad2d. (When you need padding outside of the convolution operation).
-
-4. Mathematical Foundation (Optimizers & Loss)
-
-     - Adam Optimizer: optim::Adam. (The industry standard. Requires tracking first and second moments: m and v).
-     - BCEWithLogitsLoss: Binary Cross Entropy for multi-label classification.
-     - NLLLoss: Negative Log Likelihood (often used with LogSoftmax).
-
-5. Backend-Specific Kernels
-
-     - Vectorized CPU Ops: Using AVX/SIMD for the CPUBackend to compete with the GPU backends on small batches.
-     - Im2Col Convolution: Moving your Conv2d from the current "naive" nested loops to an im2col + GEMM approach for significantly higher performance on all backends.
-
-
-6. Transformer / LLM Build-Out (Recommended Next Milestones)
-
-     - Core layers to add first:
-       - LayerNorm: `nn::LayerNorm` (per-token normalization used everywhere in Transformers).
-       - Embedding: `nn::Embedding` (token + positional tables).
-       - MultiHeadAttention: `nn::MultiHeadAttention` (QKV projections + scaled dot-product attention). ✅ Implemented (causal self-attention via tensor-op composition; backend-accelerated matmuls).
-       - FeedForward block: `Linear -> GELU/SwiGLU -> Linear`.
-     - Tensor operators to unlock attention workloads:
-       - `softmax(dim)` and `log_softmax(dim)` (attention weights and stable losses). ✅ Implemented in Tensor API.
-       - `transpose(dim1, dim2)` / `permute(dims)` (head and sequence layout transforms).
-       - `masked_fill(mask, value)` (causal masking and padding masks). ✅ Implemented in Tensor API.
-       - `sqrt`, `rsqrt`, `exp`, `log`, `pow` (attention scaling and normalization math).
-     - Training-quality features for small LLMs:
-       - `CrossEntropyLoss` (or `NLLLoss + LogSoftmax`) for token prediction.
-       - Gradient clipping + weight decay options in optimizers.
-       - Mixed precision support (`float16`/`bfloat16`) for memory and throughput.
-     - Demo targets (incremental path):
-       - Demo 1: Character-level language model (tiny corpus, CPU-safe).
-       - Demo 2: Decoder-only Transformer block stack with causal mask.
-       - Demo 3: Minimal text generation script (top-k / temperature sampling).
-       - Demo 4: Optional tiny instruction-tuned chat example after baseline LM is stable.
 
 # Development
 
@@ -291,21 +217,26 @@ Run the Python integration tests:
 make py-test
 ```
 
+Run performance tests:
+```
+make perf-test
+```
+
 ## Demos
 
 LLM demos:
-
 - `demos/llm/tiny_llm.py` — tiny character-level LM with token+position embedding, layer norm and MLP head.
 - `demos/llm/decoder_block_demo.py` — decoder-block style LM with causal `nn.MultiHeadAttention` and residual MLP.
+- `demos/llm/gpt3_multi_gpu_demo.py` — GPT3 style multi gpu demo
 
 Computer vision demos:
-
 - `demos/mnist/mnist.py` — simple segmentation-style toy training loop.
 - `demos/unet/unet.py` — larger UNet-like segmentation workflow with visualization outputs.
 
-Feature demos (new):
-
+Feature demos:
 - `demos/features/transformer_ops_showcase.py` — quick forward-only showcase of `MultiHeadAttention`, `LayerNorm`, `GELU`, and `Dropout`.
+
+Inference demos:
 - `demos/inference/batch_forward_demo.py` — lean batch forward loop demo for deploy-style execution.
 - `demos/inference/serialization_roundtrip_demo.py` — demonstrates full model save/load reconstruction and weights-only restore.
 - `demos/inference/e2e_train_save_load_infer.py` — end-to-end flow: train -> save -> load -> compile -> inference.
@@ -323,10 +254,3 @@ MuNet supports two serialization paths:
   - Loads parameters/buffers into an already-defined model instance.
 
 For a runnable example, see `demos/inference/serialization_roundtrip_demo.py`.
-
-### Transformer Work Remaining
-- Optimize `nn::MultiHeadAttention` with dedicated CUDA/Vulkan attention kernels (current implementation is tensor-op composition).
-- Integer-index embedding gather path (avoid one-hot expansion for memory/perf).
-- Add attention-adjacent ops still missing for scale/perf: `logsumexp`, fused causal mask-softmax, and efficient batched matmul layouts.
-- Fused attention and layernorm backend kernels for CUDA/Vulkan performance.
-- Add deeper multi-block decoder demo with KV-cache style autoregressive inference loop.
