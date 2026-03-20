@@ -221,6 +221,9 @@ public:
                        size_t num_elements) = 0;
   virtual void sigmoid_backward(const Storage &grad_out, const Storage &out,
                                 Storage &grad_in, size_t num_elements) = 0;
+  virtual void exp(const Storage &in, Storage &out, size_t num_elements) = 0;
+  virtual void log(const Storage &in, Storage &out, size_t num_elements) = 0;
+  virtual void sqrt(const Storage &in, Storage &out, size_t num_elements) = 0;
   virtual void softmax(const Storage &in, Storage &out, int batch_size,
                        int num_classes) = 0;
   virtual void softmax_backward(const Storage &grad_out, const Storage &out,
@@ -516,6 +519,18 @@ public:
     require_capability(elementwise_capability(), "elementwise",
                        "sigmoid_backward")
         ->sigmoid_backward(grad_out, out, grad_in, num_elements);
+  }
+  void exp(const Storage &in, Storage &out, size_t num_elements) {
+    require_capability(elementwise_capability(), "elementwise", "exp")
+        ->exp(in, out, num_elements);
+  }
+  void log(const Storage &in, Storage &out, size_t num_elements) {
+    require_capability(elementwise_capability(), "elementwise", "log")
+        ->log(in, out, num_elements);
+  }
+  void sqrt(const Storage &in, Storage &out, size_t num_elements) {
+    require_capability(elementwise_capability(), "elementwise", "sqrt")
+        ->sqrt(in, out, num_elements);
   }
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) {

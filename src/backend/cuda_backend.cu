@@ -146,6 +146,24 @@ __global__ void sigmoid_backward_kernel(const float *go, const float *out,
   }
 }
 
+__global__ void exp_kernel(const float *in, float *out, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N)
+    out[i] = expf(in[i]);
+}
+
+__global__ void log_kernel(const float *in, float *out, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N)
+    out[i] = logf(in[i]);
+}
+
+__global__ void sqrt_kernel(const float *in, float *out, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N)
+    out[i] = sqrtf(in[i]);
+}
+
 __global__ void softmax_forward_kernel(const float *in, float *out,
                                        int batch_size, int num_classes) {
   int b = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1223,6 +1241,39 @@ void CUDABackend::sigmoid_backward(const Storage &grad_out, const Storage &out,
   sigmoid_backward_kernel<<<blocks, threads>>>(
       (const float *)grad_out.data(), (const float *)out.data(),
       (float *)grad_in.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::exp(const Storage &in, Storage &out, size_t num_elements) {
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  exp_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
+                                  num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::log(const Storage &in, Storage &out, size_t num_elements) {
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  log_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
+                                  num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::sqrt(const Storage &in, Storage &out, size_t num_elements) {
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  sqrt_kernel<<<blocks, threads>>>((const float *)in.data(), (float *)out.data(),
+                                   num_elements);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
 }

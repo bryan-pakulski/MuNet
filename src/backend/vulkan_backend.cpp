@@ -76,6 +76,7 @@ static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
     sumToShapePipeline;
 static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
 static VkPipeline sigmoidPipeline, sigmoidBackwardPipeline;
+static VkPipeline expPipeline, logPipeline, sqrtPipeline;
 static VkPipeline softmaxPipeline, softmaxBackwardPipeline;
 static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
 static VkPipeline crossEntropyPipeline, crossEntropyBackwardPipeline;
@@ -686,6 +687,57 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
                 float s = out_d[i];
                 gi[i] = go[i] * s * (1.0 - s);
             }
+        }
+    )");
+
+  expPipeline = createComputePipeline("exp",
+                                      R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer I { float in_d[]; };
+        layout(binding = 1) writeonly buffer O { float out_d[]; };
+
+        layout(push_constant) uniform Push { uint N; } p;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                out_d[i] = exp(in_d[i]);
+        }
+    )");
+
+  logPipeline = createComputePipeline("log",
+                                      R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer I { float in_d[]; };
+        layout(binding = 1) writeonly buffer O { float out_d[]; };
+
+        layout(push_constant) uniform Push { uint N; } p;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                out_d[i] = log(in_d[i]);
+        }
+    )");
+
+  sqrtPipeline = createComputePipeline("sqrt",
+                                       R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) readonly buffer I { float in_d[]; };
+        layout(binding = 1) writeonly buffer O { float out_d[]; };
+
+        layout(push_constant) uniform Push { uint N; } p;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i < p.N)
+                out_d[i] = sqrt(in_d[i]);
         }
     )");
 
@@ -2331,6 +2383,21 @@ void VulkanBackend::sigmoid_backward(const Storage &grad_out,
   uint32_t N = num_elements;
   dispatch_kernel(sigmoidBackwardPipeline,
                   {grad_out.data(), out.data(), grad_in.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+void VulkanBackend::exp(const Storage &in, Storage &out, size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(expPipeline, {in.data(), out.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+void VulkanBackend::log(const Storage &in, Storage &out, size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(logPipeline, {in.data(), out.data()}, &N, sizeof(N),
+                  (N + 255) / 256, 1, 1);
+}
+void VulkanBackend::sqrt(const Storage &in, Storage &out, size_t num_elements) {
+  uint32_t N = num_elements;
+  dispatch_kernel(sqrtPipeline, {in.data(), out.data()}, &N, sizeof(N),
                   (N + 255) / 256, 1, 1);
 }
 void VulkanBackend::softmax(const Storage &in, Storage &out, int batch_size,

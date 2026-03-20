@@ -322,6 +322,9 @@ PYBIND11_MODULE(munet, m) {
            "Applies the Rectified Linear Unit function element-wise.")
       .def("sigmoid", &Tensor::sigmoid,
            "Applies the Sigmoid function element-wise.")
+      .def("exp", &Tensor::exp, "Applies exp element-wise.")
+      .def("log", &Tensor::log, "Applies natural log element-wise.")
+      .def("sqrt", &Tensor::sqrt, "Applies square root element-wise.")
       .def("softmax", &Tensor::softmax, py::arg("dim") = -1, "Applies softmax along a dimension.")
       .def("log_softmax", &Tensor::log_softmax, py::arg("dim") = -1,
            "Applies log-softmax along a dimension.")

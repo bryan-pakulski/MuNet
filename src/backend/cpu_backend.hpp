@@ -440,6 +440,33 @@ public:
     });
   }
 
+  void exp(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::exp(ip[i]);
+    });
+  }
+
+  void log(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::log(ip[i]);
+    });
+  }
+
+  void sqrt(const Storage &in, Storage &out, size_t num_elements) override {
+    const float *ip = (const float *)in.data();
+    float *op = (float *)out.data();
+    parallel_for(0, num_elements, [&](size_t s, size_t e) {
+      for (size_t i = s; i < e; ++i)
+        op[i] = std::sqrt(ip[i]);
+    });
+  }
+
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
     const float *ip = (const float *)in.data();

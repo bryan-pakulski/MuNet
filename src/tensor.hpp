@@ -148,6 +148,9 @@ public:
   Tensor matmul(const Tensor &other) const;
   Tensor relu() const;
   Tensor sigmoid() const;
+  Tensor exp() const;
+  Tensor log() const;
+  Tensor sqrt() const;
   Tensor softmax(int dim = -1) const;
   Tensor log_softmax(int dim = -1) const;
   Tensor sum() const;
