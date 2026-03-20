@@ -21,10 +21,14 @@ enum class OpId {
   Exp,
   Log,
   Sqrt,
+  Rsqrt,
+  Sin,
+  Cos,
   Softmax,
   LogSoftmax,
   Cat,
   Sum,
+  Mean,
   Reshape,
   Conv2D,
   MaxPool2D,
@@ -34,6 +38,7 @@ enum class OpId {
   MSELoss,
   CrossEntropy,
   Transpose,
+  Narrow,
   Zeros,
 };
 

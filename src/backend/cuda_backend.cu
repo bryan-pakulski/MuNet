@@ -1,4 +1,5 @@
 #include "../storage.hpp"
+#include "cpu_backend.hpp"
 #include "cuda_backend.hpp"
 #include "../core/util.hpp"
 #include <cublas_v2.h>
@@ -980,6 +981,16 @@ void CUDABackend::sum(const Storage &in, Storage &out, size_t num_elements) {
   CUDA_CHECK(cudaGetLastError());
 }
 
+void CUDABackend::mean_last_dim(const Storage &in, Storage &out, int outer_size,
+                                int dim_size) {
+  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
+  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
+  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
+  CPUBackend().mean_last_dim(cpu_in, cpu_out, outer_size, dim_size);
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
+       out.device());
+}
+
 void CUDABackend::update(Storage &weight, const Storage &grad, float lr,
                          size_t num_elements) {
   cudaSetDevice(device_index_);
@@ -1276,6 +1287,33 @@ void CUDABackend::sqrt(const Storage &in, Storage &out, size_t num_elements) {
                                    num_elements);
   cudaEventRecord((cudaEvent_t)stop_event_);
   CUDA_CHECK(cudaGetLastError());
+}
+
+void CUDABackend::rsqrt(const Storage &in, Storage &out, size_t num_elements) {
+  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
+  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
+  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
+  CPUBackend().rsqrt(cpu_in, cpu_out, num_elements);
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
+       out.device());
+}
+
+void CUDABackend::sin(const Storage &in, Storage &out, size_t num_elements) {
+  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
+  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
+  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
+  CPUBackend().sin(cpu_in, cpu_out, num_elements);
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
+       out.device());
+}
+
+void CUDABackend::cos(const Storage &in, Storage &out, size_t num_elements) {
+  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
+  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
+  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
+  CPUBackend().cos(cpu_in, cpu_out, num_elements);
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
+       out.device());
 }
 
 void CUDABackend::softmax(const Storage &in, Storage &out, int batch_size,

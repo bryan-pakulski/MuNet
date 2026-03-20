@@ -151,10 +151,15 @@ public:
   Tensor exp() const;
   Tensor log() const;
   Tensor sqrt() const;
+  Tensor rsqrt() const;
+  Tensor sin() const;
+  Tensor cos() const;
   Tensor softmax(int dim = -1) const;
   Tensor log_softmax(int dim = -1) const;
   Tensor sum() const;
+  Tensor mean(int dim = -1, bool keepdim = false) const;
   Tensor reshape(Shape new_shape) const;
+  Tensor narrow(int dim, int start, int length) const;
   Tensor masked_fill(const Tensor &mask, const ScalarValue &value) const;
   Tensor masked_fill(const Tensor &mask, float value) const;
   ScalarValue item_value() const;

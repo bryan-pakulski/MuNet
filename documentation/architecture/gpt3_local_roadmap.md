@@ -41,21 +41,21 @@
 ## Phase 3 — Missing primitives for RMSNorm and Rotary Embeddings
 
 ### Objectives
-- [ ] Close the tensor/runtime gaps that block clean backend-accelerated RMSNorm and RoPE implementations.
-- [ ] Keep new primitives available through Tensor API, autograd, Python bindings, and CPU/CUDA/Vulkan paths.
+- [x] Close the tensor/runtime gaps that block clean backend-accelerated RMSNorm and RoPE implementations.
+- [x] Keep new primitives available through Tensor API, autograd, Python bindings, and CPU/CUDA/Vulkan paths.
 
 ### Action Points
-- [ ] Add reduction ops needed for RMSNorm, especially `mean(dim)` or an equivalent last-dimension reduction.
-- [ ] Add reciprocal-root math (`rsqrt`) or scalar-power support so RMSNorm can avoid awkward graph workarounds.
-- [ ] Add trigonometric unary ops (`sin`, `cos`) for rotary embedding tables.
-- [ ] Add tensor slicing/select helpers (`slice`, `narrow`, or `split`) so RoPE can rotate head halves without host-side reshaping hacks.
-- [ ] Add focused tests for the new math/shape ops across CPU and any compiled accelerator backends.
-- [ ] Implement `nn::RMSNorm` and a reusable RoPE helper once the underlying ops exist.
+- [x] Add reduction ops needed for RMSNorm, especially `mean(dim)` or an equivalent last-dimension reduction.
+- [x] Add reciprocal-root math (`rsqrt`) or scalar-power support so RMSNorm can avoid awkward graph workarounds.
+- [x] Add trigonometric unary ops (`sin`, `cos`) for rotary embedding tables.
+- [x] Add tensor slicing/select helpers (`slice`, `narrow`, or `split`) so RoPE can rotate head halves without host-side reshaping hacks.
+- [x] Add focused tests for the new math/shape ops across CPU and any compiled accelerator backends.
+- [x] Implement `nn::RMSNorm` and a reusable RoPE helper once the underlying ops exist.
 
 ### Exit Criteria
-- [ ] RMSNorm runs end-to-end with autograd and backend coverage.
-- [ ] RoPE can be applied inside attention without CPU fallbacks.
-- [ ] The GPT demo can toggle LayerNorm vs RMSNorm and learned positions vs RoPE.
+- [x] RMSNorm runs end-to-end with autograd and backend coverage.
+- [x] RoPE can be applied inside attention without CPU fallbacks.
+- [x] The GPT demo can toggle LayerNorm vs RMSNorm and learned positions vs RoPE.
 
 ## Phase 4 — Full local train/inference quality and usability
 

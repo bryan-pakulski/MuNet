@@ -196,6 +196,15 @@ public:
   void sqrt(const Storage &, Storage &, size_t) override {
     throw std::runtime_error("unused");
   }
+  void rsqrt(const Storage &, Storage &, size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void sin(const Storage &, Storage &, size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void cos(const Storage &, Storage &, size_t) override {
+    throw std::runtime_error("unused");
+  }
   void softmax(const Storage &, Storage &, int, int) override {
     throw std::runtime_error("unused");
   }
@@ -322,6 +331,15 @@ public:
     throw std::runtime_error("unused");
   }
   void sqrt(const Storage &, Storage &, size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void rsqrt(const Storage &, Storage &, size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void sin(const Storage &, Storage &, size_t) override {
+    throw std::runtime_error("unused");
+  }
+  void cos(const Storage &, Storage &, size_t) override {
     throw std::runtime_error("unused");
   }
   void softmax(const Storage &, Storage &, int, int) override {

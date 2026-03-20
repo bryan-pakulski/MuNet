@@ -1,4 +1,5 @@
 #include "vulkan_backend.hpp"
+#include "cpu_backend.hpp"
 #include "storage.hpp"
 #include "core/util.hpp"
 #include <algorithm>
@@ -2400,6 +2401,28 @@ void VulkanBackend::sqrt(const Storage &in, Storage &out, size_t num_elements) {
   dispatch_kernel(sqrtPipeline, {in.data(), out.data()}, &N, sizeof(N),
                   (N + 255) / 256, 1, 1);
 }
+
+void VulkanBackend::rsqrt(const Storage &in, Storage &out, size_t num_elements) {
+  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
+  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
+  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
+  CPUBackend().rsqrt(cpu_in, cpu_out, num_elements);
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(), out.device());
+}
+void VulkanBackend::sin(const Storage &in, Storage &out, size_t num_elements) {
+  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
+  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
+  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
+  CPUBackend().sin(cpu_in, cpu_out, num_elements);
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(), out.device());
+}
+void VulkanBackend::cos(const Storage &in, Storage &out, size_t num_elements) {
+  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
+  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
+  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
+  CPUBackend().cos(cpu_in, cpu_out, num_elements);
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(), out.device());
+}
 void VulkanBackend::softmax(const Storage &in, Storage &out, int batch_size,
                             int num_classes) {
   struct {
@@ -2679,6 +2702,15 @@ void VulkanBackend::sum(const Storage &in, Storage &out, size_t num_elements) {
   uint32_t N = num_elements;
   dispatch_kernel(sumPipeline, {in.data(), out.data()}, &N, sizeof(N),
                   (num_elements + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::mean_last_dim(const Storage &in, Storage &out, int outer_size,
+                                  int dim_size) {
+  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
+  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
+  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
+  CPUBackend().mean_last_dim(cpu_in, cpu_out, outer_size, dim_size);
+  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(), out.device());
 }
 
 void VulkanBackend::concat(const std::vector<Storage *> &inputs, Storage &out,

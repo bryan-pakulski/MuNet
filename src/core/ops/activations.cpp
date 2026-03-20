@@ -127,6 +127,65 @@ Tensor sqrt(const Tensor &a) {
   return out;
 }
 
+Tensor rsqrt(const Tensor &a) {
+  Tensor out = unary_activation_op(
+      OpId::Rsqrt, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().rsqrt(in, out_storage, numel);
+      },
+      [](double v) {
+        if (v <= 0.0) {
+          throw std::runtime_error("Rsqrt expects strictly positive values");
+        }
+        return 1.0 / std::sqrt(v);
+      });
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<autograd_nodes::RsqrtBackward>(out);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_registered_trace(OpId::Rsqrt, out, {a});
+  return out;
+}
+
+Tensor sin(const Tensor &a) {
+  Tensor out = unary_activation_op(
+      OpId::Sin, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().sin(in, out_storage, numel);
+      },
+      [](double v) { return std::sin(v); });
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<autograd_nodes::SinBackward>(a);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_registered_trace(OpId::Sin, out, {a});
+  return out;
+}
+
+Tensor cos(const Tensor &a) {
+  Tensor out = unary_activation_op(
+      OpId::Cos, a,
+      [&](const Storage &in, Storage &out_storage, size_t numel) {
+        a.impl_->backend().cos(in, out_storage, numel);
+      },
+      [](double v) { return std::cos(v); });
+
+  if (GradMode::is_enabled() && a.requires_grad()) {
+    auto fn = std::make_shared<autograd_nodes::CosBackward>(a);
+    link_backward_edges(fn.get(), {a});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_registered_trace(OpId::Cos, out, {a});
+  return out;
+}
+
 Tensor softmax(const Tensor &a, int dim) {
   const auto dispatch = resolve_dispatch(OpId::Softmax, a);
   if (a.shape().empty())

@@ -36,6 +36,35 @@ public:
   float eps_;
 };
 
+class RMSNorm : public Module {
+public:
+  explicit RMSNorm(int normalized_shape, float eps = 1e-5f,
+                   TensorOptions options = TensorOptions{})
+      : Module(options), normalized_shape_(normalized_shape), eps_(eps) {
+    if (normalized_shape_ <= 0)
+      throw std::runtime_error("RMSNorm expects normalized_shape > 0");
+
+    Tensor w({normalized_shape_}, parameter_options(options));
+    w.fill_(1.0f);
+    weight = w;
+    register_parameter("weight", weight);
+  }
+
+  Tensor forward_impl(Tensor x) override {
+    if (x.shape().empty() || x.shape().back() != normalized_shape_)
+      throw std::runtime_error("RMSNorm expects last dim to match normalized_shape");
+    Tensor variance = (x * x).mean(-1, true);
+    Tensor eps({1}, x.device(), x.dtype());
+    eps.fill_(eps_);
+    Tensor normed = x * (variance + eps).rsqrt();
+    return normed * weight.reshape({1, normalized_shape_});
+  }
+
+  Tensor weight;
+  int normalized_shape_;
+  float eps_;
+};
+
 class BatchNorm2d : public Module {
 public:
   BatchNorm2d(int num_features, float eps = 1e-5f, float momentum = 0.1f,

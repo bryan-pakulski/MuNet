@@ -164,3 +164,50 @@ TEST_P(OpsTest, ScalarAutograd) {
   Tensor gb = b.grad().to({DeviceType::CPU, 0});
   EXPECT_FLOAT_EQ(((float *)gb.data())[0], 4.0f);
 }
+
+TEST_P(OpsTest, MeanLastDimForwardAndBackward) {
+  Tensor x({2, 3}, dev(), DataType::Float32, true);
+  Tensor x_cpu({2, 3}, {DeviceType::CPU, 0});
+  float *xp = static_cast<float *>(x_cpu.data());
+  xp[0] = 1.0f;
+  xp[1] = 2.0f;
+  xp[2] = 3.0f;
+  xp[3] = 4.0f;
+  xp[4] = 5.0f;
+  xp[5] = 6.0f;
+  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(), dev());
+
+  Tensor y = x.mean(-1, false);
+  Tensor y_cpu = y.to({DeviceType::CPU, 0});
+  const float *yp = static_cast<const float *>(y_cpu.data());
+  EXPECT_NEAR(yp[0], 2.0f, 1e-5f);
+  EXPECT_NEAR(yp[1], 5.0f, 1e-5f);
+
+  Tensor loss = y.sum();
+  loss.backward();
+  Tensor g_cpu = x.grad().to({DeviceType::CPU, 0});
+  const float *gp = static_cast<const float *>(g_cpu.data());
+  for (int i = 0; i < 6; ++i) {
+    EXPECT_NEAR(gp[i], 1.0f / 3.0f, 1e-5f);
+  }
+}
+
+TEST_P(OpsTest, NarrowViewSharesStorageOffset) {
+  Tensor x({2, 4}, dev());
+  Tensor x_cpu({2, 4}, {DeviceType::CPU, 0});
+  float *xp = static_cast<float *>(x_cpu.data());
+  for (int i = 0; i < 8; ++i)
+    xp[i] = static_cast<float>(i);
+  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(), dev());
+
+  Tensor slice = x.narrow(1, 1, 2);
+  EXPECT_EQ(slice.shape(), Shape({2, 2}));
+  EXPECT_EQ(slice.storage_offset(), static_cast<size_t>(1));
+
+  Tensor slice_cpu = slice.contiguous().to({DeviceType::CPU, 0});
+  const float *sp = static_cast<const float *>(slice_cpu.data());
+  EXPECT_FLOAT_EQ(sp[0], 1.0f);
+  EXPECT_FLOAT_EQ(sp[1], 2.0f);
+  EXPECT_FLOAT_EQ(sp[2], 5.0f);
+  EXPECT_FLOAT_EQ(sp[3], 6.0f);
+}

@@ -133,6 +133,89 @@ class FeedForwardSwiGLU(munet.nn.Module):
         return self.proj(silu * self.value(x))
 
 
+def build_norm(norm_type: str, d_model: int, opts):
+    if norm_type == "rmsnorm":
+        return munet.nn.RMSNorm(d_model, options=opts)
+    return munet.nn.LayerNorm(d_model, options=opts)
+
+
+class RotarySelfAttention(munet.nn.Module):
+    def __init__(self, d_model: int, n_heads: int, device, use_rope: bool, attn_dropout: float):
+        super().__init__()
+        if d_model % n_heads != 0:
+            raise ValueError("d_model must be divisible by n_heads")
+        opts = munet.TensorOptions()
+        opts.device = device
+        self.device = device
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+        self.use_rope = use_rope
+        self.q_proj = munet.nn.Linear(d_model, d_model, True, options=opts)
+        self.k_proj = munet.nn.Linear(d_model, d_model, True, options=opts)
+        self.v_proj = munet.nn.Linear(d_model, d_model, True, options=opts)
+        self.out_proj = munet.nn.Linear(d_model, d_model, True, options=opts)
+        self.attn_drop = munet.nn.Dropout(attn_dropout)
+        self._rope_cache = {}
+
+    def _rope_tables(self, seq_len: int, device):
+        key = (seq_len, device.type, device.index)
+        if key in self._rope_cache:
+            return self._rope_cache[key]
+        half = self.head_dim // 2
+        base = 10000.0
+        inv_freq = 1.0 / (base ** (np.arange(half, dtype=np.float32) / max(1, half)))
+        positions = np.arange(seq_len, dtype=np.float32)[:, None]
+        angles = positions * inv_freq[None, :]
+        cos = munet.from_numpy(np.cos(angles).reshape(1, 1, seq_len, half).astype(np.float32)).to(device)
+        sin = munet.from_numpy(np.sin(angles).reshape(1, 1, seq_len, half).astype(np.float32)).to(device)
+        self._rope_cache[key] = (cos, sin)
+        return cos, sin
+
+    def _apply_rope(self, x):
+        if not self.use_rope:
+            return x
+        if self.head_dim % 2 != 0:
+            raise ValueError("RoPE requires an even head dimension")
+        cos, sin = self._rope_tables(x.shape[2], x.device)
+        half = self.head_dim // 2
+        x1 = x.narrow(3, 0, half).contiguous()
+        x2 = x.narrow(3, half, half).contiguous()
+        return munet.Tensor.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], 3)
+
+    def forward(self, x):
+        bsz, seq_len, _ = x.shape
+        flat = x.reshape([bsz * seq_len, self.d_model])
+        q = self.q_proj(flat).reshape([bsz, seq_len, self.n_heads, self.head_dim]).permute([0, 2, 1, 3]).contiguous()
+        k = self.k_proj(flat).reshape([bsz, seq_len, self.n_heads, self.head_dim]).permute([0, 2, 1, 3]).contiguous()
+        v = self.v_proj(flat).reshape([bsz, seq_len, self.n_heads, self.head_dim]).permute([0, 2, 1, 3]).contiguous()
+
+        q = self._apply_rope(q)
+        k = self._apply_rope(k)
+
+        q2 = q.reshape([bsz * self.n_heads * seq_len, self.head_dim])
+        k2 = k.reshape([bsz * self.n_heads * seq_len, self.head_dim])
+        v2 = v.reshape([bsz * self.n_heads * seq_len, self.head_dim])
+        scores = q2 @ k2.transpose(0, 1)
+        scores = scores * (1.0 / np.sqrt(float(self.head_dim)))
+
+        cpu = munet.Device(munet.DeviceType.CPU, 0)
+        mask_cpu = munet.Tensor([bsz * self.n_heads * seq_len, bsz * self.n_heads * seq_len], device=cpu, dtype=munet.DataType.Int32)
+        mask_arr = np.array(mask_cpu, copy=False)
+        for i in range(bsz * self.n_heads * seq_len):
+            bh_i = i // seq_len
+            t_i = i % seq_len
+            for j in range(bsz * self.n_heads * seq_len):
+                bh_j = j // seq_len
+                t_j = j % seq_len
+                mask_arr[i, j] = 1 if (bh_i != bh_j or t_j > t_i) else 0
+        scores = scores.masked_fill(mask_cpu.to(scores.device), -1e9)
+        probs = self.attn_drop(scores.softmax(-1))
+        ctx = probs @ v2
+        merged = ctx.reshape([bsz, self.n_heads, seq_len, self.head_dim]).permute([0, 2, 1, 3]).contiguous().reshape([bsz * seq_len, self.d_model])
+        return self.out_proj(merged).reshape([bsz, seq_len, self.d_model])
+
+
 class GPTDecoderBlock(munet.nn.Module):
     def __init__(
         self,
@@ -140,6 +223,8 @@ class GPTDecoderBlock(munet.nn.Module):
         n_heads: int,
         ff_hidden: int,
         ffn_type: str,
+        norm_type: str,
+        position_type: str,
         device,
         attn_dropout: float,
         resid_dropout: float,
@@ -148,10 +233,10 @@ class GPTDecoderBlock(munet.nn.Module):
         opts = munet.TensorOptions()
         opts.device = device
         self.shard_device = device
-        self.ln1 = munet.nn.LayerNorm(d_model, options=opts)
-        self.attn = munet.nn.MultiHeadAttention(d_model, n_heads, causal=True, options=opts)
+        self.ln1 = build_norm(norm_type, d_model, opts)
+        self.attn = RotarySelfAttention(d_model, n_heads, device, position_type == "rope", attn_dropout)
         self.attn_drop = munet.nn.Dropout(attn_dropout)
-        self.ln2 = munet.nn.LayerNorm(d_model, options=opts)
+        self.ln2 = build_norm(norm_type, d_model, opts)
         self.resid_drop = munet.nn.Dropout(resid_dropout)
         self.ff = (
             FeedForwardSwiGLU(d_model, ff_hidden, opts)
@@ -173,11 +258,9 @@ class GPTDecoderBlock(munet.nn.Module):
 class FullGPTDemoModel(munet.nn.Module):
     """A trainable GPT-3-style decoder LM with optional model sharding.
 
-    Current architecture stays close to classic GPT/GPT-3 defaults:
-    learned positional embeddings, LayerNorm, causal self-attention, and a
-    residual feed-forward stack. `--ffn swiglu` enables a more modern FFN block.
-    RMSNorm/RoPE remain roadmap items because they need more tensor/runtime
-    support for a clean backend-accelerated implementation.
+    Current architecture can now toggle between LayerNorm and RMSNorm, and
+    between learned positional embeddings and rotary position embeddings,
+    while keeping the same tiny sharded GPT-style workflow.
     """
 
     def __init__(
@@ -192,6 +275,8 @@ class FullGPTDemoModel(munet.nn.Module):
         attn_dropout: float = 0.0,
         resid_dropout: float = 0.0,
         embed_dropout: float = 0.0,
+        norm_type: str = "layernorm",
+        position_type: str = "learned",
     ):
         super().__init__()
         self.vocab = vocab
@@ -204,6 +289,8 @@ class FullGPTDemoModel(munet.nn.Module):
         self.attn_dropout = attn_dropout
         self.resid_dropout = resid_dropout
         self.embed_dropout = embed_dropout
+        self.norm_type = norm_type
+        self.position_type = position_type
 
         first_opts = munet.TensorOptions()
         first_opts.device = shard_devices[0]
@@ -211,7 +298,7 @@ class FullGPTDemoModel(munet.nn.Module):
         last_opts.device = shard_devices[-1]
 
         self.token = munet.nn.Embedding(vocab, d_model, options=first_opts)
-        self.pos = munet.nn.Embedding(ctx, d_model, options=first_opts)
+        self.pos = munet.nn.Embedding(ctx, d_model, options=first_opts) if position_type == "learned" else None
         self.embed_drop = munet.nn.Dropout(embed_dropout)
         self.blocks = []
         ff_hidden = 4 * d_model
@@ -222,13 +309,15 @@ class FullGPTDemoModel(munet.nn.Module):
                 n_heads=n_heads,
                 ff_hidden=ff_hidden,
                 ffn_type=ffn_type,
+                norm_type=norm_type,
+                position_type=position_type,
                 device=device,
                 attn_dropout=attn_dropout,
                 resid_dropout=resid_dropout,
             )
             setattr(self, f"block_{layer}", block)
             self.blocks.append(block)
-        self.ln_f = munet.nn.LayerNorm(d_model, options=last_opts)
+        self.ln_f = build_norm(norm_type, d_model, last_opts)
         self.head = munet.nn.Linear(d_model, vocab, True, options=last_opts)
 
     @property
@@ -237,7 +326,9 @@ class FullGPTDemoModel(munet.nn.Module):
 
     def forward(self, tok_oh, pos_oh):
         first = self.shard_devices[0]
-        x = self.token(tok_oh.to(first)) + self.pos(pos_oh.to(first))
+        x = self.token(tok_oh.to(first))
+        if self.pos is not None:
+            x = x + self.pos(pos_oh.to(first))
         x = self.embed_drop(x)
         for block in self.blocks:
             x = block.forward(x)
@@ -449,6 +540,8 @@ def save_artifact(output_dir: str, model: FullGPTDemoModel, tokenizer: Character
         "attn_dropout": model.attn_dropout,
         "resid_dropout": model.resid_dropout,
         "embed_dropout": model.embed_dropout,
+        "norm_type": model.norm_type,
+        "position_type": model.position_type,
         "chars": tokenizer.chars,
         "training_text": training_text,
         "system_prompt": system_prompt,
@@ -490,6 +583,8 @@ def load_artifact(model_dir: str, requested_shards: int, checkpoint: str):
         attn_dropout=cfg.get("attn_dropout", 0.0),
         resid_dropout=cfg.get("resid_dropout", 0.0),
         embed_dropout=cfg.get("embed_dropout", 0.0),
+        norm_type=cfg.get("norm_type", "layernorm"),
+        position_type=cfg.get("position_type", "learned"),
     )
     load_parameter_state(model, checkpoint_path(model_dir, checkpoint))
     model.eval()
@@ -529,6 +624,8 @@ def train_command(args):
         attn_dropout=args.attn_dropout,
         resid_dropout=args.resid_dropout,
         embed_dropout=args.embed_dropout,
+        norm_type=args.norm,
+        position_type=args.positions,
     )
     opt = munet.optim.Adam(model.parameters(), lr=args.lr)
     sampling_cfg = resolve_sampling_config(args)
@@ -536,7 +633,8 @@ def train_command(args):
     print("Training shards:", ", ".join(repr(dev) for dev in shard_devices))
     print(
         f"Train windows={X_train.shape[0]} | Val windows={X_val.shape[0]} | vocab={tokenizer.vocab_size} | "
-        f"ffn={args.ffn} | attn_dropout={args.attn_dropout} | resid_dropout={args.resid_dropout}"
+        f"ffn={args.ffn} | norm={args.norm} | positions={args.positions} | "
+        f"attn_dropout={args.attn_dropout} | resid_dropout={args.resid_dropout}"
     )
     print(f"Sampling config: {sampling_cfg}")
 
@@ -668,6 +766,8 @@ def build_parser():
     train.add_argument("--lr", type=float, default=3e-3)
     train.add_argument("--shards", type=int, default=2)
     train.add_argument("--ffn", choices=["gelu", "swiglu"], default="gelu")
+    train.add_argument("--norm", choices=["layernorm", "rmsnorm"], default="layernorm")
+    train.add_argument("--positions", choices=["learned", "rope"], default="learned")
     train.add_argument("--attn-dropout", type=float, default=0.1)
     train.add_argument("--resid-dropout", type=float, default=0.1)
     train.add_argument("--embed-dropout", type=float, default=0.05)

@@ -366,6 +366,24 @@ public:
     base_->sqrt(in, out, num_elements);
     check("sqrt", t.elapsed_us(), &out);
   }
+  void rsqrt(const Storage &in, Storage &out, size_t num_elements) override {
+    MUNET_DEBUG << "rsqrt | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->rsqrt(in, out, num_elements);
+    check("rsqrt", t.elapsed_us(), &out);
+  }
+  void sin(const Storage &in, Storage &out, size_t num_elements) override {
+    MUNET_DEBUG << "sin | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->sin(in, out, num_elements);
+    check("sin", t.elapsed_us(), &out);
+  }
+  void cos(const Storage &in, Storage &out, size_t num_elements) override {
+    MUNET_DEBUG << "cos | " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->cos(in, out, num_elements);
+    check("cos", t.elapsed_us(), &out);
+  }
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
     MUNET_DEBUG << "softmax | " << batch_size << " batches, " << num_classes
@@ -539,6 +557,14 @@ public:
     Timer t;
     base_->sum_to_shape(in, out, in_shape, out_shape);
     check("sum_to_shape", t.elapsed_us(), &out);
+  }
+  void mean_last_dim(const Storage &in, Storage &out, int outer_size,
+                     int dim_size) override {
+    MUNET_DEBUG << "mean_last_dim | outer=" << outer_size
+                << " dim=" << dim_size << std::endl;
+    Timer t;
+    base_->mean_last_dim(in, out, outer_size, dim_size);
+    check("mean_last_dim", t.elapsed_us(), &out);
   }
 };
 

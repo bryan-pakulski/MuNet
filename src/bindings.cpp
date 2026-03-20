@@ -245,6 +245,8 @@ PYBIND11_MODULE(munet, m) {
            "Returns a tensor that is a transposed version of this tensor.")
       .def("permute", &Tensor::permute, py::arg("dims"),
            "Returns a tensor view with dimensions permuted.")
+      .def("narrow", &Tensor::narrow, py::arg("dim"), py::arg("start"),
+           py::arg("length"), "Returns a narrowed tensor view.")
       .def("contiguous", &Tensor::contiguous,
            "Returns a contiguous tensor containing the same data as this "
            "tensor.")
@@ -294,6 +296,8 @@ PYBIND11_MODULE(munet, m) {
            [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
       .def("sum", &Tensor::sum,
            "Returns the sum of all elements in the tensor.")
+      .def("mean", &Tensor::mean, py::arg("dim") = -1, py::arg("keepdim") = false,
+           "Returns the mean reduced along the specified dimension.")
       .def("reshape", &Tensor::reshape, py::arg("shape"),
            "Returns a tensor with the same data and number of elements, but "
            "with the specified shape.")
@@ -325,6 +329,9 @@ PYBIND11_MODULE(munet, m) {
       .def("exp", &Tensor::exp, "Applies exp element-wise.")
       .def("log", &Tensor::log, "Applies natural log element-wise.")
       .def("sqrt", &Tensor::sqrt, "Applies square root element-wise.")
+      .def("rsqrt", &Tensor::rsqrt, "Applies reciprocal square root element-wise.")
+      .def("sin", &Tensor::sin, "Applies sine element-wise.")
+      .def("cos", &Tensor::cos, "Applies cosine element-wise.")
       .def("softmax", &Tensor::softmax, py::arg("dim") = -1, "Applies softmax along a dimension.")
       .def("log_softmax", &Tensor::log_softmax, py::arg("dim") = -1,
            "Applies log-softmax along a dimension.")
@@ -367,13 +374,16 @@ PYBIND11_MODULE(munet, m) {
         }
 
         std::vector<py::ssize_t> py_strides(py_shape.size());
-        py::ssize_t stride = dtype_size(t.dtype());
-        for (int i = (int)py_shape.size() - 1; i >= 0; --i) {
-          py_strides[i] = stride;
-          stride *= py_shape[i];
+        const py::ssize_t element_size =
+            static_cast<py::ssize_t>(dtype_size(t.dtype()));
+        for (size_t i = 0; i < py_shape.size(); ++i) {
+          py_strides[i] =
+              static_cast<py::ssize_t>(t.strides()[i]) * element_size;
         }
 
-        return py::buffer_info(t.data(), dtype_size(t.dtype()),
+        auto *base_ptr = static_cast<char *>(t.data()) +
+                         static_cast<py::ssize_t>(t.storage_offset()) * element_size;
+        return py::buffer_info(base_ptr, dtype_size(t.dtype()),
                                numpy_format_for_dtype(t.dtype()),
                                py_shape.size(), py_shape, py_strides);
       });
@@ -595,6 +605,15 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("eps", &nn::LayerNorm::eps_)
       .def_readonly("weight", &nn::LayerNorm::weight)
       .def_readonly("bias", &nn::LayerNorm::bias);
+
+  py::class_<nn::RMSNorm, nn::Module, std::shared_ptr<nn::RMSNorm>>(
+      nn, "RMSNorm",
+      "Applies RMS normalization over the last tensor dimension.")
+      .def(py::init<int, float, TensorOptions>(), py::arg("normalized_shape"),
+           py::arg("eps") = 1e-5f, py::arg("options") = TensorOptions{})
+      .def_readonly("normalized_shape", &nn::RMSNorm::normalized_shape_)
+      .def_readonly("eps", &nn::RMSNorm::eps_)
+      .def_readonly("weight", &nn::RMSNorm::weight);
 
   py::class_<nn::MultiHeadAttention, nn::Module, std::shared_ptr<nn::MultiHeadAttention>>(
       nn, "MultiHeadAttention",
@@ -1161,6 +1180,8 @@ PYBIND11_MODULE(munet, m) {
              return {'type': name, 'num_embeddings': m.num_embeddings, 'embedding_dim': m.embedding_dim, 'dtype': _tensor_dtype_name(m.weight)}
          elif name == 'LayerNorm':
              return {'type': name, 'normalized_shape': m.normalized_shape, 'eps': m.eps, 'dtype': _tensor_dtype_name(m.weight)}
+         elif name == 'RMSNorm':
+             return {'type': name, 'normalized_shape': m.normalized_shape, 'eps': m.eps, 'dtype': _tensor_dtype_name(m.weight)}
          elif name == 'MultiHeadAttention':
              return {'type': name, 'embed_dim': m.embed_dim, 'num_heads': m.num_heads, 'causal': bool(m.causal), 'dtype': _tensor_dtype_name(m.q_proj.weight)}
          else:
@@ -1235,6 +1256,7 @@ PYBIND11_MODULE(munet, m) {
          elif t == 'Dropout': return munet.nn.Dropout(cfg.get('p', 0.5))
          elif t == 'Embedding': return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'], opts)
          elif t == 'LayerNorm': return munet.nn.LayerNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5), opts)
+         elif t == 'RMSNorm': return munet.nn.RMSNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5), opts)
          elif t == 'MultiHeadAttention': return munet.nn.MultiHeadAttention(cfg['embed_dim'], cfg['num_heads'], cfg.get('causal', True), opts)
          elif t == 'Flatten': return munet.nn.Flatten()
          else:
