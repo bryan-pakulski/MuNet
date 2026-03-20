@@ -1,5 +1,7 @@
 #include "op_dispatch.hpp"
+#include "core/grad_mode.hpp"
 #include "core/util.hpp"
+#include "util/logging.hpp"
 
 #include <memory>
 #include <stdexcept>
@@ -128,7 +130,7 @@ ForwardNode make_trace_node(
           std::to_string(reinterpret_cast<uintptr_t>(tensor.impl_.get()));
     }
     node.input_names.push_back(tensor.name());
-    node.inputs.push_back(tensor);
+    node.input_shapes.push_back(tensor.shape());
   }
   node.int_attributes = int_attrs;
   node.attributes = float_attrs;
@@ -304,6 +306,11 @@ void record_registered_trace(
     OpId id, Tensor &out, const std::vector<Tensor> &inputs,
     const std::unordered_map<std::string, std::vector<int>> &int_attrs,
     const std::unordered_map<std::string, float> &float_attrs) {
+
+  if (!GradMode::is_enabled() && !is_profile_enabled())
+    return;
+
+  NoGradGuard guard;
   const auto &meta = op_metadata(id);
   out.impl_->trace_node = std::make_shared<ForwardNode>(
       make_trace_node(meta.trace_name, inputs, int_attrs, float_attrs));

@@ -233,6 +233,11 @@ inline void record_trace(
     Tensor &out, const std::string &op_name, const std::vector<Tensor> &inputs,
     const std::unordered_map<std::string, std::vector<int>> &int_attrs = {},
     const std::unordered_map<std::string, float> &float_attrs = {}) {
+
+  if (!GradMode::is_enabled() && !is_profile_enabled())
+    return;
+
+  NoGradGuard guard;
   auto fn = std::make_shared<ForwardNode>();
   fn->op_name = op_name;
   for (const auto &t : inputs) {
@@ -242,7 +247,7 @@ inline void record_trace(
           std::to_string(reinterpret_cast<uintptr_t>(t.impl_.get()));
     }
     fn->input_names.push_back(t.name());
-    fn->inputs.push_back(t);
+    fn->input_shapes.push_back(t.shape());
   }
   fn->int_attributes = int_attrs;
   fn->attributes = float_attrs;

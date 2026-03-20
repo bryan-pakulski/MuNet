@@ -1814,20 +1814,35 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
    )");
 
   toContiguousPipeline = createComputePipeline("to_contiguous", R"(
-        #version 450
-        layout(push_constant) uniform P { int ndim; int shape[6]; int strides[6]; uint offset; uint total; } u;
-        void main() {
-            uint idx = gl_GlobalInvocationID.x;
-            if (idx >= u.total) return;
-            uint src_off = u.offset;
-            uint rem = idx;
-            for (int d = u.ndim - 1; d >= 0; --d) {
-                src_off += (rem % u.shape[d]) * u.strides[d];
-                rem /= u.shape[d];
-            }
-            dst[idx] = src[src_off];
-        }
-    )");
+      #version 450
+      layout(local_size_x = 256) in;
+
+      layout(binding = 0) readonly buffer Src { float src[]; };
+      layout(binding = 1) writeonly buffer Dst { float dst[]; };
+
+      layout(push_constant) uniform P {
+          int ndim;
+          int shape[6];
+          int strides[6];
+          uint offset;
+          uint total;
+      } u;
+
+      void main() {
+          uint idx = gl_GlobalInvocationID.x;
+          if (idx >= u.total) return;
+
+          uint src_off = u.offset;
+          uint rem = idx;
+
+          for (int d = u.ndim - 1; d >= 0; --d) {
+              src_off += (rem % uint(u.shape[d])) * uint(u.strides[d]);
+              rem /= uint(u.shape[d]);
+          }
+
+          dst[idx] = src[src_off];
+      }
+  )");
 }
 
 VulkanBackend::~VulkanBackend() {

@@ -15,8 +15,10 @@ namespace munet {
 namespace {
 
 Tensor convert_tensor_dtype_cpu(const Tensor &input, DataType target_dtype) {
+  NoGradGuard guard;
   Tensor out(input.shape(), Device{DeviceType::CPU, 0}, target_dtype,
              input.requires_grad());
+
   convert_buffer_dtype(input.data(), input.dtype(), out.data(), target_dtype,
                        input.size());
   return out;
@@ -37,11 +39,16 @@ void Tensor::backward(bool retain_graph) {
     throw std::runtime_error("backward() requires a floating-point tensor");
   }
 
-  Tensor root_grad(shape(), device(), dtype());
-  Tensor root_cpu(shape(), Device{DeviceType::CPU, 0}, dtype());
-  write_scalar_to_buffer(root_cpu.data(), dtype(), 1.0);
-  impl_->backend().copy(root_cpu.data(), root_grad.data(), root_grad.bytes(),
-                        root_cpu.device(), device());
+  // Create the root gradient without tracking history
+  Tensor root_grad;
+  {
+    NoGradGuard guard;
+    root_grad = Tensor(shape(), device(), dtype());
+    Tensor root_cpu(shape(), Device{DeviceType::CPU, 0}, dtype());
+    write_scalar_to_buffer(root_cpu.data(), dtype(), 1.0);
+    impl_->backend().copy(root_cpu.data(), root_grad.data(), root_grad.bytes(),
+                          root_cpu.device(), device());
+  }
 
   backward(root_grad, retain_graph);
 }

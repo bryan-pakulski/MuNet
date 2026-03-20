@@ -21,24 +21,43 @@ struct Edge {
 };
 
 struct SavedTensor {
-  std::weak_ptr<TensorImpl> impl;
+  std::weak_ptr<TensorImpl> weak_impl;
+  std::shared_ptr<Storage> storage;
+  Shape shape;
+  Strides strides;
+  size_t storage_offset;
   uint64_t version = 0;
   std::string debug_name;
 
+  SavedTensor(const Tensor &t, std::string name = "")
+      : weak_impl(t.impl_), storage(t.impl_ ? t.impl_->storage : nullptr),
+        shape(t.impl_ ? t.shape() : Shape{}),
+        strides(t.impl_ ? t.strides() : Strides{}),
+        storage_offset(t.impl_ ? t.storage_offset() : 0),
+        version(t.impl_ ? t.version() : 0), debug_name(std::move(name)) {}
+
   Tensor unpack() const {
-    auto locked = impl.lock();
-    if (!locked) {
-      throw std::runtime_error(
-          "Saved tensor for backward is no longer available");
-    }
-    if (locked->version_counter != version) {
-      const std::string name = debug_name.empty() ? "saved tensor" : debug_name;
-      throw std::runtime_error("In-place mutation detected for " + name +
-                               " after it was captured for backward");
+    if (storage == nullptr)
+      return Tensor();
+
+    if (auto impl = weak_impl.lock()) {
+      if (impl->version_counter != version) {
+        const std::string name =
+            debug_name.empty() ? "saved tensor" : debug_name;
+        throw std::runtime_error("In-place mutation detected for " + name +
+                                 " after it was captured for backward");
+      }
     }
 
+    // Create a new implementation wrapper that shares the same storage.
+    // This breaks circular shared_ptr references to the original TensorImpl.
     Tensor restored;
-    restored.impl_ = std::move(locked);
+    restored.impl_ = std::make_shared<TensorImpl>(Shape{}, storage->device(),
+                                                  storage->dtype(), false);
+    restored.impl_->storage = storage;
+    restored.impl_->shape = shape;
+    restored.impl_->strides = strides;
+    restored.impl_->storage_offset = storage_offset;
     return restored;
   }
 };
@@ -61,14 +80,17 @@ struct Node {
 
   virtual std::string name() const { return "Node"; }
   virtual std::vector<Tensor> apply(const std::vector<Tensor> &grads) = 0;
-  virtual void release_resources() { saved_tensors.clear(); }
+  virtual void release_resources() {
+    saved_tensors.clear();
+    next_edges.clear();
+    gradient_hooks.clear();
+  }
 
   void save_tensor(const Tensor &tensor, const std::string &debug_name = "") {
     if (!tensor.impl_) {
       return;
     }
-    saved_tensors.push_back(
-        SavedTensor{tensor.impl_, tensor.version(), debug_name});
+    saved_tensors.emplace_back(tensor, debug_name);
   }
 
   Tensor saved_tensor(size_t index) const {
@@ -122,15 +144,18 @@ struct AccumulateGrad : public Node {
     }
 
     if (auto var = variable_.lock()) {
+      NoGradGuard guard; // Crucial: ensure gradient math doesn't track history
       if (!var->grad) {
         var->grad = std::make_shared<TensorImpl>(
             var->shape, var->storage->device(), var->storage->dtype(), false);
         var->grad->storage->zero_();
       }
-      Tensor current_grad;
-      current_grad.impl_ = var->grad;
-      Tensor updated_grad = current_grad + grads[0];
-      var->grad = updated_grad.impl_;
+
+      Tensor current_grad_wrap;
+      current_grad_wrap.impl_ = var->grad;
+      // Use detached addition to be doubly sure
+      Tensor updated = current_grad_wrap + grads[0].detach();
+      var->grad = updated.impl_;
       var->grad->bump_version();
     }
 
@@ -283,12 +308,17 @@ private:
   }
 
   Tensor accumulate_gradients(const std::vector<Tensor> &inputs) {
-    Tensor accumulated_grad =
-        inputs.size() == 1 ? inputs[0] : inputs.front().clone();
+    if (inputs.empty())
+      return Tensor();
+    if (inputs.size() == 1)
+      return inputs[0];
+
+    NoGradGuard guard; // Ensure accumulation doesn't create new graph nodes
+    Tensor accumulated_grad = inputs.front().clone().detach();
 
     for (size_t i = 1; i < inputs.size(); ++i) {
       if (inputs[i].impl_) {
-        accumulated_grad = accumulated_grad + inputs[i];
+        accumulated_grad = accumulated_grad + inputs[i].detach();
       }
     }
     return accumulated_grad;

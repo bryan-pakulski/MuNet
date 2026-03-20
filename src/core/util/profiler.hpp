@@ -86,7 +86,15 @@ public:
     s.max_gpu_us = std::max(s.max_gpu_us, gpu_us);
     s.bytes_processed += bytes;
     s.count++;
-    const std::string detail = append_trace_context(std::move(shape));
+    std::string detail = shape;
+
+    // If we have a trace context (trace_id/span), attach it to the shape info
+    // so individual ops can be mapped to high-level requests in the report.
+    std::string context = current_trace_context_string();
+    if (!context.empty()) {
+      detail = (detail.empty() ? "" : detail + " ") + "[" + context + "]";
+    }
+
     if (!detail.empty())
       s.last_shape = detail;
   }

@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 #include <mutex>
+#include <unordered_set>
 #include <vector>
 
 using namespace munet;
@@ -37,6 +38,11 @@ class PartialMatmulBackend : public Backend,
 public:
   explicit PartialMatmulBackend(int device_index)
       : device_index_(device_index) {}
+
+  ~PartialMatmulBackend() {
+    for (void *p : allocated_ptrs_)
+      std::free(p);
+  }
 
   const char *name() const override { return "partial_matmul"; }
 
@@ -71,8 +77,17 @@ public:
 
   double get_last_kernel_time_us() override { return 0.0; }
 
-  void *allocate(size_t bytes) override { return std::malloc(bytes); }
-  void deallocate(void *ptr) override { std::free(ptr); }
+  void *allocate(size_t bytes) override {
+    void *ptr = std::malloc(bytes);
+    allocated_ptrs_.insert(ptr);
+    return ptr;
+  }
+  void deallocate(void *ptr) override {
+    if (ptr) {
+      allocated_ptrs_.erase(ptr);
+      std::free(ptr);
+    }
+  }
   void memset(void *ptr, int value, size_t bytes) override {
     std::memset(ptr, value, bytes);
   }
@@ -126,6 +141,7 @@ public:
 private:
   int device_index_ = 0;
   int matmul_calls_ = 0;
+  std::unordered_set<void *> allocated_ptrs_;
 };
 
 class TimedAddBackend : public Backend,
@@ -135,6 +151,11 @@ public:
   TimedAddBackend(int device_index, bool gpu_timing, double kernel_time_us)
       : device_index_(device_index), gpu_timing_(gpu_timing),
         kernel_time_us_(kernel_time_us) {}
+
+  ~TimedAddBackend() {
+    for (void *p : allocated_ptrs_)
+      std::free(p);
+  }
 
   const char *name() const override {
     return gpu_timing_ ? "timed_gpu_add" : "timed_cpu_add";
@@ -156,8 +177,18 @@ public:
     return this;
   }
 
-  void *allocate(size_t bytes) override { return std::malloc(bytes); }
-  void deallocate(void *ptr) override { std::free(ptr); }
+  void *allocate(size_t bytes) override {
+    void *ptr = std::malloc(bytes);
+    allocated_ptrs_.insert(ptr);
+    return ptr;
+  }
+  void deallocate(void *ptr) override {
+    if (ptr) {
+      allocated_ptrs_.erase(ptr);
+      std::free(ptr);
+    }
+  }
+
   void memset(void *ptr, int value, size_t bytes) override {
     std::memset(ptr, value, bytes);
   }
@@ -265,6 +296,7 @@ private:
   double last_kernel_time_us_ = 0.0;
   int add_calls_ = 0;
   int sync_calls_ = 0;
+  std::unordered_set<void *> allocated_ptrs_;
 };
 
 class ReusingTimedAddBackend : public Backend,
@@ -273,6 +305,11 @@ class ReusingTimedAddBackend : public Backend,
 public:
   explicit ReusingTimedAddBackend(int device_index)
       : device_index_(device_index) {}
+
+  ~ReusingTimedAddBackend() {
+    for (void *p : all_mallocs_)
+      std::free(p);
+  }
 
   const char *name() const override { return "reusing_timed_add"; }
 
@@ -300,19 +337,19 @@ public:
       allocated_sizes_[ptr] = bytes;
       return ptr;
     }
+
     void *ptr = std::malloc(bytes);
     allocated_sizes_[ptr] = bytes;
+    all_mallocs_.push_back(ptr);
     return ptr;
   }
 
   void deallocate(void *ptr) override {
-    if (!ptr) {
+    if (!ptr)
       return;
-    }
     const size_t bytes = allocation_size(ptr);
-    if (bytes > 0) {
+    if (bytes > 0)
       free_blocks_[bytes].push_back(ptr);
-    }
   }
 
   void memset(void *ptr, int value, size_t bytes) override {
@@ -426,6 +463,7 @@ private:
   int sync_calls_ = 0;
   std::unordered_map<void *, size_t> allocated_sizes_;
   std::unordered_map<size_t, std::vector<void *>> free_blocks_;
+  std::vector<void *> all_mallocs_;
 };
 
 } // namespace
