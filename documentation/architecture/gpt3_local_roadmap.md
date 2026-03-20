@@ -60,17 +60,17 @@
 ## Phase 4 — Full local train/inference quality and usability
 
 ### Objectives
-- [ ] Make the model practical for longer local training runs and faster autoregressive inference.
-- [ ] Reduce the gap between a teaching demo and a serious local experimentation stack.
+- [x] Make the model practical for longer local training runs and faster autoregressive inference.
+- [x] Reduce the gap between a teaching demo and a serious local experimentation stack.
 
 ### Action Points
-- [ ] Add KV-cache support for incremental decoding so chat generation no longer recomputes the full prefix every step.
-- [ ] Add optimizer/training utilities such as gradient clipping, weight decay, LR scheduling, and periodic checkpointing.
-- [ ] Add dataset streaming / mini-batch loading from local text corpora instead of relying only on in-memory strings.
-- [ ] Add mixed-precision and memory/perf measurement guidance for longer-context local runs.
-- [ ] Add a reproducible inference command that loads a saved artifact and exposes a chat REPL suitable for local experimentation.
+- [x] Add KV-cache support for incremental decoding so chat generation no longer recomputes the full prefix every step.
+- [x] Add optimizer/training utilities such as gradient clipping, weight decay, LR scheduling, and periodic checkpointing.
+- [x] Add dataset streaming / mini-batch loading from local text corpora instead of relying only on in-memory strings.
+- [x] Add mixed-precision and memory/perf measurement guidance for longer-context local runs.
+- [x] Add a reproducible inference command that loads a saved artifact and exposes a chat REPL suitable for local experimentation.
 
 ### Exit Criteria
-- [ ] A user can train on a non-trivial local corpus with restarts/checkpoints.
-- [ ] Chat inference is materially faster due to KV caching.
-- [ ] The demo documents the practical limits for running larger local models on CPU / multi-GPU setups.
+- [x] A user can train on a non-trivial local corpus with restarts/checkpoints.
+- [x] Chat inference is materially faster due to KV caching.
+- [x] The demo documents the practical limits for running larger local models on CPU / multi-GPU setups.

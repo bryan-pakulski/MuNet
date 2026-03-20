@@ -89,6 +89,9 @@ public:
 
   virtual void step() = 0;
 
+  float lr() const { return lr_; }
+  void set_lr(float value) { lr_ = value; }
+
   void zero_grad() {
     for_each_parameter([&](Tensor &p, size_t, size_t) { p.zero_grad(); });
 
@@ -108,6 +111,47 @@ public:
         return;
       }
       scale_tensor_in_place(p.grad(), factor);
+    });
+  }
+
+  float grad_global_norm() const {
+    double total_sq = 0.0;
+    for_each_parameter([&](Tensor p, size_t, size_t) {
+      if (!p.has_grad()) {
+        return;
+      }
+      Device cpu{DeviceType::CPU, 0};
+      Tensor grad_cpu =
+          (p.grad().device().type == DeviceType::CPU) ? p.grad() : p.grad().to(cpu);
+      const char *bytes = static_cast<const char *>(grad_cpu.data());
+      const size_t stride = dtype_size(grad_cpu.dtype());
+      for (size_t i = 0; i < grad_cpu.size(); ++i) {
+        const double value =
+            read_scalar_from_buffer(bytes + i * stride, grad_cpu.dtype()).value;
+        total_sq += value * value;
+      }
+    });
+    return static_cast<float>(std::sqrt(total_sq));
+  }
+
+  float clip_grad_norm(float max_norm) {
+    const float total_norm = grad_global_norm();
+    if (max_norm > 0.0f && total_norm > max_norm && total_norm > 0.0f) {
+      scale_gradients(max_norm / total_norm);
+    }
+    return total_norm;
+  }
+
+  void apply_weight_decay(float weight_decay) {
+    if (weight_decay <= 0.0f) {
+      return;
+    }
+    for_each_parameter([&](Tensor &p, size_t group_index, size_t) {
+      if (!is_floating(p.dtype())) {
+        return;
+      }
+      const float factor = 1.0f - group_lr(group_index) * weight_decay;
+      scale_tensor_in_place(p, factor);
     });
   }
 

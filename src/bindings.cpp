@@ -821,7 +821,17 @@ PYBIND11_MODULE(munet, m) {
       .def("step", &optim::Optimizer::step,
            "Performs a single optimization step.")
       .def("zero_grad", &optim::Optimizer::zero_grad,
-           "Clears the gradients of all optimized Tensors.");
+           "Clears the gradients of all optimized Tensors.")
+      .def("grad_global_norm", &optim::Optimizer::grad_global_norm,
+           "Computes the global L2 norm of all gradients.")
+      .def("clip_grad_norm", &optim::Optimizer::clip_grad_norm,
+           py::arg("max_norm"),
+           "Clips gradients to the provided global L2 norm and returns the pre-clip norm.")
+      .def("apply_weight_decay", &optim::Optimizer::apply_weight_decay,
+           py::arg("weight_decay"),
+           "Applies simple decoupled weight decay to all managed parameters.")
+      .def_property("lr", &optim::Optimizer::lr, &optim::Optimizer::set_lr,
+                    "Gets or sets the optimizer learning rate.");
 
   py::class_<optim::Adam, optim::Optimizer, std::shared_ptr<optim::Adam>>(
       optim, "Adam", "Adam optimizer.")
