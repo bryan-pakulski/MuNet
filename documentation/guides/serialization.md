@@ -24,10 +24,14 @@ MuNet writes explicit deploy-oriented serialization metadata alongside the tenso
 - `__format_version__ = "munet_model_v1"` (legacy compatibility tag)
 - `__producer__ = "munet"`
 - `__artifact_kind__ = "deploy_model"`
+- `__artifact_scope__ = "runtime_only"`
 - `__default_load_mode__ = "eval"`
 - `__contains_training_state__ = false`
 - `__device_policy__ = "caller_specified"`
 - `__dtype_policy__ = "per_tensor"`
+- `__recommended_loader__ = "load_for_inference"`
+- `__compile_contract_policy__ = "external"`
+- `__tensor_names__ = [...]`
 
 Use `munet.serialization_format_info()` to inspect the supported format contract in the current build, and `munet.serialization_metadata(path)` to inspect a saved artifact before loading it.
 
@@ -41,10 +45,12 @@ Use `munet.serialization_format_info()` to inspect the supported format contract
 ## Deploy behavior
 
 - `munet.save(...)` produces a **deploy artifact**, not a training checkpoint.
+- Deploy artifacts are validated as **runtime-only** payloads: architecture config, tensor payload, and deploy metadata are allowed; training/checkpoint payload keys are rejected.
 - `munet.load_for_inference(...)` and `munet.inference.load_serialized(...)` normalize the loaded module for deployment by:
   - validating the deploy manifest
   - optionally moving the module to the requested device
   - forcing `eval()` before runtime use
+- Shape contracts and warm/compile behavior stay external to the artifact (`compile_contract_policy = "external"`), so deployment can choose fixed or dynamic contracts at `Engine.compile(...)` time instead of inheriting trainer-side assumptions.
 - Use plain `munet.load(...)` when you explicitly want generic reconstruction/restore semantics outside a deploy path.
 
 ## Best practices

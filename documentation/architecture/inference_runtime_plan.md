@@ -186,7 +186,7 @@ Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend P
 
 ### Phase 4 - Serialization and model execution decoupling
 
-**Status:** [~] in progress
+**Status:** [x] completed
 
 #### Objectives
 
@@ -197,7 +197,7 @@ Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend P
 
 - [x] Audit serialization metadata to separate deploy-required state from training/checkpoint-only state.
 - [x] Ensure loaded inference modules default to eval-safe behavior without relying on training-mode conventions.
-- [~] Define how exported/native-converted models are normalized for deploy execution:
+- [x] Define how exported/native-converted models are normalized for deploy execution:
   - fixed or dynamic shape contracts
   - dtype expectations
   - device placement policy
@@ -207,9 +207,9 @@ Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend P
 
 #### Exit Criteria
 
-- [ ] Deploy artifacts contain only runtime-required execution state for inference workflows.
-- [ ] Model loading paths are documented as deploy-first rather than training-derived.
-- [~] Conversion and serialization tooling have a clear packaging boundary.
+- [x] Deploy artifacts contain only runtime-required execution state for inference workflows.
+- [x] Model loading paths are documented as deploy-first rather than training-derived.
+- [x] Conversion and serialization tooling have a clear packaging boundary.
 
 ### Phase 5 - Validation, benchmarking, and rollout
 

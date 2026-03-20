@@ -907,10 +907,24 @@ PYBIND11_MODULE(munet, m) {
  SERIALIZATION_FORMAT_REVISION = 1
  SERIALIZATION_LEGACY_TAG = "munet_model_v1"
  SERIALIZATION_ARTIFACT_KIND = "deploy_model"
+ SERIALIZATION_ARTIFACT_SCOPE = "runtime_only"
  SERIALIZATION_DEFAULT_LOAD_MODE = "eval"
  SERIALIZATION_CONTAINS_TRAINING_STATE = False
  SERIALIZATION_DEVICE_POLICY = "caller_specified"
  SERIALIZATION_DTYPE_POLICY = "per_tensor"
+ SERIALIZATION_RECOMMENDED_LOADER = "load_for_inference"
+ SERIALIZATION_COMPILE_CONTRACT_POLICY = "external"
+ SERIALIZATION_FORBIDDEN_TRAINING_KEY_TOKENS = (
+     "optim",
+     "optimizer",
+     "scheduler",
+     "scaler",
+     "master_weight",
+     "checkpoint",
+     "epoch",
+     "step",
+     "grad",
+ )
 
  def serialization_format_info():
      return {
@@ -918,10 +932,13 @@ PYBIND11_MODULE(munet, m) {
          "format_revision": SERIALIZATION_FORMAT_REVISION,
          "legacy_tag": SERIALIZATION_LEGACY_TAG,
          "artifact_kind": SERIALIZATION_ARTIFACT_KIND,
+         "artifact_scope": SERIALIZATION_ARTIFACT_SCOPE,
          "default_load_mode": SERIALIZATION_DEFAULT_LOAD_MODE,
          "contains_training_state": SERIALIZATION_CONTAINS_TRAINING_STATE,
          "device_policy": SERIALIZATION_DEVICE_POLICY,
          "dtype_policy": SERIALIZATION_DTYPE_POLICY,
+         "recommended_loader": SERIALIZATION_RECOMMENDED_LOADER,
+         "compile_contract_policy": SERIALIZATION_COMPILE_CONTRACT_POLICY,
          "load_compatibility": [
              {"format_name": SERIALIZATION_FORMAT_NAME, "format_revision": SERIALIZATION_FORMAT_REVISION},
              {"legacy_tag": SERIALIZATION_LEGACY_TAG},
@@ -941,10 +958,17 @@ PYBIND11_MODULE(munet, m) {
      legacy_tag = _string_state_value(state, '__format_version__')
      producer = _string_state_value(state, '__producer__')
      artifact_kind = _string_state_value(state, '__artifact_kind__')
+     artifact_scope = _string_state_value(state, '__artifact_scope__')
      default_load_mode = _string_state_value(state, '__default_load_mode__')
      device_policy = _string_state_value(state, '__device_policy__')
      dtype_policy = _string_state_value(state, '__dtype_policy__')
+     recommended_loader = _string_state_value(state, '__recommended_loader__')
+     compile_contract_policy = _string_state_value(state, '__compile_contract_policy__')
      contains_training_state = _bool_state_value(state, '__contains_training_state__')
+     tensor_names = []
+     if '__tensor_names__' in state:
+         import json
+         tensor_names = list(json.loads(str(state['__tensor_names__'])))
      has_config = '__config__' in state
 
      if format_name is None and legacy_tag == SERIALIZATION_LEGACY_TAG:
@@ -952,6 +976,8 @@ PYBIND11_MODULE(munet, m) {
          format_revision = SERIALIZATION_FORMAT_REVISION
      if artifact_kind is None:
          artifact_kind = SERIALIZATION_ARTIFACT_KIND
+     if artifact_scope is None:
+         artifact_scope = SERIALIZATION_ARTIFACT_SCOPE
      if default_load_mode is None:
          default_load_mode = SERIALIZATION_DEFAULT_LOAD_MODE
      if contains_training_state is None:
@@ -960,6 +986,10 @@ PYBIND11_MODULE(munet, m) {
          device_policy = SERIALIZATION_DEVICE_POLICY
      if dtype_policy is None:
          dtype_policy = SERIALIZATION_DTYPE_POLICY
+     if recommended_loader is None:
+         recommended_loader = SERIALIZATION_RECOMMENDED_LOADER
+     if compile_contract_policy is None:
+         compile_contract_policy = SERIALIZATION_COMPILE_CONTRACT_POLICY
 
      return {
          "format_name": format_name,
@@ -967,10 +997,15 @@ PYBIND11_MODULE(munet, m) {
          "legacy_tag": legacy_tag,
          "producer": producer,
          "artifact_kind": artifact_kind,
+         "artifact_scope": artifact_scope,
          "default_load_mode": default_load_mode,
          "contains_training_state": contains_training_state,
          "device_policy": device_policy,
          "dtype_policy": dtype_policy,
+         "recommended_loader": recommended_loader,
+         "compile_contract_policy": compile_contract_policy,
+         "tensor_names": tensor_names,
+         "tensor_count": len(tensor_names),
          "has_config": has_config,
      }
 
@@ -978,6 +1013,32 @@ PYBIND11_MODULE(munet, m) {
      import numpy as np
      with np.load(filename, allow_pickle=True) as state:
          return _serialization_metadata_from_state(state)
+
+ def _payload_tensor_names(state):
+     return sorted([
+         key for key in state.files
+         if not key.startswith('__')
+     ])
+
+ def _validate_serialization_payload_keys(state, metadata):
+     payload_tensor_names = _payload_tensor_names(state)
+
+     for key in payload_tensor_names:
+         lowered = key.lower()
+         if any(token in lowered for token in SERIALIZATION_FORBIDDEN_TRAINING_KEY_TOKENS):
+             raise ValueError(
+                 f"Unsupported training/checkpoint payload key in deploy artifact: {key!r}."
+             )
+
+     manifest_tensor_names = sorted(metadata.get("tensor_names", []))
+     if manifest_tensor_names:
+         if payload_tensor_names != manifest_tensor_names:
+             raise ValueError(
+                 "Serialization tensor manifest does not match payload keys. "
+                 f"manifest={manifest_tensor_names}, payload={payload_tensor_names}"
+             )
+
+     return payload_tensor_names
 
  def _validate_serialization_metadata(state):
      metadata = _serialization_metadata_from_state(state)
@@ -1009,10 +1070,30 @@ PYBIND11_MODULE(munet, m) {
              f"Expected {SERIALIZATION_ARTIFACT_KIND!r}."
          )
 
+     if metadata["artifact_scope"] != SERIALIZATION_ARTIFACT_SCOPE:
+         raise ValueError(
+             f"Unsupported serialization artifact scope: {metadata['artifact_scope']!r}. "
+             f"Expected {SERIALIZATION_ARTIFACT_SCOPE!r}."
+         )
+
      if metadata["contains_training_state"] is not SERIALIZATION_CONTAINS_TRAINING_STATE:
          raise ValueError(
              "Unsupported serialization payload: deploy artifacts must not contain training-only state."
          )
+
+     if metadata["recommended_loader"] != SERIALIZATION_RECOMMENDED_LOADER:
+         raise ValueError(
+             f"Unsupported recommended loader: {metadata['recommended_loader']!r}. "
+             f"Expected {SERIALIZATION_RECOMMENDED_LOADER!r}."
+         )
+
+     if metadata["compile_contract_policy"] != SERIALIZATION_COMPILE_CONTRACT_POLICY:
+         raise ValueError(
+             f"Unsupported compile contract policy: {metadata['compile_contract_policy']!r}. "
+             f"Expected {SERIALIZATION_COMPILE_CONTRACT_POLICY!r}."
+         )
+
+     _validate_serialization_payload_keys(state, metadata)
 
      return metadata
 
@@ -1098,16 +1179,21 @@ PYBIND11_MODULE(munet, m) {
      for name, tensor in _iter_named_tensors(module):
          state[name] = tensor_to_numpy(tensor)
 
+     tensor_names = sorted(state.keys())
      state['__config__'] = np.array(json.dumps(config))
      state['__format_name__'] = np.array(SERIALIZATION_FORMAT_NAME)
      state['__format_revision__'] = np.array(SERIALIZATION_FORMAT_REVISION)
      state['__format_version__'] = np.array(SERIALIZATION_LEGACY_TAG)
      state['__producer__'] = np.array('munet')
      state['__artifact_kind__'] = np.array(SERIALIZATION_ARTIFACT_KIND)
+     state['__artifact_scope__'] = np.array(SERIALIZATION_ARTIFACT_SCOPE)
      state['__default_load_mode__'] = np.array(SERIALIZATION_DEFAULT_LOAD_MODE)
      state['__contains_training_state__'] = np.array(SERIALIZATION_CONTAINS_TRAINING_STATE)
      state['__device_policy__'] = np.array(SERIALIZATION_DEVICE_POLICY)
      state['__dtype_policy__'] = np.array(SERIALIZATION_DTYPE_POLICY)
+     state['__recommended_loader__'] = np.array(SERIALIZATION_RECOMMENDED_LOADER)
+     state['__compile_contract_policy__'] = np.array(SERIALIZATION_COMPILE_CONTRACT_POLICY)
+     state['__tensor_names__'] = np.array(json.dumps(tensor_names))
      np.savez(filename, **state)
 
  def _normalize_loaded_module_for_inference(module, device=None):

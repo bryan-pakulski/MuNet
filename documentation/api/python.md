@@ -34,5 +34,5 @@ Common modules in `munet.nn` include:
 - `munet.save(model, path)`
 - `munet.load(path)` (generic full reconstruction for supported built-ins)
 - `munet.load(model, path)` / `munet.load_weights(model, path)` (generic weights-only restore)
-- `munet.load_for_inference(path, device=...)`
-- `munet.load_weights_for_inference(model, path, device=...)`
+- `munet.load_for_inference(path, device=...)` (recommended deploy loader)
+- `munet.load_weights_for_inference(model, path, device=...)` (recommended deploy weights-only loader)

@@ -48,7 +48,7 @@ def main():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "trained_model.npz")
         munet.save(model, path)
-        restored = munet.load(path)
+        restored = munet.load_for_inference(path)
 
         engine = munet.inference.Engine()
         engine.load(restored)

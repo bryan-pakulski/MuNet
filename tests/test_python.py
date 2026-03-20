@@ -686,10 +686,13 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(info["format_revision"], 1)
         self.assertEqual(info["legacy_tag"], "munet_model_v1")
         self.assertEqual(info["artifact_kind"], "deploy_model")
+        self.assertEqual(info["artifact_scope"], "runtime_only")
         self.assertEqual(info["default_load_mode"], "eval")
         self.assertFalse(info["contains_training_state"])
         self.assertEqual(info["device_policy"], "caller_specified")
         self.assertEqual(info["dtype_policy"], "per_tensor")
+        self.assertEqual(info["recommended_loader"], "load_for_inference")
+        self.assertEqual(info["compile_contract_policy"], "external")
 
         model = munet.nn.Sequential([
             munet.nn.Linear(4, 4),
@@ -704,10 +707,15 @@ class TestBindings(unittest.TestCase):
             self.assertEqual(metadata["format_revision"], 1)
             self.assertEqual(metadata["legacy_tag"], "munet_model_v1")
             self.assertEqual(metadata["artifact_kind"], "deploy_model")
+            self.assertEqual(metadata["artifact_scope"], "runtime_only")
             self.assertEqual(metadata["default_load_mode"], "eval")
             self.assertFalse(metadata["contains_training_state"])
             self.assertEqual(metadata["device_policy"], "caller_specified")
             self.assertEqual(metadata["dtype_policy"], "per_tensor")
+            self.assertEqual(metadata["recommended_loader"], "load_for_inference")
+            self.assertEqual(metadata["compile_contract_policy"], "external")
+            self.assertGreaterEqual(metadata["tensor_count"], 2)
+            self.assertIn("0.weight", metadata["tensor_names"])
             self.assertTrue(metadata["has_config"])
 
     def test_model_serialization_rejects_unsupported_revision(self):
@@ -727,6 +735,24 @@ class TestBindings(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 munet.load(path)
+
+    def test_model_serialization_rejects_training_payload_keys(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 4),
+            munet.nn.ReLU(),
+        ])
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "bad_training_payload.npz")
+            munet.save(model, path)
+
+            with np.load(path, allow_pickle=True) as state:
+                mutated = {key: state[key] for key in state.files}
+            mutated["optimizer_state"] = np.array([1.0], dtype=np.float32)
+            np.savez(path, **mutated)
+
+            with self.assertRaises(ValueError):
+                munet.load_for_inference(path)
 
     def test_load_for_inference_sets_eval_mode(self):
         model = munet.nn.Sequential([
