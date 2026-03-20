@@ -202,14 +202,14 @@ Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend P
   - dtype expectations
   - device placement policy
   - optional precompiled/warm state
-- [ ] Review ONNX/native conversion helpers to keep conversion-time flexibility from bloating the runtime execution surface.
-- [ ] Decide which conversion utilities stay in deploy packages versus development tooling.
+- [x] Review ONNX/native conversion helpers to keep conversion-time flexibility from bloating the runtime execution surface.
+- [x] Decide which conversion utilities stay in deploy packages versus development tooling.
 
 #### Exit Criteria
 
 - [ ] Deploy artifacts contain only runtime-required execution state for inference workflows.
 - [ ] Model loading paths are documented as deploy-first rather than training-derived.
-- [ ] Conversion and serialization tooling have a clear packaging boundary.
+- [~] Conversion and serialization tooling have a clear packaging boundary.
 
 ### Phase 5 - Validation, benchmarking, and rollout
 

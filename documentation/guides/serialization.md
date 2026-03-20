@@ -51,4 +51,5 @@ Use `munet.serialization_format_info()` to inspect the supported format contract
 
 - Keep serialization tests in CI for every new module you add.
 - For deployment, pair a serialized model with an inference compile contract.
+- When `munet.inference.compile_onnx(...)` lowers to a native sequential MuNet module, prefer `output_path="model.npz"` so the result crosses into the same deploy-artifact path as `munet.save(...)`.
 - Validate serialization metadata during deployment promotion so unsupported revisions or non-deploy artifacts fail before runtime rollout.

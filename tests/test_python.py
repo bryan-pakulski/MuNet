@@ -1298,8 +1298,57 @@ class TestBindings(unittest.TestCase):
             report = munet.inference.onnx_conversion_coverage_report(path)
             self.assertEqual(report["total_nodes"], 3)
             self.assertTrue(report["fully_lowerable"])
+            self.assertTrue(report["native_deployable"])
+            self.assertEqual(report["runtime_role"], "deploy_runtime")
+            self.assertEqual(report["device_policy"], "caller_specified")
+            self.assertEqual(report["dtype_policy"], "preserve_onnx_io_types")
+            self.assertEqual(report["shape_contract_policy"], "caller_declared_at_engine_compile")
+            self.assertEqual(report["warm_state"], "not_embedded")
             self.assertEqual(report["coverage"]["unsupported"], [])
             self.assertEqual(report["coverage"]["unmapped"], [])
+
+    def test_compile_onnx_native_module_can_save_deploy_artifact(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX native-output save test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            onnx_path = os.path.join(d, "linear_relu_native.onnx")
+            native_path = os.path.join(d, "linear_relu_native.npz")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
+
+            W = np.array([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=np.float32)
+            B = np.array([0.5, -1.0], dtype=np.float32)
+
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
+            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
+
+            gemm = helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0)
+            relu = helper.make_node("Relu", ["z"], ["y"])
+
+            graph = helper.make_graph([gemm, relu], "linear_relu_native_graph", [x_info], [y_info], [w_init, b_init])
+            model = helper.make_model(graph, producer_name="munet_native_save_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, onnx_path)
+
+            module = munet.inference.compile_onnx(onnx_path, output_path=native_path)
+            restored = munet.load_for_inference(native_path)
+
+            x_np = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+            expected = np.maximum(x_np @ W + B, 0.0)
+
+            y0 = np.array(module.forward(munet.from_numpy(x_np)).detach(), copy=False)
+            y1 = np.array(restored.forward(munet.from_numpy(x_np)).detach(), copy=False)
+            self.assertTrue(np.allclose(y0, expected, atol=1e-5))
+            self.assertTrue(np.allclose(y1, expected, atol=1e-5))
+
+            metadata = munet.serialization_metadata(native_path)
+            self.assertEqual(metadata["artifact_kind"], "deploy_model")
 
     def test_yolov5n_onnx_conversion_coverage_report(self):
         try:
@@ -1324,8 +1373,6 @@ class TestBindings(unittest.TestCase):
             self.assertEqual(report["coverage"]["unsupported"], [])
             self.assertEqual(report["coverage"]["unmapped"], [])
             self.assertTrue(report["fully_lowerable"])
-
-
 
     def test_compile_onnx_graph_runtime_branching_ops(self):
         try:
@@ -1375,6 +1422,18 @@ class TestBindings(unittest.TestCase):
             y = module.forward(x)
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
+
+            report = munet.inference.onnx_conversion_coverage_report(path)
+            self.assertTrue(report["fully_lowerable"])
+            self.assertFalse(report["native_deployable"])
+            self.assertEqual(report["runtime_role"], "development_tooling")
+
+    def test_onnx_runtime_package_boundary_api(self):
+        boundary = munet.inference.onnx_runtime_package_boundary()
+        self.assertIn("deploy_runtime", boundary)
+        self.assertIn("development_tooling", boundary)
+        self.assertIn("compile_onnx(model_path)", boundary["deploy_runtime"][0])
+        self.assertIn("packaging_policy", boundary)
 
     def test_onnx_inference_wrapper(self):
         try:

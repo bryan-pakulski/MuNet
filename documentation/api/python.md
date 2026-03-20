@@ -23,6 +23,7 @@ Common modules in `munet.nn` include:
   - `load(module)`
 - `munet.inference.load_serialized(path, device=...)`
 - `munet.inference.load_weights_serialized(model, path, device=...)`
+- `munet.inference.onnx_runtime_package_boundary()`
   - `compile(example_input, expected_input_shape=None, expected_output_shape=None)`
   - `run(input)`
 

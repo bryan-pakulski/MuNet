@@ -82,6 +82,13 @@ MuNet now follows a strict native-conversion flow:
 
 There is no runtime fallback path in conversion.
 
+### Deploy packaging boundary
+
+- If `compile_onnx(...)` can lower a model into a plain sequential MuNet module, that result is treated as **deploy runtime** output.
+- In that native-sequential case, `compile_onnx(model_path, output_path="model.npz")` now writes a deploy artifact that can be consumed by `munet.load_for_inference(...)`.
+- If conversion still requires the Python graph-runtime helper, the result remains **development tooling**: it is useful for validation and bring-up, but it is not serialized as a deploy package.
+- Use `munet.inference.onnx_runtime_package_boundary()` and `munet.inference.onnx_conversion_coverage_report(...)` to inspect which side of that boundary a given conversion lands on.
+
 ### Foundation added for runtime conversion
 
 - A central `onnx_native_conversion_map()` reports known ONNX operator mappings and status:
@@ -121,6 +128,8 @@ report = munet.inference.onnx_conversion_coverage_report("yolov5n.onnx")
 print(report["unique_ops"])
 print("unsupported:", report["coverage"]["unsupported"])
 print("unmapped:", report["coverage"]["unmapped"])
+print("native deployable:", report["native_deployable"])
+print("runtime role:", report["runtime_role"])
 ```
 
 To fetch the reference model used by tests/utilities:
