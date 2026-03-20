@@ -24,19 +24,19 @@
 ## Phase 2 — Modern decoder block options on current primitives
 
 ### Objectives
-- [~] Add optional architectural upgrades that do **not** require new tensor primitives.
-- [~] Make it easier to compare classic GPT-3 blocks versus more modern feed-forward variants.
+- [x] Add optional architectural upgrades that do **not** require new tensor primitives.
+- [x] Make it easier to compare classic GPT-3 blocks versus more modern feed-forward variants.
 
 ### Action Points
 - [x] Add optional SwiGLU feed-forward blocks using existing `sigmoid`, `mul`, and `Linear` support.
-- [ ] Add attention dropout and residual dropout knobs to the GPT demo for more stable local training.
-- [ ] Add a reusable sampling helper with temperature/top-k/top-p presets and repetition penalty.
-- [ ] Add lightweight evaluation metrics such as validation loss / perplexity logging and checkpoint selection.
+- [x] Add attention dropout and residual dropout knobs to the GPT demo for more stable local training.
+- [x] Add a reusable sampling helper with temperature/top-k/top-p presets and repetition penalty.
+- [x] Add lightweight evaluation metrics such as validation loss / perplexity logging and checkpoint selection.
 
 ### Exit Criteria
 - [x] Users can switch between GELU and SwiGLU from the demo CLI.
-- [ ] The demo can report train/validation perplexity during training.
-- [ ] Sampling presets are exposed for deterministic and creative generation modes.
+- [x] The demo can report train/validation perplexity during training.
+- [x] Sampling presets are exposed for deterministic and creative generation modes.
 
 ## Phase 3 — Missing primitives for RMSNorm and Rotary Embeddings
 

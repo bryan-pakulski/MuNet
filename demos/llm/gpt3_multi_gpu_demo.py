@@ -1,8 +1,9 @@
 import argparse
 import json
 import os
+import shutil
 import sys
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 
@@ -40,6 +41,12 @@ System: You are a helpful tiny MuNet assistant.
 User: summarize munet
 Assistant: MuNet is a lightweight framework with tensors, autograd, multiple backends, and small training and inference demos.
 """.strip()
+
+SAMPLING_PRESETS: Dict[str, Dict[str, float]] = {
+    "deterministic": {"temperature": 0.2, "top_k": 1, "top_p": 1.0, "repetition_penalty": 1.02},
+    "balanced": {"temperature": 0.8, "top_k": 8, "top_p": 0.92, "repetition_penalty": 1.08},
+    "creative": {"temperature": 1.0, "top_k": 16, "top_p": 0.96, "repetition_penalty": 1.12},
+}
 
 
 def same_device(lhs, rhs):
@@ -86,8 +93,7 @@ class CharacterTokenizer:
 
     @classmethod
     def from_text(cls, text: str):
-        chars = sorted(set(text))
-        return cls(chars)
+        return cls(sorted(set(text)))
 
     @property
     def vocab_size(self) -> int:
@@ -97,8 +103,7 @@ class CharacterTokenizer:
         return "".join(ch if ch in self.stoi else self.pad_token for ch in text)
 
     def encode(self, text: str) -> np.ndarray:
-        clean = self.sanitize(text)
-        return np.array([self.stoi[ch] for ch in clean], dtype=np.int32)
+        return np.array([self.stoi[ch] for ch in self.sanitize(text)], dtype=np.int32)
 
     def decode(self, ids: np.ndarray) -> str:
         return "".join(self.itos[int(idx)] for idx in ids)
@@ -112,8 +117,7 @@ class FeedForwardGELU(munet.nn.Module):
         self.fc2 = munet.nn.Linear(hidden, d_model, True, options=options)
 
     def forward(self, x):
-        h = self.fc1(x)
-        return self.fc2(self.act(h))
+        return self.fc2(self.act(self.fc1(x)))
 
 
 class FeedForwardSwiGLU(munet.nn.Module):
@@ -130,42 +134,65 @@ class FeedForwardSwiGLU(munet.nn.Module):
 
 
 class GPTDecoderBlock(munet.nn.Module):
-    def __init__(self, d_model: int, n_heads: int, ff_hidden: int, ffn_type: str, device):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        ff_hidden: int,
+        ffn_type: str,
+        device,
+        attn_dropout: float,
+        resid_dropout: float,
+    ):
         super().__init__()
         opts = munet.TensorOptions()
         opts.device = device
         self.shard_device = device
         self.ln1 = munet.nn.LayerNorm(d_model, options=opts)
         self.attn = munet.nn.MultiHeadAttention(d_model, n_heads, causal=True, options=opts)
+        self.attn_drop = munet.nn.Dropout(attn_dropout)
         self.ln2 = munet.nn.LayerNorm(d_model, options=opts)
-        if ffn_type == "swiglu":
-            self.ff = FeedForwardSwiGLU(d_model, ff_hidden, opts)
-        else:
-            self.ff = FeedForwardGELU(d_model, ff_hidden, opts)
+        self.resid_drop = munet.nn.Dropout(resid_dropout)
+        self.ff = (
+            FeedForwardSwiGLU(d_model, ff_hidden, opts)
+            if ffn_type == "swiglu"
+            else FeedForwardGELU(d_model, ff_hidden, opts)
+        )
 
     def forward(self, x):
         if not same_device(x.device, self.shard_device):
             x = x.to(self.shard_device)
         h = self.ln1(x)
-        x = x + self.attn(h)
+        x = x + self.attn_drop(self.attn(h))
         h = self.ln2(x)
         flat = h.reshape([h.shape[0] * h.shape[1], h.shape[2]])
         ff = self.ff(flat).reshape([h.shape[0], h.shape[1], h.shape[2]])
-        return x + ff
+        return x + self.resid_drop(ff)
 
 
 class FullGPTDemoModel(munet.nn.Module):
     """A trainable GPT-3-style decoder LM with optional model sharding.
 
-    Current architecture is intentionally close to classic GPT/GPT-3 blocks:
-    token embedding + learned positional embedding + pre-norm causal attention +
-    residual MLP stack. `--ffn swiglu` enables a more modern feed-forward block,
-    while RMSNorm/RoPE are left as roadmap items because MuNet still needs more
-    tensor primitives for a clean backend-accelerated implementation.
+    Current architecture stays close to classic GPT/GPT-3 defaults:
+    learned positional embeddings, LayerNorm, causal self-attention, and a
+    residual feed-forward stack. `--ffn swiglu` enables a more modern FFN block.
+    RMSNorm/RoPE remain roadmap items because they need more tensor/runtime
+    support for a clean backend-accelerated implementation.
     """
 
-    def __init__(self, vocab: int, ctx: int, d_model: int, n_heads: int, n_layers: int,
-                 ffn_type: str, shard_devices: List["munet.Device"]):
+    def __init__(
+        self,
+        vocab: int,
+        ctx: int,
+        d_model: int,
+        n_heads: int,
+        n_layers: int,
+        ffn_type: str,
+        shard_devices: List["munet.Device"],
+        attn_dropout: float = 0.0,
+        resid_dropout: float = 0.0,
+        embed_dropout: float = 0.0,
+    ):
         super().__init__()
         self.vocab = vocab
         self.ctx = ctx
@@ -174,6 +201,9 @@ class FullGPTDemoModel(munet.nn.Module):
         self.n_layers = n_layers
         self.ffn_type = ffn_type
         self.shard_devices = shard_devices
+        self.attn_dropout = attn_dropout
+        self.resid_dropout = resid_dropout
+        self.embed_dropout = embed_dropout
 
         first_opts = munet.TensorOptions()
         first_opts.device = shard_devices[0]
@@ -182,11 +212,20 @@ class FullGPTDemoModel(munet.nn.Module):
 
         self.token = munet.nn.Embedding(vocab, d_model, options=first_opts)
         self.pos = munet.nn.Embedding(ctx, d_model, options=first_opts)
+        self.embed_drop = munet.nn.Dropout(embed_dropout)
         self.blocks = []
         ff_hidden = 4 * d_model
         for layer in range(n_layers):
             device = shard_devices[layer % len(shard_devices)]
-            block = GPTDecoderBlock(d_model, n_heads, ff_hidden, ffn_type, device)
+            block = GPTDecoderBlock(
+                d_model=d_model,
+                n_heads=n_heads,
+                ff_hidden=ff_hidden,
+                ffn_type=ffn_type,
+                device=device,
+                attn_dropout=attn_dropout,
+                resid_dropout=resid_dropout,
+            )
             setattr(self, f"block_{layer}", block)
             self.blocks.append(block)
         self.ln_f = munet.nn.LayerNorm(d_model, options=last_opts)
@@ -199,6 +238,7 @@ class FullGPTDemoModel(munet.nn.Module):
     def forward(self, tok_oh, pos_oh):
         first = self.shard_devices[0]
         x = self.token(tok_oh.to(first)) + self.pos(pos_oh.to(first))
+        x = self.embed_drop(x)
         for block in self.blocks:
             x = block.forward(x)
         if not same_device(x.device, self.output_device):
@@ -214,6 +254,14 @@ def make_language_model_dataset(ids: np.ndarray, context_len: int) -> Tuple[np.n
         xs.append(ids[i : i + context_len])
         ys.append(ids[i + 1 : i + context_len + 1])
     return np.array(xs, dtype=np.int32), np.array(ys, dtype=np.int32)
+
+
+def split_train_val(X: np.ndarray, Y: np.ndarray, val_ratio: float):
+    total = X.shape[0]
+    val_count = max(1, int(total * val_ratio)) if total > 2 else 1
+    val_count = min(val_count, max(1, total - 1))
+    train_count = max(1, total - val_count)
+    return (X[:train_count], Y[:train_count]), (X[train_count:], Y[train_count:])
 
 
 def make_one_hot(tokens: np.ndarray, vocab: int) -> np.ndarray:
@@ -240,17 +288,61 @@ def prepare_prompt_window(tokenizer: CharacterTokenizer, prompt: str, ctx: int) 
     return np.concatenate([pad, ids])
 
 
-def sample_next_id(logits_np: np.ndarray, temperature: float, top_k: int) -> int:
-    scaled = logits_np / max(temperature, 1e-5)
+def resolve_sampling_config(args) -> Dict[str, float]:
+    if getattr(args, "sampling_preset", "manual") != "manual":
+        preset = SAMPLING_PRESETS[args.sampling_preset]
+        return {
+            "temperature": float(preset["temperature"]),
+            "top_k": int(preset["top_k"]),
+            "top_p": float(preset["top_p"]),
+            "repetition_penalty": float(preset["repetition_penalty"]),
+        }
+    return {
+        "temperature": float(args.temperature),
+        "top_k": int(args.top_k),
+        "top_p": float(args.top_p),
+        "repetition_penalty": float(args.repetition_penalty),
+    }
+
+
+def sample_next_id(
+    logits_np: np.ndarray,
+    temperature: float,
+    top_k: int,
+    top_p: float,
+    repetition_penalty: float,
+    recent_token_ids: np.ndarray,
+) -> int:
+    adjusted = np.array(logits_np, copy=True)
+    if repetition_penalty > 1.0 and recent_token_ids.size > 0:
+        for token_id in np.unique(recent_token_ids):
+            if adjusted[token_id] >= 0.0:
+                adjusted[token_id] /= repetition_penalty
+            else:
+                adjusted[token_id] *= repetition_penalty
+
+    scaled = adjusted / max(temperature, 1e-5)
     scaled = scaled - np.max(scaled)
     probs = np.exp(scaled)
-    probs /= np.sum(probs)
+    probs /= max(np.sum(probs), 1e-12)
 
     if top_k > 0 and top_k < probs.shape[0]:
         keep = np.argpartition(probs, -top_k)[-top_k:]
         masked = np.zeros_like(probs)
         masked[keep] = probs[keep]
-        probs = masked / np.sum(masked)
+        probs = masked / max(np.sum(masked), 1e-12)
+
+    if 0.0 < top_p < 1.0:
+        order = np.argsort(probs)[::-1]
+        sorted_probs = probs[order]
+        cumulative = np.cumsum(sorted_probs)
+        keep_mask = cumulative <= top_p
+        if keep_mask.size > 0:
+            keep_mask[0] = True
+        keep_indices = order[keep_mask]
+        masked = np.zeros_like(probs)
+        masked[keep_indices] = probs[keep_indices]
+        probs = masked / max(np.sum(masked), 1e-12)
 
     return int(np.random.choice(np.arange(probs.shape[0]), p=probs))
 
@@ -265,19 +357,24 @@ def model_forward_logits(model: FullGPTDemoModel, token_ids: np.ndarray, tokeniz
 
 
 def generate_text(model: FullGPTDemoModel, tokenizer: CharacterTokenizer, prompt: str,
-                  max_new_tokens: int, temperature: float, top_k: int) -> str:
+                  max_new_tokens: int, sampling_cfg: Dict[str, float]) -> str:
     window = prepare_prompt_window(tokenizer, prompt, model.ctx)
     generated = list(tokenizer.sanitize(prompt))
 
     for _ in range(max_new_tokens):
         logits_np = model_forward_logits(model, window, tokenizer)
-        nxt = sample_next_id(logits_np, temperature=temperature, top_k=top_k)
+        nxt = sample_next_id(
+            logits_np,
+            temperature=sampling_cfg["temperature"],
+            top_k=sampling_cfg["top_k"],
+            top_p=sampling_cfg["top_p"],
+            repetition_penalty=sampling_cfg["repetition_penalty"],
+            recent_token_ids=window,
+        )
         generated.append(tokenizer.itos[nxt])
         window = np.concatenate([window[1:], np.array([nxt], dtype=np.int32)])
 
     return "".join(generated)
-
-
 
 
 def tensor_to_numpy_copy(tensor):
@@ -303,8 +400,30 @@ def load_parameter_state(model, path: str):
                 raise KeyError(f"Missing parameter '{name}' in saved state")
             cpu_tensor = tensor.to(munet.Device(munet.DeviceType.CPU, 0))
             munet.copy_from_numpy(cpu_tensor, state[name])
-            restored = cpu_tensor.to(tensor.device)
-            tensor.replace_(restored)
+            tensor.replace_(cpu_tensor.to(tensor.device))
+
+
+def evaluate_model(model, X_oh, Y_oh, P_oh, batch_size: int, vocab_size: int, max_batches: int = 4):
+    if X_oh.shape[0] == 0:
+        return float("nan"), float("nan")
+
+    model.eval()
+    losses = []
+    batches = min(max_batches, max(1, int(np.ceil(X_oh.shape[0] / batch_size))))
+    for batch_idx in range(batches):
+        start = (batch_idx * batch_size) % X_oh.shape[0]
+        end = min(start + batch_size, X_oh.shape[0])
+        xb = munet.from_numpy(X_oh[start:end])
+        pb = munet.from_numpy(P_oh[start:end])
+        yb = munet.from_numpy(Y_oh[start:end]).reshape([(end - start) * model.ctx, vocab_size]).to(model.output_device)
+        with munet.no_grad():
+            logits = model.forward(xb, pb).reshape([(end - start) * model.ctx, vocab_size])
+            loss = logits.cross_entropy(yb)
+        losses.append(loss.item())
+
+    mean_loss = float(np.mean(losses))
+    return mean_loss, float(np.exp(mean_loss))
+
 
 def read_corpus(args) -> str:
     if args.corpus_file:
@@ -314,35 +433,47 @@ def read_corpus(args) -> str:
 
 
 def save_artifact(output_dir: str, model: FullGPTDemoModel, tokenizer: CharacterTokenizer,
-                  training_text: str, system_prompt: str):
+                  training_text: str, system_prompt: str, training_summary: Dict[str, float]):
     os.makedirs(output_dir, exist_ok=True)
     weights_path = os.path.join(output_dir, "model_weights.npz")
     config_path = os.path.join(output_dir, "config.json")
+    metrics_path = os.path.join(output_dir, "training_metrics.json")
 
     save_parameter_state(model, weights_path)
+    config = {
+        "ctx": model.ctx,
+        "d_model": model.d_model,
+        "n_heads": model.n_heads,
+        "n_layers": model.n_layers,
+        "ffn_type": model.ffn_type,
+        "attn_dropout": model.attn_dropout,
+        "resid_dropout": model.resid_dropout,
+        "embed_dropout": model.embed_dropout,
+        "chars": tokenizer.chars,
+        "training_text": training_text,
+        "system_prompt": system_prompt,
+        "default_checkpoint": "best" if os.path.exists(os.path.join(output_dir, "best_model_weights.npz")) else "last",
+    }
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "ctx": model.ctx,
-                "d_model": model.d_model,
-                "n_heads": model.n_heads,
-                "n_layers": model.n_layers,
-                "ffn_type": model.ffn_type,
-                "chars": tokenizer.chars,
-                "training_text": training_text,
-                "system_prompt": system_prompt,
-            },
-            f,
-            indent=2,
-        )
+        json.dump(config, f, indent=2)
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(training_summary, f, indent=2)
 
     print(f"Saved weights to {weights_path}")
     print(f"Saved config to {config_path}")
+    print(f"Saved metrics to {metrics_path}")
 
 
-def load_artifact(model_dir: str, requested_shards: int):
+def checkpoint_path(model_dir: str, checkpoint: str) -> str:
+    best = os.path.join(model_dir, "best_model_weights.npz")
+    last = os.path.join(model_dir, "model_weights.npz")
+    if checkpoint == "best" and os.path.exists(best):
+        return best
+    return last
+
+
+def load_artifact(model_dir: str, requested_shards: int, checkpoint: str):
     config_path = os.path.join(model_dir, "config.json")
-    weights_path = os.path.join(model_dir, "model_weights.npz")
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
@@ -356,10 +487,18 @@ def load_artifact(model_dir: str, requested_shards: int):
         n_layers=cfg["n_layers"],
         ffn_type=cfg.get("ffn_type", "gelu"),
         shard_devices=shard_devices,
+        attn_dropout=cfg.get("attn_dropout", 0.0),
+        resid_dropout=cfg.get("resid_dropout", 0.0),
+        embed_dropout=cfg.get("embed_dropout", 0.0),
     )
-    load_parameter_state(model, weights_path)
+    load_parameter_state(model, checkpoint_path(model_dir, checkpoint))
     model.eval()
-    return model, tokenizer, cfg
+    metrics_path = os.path.join(model_dir, "training_metrics.json")
+    metrics = {}
+    if os.path.exists(metrics_path):
+        with open(metrics_path, "r", encoding="utf-8") as f:
+            metrics = json.load(f)
+    return model, tokenizer, cfg, metrics
 
 
 def train_command(args):
@@ -368,10 +507,16 @@ def train_command(args):
     shard_devices = resolve_shard_devices(args.shards)
 
     ids = tokenizer.encode(training_text)
-    X, Y = make_language_model_dataset(ids, args.context)
-    X_oh = make_one_hot(X, tokenizer.vocab_size)
-    Y_oh = make_one_hot(Y, tokenizer.vocab_size)
-    P_oh = make_pos(X.shape[0], args.context)
+    X_all, Y_all = make_language_model_dataset(ids, args.context)
+    (X_train, Y_train), (X_val, Y_val) = split_train_val(X_all, Y_all, args.val_ratio)
+
+    X_train_oh = make_one_hot(X_train, tokenizer.vocab_size)
+    Y_train_oh = make_one_hot(Y_train, tokenizer.vocab_size)
+    P_train = make_pos(X_train.shape[0], args.context)
+
+    X_val_oh = make_one_hot(X_val, tokenizer.vocab_size)
+    Y_val_oh = make_one_hot(Y_val, tokenizer.vocab_size)
+    P_val = make_pos(X_val.shape[0], args.context)
 
     model = FullGPTDemoModel(
         vocab=tokenizer.vocab_size,
@@ -381,17 +526,31 @@ def train_command(args):
         n_layers=args.layers,
         ffn_type=args.ffn,
         shard_devices=shard_devices,
+        attn_dropout=args.attn_dropout,
+        resid_dropout=args.resid_dropout,
+        embed_dropout=args.embed_dropout,
     )
     opt = munet.optim.Adam(model.parameters(), lr=args.lr)
+    sampling_cfg = resolve_sampling_config(args)
 
     print("Training shards:", ", ".join(repr(dev) for dev in shard_devices))
-    print(f"Dataset windows={X.shape[0]} | vocab={tokenizer.vocab_size} | ffn={args.ffn}")
+    print(
+        f"Train windows={X_train.shape[0]} | Val windows={X_val.shape[0]} | vocab={tokenizer.vocab_size} | "
+        f"ffn={args.ffn} | attn_dropout={args.attn_dropout} | resid_dropout={args.resid_dropout}"
+    )
+    print(f"Sampling config: {sampling_cfg}")
+
+    best_val_loss = float("inf")
+    best_step = -1
+    last_train_loss = float("nan")
+    last_train_ppl = float("nan")
 
     for step in range(args.steps):
-        idx = np.random.randint(0, X.shape[0], size=args.batch_size)
-        xb = munet.from_numpy(X_oh[idx])
-        pb = munet.from_numpy(P_oh[idx])
-        yb = munet.from_numpy(Y_oh[idx]).reshape([args.batch_size * args.context, tokenizer.vocab_size]).to(
+        model.train()
+        idx = np.random.randint(0, X_train.shape[0], size=args.batch_size)
+        xb = munet.from_numpy(X_train_oh[idx])
+        pb = munet.from_numpy(P_train[idx])
+        yb = munet.from_numpy(Y_train_oh[idx]).reshape([args.batch_size * args.context, tokenizer.vocab_size]).to(
             model.output_device
         )
 
@@ -401,32 +560,66 @@ def train_command(args):
         loss.backward()
         opt.step()
 
-        if step % args.log_every == 0 or step == args.steps - 1:
-            ppl = loss.exp().to(munet.Device(munet.DeviceType.CPU, 0)).item()
-            print(f"step {step:04d} | loss={loss.item():.4f} | ppl={ppl:.4f}")
+        last_train_loss = loss.item()
+        last_train_ppl = loss.exp().to(munet.Device(munet.DeviceType.CPU, 0)).item()
+
+        if step % args.eval_every == 0 or step == args.steps - 1:
+            val_loss, val_ppl = evaluate_model(
+                model, X_val_oh, Y_val_oh, P_val, args.batch_size, tokenizer.vocab_size, args.eval_batches
+            )
+            improved = val_loss < best_val_loss
+            if improved:
+                best_val_loss = val_loss
+                best_step = step
+                os.makedirs(args.output_dir, exist_ok=True)
+                save_parameter_state(model, os.path.join(args.output_dir, "best_model_weights.npz"))
+
+            print(
+                f"step {step:04d} | train_loss={last_train_loss:.4f} | train_ppl={last_train_ppl:.4f} | "
+                f"val_loss={val_loss:.4f} | val_ppl={val_ppl:.4f} | best_step={best_step}"
+            )
 
     model.eval()
-    save_artifact(args.output_dir, model, tokenizer, training_text, args.system_prompt)
+    summary = {
+        "last_train_loss": last_train_loss,
+        "last_train_ppl": last_train_ppl,
+        "best_val_loss": best_val_loss,
+        "best_val_ppl": float(np.exp(best_val_loss)) if np.isfinite(best_val_loss) else float("nan"),
+        "best_step": best_step,
+        "sampling_config": sampling_cfg,
+        "val_ratio": args.val_ratio,
+    }
+    save_artifact(args.output_dir, model, tokenizer, training_text, args.system_prompt, summary)
+    if best_step >= 0:
+        shutil.copyfile(os.path.join(args.output_dir, "best_model_weights.npz"), os.path.join(args.output_dir, "selected_model_weights.npz"))
 
     preview_prompt = f"System: {args.system_prompt}\nUser: hello\nAssistant:"
-    preview = generate_text(model, tokenizer, preview_prompt, args.generate, args.temperature, args.top_k)
+    preview = generate_text(model, tokenizer, preview_prompt, args.generate, sampling_cfg)
     print("\nPreview generation:\n" + preview)
 
 
 def generate_command(args):
-    model, tokenizer, cfg = load_artifact(args.model_dir, args.shards)
+    model, tokenizer, cfg, metrics = load_artifact(args.model_dir, args.shards, args.checkpoint)
+    sampling_cfg = resolve_sampling_config(args)
     print("Loaded model with shards:", ", ".join(repr(dev) for dev in model.shard_devices))
-    text = generate_text(model, tokenizer, args.prompt, args.generate, args.temperature, args.top_k)
+    print(f"Sampling config: {sampling_cfg}")
+    text = generate_text(model, tokenizer, args.prompt, args.generate, sampling_cfg)
     print(text)
     if args.show_training_info:
         print("\nTraining corpus length:", len(cfg.get("training_text", "")))
+        if metrics:
+            print("Training metrics:", json.dumps(metrics, indent=2))
 
 
 def chat_command(args):
-    model, tokenizer, cfg = load_artifact(args.model_dir, args.shards)
+    model, tokenizer, cfg, metrics = load_artifact(args.model_dir, args.shards, args.checkpoint)
+    sampling_cfg = resolve_sampling_config(args)
     system_prompt = cfg.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
     history = [f"System: {system_prompt}"]
     print("Loaded chat model with shards:", ", ".join(repr(dev) for dev in model.shard_devices))
+    print(f"Sampling config: {sampling_cfg}")
+    if metrics:
+        print(f"Best validation perplexity: {metrics.get('best_val_ppl', 'n/a')}")
     print("Enter messages. Type /quit to exit.\n")
 
     while True:
@@ -440,15 +633,22 @@ def chat_command(args):
 
         history.append(f"User: {user}")
         prompt = "\n".join(history + ["Assistant:"])
-        response_full = generate_text(model, tokenizer, prompt, args.generate, args.temperature, args.top_k)
+        response_full = generate_text(model, tokenizer, prompt, args.generate, sampling_cfg)
         response = response_full[len(prompt):]
-        stop_markers = ["\nUser:", "\nSystem:"]
-        for marker in stop_markers:
+        for marker in ["\nUser:", "\nSystem:"]:
             if marker in response:
                 response = response.split(marker, 1)[0]
         response = response.strip() or "I need a little more training data to answer that well."
         print(f"assistant> {response}\n")
         history.append(f"Assistant: {response}")
+
+
+def add_sampling_args(parser, default_preset: str = "balanced"):
+    parser.add_argument("--sampling-preset", choices=["manual", *SAMPLING_PRESETS.keys()], default=default_preset)
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--top-k", type=int, default=8)
+    parser.add_argument("--top-p", type=float, default=0.92)
+    parser.add_argument("--repetition-penalty", type=float, default=1.08)
 
 
 def build_parser():
@@ -468,28 +668,32 @@ def build_parser():
     train.add_argument("--lr", type=float, default=3e-3)
     train.add_argument("--shards", type=int, default=2)
     train.add_argument("--ffn", choices=["gelu", "swiglu"], default="gelu")
-    train.add_argument("--log-every", type=int, default=20)
+    train.add_argument("--attn-dropout", type=float, default=0.1)
+    train.add_argument("--resid-dropout", type=float, default=0.1)
+    train.add_argument("--embed-dropout", type=float, default=0.05)
+    train.add_argument("--val-ratio", type=float, default=0.1)
+    train.add_argument("--eval-every", type=int, default=20)
+    train.add_argument("--eval-batches", type=int, default=4)
     train.add_argument("--generate", type=int, default=96)
-    train.add_argument("--temperature", type=float, default=0.9)
-    train.add_argument("--top-k", type=int, default=8)
+    add_sampling_args(train)
     train.set_defaults(func=train_command)
 
     generate = sub.add_parser("generate", help="Load a trained model and continue a prompt.")
     generate.add_argument("--model-dir", type=str, required=True)
     generate.add_argument("--prompt", type=str, required=True)
     generate.add_argument("--generate", type=int, default=96)
-    generate.add_argument("--temperature", type=float, default=0.8)
-    generate.add_argument("--top-k", type=int, default=8)
     generate.add_argument("--shards", type=int, default=2)
+    generate.add_argument("--checkpoint", choices=["best", "last"], default="best")
     generate.add_argument("--show-training-info", action="store_true")
+    add_sampling_args(generate)
     generate.set_defaults(func=generate_command)
 
     chat = sub.add_parser("chat", help="Load a trained model and enter a chat loop.")
     chat.add_argument("--model-dir", type=str, required=True)
     chat.add_argument("--generate", type=int, default=120)
-    chat.add_argument("--temperature", type=float, default=0.8)
-    chat.add_argument("--top-k", type=int, default=8)
     chat.add_argument("--shards", type=int, default=2)
+    chat.add_argument("--checkpoint", choices=["best", "last"], default="best")
+    add_sampling_args(chat)
     chat.set_defaults(func=chat_command)
 
     return parser
