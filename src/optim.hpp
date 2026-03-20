@@ -1,4 +1,5 @@
 #pragma once
+#include "training_guard.hpp"
 #include "ops.hpp"
 #include "tensor.hpp"
 #include "core/util.hpp"

@@ -25,6 +25,22 @@ Use `-1` for dynamic dims:
 - You can opt into `allow_autograd_inputs=True` only for debugging/inspection flows; MuNet still hard-fails if the resulting deployment path would surface a grad-tracked output.
 - If a deployment path somehow produces a gradient-tracked output, the engine raises an error instead of silently leaking training behavior into inference.
 
+## Low-overhead defaults and lean mode
+
+MuNet now defaults the inference runtime toward lower overhead:
+
+- `capture_profiler_memory` defaults to `False`
+- trace ids / scoped trace contexts are only activated when observers, profiler mode, or debug logging are enabled
+- `lean_mode=True` further favors predictable deploy execution by keeping optional runtime diagnostics off and skipping non-essential load-time diagnostics
+
+For constrained devices, prefer:
+
+- `eng.set_lean_mode(True)` in Python, or `EngineConfig::lean_mode = true` in C++
+- `capture_profiler_memory=True` only when you are actively collecting memory diagnostics
+- a bounded prepared-input cache (`prepared_input_cache_entries`, `prepared_input_cache_max_bytes`) when repeated host-to-device transfers must stay within a fixed memory budget
+- `prepare_batch([...])` during warmup when you want to pre-populate prepared-input buffers before steady-state batched inference
+- observers only when lifecycle event callbacks are required
+
 ## Strict vs non-strict checks
 
 - strict mode validates compiled/expected shapes at runtime.
@@ -66,6 +82,13 @@ MuNet now follows a strict native-conversion flow:
 
 There is no runtime fallback path in conversion.
 
+### Deploy packaging boundary
+
+- If `compile_onnx(...)` can lower a model into a plain sequential MuNet module, that result is treated as **deploy runtime** output.
+- In that native-sequential case, `compile_onnx(model_path, output_path="model.npz")` now writes a deploy artifact that can be consumed by `munet.load_for_inference(...)`.
+- If conversion still requires the Python graph-runtime helper, the result remains **development tooling**: it is useful for validation and bring-up, but it is not serialized as a deploy package.
+- Use `munet.inference.onnx_runtime_package_boundary()` and `munet.inference.onnx_conversion_coverage_report(...)` to inspect which side of that boundary a given conversion lands on.
+
 ### Foundation added for runtime conversion
 
 - A central `onnx_native_conversion_map()` reports known ONNX operator mappings and status:
@@ -105,6 +128,8 @@ report = munet.inference.onnx_conversion_coverage_report("yolov5n.onnx")
 print(report["unique_ops"])
 print("unsupported:", report["coverage"]["unsupported"])
 print("unmapped:", report["coverage"]["unmapped"])
+print("native deployable:", report["native_deployable"])
+print("runtime role:", report["runtime_role"])
 ```
 
 To fetch the reference model used by tests/utilities:

@@ -16,6 +16,12 @@ nav:
       - Build & Install: documentation/getting-started/build_install.md
   - Architecture:
       - Runtime: documentation/architecture/runtime.md
+      - Inference Runtime Separation Plan: documentation/architecture/inference_runtime_plan.md
+      - Inference Runtime Phase 0 Audit: documentation/architecture/inference_phase0_audit.md
+      - Inference Runtime Phase 1 Boundary Split: documentation/architecture/inference_phase1_boundary_split.md
+      - Inference Runtime Phase 2 Runtime Slimming: documentation/architecture/inference_phase2_runtime_slimming.md
+      - Inference Runtime Phase 3 Memory and Backend Policy: documentation/architecture/inference_phase3_memory_backend_policy.md
+      - Inference Runtime Phase 5 Validation and Rollout: documentation/architecture/inference_phase5_validation_rollout.md
       - Backends: documentation/architecture/backends.md
   - API Reference:
       - Python API: documentation/api/python.md

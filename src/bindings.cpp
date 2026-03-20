@@ -451,12 +451,14 @@ PYBIND11_MODULE(munet, m) {
       py::arg("tensor"), py::arg("input"),
       "Copies data from a NumPy array into the given CPU tensor.");
 
+  py::class_<core::Module, std::shared_ptr<core::Module>>(m, "_CoreModule");
+
   // ============================================================================
   // Neural Network Layers (munet.nn)
   // ============================================================================
   auto nn = m.def_submodule("nn", "Neural Network Modules and Layers");
 
-  py::class_<nn::Module, std::shared_ptr<nn::Module>, PyModule>(
+  py::class_<nn::Module, core::Module, std::shared_ptr<nn::Module>, PyModule>(
       nn, "Module", py::dynamic_attr(),
       "Base class for all neural network modules.")
       .def(py::init<>())
@@ -679,7 +681,12 @@ PYBIND11_MODULE(munet, m) {
       .def_readwrite("allow_autograd_inputs",
                      &inference::EngineConfig::allow_autograd_inputs)
       .def_readwrite("capture_profiler_memory",
-                     &inference::EngineConfig::capture_profiler_memory);
+                     &inference::EngineConfig::capture_profiler_memory)
+      .def_readwrite("lean_mode", &inference::EngineConfig::lean_mode)
+      .def_readwrite("prepared_input_cache_entries",
+                     &inference::EngineConfig::prepared_input_cache_entries)
+      .def_readwrite("prepared_input_cache_max_bytes",
+                     &inference::EngineConfig::prepared_input_cache_max_bytes);
 
   py::class_<inference::EngineStats>(inf, "EngineStats")
       .def(py::init<>())
@@ -711,7 +718,17 @@ PYBIND11_MODULE(munet, m) {
       .def_readonly("current_memory_bytes",
                     &inference::EngineStats::current_memory_bytes)
       .def_readonly("peak_memory_bytes",
-                    &inference::EngineStats::peak_memory_bytes);
+                    &inference::EngineStats::peak_memory_bytes)
+      .def_readonly("prepared_input_cache_entries",
+                    &inference::EngineStats::prepared_input_cache_entries)
+      .def_readonly("prepared_input_cache_bytes",
+                    &inference::EngineStats::prepared_input_cache_bytes)
+      .def_readonly("prepared_input_cache_hits",
+                    &inference::EngineStats::prepared_input_cache_hits)
+      .def_readonly("prepared_input_cache_misses",
+                    &inference::EngineStats::prepared_input_cache_misses)
+      .def_readonly("prepared_input_cache_evictions",
+                    &inference::EngineStats::prepared_input_cache_evictions);
 
   py::class_<inference::Engine>(inf, "Engine")
       .def(py::init<inference::EngineConfig>(), py::arg("config") = inference::EngineConfig{})
@@ -729,13 +746,26 @@ PYBIND11_MODULE(munet, m) {
            py::arg("enabled"))
       .def("capture_profiler_memory",
            &inference::Engine::capture_profiler_memory)
+      .def("set_lean_mode", &inference::Engine::set_lean_mode,
+           py::arg("enabled"))
+      .def("lean_mode", &inference::Engine::lean_mode)
+      .def("set_prepared_input_cache_entries",
+           &inference::Engine::set_prepared_input_cache_entries, py::arg("entries"))
+      .def("prepared_input_cache_entries_limit",
+           &inference::Engine::prepared_input_cache_entries_limit)
+      .def("set_prepared_input_cache_max_bytes",
+           &inference::Engine::set_prepared_input_cache_max_bytes, py::arg("bytes"))
+      .def("prepared_input_cache_max_bytes_limit",
+           &inference::Engine::prepared_input_cache_max_bytes_limit)
+      .def("clear_prepared_input_cache",
+           &inference::Engine::clear_prepared_input_cache)
       .def("set_observer", &inference::Engine::set_observer,
            py::arg("observer"))
       .def("clear_observer", &inference::Engine::clear_observer)
       .def(
           "load",
-          [](inference::Engine &self, const std::shared_ptr<nn::Module> &module) {
-            self.load(std::static_pointer_cast<core::Module>(module));
+          [](inference::Engine &self, py::object module) {
+            self.load(module.cast<std::shared_ptr<core::Module>>());
           },
           py::arg("module"))
       .def("compile",
@@ -749,6 +779,7 @@ PYBIND11_MODULE(munet, m) {
            py::arg("expected_input_shape") = py::none(),
            py::arg("expected_output_shape") = py::none())
       .def("prepare", &inference::Engine::prepare, py::arg("example_input"))
+      .def("prepare_batch", &inference::Engine::prepare_batch, py::arg("inputs"))
       .def("run", &inference::Engine::run, py::arg("input"))
       .def("run_batch", &inference::Engine::run_batch, py::arg("inputs"))
       .def("is_loaded", &inference::Engine::is_loaded)
@@ -875,12 +906,39 @@ PYBIND11_MODULE(munet, m) {
  SERIALIZATION_FORMAT_NAME = "munet_model"
  SERIALIZATION_FORMAT_REVISION = 1
  SERIALIZATION_LEGACY_TAG = "munet_model_v1"
+ SERIALIZATION_ARTIFACT_KIND = "deploy_model"
+ SERIALIZATION_ARTIFACT_SCOPE = "runtime_only"
+ SERIALIZATION_DEFAULT_LOAD_MODE = "eval"
+ SERIALIZATION_CONTAINS_TRAINING_STATE = False
+ SERIALIZATION_DEVICE_POLICY = "caller_specified"
+ SERIALIZATION_DTYPE_POLICY = "per_tensor"
+ SERIALIZATION_RECOMMENDED_LOADER = "load_for_inference"
+ SERIALIZATION_COMPILE_CONTRACT_POLICY = "external"
+ SERIALIZATION_FORBIDDEN_TRAINING_KEY_TOKENS = (
+     "optim",
+     "optimizer",
+     "scheduler",
+     "scaler",
+     "master_weight",
+     "checkpoint",
+     "epoch",
+     "step",
+     "grad",
+ )
 
  def serialization_format_info():
      return {
          "format_name": SERIALIZATION_FORMAT_NAME,
          "format_revision": SERIALIZATION_FORMAT_REVISION,
          "legacy_tag": SERIALIZATION_LEGACY_TAG,
+         "artifact_kind": SERIALIZATION_ARTIFACT_KIND,
+         "artifact_scope": SERIALIZATION_ARTIFACT_SCOPE,
+         "default_load_mode": SERIALIZATION_DEFAULT_LOAD_MODE,
+         "contains_training_state": SERIALIZATION_CONTAINS_TRAINING_STATE,
+         "device_policy": SERIALIZATION_DEVICE_POLICY,
+         "dtype_policy": SERIALIZATION_DTYPE_POLICY,
+         "recommended_loader": SERIALIZATION_RECOMMENDED_LOADER,
+         "compile_contract_policy": SERIALIZATION_COMPILE_CONTRACT_POLICY,
          "load_compatibility": [
              {"format_name": SERIALIZATION_FORMAT_NAME, "format_revision": SERIALIZATION_FORMAT_REVISION},
              {"legacy_tag": SERIALIZATION_LEGACY_TAG},
@@ -888,22 +946,66 @@ PYBIND11_MODULE(munet, m) {
          "policy": "Forward-compatible loading is not guaranteed across future major format revisions.",
      }
 
+ def _string_state_value(state, key):
+     return str(state[key]) if key in state else None
+
+ def _bool_state_value(state, key):
+     return bool(state[key]) if key in state else None
+
  def _serialization_metadata_from_state(state):
-     format_name = str(state['__format_name__']) if '__format_name__' in state else None
+     format_name = _string_state_value(state, '__format_name__')
      format_revision = int(state['__format_revision__']) if '__format_revision__' in state else None
-     legacy_tag = str(state['__format_version__']) if '__format_version__' in state else None
-     producer = str(state['__producer__']) if '__producer__' in state else None
+     legacy_tag = _string_state_value(state, '__format_version__')
+     producer = _string_state_value(state, '__producer__')
+     artifact_kind = _string_state_value(state, '__artifact_kind__')
+     artifact_scope = _string_state_value(state, '__artifact_scope__')
+     default_load_mode = _string_state_value(state, '__default_load_mode__')
+     device_policy = _string_state_value(state, '__device_policy__')
+     dtype_policy = _string_state_value(state, '__dtype_policy__')
+     recommended_loader = _string_state_value(state, '__recommended_loader__')
+     compile_contract_policy = _string_state_value(state, '__compile_contract_policy__')
+     contains_training_state = _bool_state_value(state, '__contains_training_state__')
+     tensor_names = []
+     if '__tensor_names__' in state:
+         import json
+         tensor_names = list(json.loads(str(state['__tensor_names__'])))
      has_config = '__config__' in state
 
      if format_name is None and legacy_tag == SERIALIZATION_LEGACY_TAG:
          format_name = SERIALIZATION_FORMAT_NAME
          format_revision = SERIALIZATION_FORMAT_REVISION
+     if artifact_kind is None:
+         artifact_kind = SERIALIZATION_ARTIFACT_KIND
+     if artifact_scope is None:
+         artifact_scope = SERIALIZATION_ARTIFACT_SCOPE
+     if default_load_mode is None:
+         default_load_mode = SERIALIZATION_DEFAULT_LOAD_MODE
+     if contains_training_state is None:
+         contains_training_state = SERIALIZATION_CONTAINS_TRAINING_STATE
+     if device_policy is None:
+         device_policy = SERIALIZATION_DEVICE_POLICY
+     if dtype_policy is None:
+         dtype_policy = SERIALIZATION_DTYPE_POLICY
+     if recommended_loader is None:
+         recommended_loader = SERIALIZATION_RECOMMENDED_LOADER
+     if compile_contract_policy is None:
+         compile_contract_policy = SERIALIZATION_COMPILE_CONTRACT_POLICY
 
      return {
          "format_name": format_name,
          "format_revision": format_revision,
          "legacy_tag": legacy_tag,
          "producer": producer,
+         "artifact_kind": artifact_kind,
+         "artifact_scope": artifact_scope,
+         "default_load_mode": default_load_mode,
+         "contains_training_state": contains_training_state,
+         "device_policy": device_policy,
+         "dtype_policy": dtype_policy,
+         "recommended_loader": recommended_loader,
+         "compile_contract_policy": compile_contract_policy,
+         "tensor_names": tensor_names,
+         "tensor_count": len(tensor_names),
          "has_config": has_config,
      }
 
@@ -911,6 +1013,32 @@ PYBIND11_MODULE(munet, m) {
      import numpy as np
      with np.load(filename, allow_pickle=True) as state:
          return _serialization_metadata_from_state(state)
+
+ def _payload_tensor_names(state):
+     return sorted([
+         key for key in state.files
+         if not key.startswith('__')
+     ])
+
+ def _validate_serialization_payload_keys(state, metadata):
+     payload_tensor_names = _payload_tensor_names(state)
+
+     for key in payload_tensor_names:
+         lowered = key.lower()
+         if any(token in lowered for token in SERIALIZATION_FORBIDDEN_TRAINING_KEY_TOKENS):
+             raise ValueError(
+                 f"Unsupported training/checkpoint payload key in deploy artifact: {key!r}."
+             )
+
+     manifest_tensor_names = sorted(metadata.get("tensor_names", []))
+     if manifest_tensor_names:
+         if payload_tensor_names != manifest_tensor_names:
+             raise ValueError(
+                 "Serialization tensor manifest does not match payload keys. "
+                 f"manifest={manifest_tensor_names}, payload={payload_tensor_names}"
+             )
+
+     return payload_tensor_names
 
  def _validate_serialization_metadata(state):
      metadata = _serialization_metadata_from_state(state)
@@ -935,6 +1063,37 @@ PYBIND11_MODULE(munet, m) {
              f"Unsupported legacy serialization tag: {legacy_tag!r}. "
              f"Expected {SERIALIZATION_LEGACY_TAG!r}."
          )
+
+     if metadata["artifact_kind"] != SERIALIZATION_ARTIFACT_KIND:
+         raise ValueError(
+             f"Unsupported serialization artifact kind: {metadata['artifact_kind']!r}. "
+             f"Expected {SERIALIZATION_ARTIFACT_KIND!r}."
+         )
+
+     if metadata["artifact_scope"] != SERIALIZATION_ARTIFACT_SCOPE:
+         raise ValueError(
+             f"Unsupported serialization artifact scope: {metadata['artifact_scope']!r}. "
+             f"Expected {SERIALIZATION_ARTIFACT_SCOPE!r}."
+         )
+
+     if metadata["contains_training_state"] is not SERIALIZATION_CONTAINS_TRAINING_STATE:
+         raise ValueError(
+             "Unsupported serialization payload: deploy artifacts must not contain training-only state."
+         )
+
+     if metadata["recommended_loader"] != SERIALIZATION_RECOMMENDED_LOADER:
+         raise ValueError(
+             f"Unsupported recommended loader: {metadata['recommended_loader']!r}. "
+             f"Expected {SERIALIZATION_RECOMMENDED_LOADER!r}."
+         )
+
+     if metadata["compile_contract_policy"] != SERIALIZATION_COMPILE_CONTRACT_POLICY:
+         raise ValueError(
+             f"Unsupported compile contract policy: {metadata['compile_contract_policy']!r}. "
+             f"Expected {SERIALIZATION_COMPILE_CONTRACT_POLICY!r}."
+         )
+
+     _validate_serialization_payload_keys(state, metadata)
 
      return metadata
 
@@ -1020,12 +1179,28 @@ PYBIND11_MODULE(munet, m) {
      for name, tensor in _iter_named_tensors(module):
          state[name] = tensor_to_numpy(tensor)
 
+     tensor_names = sorted(state.keys())
      state['__config__'] = np.array(json.dumps(config))
      state['__format_name__'] = np.array(SERIALIZATION_FORMAT_NAME)
      state['__format_revision__'] = np.array(SERIALIZATION_FORMAT_REVISION)
      state['__format_version__'] = np.array(SERIALIZATION_LEGACY_TAG)
      state['__producer__'] = np.array('munet')
+     state['__artifact_kind__'] = np.array(SERIALIZATION_ARTIFACT_KIND)
+     state['__artifact_scope__'] = np.array(SERIALIZATION_ARTIFACT_SCOPE)
+     state['__default_load_mode__'] = np.array(SERIALIZATION_DEFAULT_LOAD_MODE)
+     state['__contains_training_state__'] = np.array(SERIALIZATION_CONTAINS_TRAINING_STATE)
+     state['__device_policy__'] = np.array(SERIALIZATION_DEVICE_POLICY)
+     state['__dtype_policy__'] = np.array(SERIALIZATION_DTYPE_POLICY)
+     state['__recommended_loader__'] = np.array(SERIALIZATION_RECOMMENDED_LOADER)
+     state['__compile_contract_policy__'] = np.array(SERIALIZATION_COMPILE_CONTRACT_POLICY)
+     state['__tensor_names__'] = np.array(json.dumps(tensor_names))
      np.savez(filename, **state)
+
+ def _normalize_loaded_module_for_inference(module, device=None):
+     if device is not None:
+         module.to(device)
+     module.eval()
+     return module
 
  def load(arg, filename=None):
      """
@@ -1095,10 +1270,38 @@ PYBIND11_MODULE(munet, m) {
              _validate_serialization_metadata(state)
              return apply_state(module, state)
 
+ def load_for_inference(arg, filename=None, device=None):
+     """Load a deploy artifact and normalize the result for inference execution.
+
+     Usage:
+       - load_for_inference("model.npz", device=None) -> reconstruct + eval-safe module.
+       - load_for_inference(module, "model.npz", device=None) -> apply state into existing module, move if requested, then eval().
+     """
+     import numpy as np
+     import munet
+
+     path = arg if filename is None else filename
+     with np.load(path, allow_pickle=True) as state:
+         metadata = _validate_serialization_metadata(state)
+         if metadata["default_load_mode"] != SERIALIZATION_DEFAULT_LOAD_MODE:
+             raise ValueError(
+                 f"Unsupported deploy load mode: {metadata['default_load_mode']!r}. "
+                 f"Expected {SERIALIZATION_DEFAULT_LOAD_MODE!r}."
+             )
+
+     module = munet.load(arg, filename) if filename is not None else munet.load(arg)
+     return _normalize_loaded_module_for_inference(module, device)
+
  def load_weights(module, filename):
      """Alias for `load(module, filename)` to explicitly do weights-only restore."""
      m = __import__("munet")
      return m.load(module, filename)
+
+ def load_weights_for_inference(module, filename, device=None):
+     """Weights-only restore that also normalizes the module for inference execution."""
+     m = __import__("munet")
+     m.load(module, filename)
+     return _normalize_loaded_module_for_inference(module, device)
 
  def _load_python_helper(filename):
      import pathlib

@@ -685,6 +685,14 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(info["format_name"], "munet_model")
         self.assertEqual(info["format_revision"], 1)
         self.assertEqual(info["legacy_tag"], "munet_model_v1")
+        self.assertEqual(info["artifact_kind"], "deploy_model")
+        self.assertEqual(info["artifact_scope"], "runtime_only")
+        self.assertEqual(info["default_load_mode"], "eval")
+        self.assertFalse(info["contains_training_state"])
+        self.assertEqual(info["device_policy"], "caller_specified")
+        self.assertEqual(info["dtype_policy"], "per_tensor")
+        self.assertEqual(info["recommended_loader"], "load_for_inference")
+        self.assertEqual(info["compile_contract_policy"], "external")
 
         model = munet.nn.Sequential([
             munet.nn.Linear(4, 4),
@@ -698,6 +706,16 @@ class TestBindings(unittest.TestCase):
             self.assertEqual(metadata["format_name"], "munet_model")
             self.assertEqual(metadata["format_revision"], 1)
             self.assertEqual(metadata["legacy_tag"], "munet_model_v1")
+            self.assertEqual(metadata["artifact_kind"], "deploy_model")
+            self.assertEqual(metadata["artifact_scope"], "runtime_only")
+            self.assertEqual(metadata["default_load_mode"], "eval")
+            self.assertFalse(metadata["contains_training_state"])
+            self.assertEqual(metadata["device_policy"], "caller_specified")
+            self.assertEqual(metadata["dtype_policy"], "per_tensor")
+            self.assertEqual(metadata["recommended_loader"], "load_for_inference")
+            self.assertEqual(metadata["compile_contract_policy"], "external")
+            self.assertGreaterEqual(metadata["tensor_count"], 2)
+            self.assertIn("0.weight", metadata["tensor_names"])
             self.assertTrue(metadata["has_config"])
 
     def test_model_serialization_rejects_unsupported_revision(self):
@@ -717,6 +735,77 @@ class TestBindings(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 munet.load(path)
+
+    def test_model_serialization_rejects_training_payload_keys(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 4),
+            munet.nn.ReLU(),
+        ])
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "bad_training_payload.npz")
+            munet.save(model, path)
+
+            with np.load(path, allow_pickle=True) as state:
+                mutated = {key: state[key] for key in state.files}
+            mutated["optimizer_state"] = np.array([1.0], dtype=np.float32)
+            np.savez(path, **mutated)
+
+            with self.assertRaises(ValueError):
+                munet.load_for_inference(path)
+
+    def test_load_for_inference_sets_eval_mode(self):
+        model = munet.nn.Sequential([
+            munet.nn.Dropout(0.5),
+        ])
+        model.train(True)
+
+        x = munet.ones([2, 3], dtype=munet.DataType.Float32)
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "deploy_dropout.npz")
+            munet.save(model, path)
+
+            restored = munet.load_for_inference(path)
+            y = np.array(restored.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y, np.ones((2, 3), dtype=np.float32)))
+
+    def test_inference_load_serialized_alias_and_device(self):
+        model = munet.nn.Sequential([
+            munet.nn.Dropout(0.5),
+        ])
+        model.train(True)
+
+        x = munet.ones([1, 3], dtype=munet.DataType.Float32)
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "deploy_alias.npz")
+            munet.save(model, path)
+
+            restored = munet.inference.load_serialized(
+                path,
+                device=munet.Device(munet.DeviceType.CPU, 0),
+            )
+            y = np.array(restored.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y, np.ones((1, 3), dtype=np.float32)))
+
+    def test_load_weights_for_inference_sets_eval_mode(self):
+        src = munet.nn.Sequential([
+            munet.nn.Dropout(0.5),
+        ])
+        dst = munet.nn.Sequential([
+            munet.nn.Dropout(0.5),
+        ])
+        src.train(True)
+        dst.train(True)
+        x = munet.ones([2, 2], dtype=munet.DataType.Float32)
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "deploy_weights_only.npz")
+            munet.save(src, path)
+            munet.load_weights_for_inference(dst, path)
+            y = np.array(dst.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y, np.ones((2, 2), dtype=np.float32)))
 
     def test_model_serialization_from_non_cpu_device_preserves_dtype(self):
         devices = self._available_non_cpu_devices()
@@ -779,6 +868,78 @@ class TestBindings(unittest.TestCase):
         y2 = eng.run(bad)
         self.assertEqual(y2.shape, [2, 2])
 
+    def test_inference_engine_defaults_to_low_overhead_mode_without_diagnostics(self):
+        model = munet.nn.Sequential([
+            munet.nn.Linear(4, 8),
+            munet.nn.ReLU(),
+            munet.nn.Linear(8, 2),
+        ])
+
+        eng = munet.inference.Engine()
+        self.assertFalse(eng.capture_profiler_memory())
+        self.assertFalse(eng.lean_mode())
+
+        x = munet.Tensor([2, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.ones((2, 4), dtype=np.float32)
+
+        eng.load(model)
+        eng.compile(x)
+        y = eng.run(x)
+
+        self.assertEqual(y.shape, [2, 2])
+        self.assertEqual(eng.stats().last_compile_trace_id, 0)
+        self.assertEqual(eng.stats().last_run_trace_id, 0)
+        self.assertEqual(eng.stats().current_memory_bytes, 0)
+        self.assertEqual(eng.stats().peak_memory_bytes, 0)
+
+    def test_inference_engine_lean_mode_disables_memory_capture(self):
+        cfg = munet.inference.EngineConfig()
+        cfg.lean_mode = True
+        eng = munet.inference.Engine(cfg)
+        self.assertTrue(eng.lean_mode())
+        self.assertFalse(eng.capture_profiler_memory())
+
+        model = munet.nn.Sequential([munet.nn.Linear(4, 2)])
+        x = munet.ones([1, 4], dtype=munet.DataType.Float32)
+        eng.load(model)
+        y = eng.run(x)
+
+        self.assertEqual(y.shape, [1, 2])
+        self.assertEqual(eng.stats().current_memory_bytes, 0)
+        self.assertEqual(eng.stats().peak_memory_bytes, 0)
+
+    def test_inference_engine_exposes_bounded_prepared_input_cache_policy(self):
+        cfg = munet.inference.EngineConfig()
+        cfg.prepared_input_cache_entries = 1
+        cfg.prepared_input_cache_max_bytes = 1024
+        eng = munet.inference.Engine(cfg)
+
+        self.assertEqual(eng.prepared_input_cache_entries_limit(), 1)
+        self.assertEqual(eng.prepared_input_cache_max_bytes_limit(), 1024)
+
+        model = munet.nn.Sequential([munet.nn.Linear(4, 2)])
+        eng.load(model)
+
+        a = munet.ones([1, 4], dtype=munet.DataType.Float32)
+        b = munet.ones([1, 4], dtype=munet.DataType.Float32)
+        eng.run_batch([a, b])
+        stats = eng.stats()
+
+        self.assertLessEqual(stats.prepared_input_cache_entries, 1)
+        self.assertLessEqual(stats.prepared_input_cache_bytes, 1024)
+
+    def test_inference_engine_prepare_batch_prepopulates_cache(self):
+        cfg = munet.inference.EngineConfig()
+        cfg.prepared_input_cache_entries = 2
+        eng = munet.inference.Engine(cfg)
+        model = munet.nn.Sequential([munet.nn.Linear(4, 2)])
+        eng.load(model)
+
+        a = munet.ones([1, 4], dtype=munet.DataType.Float32)
+        b = munet.ones([1, 4], dtype=munet.DataType.Float32)
+        eng.prepare_batch([a, b])
+        self.assertEqual(eng.stats().prepared_input_cache_misses, 0)
+
     def test_inference_engine_from_serialized_model(self):
         model = munet.nn.Sequential([
             munet.nn.Linear(3, 3),
@@ -795,7 +956,7 @@ class TestBindings(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "e2e_model.npz")
             munet.save(model, path)
-            restored = munet.load(path)
+            restored = munet.load_for_inference(path)
 
             eng = munet.inference.Engine()
             eng.load(restored)
@@ -1163,8 +1324,57 @@ class TestBindings(unittest.TestCase):
             report = munet.inference.onnx_conversion_coverage_report(path)
             self.assertEqual(report["total_nodes"], 3)
             self.assertTrue(report["fully_lowerable"])
+            self.assertTrue(report["native_deployable"])
+            self.assertEqual(report["runtime_role"], "deploy_runtime")
+            self.assertEqual(report["device_policy"], "caller_specified")
+            self.assertEqual(report["dtype_policy"], "preserve_onnx_io_types")
+            self.assertEqual(report["shape_contract_policy"], "caller_declared_at_engine_compile")
+            self.assertEqual(report["warm_state"], "not_embedded")
             self.assertEqual(report["coverage"]["unsupported"], [])
             self.assertEqual(report["coverage"]["unmapped"], [])
+
+    def test_compile_onnx_native_module_can_save_deploy_artifact(self):
+        try:
+            import onnx
+            from onnx import TensorProto, helper
+        except Exception:
+            print("\nSkipping ONNX native-output save test (onnx not installed).")
+            return
+
+        with tempfile.TemporaryDirectory() as d:
+            onnx_path = os.path.join(d, "linear_relu_native.onnx")
+            native_path = os.path.join(d, "linear_relu_native.npz")
+
+            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
+            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
+
+            W = np.array([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=np.float32)
+            B = np.array([0.5, -1.0], dtype=np.float32)
+
+            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
+            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
+
+            gemm = helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0)
+            relu = helper.make_node("Relu", ["z"], ["y"])
+
+            graph = helper.make_graph([gemm, relu], "linear_relu_native_graph", [x_info], [y_info], [w_init, b_init])
+            model = helper.make_model(graph, producer_name="munet_native_save_test", opset_imports=[helper.make_opsetid("", 11)])
+            model.ir_version = 7
+            onnx.save(model, onnx_path)
+
+            module = munet.inference.compile_onnx(onnx_path, output_path=native_path)
+            restored = munet.load_for_inference(native_path)
+
+            x_np = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+            expected = np.maximum(x_np @ W + B, 0.0)
+
+            y0 = np.array(module.forward(munet.from_numpy(x_np)).detach(), copy=False)
+            y1 = np.array(restored.forward(munet.from_numpy(x_np)).detach(), copy=False)
+            self.assertTrue(np.allclose(y0, expected, atol=1e-5))
+            self.assertTrue(np.allclose(y1, expected, atol=1e-5))
+
+            metadata = munet.serialization_metadata(native_path)
+            self.assertEqual(metadata["artifact_kind"], "deploy_model")
 
     def test_yolov5n_onnx_conversion_coverage_report(self):
         try:
@@ -1189,8 +1399,6 @@ class TestBindings(unittest.TestCase):
             self.assertEqual(report["coverage"]["unsupported"], [])
             self.assertEqual(report["coverage"]["unmapped"], [])
             self.assertTrue(report["fully_lowerable"])
-
-
 
     def test_compile_onnx_graph_runtime_branching_ops(self):
         try:
@@ -1240,6 +1448,18 @@ class TestBindings(unittest.TestCase):
             y = module.forward(x)
             y_np = np.array(y.detach(), copy=False)
             self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
+
+            report = munet.inference.onnx_conversion_coverage_report(path)
+            self.assertTrue(report["fully_lowerable"])
+            self.assertFalse(report["native_deployable"])
+            self.assertEqual(report["runtime_role"], "development_tooling")
+
+    def test_onnx_runtime_package_boundary_api(self):
+        boundary = munet.inference.onnx_runtime_package_boundary()
+        self.assertIn("deploy_runtime", boundary)
+        self.assertIn("development_tooling", boundary)
+        self.assertIn("compile_onnx(model_path)", boundary["deploy_runtime"][0])
+        self.assertIn("packaging_policy", boundary)
 
     def test_onnx_inference_wrapper(self):
         try:

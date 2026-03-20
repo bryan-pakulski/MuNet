@@ -21,6 +21,9 @@ Common modules in `munet.nn` include:
 - `munet.inference.EngineConfig`
 - `munet.inference.Engine`
   - `load(module)`
+- `munet.inference.load_serialized(path, device=...)`
+- `munet.inference.load_weights_serialized(model, path, device=...)`
+- `munet.inference.onnx_runtime_package_boundary()`
   - `compile(example_input, expected_input_shape=None, expected_output_shape=None)`
   - `run(input)`
 
@@ -29,5 +32,7 @@ Common modules in `munet.nn` include:
 ## Serialization
 
 - `munet.save(model, path)`
-- `munet.load(path)` (full reconstruction for supported built-ins)
-- `munet.load(model, path)` / `munet.load_weights(model, path)` (weights-only)
+- `munet.load(path)` (generic full reconstruction for supported built-ins)
+- `munet.load(model, path)` / `munet.load_weights(model, path)` (generic weights-only restore)
+- `munet.load_for_inference(path, device=...)` (recommended deploy loader)
+- `munet.load_weights_for_inference(model, path, device=...)` (recommended deploy weights-only loader)

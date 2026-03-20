@@ -123,12 +123,14 @@ class ScopedTraceContext {
 public:
   explicit ScopedTraceContext(std::string span,
                               std::optional<uint64_t> trace_id = std::nullopt)
-      : previous_id_(trace_context_state().trace_id),
-        previous_spans_(trace_context_state().span_stack) {
+      : previous_id_(trace_context_state().trace_id) {
     auto &state = trace_context_state();
+    previous_depth_ = state.span_stack.size();
     if (trace_id.has_value()) {
       state.trace_id = *trace_id;
       state.span_stack.clear();
+      previous_depth_ = 0;
+      owns_trace_id_ = true;
       active_ = true;
     } else if (state.trace_id != 0) {
       active_ = true;
@@ -146,14 +148,19 @@ public:
       return;
     }
     auto &state = trace_context_state();
-    state.trace_id = previous_id_;
-    state.span_stack = previous_spans_;
+    if (state.span_stack.size() > previous_depth_) {
+      state.span_stack.resize(previous_depth_);
+    }
+    if (owns_trace_id_) {
+      state.trace_id = previous_id_;
+    }
   }
 
 private:
   uint64_t previous_id_ = 0;
-  std::vector<std::string> previous_spans_{};
+  size_t previous_depth_ = 0;
   bool active_ = false;
+  bool owns_trace_id_ = false;
 };
 
 inline bool cached_env_debug_enabled() {

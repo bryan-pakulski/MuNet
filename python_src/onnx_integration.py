@@ -159,6 +159,9 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Floor": {"status": "lowered", "munet": "graph/floor"},
 }
 
+ONNX_DEPLOY_RUNTIME_ROLE = "deploy_runtime"
+ONNX_DEVELOPMENT_TOOLING_ROLE = "development_tooling"
+
 
 def onnx_native_conversion_map():
     """Return ONNX op conversion metadata for native ONNX->MuNet lowering."""
@@ -369,6 +372,68 @@ _NODE_LOWERING_DISPATCH = {
 }
 
 _PASS_THROUGH_OPS = {"Identity", "Cast"}
+_NATIVE_SEQUENTIAL_PASS_THROUGH_OPS = {"Identity"}
+
+
+def _try_compile_onnx_native_sequential_module(model, debug=False):
+    import numpy as np
+    import munet
+    import onnx
+    from onnx import numpy_helper
+
+    graph = model.graph
+    if len(graph.input) != 1 or len(graph.output) != 1:
+        return None
+
+    ctx = _ConversionContext(
+        graph,
+        munet_module=munet,
+        np_module=np,
+        onnx_module=onnx,
+        numpy_helper=numpy_helper,
+        debug=debug,
+    )
+
+    for node in graph.node:
+        if node.op_type == "Constant":
+            _capture_constant_node(node, ctx)
+            continue
+
+        if len(node.output) != 1:
+            ctx.log(
+                f"native sequential lowering skipped: op={node.op_type} has output arity={len(node.output)}"
+            )
+            return None
+
+        if not node.input or node.input[0] != ctx.stream_name:
+            ctx.log(
+                f"native sequential lowering skipped: op={node.op_type} is not a single-stream transform"
+            )
+            return None
+
+        if node.op_type in _NATIVE_SEQUENTIAL_PASS_THROUGH_OPS:
+            ctx.stream_name = node.output[0]
+            continue
+
+        lower = _NODE_LOWERING_DISPATCH.get(node.op_type)
+        if lower is None:
+            ctx.log(f"native sequential lowering skipped: unsupported op={node.op_type}")
+            return None
+
+        if not lower(node, ctx):
+            ctx.log(f"native sequential lowering skipped: op={node.op_type} failed lowering preconditions")
+            return None
+
+        ctx.lowered_count += 1
+        ctx.stream_name = node.output[0]
+
+    if ctx.stream_name != graph.output[0].name or not ctx.seq_layers:
+        ctx.log("native sequential lowering skipped: output stream did not end at graph output")
+        return None
+
+    if len(ctx.seq_layers) == 1:
+        return ctx.seq_layers[0]
+    return munet.nn.Sequential(ctx.seq_layers)
 
 
 
@@ -462,7 +527,14 @@ class _ONNXGraphModule:
         if like is not None and isinstance(like, self._m.Tensor):
             arr_np = arr_np.astype(self._tensor_numpy_dtype(like), copy=False)
         else:
-            _munet_dtype_from_numpy(arr_np, self._m)
+            try:
+                _munet_dtype_from_numpy(arr_np, self._m)
+            except RuntimeError:
+                if arr_np.dtype == self._np.float64:
+                    arr_np = arr_np.astype(self._np.float32, copy=False)
+                elif arr_np.dtype == self._np.int64:
+                    arr_np = arr_np.astype(self._np.int32, copy=False)
+                _munet_dtype_from_numpy(arr_np, self._m)
         t = self._m.from_numpy(arr_np)
         if like is not None and isinstance(like, self._m.Tensor):
             if like.device.type != self._m.DeviceType.CPU:
@@ -789,6 +861,10 @@ def _collect_conversion_failures(graph):
     }
 
 
+def _native_sequential_deployable(model):
+    return _try_compile_onnx_native_sequential_module(model, debug=False) is not None
+
+
 def _format_conversion_failure(model_path, fail_info):
     return (
         "compile_onnx: conversion failed. "
@@ -809,6 +885,7 @@ def compile_onnx(model_path, output_path=None, debug=False):
     No fallback execution/runtime path is used.
     """
     import onnx
+    import munet
 
     model = onnx.load(model_path)
     fail_info = _collect_conversion_failures(model.graph)
@@ -824,17 +901,29 @@ def compile_onnx(model_path, output_path=None, debug=False):
             f"missing_runtime_total={runtime_info['missing_runtime_total']}"
         )
 
+    native_module = _try_compile_onnx_native_sequential_module(model, debug=debug)
+    if native_module is not None:
+        native_module.eval()
+        if output_path is not None:
+            munet.save(native_module, output_path)
+        if debug:
+            print(
+                f"[compile_onnx] success model={model_path} kind=native_sequential "
+                f"nodes={len(model.graph.node)} unique_ops={len(fail_info['op_counts'])}"
+            )
+        return native_module
+
     module = _compile_onnx_graph_module(model_path)
 
     if output_path is not None:
         raise ValueError(
-            "compile_onnx: output_path save is not yet supported for graph-runtime modules. "
-            "Convert first and run inference directly with returned module."
+            "compile_onnx: output_path save is only supported when conversion lowers to a native MuNet module. "
+            "Current model requires the graph-runtime helper, which remains development tooling rather than a deploy artifact."
         )
 
     if debug:
         print(
-            f"[compile_onnx] success model={model_path} "
+            f"[compile_onnx] success model={model_path} kind=graph_runtime "
             f"nodes={len(model.graph.node)} unique_ops={len(fail_info['op_counts'])}"
         )
 
@@ -856,6 +945,7 @@ def onnx_conversion_coverage_report(model_path):
 
     model = onnx.load(model_path)
     fail_info = _collect_conversion_failures(model.graph)
+    native_deployable = _native_sequential_deployable(model)
 
     coverage = {
         "lowered": [],
@@ -881,6 +971,35 @@ def onnx_conversion_coverage_report(model_path):
         "unsupported_unique": fail_info["unsupported_unique"],
         "unsupported_total": fail_info["unsupported_total"],
         "fully_lowerable": fail_info["unsupported_total"] == 0,
+        "native_deployable": native_deployable,
+        "runtime_role": (
+            ONNX_DEPLOY_RUNTIME_ROLE
+            if native_deployable
+            else ONNX_DEVELOPMENT_TOOLING_ROLE
+        ),
+        "device_policy": "caller_specified",
+        "dtype_policy": "preserve_onnx_io_types",
+        "shape_contract_policy": "caller_declared_at_engine_compile",
+        "warm_state": "not_embedded",
+    }
+
+
+def onnx_runtime_package_boundary():
+    """Describe which ONNX helpers belong to deploy runtime vs development tooling."""
+    return {
+        "deploy_runtime": [
+            "compile_onnx(model_path) -> native MuNet module when sequential lowering succeeds",
+        ],
+        "development_tooling": [
+            "compile_onnx(model_path) -> graph-runtime helper when native sequential lowering is not possible",
+            "report_onnx_unsupported_ops(model_path)",
+            "onnx_conversion_coverage_report(model_path)",
+            "download_yolov5n_onnx(destination_path)",
+        ],
+        "packaging_policy": (
+            "Only native MuNet modules are deploy artifacts. "
+            "Graph-runtime ONNX helpers remain development tooling and are not serialized as deploy packages."
+        ),
     }
 
 
@@ -899,7 +1018,10 @@ def download_yolov5n_onnx(destination_path):
 inference.ONNXEngine = ONNXEngine
 inference.load_onnx = load_onnx
 inference.compile_onnx = compile_onnx
+inference.load_serialized = load_for_inference
+inference.load_weights_serialized = load_weights_for_inference
 inference.report_onnx_unsupported_ops = report_onnx_unsupported_ops
 inference.onnx_native_conversion_map = onnx_native_conversion_map
 inference.onnx_conversion_coverage_report = onnx_conversion_coverage_report
+inference.onnx_runtime_package_boundary = onnx_runtime_package_boundary
 inference.download_yolov5n_onnx = download_yolov5n_onnx

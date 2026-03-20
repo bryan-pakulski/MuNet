@@ -41,7 +41,10 @@ set(MUNET_SOURCES
     src/core/ops/pooling.cpp
     src/core/ops/normalization.cpp
     src/core/ops/loss.cpp
+    src/inference_serialization.cpp
 )
+
+set_source_files_properties(src/inference_serialization.cpp PROPERTIES COMPILE_DEFINITIONS MUNET_ENABLE_TRAINING=1)
 
 if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
@@ -95,6 +98,31 @@ target_include_directories(munet_inference INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}
 target_link_libraries(munet_inference INTERFACE munet_core)
 target_compile_definitions(munet_inference INTERFACE MUNET_ENABLE_INFERENCE=1 MUNET_EDGE_DEPLOY=1)
 
+set(MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR
+    ${CMAKE_CURRENT_BINARY_DIR}/inference_training_header_probe)
+file(MAKE_DIRECTORY ${MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR})
+file(WRITE ${MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR}/CMakeLists.txt [=[
+cmake_minimum_required(VERSION 3.18)
+project(MuNetInferenceTrainingHeaderProbe LANGUAGES CXX)
+add_executable(probe probe.cpp)
+target_include_directories(probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(probe PRIVATE MUNET_ENABLE_INFERENCE=1 MUNET_EDGE_DEPLOY=1)
+]=])
+file(WRITE ${MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR}/probe.cpp [=[
+#include "nn.hpp"
+#include "optim.hpp"
+int main() { return 0; }
+]=])
+try_compile(MUNET_INFERENCE_REJECTS_TRAINING_HEADERS
+    ${MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR}/build
+    ${MUNET_INFERENCE_TRAINING_HEADER_PROBE_DIR}
+    probe
+    OUTPUT_VARIABLE MUNET_INFERENCE_TRAINING_HEADER_PROBE_OUTPUT)
+if(MUNET_INFERENCE_REJECTS_TRAINING_HEADERS)
+    message(FATAL_ERROR
+        "munet_inference boundary regression: training headers compiled under inference-only definitions.\n${MUNET_INFERENCE_TRAINING_HEADER_PROBE_OUTPUT}")
+endif()
+
 # --- Python Bindings ---
 pybind11_add_module(munet src/bindings.cpp)
 target_link_libraries(munet PRIVATE munet_training)
@@ -125,6 +153,29 @@ add_executable(munet_tests
 )
 
 target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_main)
+
+add_executable(munet_inference_baseline tools/inference_baseline.cpp)
+target_link_libraries(munet_inference_baseline PRIVATE munet_inference)
+add_test(
+    NAME munet_inference_baseline_cpu_smoke
+    COMMAND munet_inference_baseline
+            --device cpu
+            --dtype float32
+            --batch 4
+            --input-dim 16
+            --hidden-dim 32
+            --output-dim 8
+            --warmup-runs 0
+            --single-run-iters 1
+            --batch-run-inputs 2
+            --batch-run-iters 1
+            --prepared-input-cache-entries 0
+            --prepared-input-cache-max-bytes 0
+)
+
+add_executable(munet_inference_boundary_check tools/inference_boundary_check.cpp)
+target_link_libraries(munet_inference_boundary_check PRIVATE munet_inference)
+add_test(NAME munet_inference_boundary_check COMMAND munet_inference_boundary_check)
 
 include(GoogleTest)
 gtest_discover_tests(munet_tests)
