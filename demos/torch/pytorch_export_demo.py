@@ -149,12 +149,15 @@ def demo_pytorch_export():
         
         print("    Running inference with MuNet...")
         device = munet.Device(munet.DeviceType.CUDA if torch.cuda.is_available() else munet.DeviceType.CPU, 0)
-        engine = munet.inference.Engine(munet.inference.EngineConfig(device=device))
+        config = munet.inference.EngineConfig()
+        config.device = device
+        engine = munet.inference.Engine(config)
         engine.load(munet_model)
         
         # Prepare input
         input_np = test_input.numpy()
         input_tensor = munet.from_numpy(input_np[0]).to(device)
+        input_tensor = munet.from_numpy(input_np).to(device)
         
         engine.compile(input_tensor)
         output_tensor = engine.run(input_tensor)

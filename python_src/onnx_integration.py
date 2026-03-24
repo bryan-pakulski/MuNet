@@ -141,7 +141,7 @@ ONNX_NATIVE_CONVERSION_MAP = {
     "Sub": {"status": "lowered", "munet": "graph/sub"},
     "Mul": {"status": "lowered", "munet": "graph/mul"},
     "Div": {"status": "lowered", "munet": "graph/div"},
-    "Softmax": {"status": "unsupported", "munet": None},
+    "Softmax": {"status": "lowered", "munet": "nn.Softmax"},
     "Squeeze": {"status": "lowered", "munet": "graph/squeeze"},
     "Expand": {"status": "lowered", "munet": "graph/expand"},
     "Tile": {"status": "lowered", "munet": "graph/tile"},
@@ -281,23 +281,9 @@ def _lower_conv(node, ctx):
     if W is None:
         return False
 
-    B = ctx.const(node.input[2]) if len(node.input) > 2 else None
-    strides = ctx.get_attr(node, "strides", [1, 1])
-    pads = ctx.get_attr(node, "pads", [0, 0, 0, 0])
-    dil = ctx.get_attr(node, "dilations", [1, 1])
-    group = ctx.get_attr(node, "group", 1)
-    if group != 1 or dil != [1, 1] or pads[0] != pads[2] or pads[1] != pads[3]:
-        return False
-
-    oc, ic, kh, kw = [int(v) for v in W.shape]
-    if kh != kw:
-        return False
-
-    layer = ctx.munet.nn.Conv2d(ic, oc, kh, strides[0], pads[0])
-    layer.weight.replace_(W)
-    if B is not None:
-        layer.bias.replace_(B.reshape([oc]))
-    ctx.seq_layers.append(layer)
+def _lower_softmax(node, ctx):
+    axis = int(ctx.get_attr(node, "axis", -1))
+    ctx.seq_layers.append(ctx.munet.nn.Softmax(axis))
     return True
 
 

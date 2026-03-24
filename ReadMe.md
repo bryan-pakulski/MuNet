@@ -92,7 +92,7 @@ The project has a working core runtime + training stack with CPU/CUDA/Vulkan bac
 Serialization:
     - Save and Load of arbitrarily complex models i.e. Costum Modules and Layers extending munet.nn.Module
     - Preserve layers, paramers, buffers, skip connections etc.. as well as forward pass
-    - Interop with torch models (save & load)
+    - Interop with torch models (save & load is supported for basic non graph models (Linear)) 
     - Interop with onnx models (save & load)
 
 Multi-GPU RoadMap:
