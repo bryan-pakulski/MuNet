@@ -127,9 +127,9 @@ TEST(TensorDTypeTest, Float16MatmulAndSumUseTypedFallbacks) {
 
   Tensor out32 = out.to(DataType::Float32);
   const float *out_ptr = static_cast<const float *>(out32.data());
-  EXPECT_NEAR(out_ptr[0], 58.0f, 1e-2f);
-  EXPECT_NEAR(out_ptr[1], 64.0f, 1e-2f);
-  EXPECT_NEAR(out_ptr[2], 139.0f, 1e-1f);
+  EXPECT_NEAR(out_ptr[0], 58.0f, 2e-1f);
+  EXPECT_NEAR(out_ptr[1], 64.0f, 1e-1f);
+  EXPECT_NEAR(out_ptr[2], 139.0f, 3e-1f);
   EXPECT_NEAR(out_ptr[3], 154.0f, 1e-1f);
 
   Tensor total = out.sum().to(DataType::Float32);

@@ -300,6 +300,19 @@ public:
     check("matmul", t.elapsed_us(), &out);
   }
 
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out,
+                      int B, int M, int K, int N, bool transA, bool transB,
+                      int64_t stride_a, int64_t stride_b, int64_t stride_out) override {
+    MUNET_DEBUG << "batched_matmul | " << B << " batches, " << M << "x" << K << "x" << N << " matrix"
+                << (transA ? " (transposed)" : "")
+                << (transB ? " (transposed)" : "") << std::endl;
+    Timer t;
+    base_->blas_capability()->batched_matmul(a, b, out, B, M, K, N, transA, transB,
+                                             stride_a, stride_b, stride_out);
+    check("batched_matmul", t.elapsed_us(), &out);
+  }
+
+
   void adam_step(Storage &params, const Storage &grads, Storage &exp_avg,
                  Storage &exp_avg_sq, float lr, float beta1, float beta2,
                  float eps, int step, size_t num_elements) override {

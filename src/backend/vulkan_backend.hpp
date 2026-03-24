@@ -98,6 +98,10 @@ public:
            const BroadcastInfo &info) override;
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override;
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out,
+                      int batch, int M, int K, int N, bool transA, bool transB,
+                      int64_t stride_a, int64_t stride_b,
+                      int64_t stride_out) override;
 
   void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
               const std::vector<Shape> &shapes) override;
@@ -210,6 +214,9 @@ private:
   VkPipeline bnNormalizePipeline;
   VkPipeline bnBackReducePipeline;
   VkPipeline bnBackDxPipeline;
+
+  VkPipeline matmulPipeline;
+  VkPipeline batchedMatmulPipeline;
 };
 
 } // namespace munet

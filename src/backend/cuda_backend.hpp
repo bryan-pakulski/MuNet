@@ -97,6 +97,10 @@ public:
            const BroadcastInfo &info) override;
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override;
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out,
+                      int batch, int M, int K, int N, bool transA, bool transB,
+                      int64_t stride_a, int64_t stride_b,
+                      int64_t stride_out) override;
   void relu(const Storage &in, Storage &out, size_t num_elements) override;
   void relu_backward(const Storage &grad_out, const Storage &input,
                      Storage &grad_in, size_t num_elements) override;

@@ -252,7 +252,13 @@ public:
   virtual ~BackendBlasCapability() = default;
   virtual void matmul(const Storage &a, const Storage &b, Storage &out, int M,
                       int K, int N, bool transA, bool transB) = 0;
+  virtual void batched_matmul(const Storage &a, const Storage &b, Storage &out,
+                              int batch_size, int M, int K, int N,
+                              bool transA, bool transB,
+                              int64_t stride_a, int64_t stride_b,
+                              int64_t stride_out) = 0;
 };
+
 
 class BackendShapeCapability {
 public:
@@ -563,6 +569,16 @@ public:
     require_capability(blas_capability(), "blas", "matmul")
         ->matmul(a, b, out, M, K, N, transA, transB);
   }
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out,
+                      int batch_size, int M, int K, int N,
+                      bool transA = false, bool transB = false,
+                      int64_t stride_a = 0, int64_t stride_b = 0,
+                      int64_t stride_c = 0) {
+    require_capability(blas_capability(), "blas", "batched_matmul")
+        ->batched_matmul(a, b, out, batch_size, M, K, N, transA, transB, stride_a, stride_b, stride_c);
+  }
+
+
 
   void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,
               const std::vector<Shape> &shapes) {

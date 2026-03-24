@@ -117,6 +117,24 @@ public:
     }
   }
 
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out,
+                      int batch, int M, int K, int N, bool transA, bool transB,
+                      int64_t stride_a, int64_t stride_b, int64_t stride_out) override {
+    ++matmul_calls_;  // Reuse the same counter
+    const float *ap = static_cast<const float *>(a.data());
+    const float *bp = static_cast<const float *>(b.data());
+    float *op = static_cast<float *>(out.data());
+
+    for (int b_idx = 0; b_idx < batch; ++b_idx) {
+      const float *a_ptr = ap + b_idx * stride_a;
+      const float *b_ptr = bp + b_idx * stride_b;
+      float *o_ptr = op + b_idx * stride_out;
+      
+      // Call regular matmul for each batch
+      matmul(a, b, out, M, K, N, transA, transB);
+    }
+  }
+
   void to_contiguous(const Storage &src, Storage &dst, const Shape &shape,
                      const Strides &strides, size_t offset) override {
     const char *src_ptr = static_cast<const char *>(src.data());

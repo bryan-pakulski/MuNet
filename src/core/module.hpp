@@ -96,6 +96,8 @@ public:
 
   void eval() { train(false); }
 
+  bool is_training() const { return training_; }
+
   const TensorOptions &default_options() const { return default_options_; }
 
   virtual bool is_on(Device device) const {

@@ -209,3 +209,106 @@ TEST(BroadcastTest, CPUExecution) {
   EXPECT_FLOAT_EQ(data[4], 12.0f);
   EXPECT_FLOAT_EQ(data[5], 13.0f);
 }
+
+// ============================================================================
+// Batched MatMul Tests
+// ============================================================================
+
+TEST_P(BackendTest, BatchedMatMul_2D_BackwardCompatible) {
+  // Test that 2D matmul still works (backward compatibility)
+  Tensor a({2, 3}, dev());
+  Tensor b({3, 2}, dev());
+  a.uniform_(1.0f, 1.0f);
+  b.uniform_(1.0f, 1.0f);
+
+  Tensor c = a.matmul(b);
+  EXPECT_EQ(c.shape().size(), 2);
+  EXPECT_EQ(c.shape()[0], 2);
+  EXPECT_EQ(c.shape()[1], 2);
+
+  Tensor res = c.to({DeviceType::CPU, 0});
+  const float *data = static_cast<const float *>(res.data());
+  for (size_t i = 0; i < 4; ++i)
+    EXPECT_FLOAT_EQ(data[i], 3.0f);
+}
+
+TEST_P(BackendTest, BatchedMatMul_3D_BroadcastedWeights) {
+  // Test [B, M, K] x [K, N] -> [B, M, N]
+  // B=2, M=3, K=4, N=5
+  Tensor a({2, 3, 4}, dev());
+  Tensor b({4, 5}, dev());
+  a.uniform_(1.0f, 1.0f);
+  b.uniform_(1.0f, 1.0f);
+
+  Tensor c = a.matmul(b);
+  EXPECT_EQ(c.shape().size(), 3);
+  EXPECT_EQ(c.shape()[0], 2);
+  EXPECT_EQ(c.shape()[1], 3);
+  EXPECT_EQ(c.shape()[2], 5);
+
+  Tensor res = c.to({DeviceType::CPU, 0});
+  const float *data = static_cast<const float *>(res.data());
+  // Each element should be K=4 (sum of 4 ones)
+  for (size_t i = 0; i < 2 * 3 * 5; ++i)
+    EXPECT_FLOAT_EQ(data[i], 4.0f);
+}
+
+TEST_P(BackendTest, BatchedMatMul_3D_BatchedWeights) {
+  // Test [B, M, K] x [B, K, N] -> [B, M, N]
+  // B=2, M=3, K=4, N=5
+  Tensor a({2, 3, 4}, dev());
+  Tensor b({2, 4, 5}, dev());
+  a.uniform_(1.0f, 1.0f);
+  b.uniform_(2.0f, 2.0f);
+
+  Tensor c = a.matmul(b);
+  EXPECT_EQ(c.shape().size(), 3);
+  EXPECT_EQ(c.shape()[0], 2);
+  EXPECT_EQ(c.shape()[1], 3);
+  EXPECT_EQ(c.shape()[2], 5);
+
+  Tensor res = c.to({DeviceType::CPU, 0});
+  const float *data = static_cast<const float *>(res.data());
+  // Each element should be K=4 * 2.0 = 8.0
+  for (size_t i = 0; i < 2 * 3 * 5; ++i)
+    EXPECT_FLOAT_EQ(data[i], 8.0f);
+}
+
+TEST_P(BackendTest, BatchedMatMul_SingleBatch) {
+  // Test with B=1: [1, M, K] x [K, N] -> [1, M, N]
+  Tensor a({1, 3, 4}, dev());
+  Tensor b({4, 5}, dev());
+  a.uniform_(1.0f, 1.0f);
+  b.uniform_(1.0f, 1.0f);
+
+  Tensor c = a.matmul(b);
+  EXPECT_EQ(c.shape().size(), 3);
+  EXPECT_EQ(c.shape()[0], 1);
+  EXPECT_EQ(c.shape()[1], 3);
+  EXPECT_EQ(c.shape()[2], 5);
+
+  Tensor res = c.to({DeviceType::CPU, 0});
+  const float *data = static_cast<const float *>(res.data());
+  for (size_t i = 0; i < 1 * 3 * 5; ++i)
+    EXPECT_FLOAT_EQ(data[i], 4.0f);
+}
+
+TEST_P(BackendTest, BatchedMatMul_LargeBatch) {
+  // Test with larger batch: [8, 4, 16] x [16, 32] -> [8, 4, 32]
+  Tensor a({8, 4, 16}, dev());
+  Tensor b({16, 32}, dev());
+  a.uniform_(0.5f, 0.5f);
+  b.uniform_(1.0f, 1.0f);
+
+  Tensor c = a.matmul(b);
+  EXPECT_EQ(c.shape().size(), 3);
+  EXPECT_EQ(c.shape()[0], 8);
+  EXPECT_EQ(c.shape()[1], 4);
+  EXPECT_EQ(c.shape()[2], 32);
+
+  Tensor res = c.to({DeviceType::CPU, 0});
+  const float *data = static_cast<const float *>(res.data());
+  // Each element should be 16 * 0.5 * 1.0 = 8.0
+  for (size_t i = 0; i < 8 * 4 * 32; ++i)
+    EXPECT_FLOAT_EQ(data[i], 8.0f);
+}

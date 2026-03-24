@@ -2,6 +2,7 @@
 #include "core/backend.hpp"
 #include "core/util.hpp"
 #include "storage.hpp"
+#include "core/ops/common.hpp"
 #include <algorithm>
 #include <cmath>
 #include <condition_variable>
@@ -314,6 +315,31 @@ public:
 
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override {
+    // TODO: Handle Float16 with typed implementation
+    if (a.dtype() == DataType::Float16) {
+      throw std::runtime_error("matmul: Float16 not supported");
+      /*
+      // Note: cpu_half_to_float() and float_to_half_bits() are not implemented
+      const uint16_t *ap = (const uint16_t *)a.data();
+      const uint16_t *bp = (const uint16_t *)b.data();
+      uint16_t *cp = (uint16_t *)out.data();
+      parallel_for(0, M, [&](size_t start_m, size_t end_m) {
+        for (int m = start_m; m < end_m; ++m) {
+          for (int n = 0; n < N; ++n) {
+            float sum = 0.0f;
+            for (int k = 0; k < K; ++k) {
+              float a_val = transA ? cpu_half_to_float(ap[k * M + m]) : cpu_half_to_float(ap[m * K + k]);
+              float b_val = transB ? cpu_half_to_float(bp[n * K + k]) : cpu_half_to_float(bp[k * N + n]);
+              sum += a_val * b_val;
+            }
+            cp[m * N + n] = cpu_float_to_half(sum);
+          }
+        }
+      });
+      return;
+      */
+    }
+
     const float *ap = (const float *)a.data();
     const float *bp = (const float *)b.data();
     float *cp = (float *)out.data();
@@ -330,6 +356,18 @@ public:
         }
       }
     });
+  }
+
+  void batched_matmul(const Storage &a, const Storage &b, Storage &out,
+                      int batch_size, int M, int K, int N, bool transA, bool transB,
+                      int64_t stride_a, int64_t stride_b, int64_t stride_out) override {
+    const float *ap = (const float *)a.data();
+    const float *bp = (const float *)b.data();
+    float *cp = (float *)out.data();
+    for (int b_idx = 0; b_idx < batch_size; ++b_idx) {
+      ops::detail::batched_matmul_cpu_fallback(ap + b_idx * stride_a, bp + b_idx * stride_b,
+                                                cp + b_idx * stride_out, M, K, N, transA, transB);
+    }
   }
 
   void concat(const std::vector<Storage *> &inputs, Storage &out, int dim,

@@ -164,6 +164,97 @@ inline Tensor matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool transA,
                                               : out_cpu.to(a.device());
 }
 
+inline Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b,
+                                          bool transA, bool transB) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a_cpu = a.to(cpu);
+  Tensor b_cpu = b.to(cpu);
+
+  // Determine dimensions
+  const int a_ndim = static_cast<int>(a.shape().size());
+  const int b_ndim = static_cast<int>(b.shape().size());
+
+  // Extract batch dimensions from a (all dims except last 2)
+  Shape batch_dims;
+  for (int i = 0; i < a_ndim - 2; ++i) {
+    batch_dims.push_back(a.shape()[i]);
+  }
+  const size_t batch_size = batch_dims.empty() ? 1 : numel(batch_dims);
+
+  // Get matrix dimensions
+  const int M = transA ? a.shape()[a_ndim - 1] : a.shape()[a_ndim - 2];
+  const int K = transA ? a.shape()[a_ndim - 2] : a.shape()[a_ndim - 1];
+  const int N = transB ? b.shape()[b_ndim - 2] : b.shape()[b_ndim - 1];
+
+  // Validate K dimension matches
+  const int b_K = transB ? b.shape()[b_ndim - 1] : b.shape()[b_ndim - 2];
+  if (K != b_K) {
+    throw std::runtime_error("Batched matmul: K dimension mismatch: a has K=" +
+                             std::to_string(K) + ", b has K=" + std::to_string(b_K));
+  }
+
+  // Handle broadcasting for b (can be [K,N] or [B,K,N])
+  bool b_is_batched = (b_ndim >= 3);
+  if (b_is_batched) {
+    // Verify batch dimensions match or are broadcastable
+    const int b_batch_ndim = b_ndim - 2;
+    if (b_batch_ndim != static_cast<int>(batch_dims.size())) {
+      // Check if b can be broadcast (e.g., b has batch_size=1)
+      size_t b_batch_size = 1;
+      for (int i = 0; i < b_batch_ndim; ++i) {
+        b_batch_size *= b.shape()[i];
+      }
+      if (b_batch_size != 1 && b_batch_size != batch_size) {
+        throw std::runtime_error("Batched matmul: batch dimensions mismatch");
+      }
+    }
+  }
+
+  // Compute strides for batch iteration
+  const size_t a_batch_stride = M * K;
+  const size_t b_batch_stride = b_is_batched ? (b_K * N) : 0;  // 0 means broadcast
+  const size_t out_batch_stride = M * N;
+
+  // Build output shape
+  Shape out_shape = batch_dims;
+  out_shape.push_back(M);
+  out_shape.push_back(N);
+
+  Tensor out_cpu(out_shape, cpu, a.dtype());
+
+  const char *ap = static_cast<const char *>(a_cpu.data());
+  const char *bp = static_cast<const char *>(b_cpu.data());
+  char *cp = static_cast<char *>(out_cpu.data());
+  const size_t a_stride = dtype_size(a.dtype());
+  const size_t b_stride = dtype_size(b.dtype());
+  const size_t out_stride = dtype_size(out_cpu.dtype());
+
+  // Iterate over batches
+  for (size_t batch = 0; batch < batch_size; ++batch) {
+    const char *a_batch = ap + batch * a_batch_stride * a_stride;
+    const char *b_batch = b_is_batched ? (bp + batch * b_batch_stride * b_stride) : bp;
+    char *c_batch = cp + batch * out_batch_stride * out_stride;
+
+    for (int m = 0; m < M; ++m) {
+      for (int n = 0; n < N; ++n) {
+        double sum = 0.0;
+        for (int k = 0; k < K; ++k) {
+          const int a_index = transA ? (k * M + m) : (m * K + k);
+          const int b_index = transB ? (n * K + k) : (k * N + n);
+          const ScalarValue a_val =
+              read_scalar_from_buffer(a_batch + a_index * a_stride, a.dtype());
+          const ScalarValue b_val =
+              read_scalar_from_buffer(b_batch + b_index * b_stride, b.dtype());
+          sum += a_val.value * b_val.value;
+        }
+        write_scalar_to_buffer(c_batch + (m * N + n) * out_stride, out_cpu.dtype(), sum);
+      }
+    }
+  }
+
+  return (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+}
+
 template <typename Fn>
 inline Tensor unary_cpu_fallback(const Tensor &input, Fn &&fn) {
   Device cpu{DeviceType::CPU, 0};
@@ -179,6 +270,22 @@ inline Tensor unary_cpu_fallback(const Tensor &input, Fn &&fn) {
   }
   return (input.device().type == DeviceType::CPU) ? out_cpu
                                                   : out_cpu.to(input.device());
+}
+
+// Low-level batched matmul fallback for backends (works with raw pointers)
+inline void batched_matmul_cpu_fallback(const float *a, const float *b, float *out,
+                                         int M, int K, int N, bool transA, bool transB) {
+  for (int m = 0; m < M; ++m) {
+    for (int n = 0; n < N; ++n) {
+      float sum = 0.0f;
+      for (int k = 0; k < K; ++k) {
+        const float a_val = transA ? a[k * M + m] : a[m * K + k];
+        const float b_val = transB ? b[n * K + k] : b[k * N + n];
+        sum += a_val * b_val;
+      }
+      out[m * N + n] = sum;
+    }
+  }
 }
 
 } // namespace detail
@@ -212,6 +319,8 @@ Tensor mse_loss(const Tensor &pred, const Tensor &target);
 Tensor cross_entropy(const Tensor &logits, const Tensor &targets);
 Tensor transpose(const Tensor &in, int dim0, int dim1);
 Tensor zeros(Shape shape, Device device, bool requires_grad, DataType dtype);
+Tensor batched_matmul(const Tensor &a, const Tensor &b);
+
 
 inline void link_backward_edges(Node *node, const std::vector<Tensor> &inputs) {
   for (size_t i = 0; i < inputs.size(); ++i) {

@@ -72,7 +72,7 @@ static VkCommandBuffer immediateCmdBuffer = VK_NULL_HANDLE;
 
 static VkPipelineLayout pipelineLayout;
 static VkPipeline addPipeline, mulPipeline, subPipeline, divPipeline,
-    matmulPipeline;
+    matmulPipeline, batchedMatmulPipeline;
 static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
     sumToShapePipeline;
 static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
@@ -1159,6 +1159,93 @@ VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
 				}
     )");
 
+  batchedMatmulPipeline = createComputePipeline("batched_matmul",
+                                         R"(
+#version 450
+layout(local_size_x = 32, local_size_y = 8) in;
+
+layout(binding = 0) readonly buffer A { float a[]; };
+layout(binding = 1) readonly buffer B { float b[]; };
+layout(binding = 2) writeonly buffer C { float c[]; };
+
+layout(push_constant) uniform Push {
+    int B_batch;
+    int M;
+    int K;
+    int N;
+    int tA;
+    int tB;
+    int stride_a;
+    int stride_b;
+    int stride_c;
+    int broadcast_b;
+} p;
+
+shared float As[8][32];
+shared float Bs[32][32];
+
+void main() {
+    const int lx = int(gl_LocalInvocationID.x);
+    const int ly = int(gl_LocalInvocationID.y);
+
+    const int batch = int(gl_WorkGroupID.z);
+    const int row = int(gl_WorkGroupID.y) * 8 + ly;
+    const int col = int(gl_WorkGroupID.x) * 32 + lx;
+
+    const bool out_valid = (row < p.M) && (col < p.N);
+
+    const int a_stride = p.stride_a;
+    const int b_stride = p.stride_b;
+    const int c_stride = p.stride_c;
+
+    const int a_offset = batch * a_stride;
+    // When broadcast_b is true, use the same weights for all batches
+    const int b_offset = p.broadcast_b != 0 ? 0 : batch * b_stride;
+    const int c_offset = batch * c_stride;
+
+    float sum = 0.0;
+
+    // Tiled path for non-transposed case
+    if (p.tA == 0 && p.tB == 0) {
+        const int tiles = (p.K + 31) / 32;
+        for (int t = 0; t < tiles; ++t) {
+            const int kA = t * 32 + lx;
+            As[ly][lx] = (row < p.M && kA < p.K) ? a[a_offset + row * p.K + kA] : 0.0;
+
+            const int brow = t * 32 + ly;
+            Bs[ly][lx] = (brow < p.K && col < p.N) ? b[b_offset + brow * p.N + col] : 0.0;
+            Bs[ly + 8][lx] = (brow + 8 < p.K && col < p.N) ? b[b_offset + (brow + 8) * p.N + col] : 0.0;
+            Bs[ly + 16][lx] = (brow + 16 < p.K && col < p.N) ? b[b_offset + (brow + 16) * p.N + col] : 0.0;
+            Bs[ly + 24][lx] = (brow + 24 < p.K && col < p.N) ? b[b_offset + (brow + 24) * p.N + col] : 0.0;
+
+            barrier();
+
+            if (out_valid) {
+                for (int kk = 0; kk < 32; ++kk)
+                    sum += As[ly][kk] * Bs[kk][lx];
+            }
+
+            barrier();
+        }
+    } else if (out_valid) {
+        // Fallback for transposed cases
+        if (p.tA == 0 && p.tB != 0) {
+            for (int k = 0; k < p.K; ++k)
+                sum += a[a_offset + row * p.K + k] * b[b_offset + col * p.K + k];
+        } else if (p.tA != 0 && p.tB == 0) {
+            for (int k = 0; k < p.K; ++k)
+                sum += a[a_offset + k * p.M + row] * b[b_offset + k * p.N + col];
+        } else {
+            for (int k = 0; k < p.K; ++k)
+                sum += a[a_offset + k * p.M + row] * b[b_offset + col * p.K + k];
+        }
+    }
+
+    if (out_valid)
+        c[c_offset + row * p.N + col] = sum;
+}
+    )");
+
   conv2dPipeline = createComputePipeline("conv2d",
                                          R"(
 				#version 450
@@ -1992,6 +2079,7 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyPipeline(device, crossEntropyBackwardPipeline, nullptr);
 
   vkDestroyPipeline(device, matmulPipeline, nullptr);
+  vkDestroyPipeline(device, batchedMatmulPipeline, nullptr);
 
   vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
   vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
@@ -2617,6 +2705,19 @@ void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
                   sizeof(pc), (N + 31) / 32, (M + 7) / 8, 1);
 }
 
+void VulkanBackend::batched_matmul(const Storage &a, const Storage &b,
+                                   Storage &out, int B, int M, int K, int N,
+                                   bool transA, bool transB,
+                                   int64_t stride_a, int64_t stride_b, int64_t stride_out) {
+  struct {
+    int batch, m, k, n, ta, tb;
+    int stride_a, stride_b, stride_out;  // Use int to match GLSL
+    int broadcast_b;
+  } pc = {B, M, K, N, transA, transB, (int)stride_a, (int)stride_b, (int)stride_out, 0};
+  // Dispatch x maps to N (cols), y maps to M (rows), z maps to batch
+  dispatch_kernel(batchedMatmulPipeline, {a.data(), b.data(), out.data()}, &pc,
+                  sizeof(pc), (N + 31) / 32, (M + 7) / 8, B);
+}
 // --- Spatial Stubs ---
 void VulkanBackend::conv2d(const Storage &in, const Storage &weight,
                            const Storage *bias, Storage &out, int B, int iC,

@@ -29,7 +29,7 @@ public:
   Device device() const { return device_; }
   DataType dtype() const { return dtype_; }
   const Shape &shape() const { return shape_; }
-
+    
   void zero_() { backend_->memset(data_ptr_, 0, size_bytes_); }
 
   Backend &backend() const { return *backend_; }

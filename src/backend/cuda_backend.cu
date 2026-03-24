@@ -1074,6 +1074,37 @@ void CUDABackend::matmul(const Storage &a, const Storage &b, Storage &out,
   }
 }
 
+void CUDABackend::batched_matmul(const Storage &a, const Storage &b,
+                                  Storage &out, int batch_size, int M, int K,
+                                  int N, bool transA, bool transB,
+                                  int64_t stride_a, int64_t stride_b, int64_t stride_out) {
+  cudaSetDevice(device_index_);
+  float alpha = 1.0f;
+  float beta = 0.0f;
+  cublasOperation_t cuTransA = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
+  cublasOperation_t cuTransB = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
+  int lda = transB ? K : N;
+  int ldb = transA ? M : K;
+  int ldc = N;
+
+  // Use provided strides
+  long long strideA = stride_a;
+  long long strideB = stride_b;
+  long long strideC = stride_out;
+
+  cudaEventRecord((cudaEvent_t)start_event_);
+  cublasStatus_t status = cublasSgemmStridedBatched(
+      cublas_handle_, cuTransA, cuTransB, N, M, K, &alpha,
+      (const float *)b.data(), lda, strideB, (const float *)a.data(), ldb,
+      strideA, &beta, (float *)out.data(), ldc, strideC, batch_size);
+
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    throw std::runtime_error("cuBLAS Strided Batched SGEMM failed: " +
+                             std::to_string(status));
+  }
+}
+
 void CUDABackend::relu(const Storage &in, Storage &out, size_t num_elements) {
   cudaSetDevice(device_index_);
   int threads = 256;
