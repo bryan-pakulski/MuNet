@@ -112,7 +112,7 @@ perf-test: build-release
 	MUNET_RUN_PERF_TESTS=1 ./$(BUILD_RELEASE)/munet_tests --gtest_filter=PerformanceTest.*
 
 py-test: build-debug
-	cd tests && python3 test_python.py
+	cd tests && python3 test_python.py && python3 test_pytorch_interop.py
 
 format:
 	find src tests -regex '.*\.\(cpp\|hpp\|cc\|cxx\|c\|h\|cu\)' -exec clang-format -style=file -i {} \;

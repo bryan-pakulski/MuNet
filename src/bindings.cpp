@@ -580,6 +580,11 @@ PYBIND11_MODULE(munet, m) {
       nn, "Sigmoid", "Applies the element-wise Sigmoid function.")
       .def(py::init<>());
 
+  py::class_<nn::Softmax, nn::Module, std::shared_ptr<nn::Softmax>>(
+     nn, "Softmax", "Applies the Softmax function over the specified dimension.")
+     .def(py::init<int>(), py::arg("dim") = -1)
+     .def_readonly("dim", &nn::Softmax::dim_);
+
   py::class_<nn::Tanh, nn::Module, std::shared_ptr<nn::Tanh>>(
       nn, "Tanh", "Applies the element-wise Tanh function.")
       .def(py::init<>());

@@ -166,6 +166,24 @@ __global__ void sqrt_kernel(const float *in, float *out, size_t N) {
     out[i] = sqrtf(in[i]);
 }
 
+__global__ void rsqrt_kernel(const float *in, float *out, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N)
+    out[i] = rsqrtf(in[i]);
+}
+
+__global__ void sin_kernel(const float *in, float *out, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N)
+    out[i] = sinf(in[i]);
+}
+
+__global__ void cos_kernel(const float *in, float *out, size_t N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N)
+    out[i] = cosf(in[i]);
+}
+
 __global__ void softmax_forward_kernel(const float *in, float *out,
                                        int batch_size, int num_classes) {
   int b = blockIdx.x * blockDim.x + threadIdx.x;
@@ -340,6 +358,18 @@ __global__ void sum_kernel(const float *in, float *out, size_t N) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < N) {
     atomicAdd(out, in[idx]);
+  }
+}
+
+__global__ void mean_last_dim_kernel(const float *in, float *out, int outer_size,
+                                     int dim_size) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < outer_size) {
+    float sum = 0.0f;
+    for (int i = 0; i < dim_size; ++i) {
+      sum += in[idx * dim_size + i];
+    }
+    out[idx] = sum / (float)dim_size;
   }
 }
 
@@ -999,12 +1029,15 @@ void CUDABackend::sum(const Storage &in, Storage &out, size_t num_elements) {
 
 void CUDABackend::mean_last_dim(const Storage &in, Storage &out, int outer_size,
                                 int dim_size) {
-  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
-  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
-  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
-  CPUBackend().mean_last_dim(cpu_in, cpu_out, outer_size, dim_size);
-  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
-       out.device());
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (outer_size + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  mean_last_dim_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                             (float *)out.data(), outer_size,
+                                             dim_size);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::update(Storage &weight, const Storage &grad, float lr,
@@ -1306,30 +1339,36 @@ void CUDABackend::sqrt(const Storage &in, Storage &out, size_t num_elements) {
 }
 
 void CUDABackend::rsqrt(const Storage &in, Storage &out, size_t num_elements) {
-  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
-  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
-  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
-  CPUBackend().rsqrt(cpu_in, cpu_out, num_elements);
-  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
-       out.device());
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  rsqrt_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                     (float *)out.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::sin(const Storage &in, Storage &out, size_t num_elements) {
-  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
-  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
-  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
-  CPUBackend().sin(cpu_in, cpu_out, num_elements);
-  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
-       out.device());
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  sin_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                   (float *)out.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::cos(const Storage &in, Storage &out, size_t num_elements) {
-  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
-  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
-  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
-  CPUBackend().cos(cpu_in, cpu_out, num_elements);
-  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
-       out.device());
+  cudaSetDevice(device_index_);
+  int threads = 256;
+  int blocks = (num_elements + threads - 1) / threads;
+  cudaEventRecord((cudaEvent_t)start_event_);
+  cos_kernel<<<blocks, threads>>>((const float *)in.data(),
+                                   (float *)out.data(), num_elements);
+  cudaEventRecord((cudaEvent_t)stop_event_);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 void CUDABackend::softmax(const Storage &in, Storage &out, int batch_size,

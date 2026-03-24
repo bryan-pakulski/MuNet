@@ -87,5 +87,16 @@ public:
   float negative_slope_;
 };
 
+class Softmax : public Module {
+public:
+  explicit Softmax(int dim = -1) : dim_(dim) {}
+
+  Tensor forward_impl(Tensor x) override {
+    return x.softmax(dim_);
+  }
+
+  int dim_;
+};
+
 } // namespace nn
 } // namespace munet
