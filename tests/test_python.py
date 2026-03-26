@@ -3,6 +3,7 @@ import os
 import unittest
 import numpy as np
 import tempfile
+import subprocess
 
 # Dynamically add build output directories to sys.path so Python can find
 # munet*.so (CMake places it in build/debug by default).
@@ -19,13 +20,12 @@ for candidate in candidate_build_dirs:
 try:
     import munet
 except ImportError as e:
-    print(
-        "\n[ERROR] Failed to import munet.\n"
-        "Make sure you ran `make build-debug` and munet*.so exists in one of:\n"
-        + "\n".join(candidate_build_dirs)
-        + "\n"
-    )
-    raise e
+    print("\n[INFO] munet import failed; attempting local build for tests...\n")
+    subprocess.run(["make", "build-debug", "-j4"], cwd=repo_root, check=True)
+    for candidate in candidate_build_dirs:
+        if candidate not in sys.path and os.path.isdir(candidate):
+            sys.path.insert(0, candidate)
+    import munet
 
 
 def _sequential(layers):

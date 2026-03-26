@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 
 import numpy as np
 
@@ -12,7 +13,18 @@ for build_dir in (
     if os.path.isdir(build_dir):
         sys.path.insert(0, build_dir)
 
-import munet
+try:
+    import munet
+except ImportError:
+    subprocess.run(["make", "build-debug", "-j4"], cwd=repo_root, check=True)
+    for build_dir in (
+        os.path.join(repo_root, "build", "debug"),
+        os.path.join(repo_root, "build", "release"),
+        os.path.join(repo_root, "build"),
+    ):
+        if os.path.isdir(build_dir):
+            sys.path.insert(0, build_dir)
+    import munet
 
 
 def test_munet_demo_smoke_forward_shape_and_finiteness():
