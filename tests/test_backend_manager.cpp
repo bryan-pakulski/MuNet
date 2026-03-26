@@ -1,5 +1,6 @@
 #include "backend.hpp"
 #include "backend/cpu_backend.hpp"
+#include "core/all_reduce_runtime.hpp"
 #include "core/util/profiler.hpp"
 #include "tensor.hpp"
 #include <cstdlib>
@@ -979,6 +980,61 @@ TEST(BackendManagerTest, CpuAllReduceAggregatesAcrossParticipants) {
 
   std::thread t1([&] { backend->all_reduce(a, 2); });
   std::thread t2([&] { backend->all_reduce(b, 2); });
+  t1.join();
+  t2.join();
+
+  EXPECT_FLOAT_EQ(ap[0], 4.0f);
+  EXPECT_FLOAT_EQ(ap[1], 6.0f);
+  EXPECT_FLOAT_EQ(bp[0], 4.0f);
+  EXPECT_FLOAT_EQ(bp[1], 6.0f);
+}
+
+TEST(BackendManagerTest,
+     AllReduceHostPathRequiresExplicitOverrideForAcceleratorDevices) {
+  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "2", 1);
+  setenv("MUNET_ALLREDUCE_MODE", "device_native", 1);
+  BackendManager::registry().clear_cache(DeviceType::UNKNOWN);
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device unknown{DeviceType::UNKNOWN, 0};
+  Storage a(2 * sizeof(float), unknown, DataType::Float32, {2});
+  float *ap = static_cast<float *>(a.data());
+  ap[0] = 1.0f;
+  ap[1] = 2.0f;
+
+  EXPECT_THROW(
+      detail::all_reduce_via_host(a, 2, a.backend(), Device{DeviceType::CUDA, 0}),
+      std::runtime_error);
+}
+
+TEST(BackendManagerTest, ForcedHostAllReduceSupportsAcceleratorDeviceKeys) {
+  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "2", 1);
+  setenv("MUNET_ALLREDUCE_MODE", "device_native", 1);
+  BackendManager::registry().clear_cache(DeviceType::UNKNOWN);
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device unknown{DeviceType::UNKNOWN, 0};
+  Storage a(2 * sizeof(float), unknown, DataType::Float32, {2});
+  Storage b(2 * sizeof(float), unknown, DataType::Float32, {2});
+  float *ap = static_cast<float *>(a.data());
+  float *bp = static_cast<float *>(b.data());
+  ap[0] = 1.0f;
+  ap[1] = 2.0f;
+  bp[0] = 3.0f;
+  bp[1] = 4.0f;
+
+  std::thread t1([&] {
+    detail::all_reduce_via_host(a, 2, a.backend(), Device{DeviceType::CUDA, 0},
+                                true);
+  });
+  std::thread t2([&] {
+    detail::all_reduce_via_host(b, 2, b.backend(), Device{DeviceType::CUDA, 0},
+                                true);
+  });
   t1.join();
   t2.join();
 
