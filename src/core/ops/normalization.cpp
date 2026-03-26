@@ -23,6 +23,10 @@ Tensor batch_norm(const Tensor &in, Tensor &running_mean, Tensor &running_var,
       accumulation_type(AccumulationOp::Normalization, in.dtype());
   Tensor save_mean({C}, in.device(), stats_dtype);
   Tensor save_var({C}, in.device(), stats_dtype);
+  Tensor backward_in = in;
+  Tensor backward_weight = weight;
+  Tensor backward_save_mean = save_mean;
+  Tensor backward_save_var = save_var;
 
   if (use_cpu_fallback) {
     Device cpu{DeviceType::CPU, 0};
@@ -84,6 +88,10 @@ Tensor batch_norm(const Tensor &in, Tensor &running_mean, Tensor &running_var,
     running_var.impl_->backend().copy(
         running_var_updated.data(), running_var.data(), running_var.bytes(),
         running_var_updated.device(), running_var.device());
+    backward_in = in_exec;
+    backward_weight = weight_exec;
+    backward_save_mean = save_mean_exec;
+    backward_save_var = save_var_exec;
   } else {
     in.impl_->backend().batch_norm(
         *in.impl_->storage, *weight.impl_->storage, *bias.impl_->storage,
@@ -94,13 +102,16 @@ Tensor batch_norm(const Tensor &in, Tensor &running_mean, Tensor &running_var,
 
   if (GradMode::is_enabled() && training &&
       (in.requires_grad() || weight.requires_grad() || bias.requires_grad())) {
+    std::shared_ptr<autograd_nodes::BatchNormBackward> fn;
     if (use_cpu_fallback) {
-      throw std::runtime_error(
-          "BatchNorm backward for CPU dtype-conversion fallback is not yet "
-          "implemented");
+      fn = std::make_shared<autograd_nodes::BatchNormBackward>(
+          backward_in, backward_weight, backward_save_mean, backward_save_var,
+          eps, in.shape(), in.device(), in.dtype(), weight.shape(),
+          weight.device(), weight.dtype());
+    } else {
+      fn = std::make_shared<autograd_nodes::BatchNormBackward>(
+          in, weight, save_mean, save_var, eps);
     }
-    auto fn = std::make_shared<autograd_nodes::BatchNormBackward>(
-        in, weight, save_mean, save_var, eps);
     link_backward_edges(fn.get(), {in, weight, bias});
     out.set_requires_grad(true);
     out.impl_->grad_fn = fn;

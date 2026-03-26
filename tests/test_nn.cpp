@@ -215,7 +215,7 @@ TEST(NNTest, BatchNormFloat16FallbackForwardOnCPU) {
   EXPECT_EQ(y.shape(), x.shape());
 }
 
-TEST(NNTest, BatchNormFloat16FallbackBackwardCurrentlyRejected) {
+TEST(NNTest, BatchNormFloat16FallbackBackwardComputesGradients) {
   Device cpu{DeviceType::CPU, 0};
   TensorOptions options;
   options.device = cpu;
@@ -228,7 +228,12 @@ TEST(NNTest, BatchNormFloat16FallbackBackwardCurrentlyRejected) {
   Tensor x = x32.to(DataType::Float16).detach();
   x.set_requires_grad(true);
 
-  EXPECT_THROW((void)bn.forward(x), std::runtime_error);
+  Tensor y = bn.forward(x);
+  Tensor loss = y.sum();
+  loss.backward();
+  EXPECT_TRUE(x.has_grad());
+  EXPECT_TRUE(bn.weight.has_grad());
+  EXPECT_TRUE(bn.bias.has_grad());
 }
 
 TEST(NNTest, TanhForwardRange) {

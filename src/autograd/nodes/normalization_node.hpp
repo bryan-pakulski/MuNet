@@ -15,9 +15,22 @@ struct BatchNormBackward : public Node {
   float eps;
 
   BatchNormBackward(Tensor i, Tensor w, Tensor sm, Tensor sv, float e)
+      : BatchNormBackward(i, w, sm, sv, e, i.shape(), i.device(), i.dtype(),
+                          w.shape(), w.device(), w.dtype()) {}
+
+  BatchNormBackward(Tensor i, Tensor w, Tensor sm, Tensor sv, float e,
+                    Shape input_shape_out, Device input_device_out,
+                    DataType input_dtype_out, Shape weight_shape_out,
+                    Device weight_device_out, DataType weight_dtype_out)
       : input_shape(i.shape()), input_device(i.device()),
         input_dtype(i.dtype()), weight_shape(w.shape()),
-        weight_device(w.device()), weight_dtype(w.dtype()), eps(e) {
+        weight_device(w.device()), weight_dtype(w.dtype()), eps(e),
+        output_input_device(input_device_out),
+        output_input_dtype(input_dtype_out),
+        output_weight_device(weight_device_out),
+        output_weight_dtype(weight_dtype_out) {
+    (void)input_shape_out;
+    (void)weight_shape_out;
     save_tensor(i, "batch_norm_input");
     save_tensor(w, "batch_norm_weight");
     save_tensor(sm, "batch_norm_saved_mean");
@@ -32,6 +45,12 @@ struct BatchNormBackward : public Node {
     Tensor save_mean = saved_tensor(2);
     Tensor save_var = saved_tensor(3);
     Tensor grad_out = grads[0];
+    if (grad_out.device() != in.device()) {
+      grad_out = grad_out.to(in.device());
+    }
+    if (grad_out.dtype() != in.dtype()) {
+      grad_out = grad_out.to(in.dtype());
+    }
     Tensor grad_in(input_shape, input_device, input_dtype);
     Tensor grad_scale(weight_shape, weight_device, weight_dtype);
     Tensor grad_bias(weight_shape, weight_device, weight_dtype);
@@ -45,9 +64,33 @@ struct BatchNormBackward : public Node {
         *save_mean.impl_->storage, *save_var.impl_->storage,
         *grad_in.impl_->storage, *grad_scale.impl_->storage,
         *grad_bias.impl_->storage, B, C, H, W, eps);
+    Tensor grad_in_out = (grad_in.device() == output_input_device)
+                             ? grad_in
+                             : grad_in.to(output_input_device);
+    if (grad_in_out.dtype() != output_input_dtype) {
+      grad_in_out = grad_in_out.to(output_input_dtype);
+    }
+    Tensor grad_scale_out = (grad_scale.device() == output_weight_device)
+                                ? grad_scale
+                                : grad_scale.to(output_weight_device);
+    if (grad_scale_out.dtype() != output_weight_dtype) {
+      grad_scale_out = grad_scale_out.to(output_weight_dtype);
+    }
+    Tensor grad_bias_out = (grad_bias.device() == output_weight_device)
+                               ? grad_bias
+                               : grad_bias.to(output_weight_device);
+    if (grad_bias_out.dtype() != output_weight_dtype) {
+      grad_bias_out = grad_bias_out.to(output_weight_dtype);
+    }
 
-    return {grad_in, grad_scale, grad_bias};
+    return {grad_in_out, grad_scale_out, grad_bias_out};
   }
+
+private:
+  Device output_input_device;
+  DataType output_input_dtype;
+  Device output_weight_device;
+  DataType output_weight_dtype;
 };
 
 struct LayerNormBackward : public Node {

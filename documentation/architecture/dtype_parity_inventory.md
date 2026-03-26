@@ -16,18 +16,16 @@ This inventory tracks dtype behavior across core ops with focus on Float16 pathw
 | Conv2D | CPU fallback | CPU conversion fallback (to CPU Float32, compute, cast back) | Implemented in `conv2d.cpp`. |
 | MaxPool2D / Upsample2D | CPU fallback | CPU conversion fallback (to CPU Float32, compute, cast back) | Implemented in `pooling.cpp`. |
 | MSELoss / CrossEntropy | CPU fallback | CPU conversion fallback (to CPU Float32, compute, cast back) | Implemented in `loss.cpp`. |
-| BatchNorm | CPU fallback | CPU conversion fallback for forward path; training backward still pending for fallback path | Forward now routes through CPU Float32 conversion fallback when needed. |
+| BatchNorm | CPU fallback | CPU conversion fallback for forward + backward paths | Float16 fallback now executes batchnorm forward/backward via CPU Float32 compute with cast-back. |
 | LayerNorm | CPU fallback | CPU typed implementation | Already computes on CPU with typed scalar conversions. |
 
 ## Remaining parity work (next)
 
-1. **BatchNorm training parity**
-   - Implement backward support for CPU dtype-conversion fallback path.
-2. **BFloat16 / Int8 pathways**
+1. **BFloat16 / Int8 pathways**
    - Add new dtype enum/storage support and conversion helpers.
    - Add dispatch + kernel/fallback coverage tests for bf16/int8 matmul/conv/loss.
-3. **Backend-native low precision kernels**
+2. **Backend-native low precision kernels**
    - CUDA: native fp16/bf16/int8 kernels for matmul/conv/reduction.
    - Vulkan: native fp16 path where hardware/driver capabilities permit.
-4. **Capability reporting**
+3. **Capability reporting**
    - Expand backend `query_support` reporting to distinguish native low-precision support from CPU conversion fallback availability.
