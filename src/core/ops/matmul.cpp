@@ -2,6 +2,7 @@
 #include "common.hpp"
 #include "../backend.hpp"
 #include "../../tensor.hpp"
+#include "../../autograd/nodes/matmul_node.hpp"
 #include <iostream>
 #include "../op_dispatch.hpp"
 #include <sstream>
@@ -20,7 +21,7 @@ static bool is_batched_matmul_shape(const Shape& a_shape, const Shape& b_shape) 
 
 // Helper to perform matmul on CPU with dtype conversion
 // This is used when the target backend doesn't support the dtype (e.g., Float16)
-static Tensor matmul_cpu_fallback(const Tensor& a, const Tensor& b) {
+static Tensor matmul_cpu_fallback(const Tensor& a, const Tensor& b, bool transA = false, bool transB = false) {
   Device cpu{DeviceType::CPU, 0};
   
   // Convert to CPU if needed
@@ -47,15 +48,27 @@ static Tensor matmul_cpu_fallback(const Tensor& a, const Tensor& b) {
   }
   
   // Perform 2D matmul on CPU
-  int M = a_shape[0];
-  int K = a_shape[1];
-  int N = b_shape[1];
+  int a_m = static_cast<int>(a_shape[0]);
+  int a_k = static_cast<int>(a_shape[1]);
+  int b_k = static_cast<int>(b_shape[0]);
+  int b_n = static_cast<int>(b_shape[1]);
+
+  int M = transA ? a_k : a_m;
+  int K_a = transA ? a_m : a_k;
+  int K_b = transB ? b_n : b_k;
+  int N = transB ? b_k : b_n;
+
+  if (K_a != K_b) {
+    MUNET_ERROR << "matmul_cpu_fallback: dimension mismatch after transpose handling: "
+                << "K_a=" << K_a << ", K_b=" << K_b << std::endl;
+    return Tensor();
+  }
   
   Shape out_shape{static_cast<size_t>(M), static_cast<size_t>(N)};
   Tensor out(out_shape, cpu, a_cpu.dtype());
   
   blas->matmul(*a_cpu.impl_->storage, *b_cpu.impl_->storage, *out.impl_->storage,
-               M, K, N, false, false);
+               M, K_a, N, transA, transB);
   
   // Convert back to original dtype if we converted
   if (orig_dtype == DataType::Float16) {
@@ -72,7 +85,7 @@ Tensor matmul_2d(const Tensor &a, const Tensor &b) {
 
   // Use CPU fallback if needed (backend doesn't support this dtype)
   if (dispatch.use_cpu_fallback) {
-    return matmul_cpu_fallback(a, b);
+    return matmul_cpu_fallback(a, b, false, false);
   }
 
   // Get shapes
@@ -329,16 +342,24 @@ Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA, bool trans
     return matmul_cpu_fallback(a, b);
   }
   
-  // 2D matmul
-  int M = a_shape[0];
-  int K = a_shape[1];
-  int N = b_shape[1];
-  
-  // Validate dimensions
-  if (a_shape[1] != b_shape[0]) {
-    MUNET_ERROR << "matmul: dimension mismatch: a.shape = [" 
-                << a_shape[0] << ", " << a_shape[1] << "], b.shape = [" 
-                << b_shape[0] << ", " << b_shape[1] << "]" << std::endl;
+  // 2D matmul with transpose-aware dimension bookkeeping.
+  int a_m = static_cast<int>(a_shape[0]);
+  int a_k = static_cast<int>(a_shape[1]);
+  int b_k = static_cast<int>(b_shape[0]);
+  int b_n = static_cast<int>(b_shape[1]);
+
+  int M_eff = transA ? a_k : a_m;
+  int K_a_eff = transA ? a_m : a_k;
+  int K_b_eff = transB ? b_n : b_k;
+  int N_eff = transB ? b_k : b_n;
+
+  // Validate dimensions after applying transpose flags.
+  if (K_a_eff != K_b_eff) {
+    MUNET_ERROR << "matmul: dimension mismatch after transpose handling: "
+                << "a.shape=[" << a_shape[0] << ", " << a_shape[1]
+                << "], b.shape=[" << b_shape[0] << ", " << b_shape[1]
+                << "], transA=" << transA << ", transB=" << transB
+                << ", K_a=" << K_a_eff << ", K_b=" << K_b_eff << std::endl;
     return Tensor();
   }
   
@@ -350,25 +371,27 @@ Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA, bool trans
     return Tensor();
   }
   
-  // Handle transposition
-  int K_a = transA ? M : K;
-  int M_eff = transA ? K : M;
-  int K_b = transB ? N : K;
-  int N_eff = transB ? K : N;
-  
   // Create output tensor
   Shape out_shape{static_cast<size_t>(M_eff), static_cast<size_t>(N_eff)};
   Tensor out(out_shape, a.device(), a.dtype());
   
   // Call backend matmul
   blas->matmul(*a.impl_->storage, *b.impl_->storage, *out.impl_->storage,
-               M_eff, K, N_eff, transA, transB);
+               M_eff, K_a_eff, N_eff, transA, transB);
   
   return out;
 }
 
 Tensor matmul(const Tensor &a, const Tensor &b) {
-  return matmul_internal(a, b, false, false);
+  Tensor out = matmul_internal(a, b, false, false);
+  if (GradMode::is_enabled() && (a.requires_grad() || b.requires_grad())) {
+    auto fn = std::make_shared<autograd_nodes::MatmulBackward>(a, b);
+    link_backward_edges(fn.get(), {a, b});
+    out.set_requires_grad(true);
+    out.impl_->grad_fn = fn;
+  }
+  record_registered_trace(OpId::Matmul, out, {a, b});
+  return out;
 }
 
 Tensor batched_matmul(const Tensor &a, const Tensor &b) {

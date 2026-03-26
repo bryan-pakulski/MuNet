@@ -20,11 +20,11 @@ struct MatmulBackward : public Node {
     Tensor grad_b;
 
     if (next_edges.size() > 0 && next_edges[0].node) {
-      grad_a = ops::matmul_internal(grad_out, B, false, true);
+      grad_a = ops::matmul(grad_out, ops::transpose(B, 0, 1));
     }
 
     if (next_edges.size() > 1 && next_edges[1].node) {
-      grad_b = ops::matmul_internal(A, grad_out, true, false);
+      grad_b = ops::matmul(ops::transpose(A, 0, 1), grad_out);
     }
 
     return {grad_a, grad_b};
