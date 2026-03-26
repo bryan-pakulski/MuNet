@@ -5,6 +5,8 @@
 #include "tensor.hpp"
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <functional>
 #include <gtest/gtest.h>
 #include <memory>
 #include <mutex>
@@ -1128,4 +1130,80 @@ TEST(BackendManagerTest,
   EXPECT_FLOAT_EQ(o0[1], 3.5f);
   EXPECT_FLOAT_EQ(o1[0], 1.5f);
   EXPECT_FLOAT_EQ(o1[1], 3.5f);
+}
+
+TEST(BackendManagerTest, MixedCpuCudaVulkanAllReduceAggregatesTogether) {
+  const Device cpu{DeviceType::CPU, 0};
+  const Device cuda{DeviceType::CUDA, 0};
+  const Device vk{DeviceType::VULKAN, 0};
+  try {
+    (void)Tensor({1}, cpu, DataType::Float32);
+    (void)Tensor({1}, cuda, DataType::Float32);
+    (void)Tensor({1}, vk, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "CPU/CUDA/Vulkan mixed backend environment unavailable";
+  }
+
+  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "3", 1);
+  setenv("MUNET_ALLREDUCE_MODE", "device_native", 1);
+  setenv("MUNET_ALLREDUCE_GROUP", "mixed_cpu_cuda_vulkan", 1);
+
+  Tensor c0({2}, cpu, DataType::Float32);
+  Tensor c1({2}, cpu, DataType::Float32);
+  Tensor c2({2}, cpu, DataType::Float32);
+  float *p0 = static_cast<float *>(c0.data());
+  float *p1 = static_cast<float *>(c1.data());
+  float *p2 = static_cast<float *>(c2.data());
+  p0[0] = 1.0f;
+  p0[1] = 2.0f;
+  p1[0] = 2.0f;
+  p1[1] = 3.0f;
+  p2[0] = 3.0f;
+  p2[1] = 4.0f;
+
+  Tensor t_cpu = c0;
+  Tensor t_cuda = c1.to(cuda);
+  Tensor t_vk = c2.to(vk);
+
+  auto b_cpu = BackendManager::get(cpu);
+  auto b_cuda = BackendManager::get(cuda);
+  auto b_vk = BackendManager::get(vk);
+  std::exception_ptr eptr = nullptr;
+  std::mutex err_mtx;
+
+  auto run_reduce = [&](std::shared_ptr<Backend> backend, Tensor &tensor) {
+    try {
+      backend->all_reduce(*tensor.impl_->storage, 2);
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(err_mtx);
+      if (!eptr)
+        eptr = std::current_exception();
+    }
+  };
+
+  std::thread t0(run_reduce, b_cpu, std::ref(t_cpu));
+  std::thread t1(run_reduce, b_cuda, std::ref(t_cuda));
+  std::thread t2(run_reduce, b_vk, std::ref(t_vk));
+  t0.join();
+  t1.join();
+  t2.join();
+
+  if (eptr) {
+    std::rethrow_exception(eptr);
+  }
+
+  Tensor out_cpu = t_cpu.to(Device{DeviceType::CPU, 0});
+  Tensor out_cuda = t_cuda.to(Device{DeviceType::CPU, 0});
+  Tensor out_vk = t_vk.to(Device{DeviceType::CPU, 0});
+
+  const float *oc = static_cast<const float *>(out_cpu.data());
+  const float *ou = static_cast<const float *>(out_cuda.data());
+  const float *ov = static_cast<const float *>(out_vk.data());
+
+  EXPECT_FLOAT_EQ(oc[0], 6.0f);
+  EXPECT_FLOAT_EQ(oc[1], 9.0f);
+  EXPECT_FLOAT_EQ(ou[0], 6.0f);
+  EXPECT_FLOAT_EQ(ou[1], 9.0f);
+  EXPECT_FLOAT_EQ(ov[0], 6.0f);
+  EXPECT_FLOAT_EQ(ov[1], 9.0f);
 }

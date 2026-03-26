@@ -63,12 +63,10 @@ inline AllReduceExecutionMode configured_all_reduce_mode() {
 
 inline std::string all_reduce_key(const Device &device, DataType dtype,
                                   size_t num_elements) {
-  const std::string device_group =
-      (device.type == DeviceType::CPU)      ? "cpu"
-      : (device.type == DeviceType::CUDA)   ? "cuda"
-      : (device.type == DeviceType::VULKAN) ? "vulkan"
-                                            : "unknown";
-  return device_group + "|" + dtype_name(dtype) + "|" +
+  (void)device;
+  const char *group_env = std::getenv("MUNET_ALLREDUCE_GROUP");
+  const std::string group = group_env ? std::string(group_env) : "default";
+  return group + "|" + dtype_name(dtype) + "|" +
          std::to_string(num_elements);
 }
 
