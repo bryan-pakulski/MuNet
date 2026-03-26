@@ -272,8 +272,15 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     return {meta, true, false, support};
   }
 
+  const DeviceType backend_device_type = tensor.device().type;
+  const bool disallow_fp32_accelerator_fallback =
+      tensor.dtype() == DataType::Float32 &&
+      (backend_device_type == DeviceType::CUDA ||
+       backend_device_type == DeviceType::VULKAN);
+
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
-      support.fallback_policy == BackendFallbackPolicy::CPUFallback) {
+      support.fallback_policy == BackendFallbackPolicy::CPUFallback &&
+      !disallow_fp32_accelerator_fallback) {
     const auto reason =
         classify_dispatch_fallback(meta, tensor, feature, support);
     log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
@@ -291,6 +298,13 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
   if (timer) {
     record_dispatch_profile("unsupported", meta, tensor, timer->elapsed_us());
+  }
+  if (disallow_fp32_accelerator_fallback) {
+    throw std::runtime_error(
+        std::string(meta.name) + ": backend '" +
+        std::string(tensor.impl_->backend().name()) +
+        "' attempted CPU fallback for float32 on accelerator backend '" +
+        tensor.device().to_string() + "'");
   }
   throw std::runtime_error(
       std::string(meta.name) + ": backend '" +
