@@ -215,9 +215,17 @@ public:
     if (bytes > 0 && (src == nullptr || dst == nullptr)) {
       throw std::runtime_error("cpu copy: null pointer with non-zero byte count");
     }
-    if (src_dev.type != DeviceType::CPU || dst_dev.type != DeviceType::CPU) {
+    const auto unsupported_endpoint = [](DeviceType type) {
+      return type == DeviceType::CUDA || type == DeviceType::VULKAN;
+    };
+    if (unsupported_endpoint(src_dev.type) || unsupported_endpoint(dst_dev.type)) {
       throw std::runtime_error(
-          "cpu copy: CPU backend can only service CPU<->CPU transfers");
+          "cpu copy: CPU backend cannot service CUDA/Vulkan transfer endpoints");
+    }
+    if ((src_dev.type == DeviceType::CPU && src_dev.index != 0) ||
+        (dst_dev.type == DeviceType::CPU && dst_dev.index != 0)) {
+      throw std::runtime_error(
+          "cpu copy: CPU endpoint device index must be 0");
     }
     std::memcpy(dst, src, bytes);
   }
