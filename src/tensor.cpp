@@ -149,7 +149,53 @@ Tensor Tensor::to(Device dev) const {
   Tensor out(shape(), dev, dtype(), requires_grad());
   size_t byte_count = bytes();
 
-  if (device().type == DeviceType::CUDA || dev.type == DeviceType::CUDA) {
+  const bool src_non_cpu = device().type != DeviceType::CPU;
+  const bool dst_non_cpu = dev.type != DeviceType::CPU;
+  const bool cross_backend_non_cpu = src_non_cpu && dst_non_cpu && device().type != dev.type;
+
+  if (cross_backend_non_cpu) {
+    // Route heterogeneous accelerator transfers through CPU staging to avoid
+    // backend-specific direct-copy assumptions (e.g. CUDA<->Vulkan).
+    Tensor cpu_stage(shape(), Device{DeviceType::CPU, 0}, dtype(), false);
+
+    if (device().type == DeviceType::CUDA) {
+#ifdef MUNET_USE_CUDA
+      BackendManager::get(device())->copy(data(), cpu_stage.data(), byte_count, device(),
+                                          cpu_stage.device());
+#else
+      throw std::runtime_error("CUDA backend not compiled");
+#endif
+    } else if (device().type == DeviceType::VULKAN) {
+#ifdef MUNET_USE_VULKAN
+      BackendManager::get(device())->copy(data(), cpu_stage.data(), byte_count, device(),
+                                          cpu_stage.device());
+#else
+      throw std::runtime_error("Vulkan backend not compiled");
+#endif
+    } else {
+      impl_->backend().copy(data(), cpu_stage.data(), byte_count, device(),
+                            cpu_stage.device());
+    }
+
+    if (dev.type == DeviceType::CUDA) {
+#ifdef MUNET_USE_CUDA
+      BackendManager::get(dev)->copy(cpu_stage.data(), out.data(), byte_count, cpu_stage.device(),
+                                     dev);
+#else
+      throw std::runtime_error("CUDA backend not compiled");
+#endif
+    } else if (dev.type == DeviceType::VULKAN) {
+#ifdef MUNET_USE_VULKAN
+      BackendManager::get(dev)->copy(cpu_stage.data(), out.data(), byte_count, cpu_stage.device(),
+                                     dev);
+#else
+      throw std::runtime_error("Vulkan backend not compiled");
+#endif
+    } else {
+      impl_->backend().copy(cpu_stage.data(), out.data(), byte_count, cpu_stage.device(),
+                            dev);
+    }
+  } else if (device().type == DeviceType::CUDA || dev.type == DeviceType::CUDA) {
 #ifdef MUNET_USE_CUDA
     Device cuda_dev = (device().type == DeviceType::CUDA) ? device() : dev;
     BackendManager::get(cuda_dev)->copy(data(), out.data(), byte_count,

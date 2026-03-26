@@ -1,9 +1,14 @@
 import sys
 import os
 import unittest
-import numpy as np
 import tempfile
 import subprocess
+
+try:
+    import numpy as np
+except ImportError:
+    subprocess.run([sys.executable, "-m", "pip", "install", "numpy"], check=True)
+    import numpy as np
 
 # Dynamically add build output directories to sys.path so Python can find
 # munet*.so (CMake places it in build/debug by default).

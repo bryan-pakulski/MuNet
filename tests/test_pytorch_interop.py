@@ -8,11 +8,16 @@ Tests verify:
 """
 
 import pytest
-import numpy as np
 import tempfile
 import os
 import sys
 import subprocess
+
+try:
+    import numpy as np
+except ImportError:
+    subprocess.run([sys.executable, "-m", "pip", "install", "numpy"], check=True)
+    import numpy as np
 
 # Check if PyTorch is available
 try:

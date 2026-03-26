@@ -1,8 +1,11 @@
 import os
 import sys
 import subprocess
-
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    subprocess.run([sys.executable, "-m", "pip", "install", "numpy"], check=True)
+    import numpy as np
 
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 for build_dir in (
