@@ -1,4 +1,5 @@
 #include "vulkan_backend.hpp"
+#include "core/all_reduce_runtime.hpp"
 #include "core/util.hpp"
 #include "cpu_backend.hpp"
 #include "storage.hpp"
@@ -2435,22 +2436,8 @@ void VulkanBackend::synchronize() {
   }
 }
 void VulkanBackend::all_reduce(Storage &buffer, size_t num_elements) {
-  const size_t bytes = num_elements * dtype_size(buffer.dtype());
-  if (bytes > buffer.size_bytes()) {
-    throw std::runtime_error(
-        "vulkan all_reduce: num_elements exceeds storage size");
-  }
-
-  const char *world_env = std::getenv("MUNET_ALLREDUCE_WORLD_SIZE");
-  const int world_size = world_env ? std::max(1, std::atoi(world_env)) : 1;
-  if (world_size <= 1) {
-    // Single-device all-reduce is identity and stays on-device.
-    return;
-  }
-
-  throw std::runtime_error(
-      "vulkan all_reduce: native multi-device collective not implemented yet "
-      "(requires timeline-semaphore/cross-device collective path)");
+  detail::all_reduce_via_host(buffer, num_elements, *this, buffer.device(),
+                              true);
 }
 
 void VulkanBackend::dispatch_kernel(VkPipeline pipeline,

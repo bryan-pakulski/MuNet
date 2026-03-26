@@ -118,7 +118,8 @@ inline void reduce_sum_bytes(const std::vector<std::vector<uint8_t>> &payloads,
 }
 
 inline void all_reduce_via_host(Storage &buffer, size_t num_elements,
-                                Backend &backend, Device device) {
+                                Backend &backend, Device device,
+                                bool force_host_for_accelerators = false) {
   const int world_size = configured_all_reduce_world_size();
   if (world_size <= 1) {
     return;
@@ -127,7 +128,8 @@ inline void all_reduce_via_host(Storage &buffer, size_t num_elements,
   const auto mode = configured_all_reduce_mode();
   const bool accelerator_device = device.type == DeviceType::CUDA ||
                                   device.type == DeviceType::VULKAN;
-  if (accelerator_device && mode == AllReduceExecutionMode::DeviceNative) {
+  if (!force_host_for_accelerators && accelerator_device &&
+      mode == AllReduceExecutionMode::DeviceNative) {
     throw std::runtime_error(
         "all_reduce: device-native mode is default for CUDA/Vulkan in "
         "multi-GPU runs; native collective backend not implemented yet. "
