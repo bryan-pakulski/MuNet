@@ -16,13 +16,13 @@ This inventory tracks dtype behavior across core ops with focus on Float16 pathw
 | Conv2D | CPU fallback | CPU conversion fallback (to CPU Float32, compute, cast back) | Implemented in `conv2d.cpp`. |
 | MaxPool2D / Upsample2D | CPU fallback | CPU conversion fallback (to CPU Float32, compute, cast back) | Implemented in `pooling.cpp`. |
 | MSELoss / CrossEntropy | CPU fallback | CPU conversion fallback (to CPU Float32, compute, cast back) | Implemented in `loss.cpp`. |
-| BatchNorm | Explicit unsupported | Not yet parity-complete | Still requires backend-native support or explicit typed CPU fallback implementation. |
+| BatchNorm | CPU fallback | CPU conversion fallback for forward path; training backward still pending for fallback path | Forward now routes through CPU Float32 conversion fallback when needed. |
 | LayerNorm | CPU fallback | CPU typed implementation | Already computes on CPU with typed scalar conversions. |
 
 ## Remaining parity work (next)
 
-1. **BatchNorm parity**
-   - Add explicit CPU typed/conversion fallback for Float16 on CUDA/Vulkan.
+1. **BatchNorm training parity**
+   - Implement backward support for CPU dtype-conversion fallback path.
 2. **BFloat16 / Int8 pathways**
    - Add new dtype enum/storage support and conversion helpers.
    - Add dispatch + kernel/fallback coverage tests for bf16/int8 matmul/conv/loss.

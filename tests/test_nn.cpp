@@ -198,6 +198,39 @@ TEST(NNTest, BatchNormTrainEval) {
   EXPECT_FLOAT_EQ(((float *)bn->running_mean.data())[0], prev_rm);
 }
 
+TEST(NNTest, BatchNormFloat16FallbackForwardOnCPU) {
+  Device cpu{DeviceType::CPU, 0};
+  TensorOptions options;
+  options.device = cpu;
+  options.dtype = DataType::Float16;
+  nn::BatchNorm2d bn(2, 1e-5f, 0.1f, options);
+  bn.eval();
+
+  Tensor x32({1, 2, 2, 2}, cpu, DataType::Float32);
+  x32.fill_(make_scalar(1.0f));
+  Tensor x = x32.to(DataType::Float16);
+
+  Tensor y = bn.forward(x);
+  EXPECT_EQ(y.dtype(), DataType::Float16);
+  EXPECT_EQ(y.shape(), x.shape());
+}
+
+TEST(NNTest, BatchNormFloat16FallbackBackwardCurrentlyRejected) {
+  Device cpu{DeviceType::CPU, 0};
+  TensorOptions options;
+  options.device = cpu;
+  options.dtype = DataType::Float16;
+  nn::BatchNorm2d bn(2, 1e-5f, 0.1f, options);
+  bn.train(true);
+
+  Tensor x32({1, 2, 2, 2}, cpu, DataType::Float32);
+  x32.fill_(make_scalar(1.0f));
+  Tensor x = x32.to(DataType::Float16).detach();
+  x.set_requires_grad(true);
+
+  EXPECT_THROW((void)bn.forward(x), std::runtime_error);
+}
+
 TEST(NNTest, TanhForwardRange) {
   Device cpu{DeviceType::CPU, 0};
   nn::Tanh tanh;

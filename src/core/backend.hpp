@@ -177,9 +177,9 @@ backend_feature_default_fallback_policy(BackendFeature feature) {
   case BackendFeature::Loss:
   case BackendFeature::Convolution:
   case BackendFeature::Pooling:
+  case BackendFeature::BatchNorm:
     return BackendFallbackPolicy::CPUFallback;
   case BackendFeature::Concat:
-  case BackendFeature::BatchNorm:
   case BackendFeature::OptimizerStep:
     return BackendFallbackPolicy::ExplicitUnsupported;
   default:
