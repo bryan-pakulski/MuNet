@@ -1043,3 +1043,89 @@ TEST(BackendManagerTest, ForcedHostAllReduceSupportsAcceleratorDeviceKeys) {
   EXPECT_FLOAT_EQ(bp[0], 4.0f);
   EXPECT_FLOAT_EQ(bp[1], 6.0f);
 }
+
+TEST(BackendManagerTest, CudaMultiDeviceAllReduceAggregatesAcrossGpuIndices) {
+  const Device cuda0{DeviceType::CUDA, 0};
+  const Device cuda1{DeviceType::CUDA, 1};
+  try {
+    (void)Tensor({1}, cuda0, DataType::Float32);
+    (void)Tensor({1}, cuda1, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "CUDA multi-device environment unavailable";
+  }
+
+  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "2", 1);
+  setenv("MUNET_ALLREDUCE_MODE", "device_native", 1);
+
+  Tensor a_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  Tensor b_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  float *ac = static_cast<float *>(a_cpu.data());
+  float *bc = static_cast<float *>(b_cpu.data());
+  ac[0] = 1.0f;
+  ac[1] = 2.0f;
+  bc[0] = 3.0f;
+  bc[1] = 4.0f;
+
+  Tensor a = a_cpu.to(cuda0);
+  Tensor b = b_cpu.to(cuda1);
+  auto backend0 = BackendManager::get(cuda0);
+  auto backend1 = BackendManager::get(cuda1);
+
+  std::thread t0([&] { backend0->all_reduce(*a.impl_->storage, 2); });
+  std::thread t1([&] { backend1->all_reduce(*b.impl_->storage, 2); });
+  t0.join();
+  t1.join();
+
+  Tensor a_out = a.to(Device{DeviceType::CPU, 0});
+  Tensor b_out = b.to(Device{DeviceType::CPU, 0});
+  const float *ao = static_cast<const float *>(a_out.data());
+  const float *bo = static_cast<const float *>(b_out.data());
+  EXPECT_FLOAT_EQ(ao[0], 4.0f);
+  EXPECT_FLOAT_EQ(ao[1], 6.0f);
+  EXPECT_FLOAT_EQ(bo[0], 4.0f);
+  EXPECT_FLOAT_EQ(bo[1], 6.0f);
+}
+
+TEST(BackendManagerTest,
+     VulkanMultiDeviceTrainingGradientAllReduceAggregatesAcrossGpuIndices) {
+  const Device vk0{DeviceType::VULKAN, 0};
+  const Device vk1{DeviceType::VULKAN, 1};
+  try {
+    (void)Tensor({1}, vk0, DataType::Float32);
+    (void)Tensor({1}, vk1, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "Vulkan multi-device environment unavailable";
+  }
+
+  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "2", 1);
+  setenv("MUNET_ALLREDUCE_MODE", "device_native", 1);
+
+  // Simulate two training replicas with per-replica gradient buffers.
+  Tensor g0_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  Tensor g1_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  float *g0p = static_cast<float *>(g0_cpu.data());
+  float *g1p = static_cast<float *>(g1_cpu.data());
+  g0p[0] = 0.5f;
+  g0p[1] = 1.5f;
+  g1p[0] = 1.0f;
+  g1p[1] = 2.0f;
+
+  Tensor g0 = g0_cpu.to(vk0);
+  Tensor g1 = g1_cpu.to(vk1);
+  auto backend0 = BackendManager::get(vk0);
+  auto backend1 = BackendManager::get(vk1);
+
+  std::thread t0([&] { backend0->all_reduce(*g0.impl_->storage, 2); });
+  std::thread t1([&] { backend1->all_reduce(*g1.impl_->storage, 2); });
+  t0.join();
+  t1.join();
+
+  Tensor g0_out = g0.to(Device{DeviceType::CPU, 0});
+  Tensor g1_out = g1.to(Device{DeviceType::CPU, 0});
+  const float *o0 = static_cast<const float *>(g0_out.data());
+  const float *o1 = static_cast<const float *>(g1_out.data());
+  EXPECT_FLOAT_EQ(o0[0], 1.5f);
+  EXPECT_FLOAT_EQ(o0[1], 3.5f);
+  EXPECT_FLOAT_EQ(o1[0], 1.5f);
+  EXPECT_FLOAT_EQ(o1[1], 3.5f);
+}

@@ -63,7 +63,12 @@ inline AllReduceExecutionMode configured_all_reduce_mode() {
 
 inline std::string all_reduce_key(const Device &device, DataType dtype,
                                   size_t num_elements) {
-  return device.to_string() + "|" + dtype_name(dtype) + "|" +
+  const std::string device_group =
+      (device.type == DeviceType::CPU)      ? "cpu"
+      : (device.type == DeviceType::CUDA)   ? "cuda"
+      : (device.type == DeviceType::VULKAN) ? "vulkan"
+                                            : "unknown";
+  return device_group + "|" + dtype_name(dtype) + "|" +
          std::to_string(num_elements);
 }
 
