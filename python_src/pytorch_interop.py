@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 PyTorch <-> MuNet Interoperability Module
 
@@ -16,6 +18,8 @@ try:
     import torch.nn as nn
     TORCH_AVAILABLE = True
 except ImportError:
+    torch = None
+    nn = Any
     TORCH_AVAILABLE = False
 
 # Add build directory to path for MuNet import
@@ -371,7 +375,11 @@ def create_munet_layer(config: Dict[str, Any]):
     
     raise ValueError(f"Unsupported layer type: {layer_type}")
 
-def copy_weights_to_munet(weights_dict: Dict[str, np.ndarray], munet_model):
+def copy_weights_to_munet(
+    weights_dict: Dict[str, np.ndarray],
+    munet_model,
+    strict: bool = True
+):
     """
     Copy weights from NumPy dict to MuNet model.
     
@@ -386,22 +394,39 @@ def copy_weights_to_munet(weights_dict: Dict[str, np.ndarray], munet_model):
         raise ImportError("MuNet is required for copy_weights_to_munet")
     
     named_params = dict(munet_model.named_parameters())
-    
-    
-    # Debug output
-    print(f"PyTorch weight names: {sorted(weights_dict.keys())}")
-    print(f"MuNet param names: {sorted(named_params.keys())}")
-    
+
+    missing_in_source = []
     for name, param in named_params.items():
-        if name in weights_dict:
-            numpy_array = weights_dict[name]
-            # Transpose Linear layer weights (PyTorch: [out, in], MuNet: [in, out])
-            if '.weight' in name and len(numpy_array.shape) == 2:
-                numpy_array = numpy_array.T
-            print(f"Copying {name}: numpy shape {list(numpy_array.shape)} -> MuNet shape {list(param.shape)}")
-            if list(numpy_array.shape) != list(param.shape):
-                print(f"  WARNING: Shape mismatch for {name}!")
-            param.copy_from_numpy(numpy_array)
+        if name not in weights_dict:
+            missing_in_source.append(name)
+            continue
+
+        numpy_array = weights_dict[name]
+        # Transpose Linear layer weights (PyTorch: [out, in], MuNet: [in, out])
+        if '.weight' in name and len(numpy_array.shape) == 2:
+            numpy_array = numpy_array.T
+
+        if list(numpy_array.shape) != list(param.shape):
+            raise ValueError(
+                f"Shape mismatch for parameter '{name}': "
+                f"source {list(numpy_array.shape)} vs target {list(param.shape)}"
+            )
+
+        param.copy_from_numpy(numpy_array)
+
+    extra_in_source = sorted(set(weights_dict.keys()) - set(named_params.keys()))
+    if strict and (missing_in_source or extra_in_source):
+        details = []
+        if missing_in_source:
+            details.append(
+                "missing source weights for target params: "
+                + ", ".join(sorted(missing_in_source))
+            )
+        if extra_in_source:
+            details.append(
+                "unused source weights: " + ", ".join(extra_in_source)
+            )
+        raise ValueError("Weight mapping mismatch: " + "; ".join(details))
 
 
 def save_as_npz(
@@ -507,3 +532,61 @@ def get_pytorch_model_info(model: nn.Module) -> Dict[str, Any]:
         'num_layers': len(layer_info),
         'layers': layer_info
     }
+
+
+class PyTorchInterop:
+    """Compatibility wrapper used by tests."""
+
+    @staticmethod
+    def _named_params(module) -> Dict[str, Any]:
+        return dict(module.named_parameters()) if hasattr(module, "named_parameters") else {}
+
+    def save_weights(self, module) -> Dict[str, np.ndarray]:
+        state: Dict[str, np.ndarray] = {}
+        for name, param in self._named_params(module).items():
+            arr = np.array(param.detach().numpy(), copy=True)
+            # MuNet Linear stores weight as [in, out]; PyTorch uses [out, in].
+            if (name.endswith(".weight") or name == "weight") and arr.ndim == 2:
+                arr = arr.T
+            state[name] = arr
+        if "weight" not in state and hasattr(module, "weight"):
+            arr = np.array(module.weight.detach().numpy(), copy=True)
+            if arr.ndim == 2:
+                arr = arr.T
+            state["weight"] = arr
+        if "bias" not in state and hasattr(module, "bias") and module.bias is not None:
+            state["bias"] = np.array(module.bias.detach().numpy(), copy=True)
+        return state
+
+    def load_weights(self, module, state_dict: Dict[str, np.ndarray]) -> None:
+        named = self._named_params(module)
+        for name, arr in state_dict.items():
+            value = np.asarray(arr, dtype=np.float32)
+            if name in named:
+                # Handle Linear convention mismatch when shapes are transposed.
+                if value.ndim == 2 and list(value.shape) == list(reversed(named[name].shape)):
+                    value = value.T
+                named[name].copy_from_numpy(value)
+            elif name == "weight" and hasattr(module, "weight"):
+                if value.ndim == 2 and list(value.shape) == list(reversed(module.weight.shape)):
+                    value = value.T
+                module.weight.copy_from_numpy(value)
+            elif name == "bias" and hasattr(module, "bias") and module.bias is not None:
+                module.bias.copy_from_numpy(value)
+
+    def save_to_file(self, module, path: str) -> None:
+        state = self.save_weights(module)
+        if TORCH_AVAILABLE:
+            tensor_state = {k: torch.from_numpy(v) for k, v in state.items()}
+            torch.save(tensor_state, path)
+        else:
+            np.savez(path, **state)
+
+    def load_from_file(self, module, path: str) -> None:
+        if TORCH_AVAILABLE:
+            state = torch.load(path, weights_only=False)
+            state = {k: (v.detach().cpu().numpy() if hasattr(v, "detach") else v) for k, v in state.items()}
+        else:
+            with np.load(path, allow_pickle=True) as data:
+                state = {k: data[k] for k in data.files}
+        self.load_weights(module, state)

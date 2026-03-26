@@ -339,7 +339,7 @@ def load(arg, filename=None, device=None):
                     
                     # Built-in module constructors
                     if t == 'Sequential':
-                        return m.nn.Sequential([build_module(c) for c in cfg['layers']])
+                        return m.nn.Sequential(*[build_module(c) for c in cfg['layers']])
                     elif t == 'Linear':
                         return m.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'], opts)
                     elif t == 'Conv2d':

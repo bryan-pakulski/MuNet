@@ -46,7 +46,30 @@ def parse_device_spec(spec: str) -> list:
         "Vulkan": munet.DeviceType.VULKAN,
         "Cpu": munet.DeviceType.CPU,
     }
-    return [munet.Device(device_type_map[b], int(d)) for b, d in devices]
+    resolved = []
+    for backend, dev_id in devices:
+        dev_type = device_type_map[backend]
+        candidate = munet.Device(dev_type, int(dev_id))
+        try:
+            # Probe allocation so invalid backend indices fail early and clearly.
+            _ = munet.ones([1], device=candidate)
+            resolved.append(candidate)
+            continue
+        except RuntimeError as err:
+            if int(dev_id) != 0:
+                fallback = munet.Device(dev_type, 0)
+                try:
+                    _ = munet.ones([1], device=fallback)
+                    print(
+                        f"[WARN] Requested {backend.lower()}:{dev_id} unavailable ({err}); "
+                        f"falling back to {backend.lower()}:0"
+                    )
+                    resolved.append(fallback)
+                    continue
+                except RuntimeError:
+                    pass
+            raise
+    return resolved
 
 
 def make_one_hot(indices: np.ndarray, depth: int) -> np.ndarray:

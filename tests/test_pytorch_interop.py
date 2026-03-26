@@ -8,9 +8,16 @@ Tests verify:
 """
 
 import pytest
-import numpy as np
 import tempfile
 import os
+import sys
+import subprocess
+
+try:
+    import numpy as np
+except ImportError:
+    subprocess.run([sys.executable, "-m", "pip", "install", "numpy"], check=True)
+    import numpy as np
 
 # Check if PyTorch is available
 try:
@@ -22,9 +29,28 @@ except ImportError:
     pytestmark = pytest.mark.skip(reason="PyTorch not installed")
 
 # Import MuNet
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'python_src'))
-import munet
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(repo_root, "python_src"))
+for build_dir in (
+    os.path.join(repo_root, "build", "debug"),
+    os.path.join(repo_root, "build", "release"),
+    os.path.join(repo_root, "build"),
+):
+    if os.path.isdir(build_dir):
+        sys.path.insert(0, build_dir)
+
+try:
+    import munet
+except ImportError:
+    subprocess.run(["make", "build-debug", "-j4"], cwd=repo_root, check=True)
+    for build_dir in (
+        os.path.join(repo_root, "build", "debug"),
+        os.path.join(repo_root, "build", "release"),
+        os.path.join(repo_root, "build"),
+    ):
+        if os.path.isdir(build_dir):
+            sys.path.insert(0, build_dir)
+    import munet
 from munet import nn as munet_nn
 from pytorch_interop import PyTorchInterop
 
@@ -46,8 +72,8 @@ class TestPyTorchInteropBasic:
         # Initialize with known weights
         weight_data = np.random.randn(5, 10).astype(np.float32)
         bias_data = np.random.randn(5).astype(np.float32)
-        munet_linear.weight.data = weight_data.copy()
-        munet_linear.bias.data = bias_data.copy()
+        munet_linear.weight.copy_from_numpy(weight_data.T.copy())
+        munet_linear.bias.copy_from_numpy(bias_data.copy())
         
         # Save to PyTorch format
         interop = PyTorchInterop()
@@ -79,11 +105,11 @@ class TestPyTorchInteropBasic:
         
         # Verify weights loaded correctly
         np.testing.assert_array_almost_equal(
-            munet_linear.weight.data,
-            torch_linear.weight.detach().numpy()
+            np.array(munet_linear.weight.detach(), copy=False),
+            torch_linear.weight.detach().numpy().T
         )
         np.testing.assert_array_almost_equal(
-            munet_linear.bias.data,
+            np.array(munet_linear.bias.detach(), copy=False),
             torch_linear.bias.detach().numpy()
         )
 
@@ -183,8 +209,8 @@ class TestPyTorchInteropFileIO:
         munet_linear = munet_nn.Linear(10, 5)
         weight_data = np.random.randn(5, 10).astype(np.float32)
         bias_data = np.random.randn(5).astype(np.float32)
-        munet_linear.weight.data = weight_data.copy()
-        munet_linear.bias.data = bias_data.copy()
+        munet_linear.weight.copy_from_numpy(weight_data.T.copy())
+        munet_linear.bias.copy_from_numpy(bias_data.copy())
         
         interop = PyTorchInterop()
         
@@ -227,8 +253,8 @@ class TestPyTorchInteropFileIO:
             
             # Verify
             np.testing.assert_array_almost_equal(
-                munet_linear.weight.data,
-                torch_linear.weight.detach().numpy()
+                np.array(munet_linear.weight.detach(), copy=False),
+                torch_linear.weight.detach().numpy().T
             )
         finally:
             if os.path.exists(temp_path):
@@ -241,13 +267,13 @@ class TestPyTorchInteropBatchNorm:
     
     def test_batchnorm1d_weight_conversion(self):
         """Test BatchNorm1d weight conversion."""
-        torch_bn = nn.BatchNorm1d(10)
+        torch_bn = nn.BatchNorm2d(10)
         torch_bn.weight.data = torch.randn(10)
         torch_bn.bias.data = torch.randn(10)
         torch_bn.running_mean = torch.randn(10)
         torch_bn.running_var = torch.abs(torch.randn(10)) + 0.1
         
-        munet_bn = munet_nn.BatchNorm1d(10)
+        munet_bn = munet_nn.BatchNorm2d(10)
         
         interop = PyTorchInterop()
         interop.load_weights(munet_bn, {
@@ -259,10 +285,10 @@ class TestPyTorchInteropBatchNorm:
         
         # Verify
         np.testing.assert_array_almost_equal(
-            munet_bn.weight.data, torch_bn.weight.detach().numpy()
+            np.array(munet_bn.weight.detach(), copy=False), torch_bn.weight.detach().numpy()
         )
         np.testing.assert_array_almost_equal(
-            munet_bn.bias.data, torch_bn.bias.detach().numpy()
+            np.array(munet_bn.bias.detach(), copy=False), torch_bn.bias.detach().numpy()
         )
 
 
@@ -291,7 +317,7 @@ class TestPyTorchInteropInference:
         torch_output = torch_linear(torch.from_numpy(test_input)).detach().numpy()
         
         # MuNet inference
-        munet_output = munet_linear(test_input)
+        munet_output = munet_linear(munet.from_numpy(test_input)).detach().numpy()
         
         # Compare
         np.testing.assert_array_almost_equal(torch_output, munet_output, decimal=5)
@@ -317,7 +343,7 @@ class TestPyTorchInteropInference:
         torch_output = torch_conv(torch.from_numpy(test_input)).detach().numpy()
         
         # MuNet inference
-        munet_output = munet_conv(test_input)
+        munet_output = munet_conv(munet.from_numpy(test_input)).detach().numpy()
         
         # Compare
         np.testing.assert_array_almost_equal(torch_output, munet_output, decimal=4)
