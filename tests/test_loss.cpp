@@ -134,3 +134,27 @@ TEST(LossDTypeParityTest, Float16LossFallbackOnCPU) {
   Tensor mse = logits.mse_loss(targets);
   EXPECT_EQ(mse.dtype(), DataType::Float16);
 }
+
+TEST(LossDTypeParityTest, BFloat16LossFallbackOnCPU) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor logits32({2, 3}, cpu, DataType::Float32);
+  Tensor targets32({2, 3}, cpu, DataType::Float32);
+  float *l = static_cast<float *>(logits32.data());
+  float *t = static_cast<float *>(targets32.data());
+  l[0] = 2.0f; l[1] = 1.0f; l[2] = 0.1f;
+  l[3] = 0.1f; l[4] = 1.0f; l[5] = 2.0f;
+  t[0] = 1.0f; t[1] = 0.0f; t[2] = 0.0f;
+  t[3] = 0.0f; t[4] = 0.0f; t[5] = 1.0f;
+
+  Tensor logits = logits32.to(DataType::BFloat16);
+  Tensor targets = targets32.to(DataType::BFloat16);
+  Tensor ce = logits.cross_entropy(targets);
+  EXPECT_EQ(ce.dtype(), DataType::BFloat16);
+}
+
+TEST(LossDTypeParityTest, Int8LossIsRejectedAsNonFloating) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor logits({2, 3}, cpu, DataType::Int8);
+  Tensor targets({2, 3}, cpu, DataType::Int8);
+  EXPECT_THROW((void)logits.cross_entropy(targets), std::runtime_error);
+}

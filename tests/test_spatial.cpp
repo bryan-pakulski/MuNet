@@ -105,3 +105,16 @@ TEST(SpatialDTypeParityTest, Float16ConvPoolUpsampleFallbackOnCPU) {
   EXPECT_EQ(up.dtype(), DataType::Float16);
   EXPECT_EQ(up.shape(), Shape({1, 1, 4, 4}));
 }
+
+TEST(SpatialDTypeParityTest, BFloat16ConvFallbackOnCPU) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor in32({1, 1, 4, 4}, cpu, DataType::Float32);
+  Tensor w32({1, 1, 3, 3}, cpu, DataType::Float32);
+  in32.fill_(make_scalar(1.0f));
+  w32.fill_(make_scalar(1.0f));
+
+  Tensor out = in32.to(DataType::BFloat16).conv2d(w32.to(DataType::BFloat16),
+                                                  Tensor(), 1, 1);
+  EXPECT_EQ(out.dtype(), DataType::BFloat16);
+  EXPECT_EQ(out.shape(), Shape({1, 1, 4, 4}));
+}

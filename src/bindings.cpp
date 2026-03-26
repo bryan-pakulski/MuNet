@@ -27,11 +27,18 @@ DataType numpy_dtype_to_data_type(const py::buffer_info &buf) {
       buf.format == py::format_descriptor<int32_t>::format()) {
     return DataType::Int32;
   }
+  if (buf.itemsize == static_cast<py::ssize_t>(sizeof(int8_t)) &&
+      buf.format == py::format_descriptor<int8_t>::format()) {
+    return DataType::Int8;
+  }
   if (buf.itemsize == 2 && buf.format.find('e') != std::string::npos) {
     return DataType::Float16;
   }
+  if (buf.itemsize == 2 && buf.format.find('H') != std::string::npos) {
+    return DataType::BFloat16;
+  }
   throw std::runtime_error(
-      "Unsupported NumPy dtype; expected float32, float16, or int32");
+      "Unsupported NumPy dtype; expected float32, float16/bfloat16, int32, or int8");
 }
 
 std::string numpy_format_for_dtype(DataType dtype) {
@@ -40,8 +47,12 @@ std::string numpy_format_for_dtype(DataType dtype) {
     return py::format_descriptor<float>::format();
   case DataType::Float16:
     return "e";
+  case DataType::BFloat16:
+    return "H";
   case DataType::Int32:
     return py::format_descriptor<int32_t>::format();
+  case DataType::Int8:
+    return py::format_descriptor<int8_t>::format();
   default:
     throw std::runtime_error("Unsupported tensor dtype for NumPy conversion");
   }
@@ -186,7 +197,9 @@ PYBIND11_MODULE(munet, m) {
   py::enum_<DataType>(m, "DataType", "Supported data types for tensors.")
       .value("Float32", DataType::Float32)
       .value("Float16", DataType::Float16)
+      .value("BFloat16", DataType::BFloat16)
       .value("Int32", DataType::Int32)
+      .value("Int8", DataType::Int8)
       .export_values();
 
   py::enum_<BackendFeature>(m, "BackendFeature",
@@ -1052,13 +1065,17 @@ def _tensor_dtype_name(t):
     m = __import__("munet")
     return {m.DataType.Float32: "float32",
             m.DataType.Float16: "float16",
-            m.DataType.Int32: "int32"}[t.dtype]
+            m.DataType.BFloat16: "bfloat16",
+            m.DataType.Int32: "int32",
+            m.DataType.Int8: "int8"}[t.dtype]
 
 def _dtype_from_name(name):
     m = __import__("munet")
     return {"float32": m.DataType.Float32,
             "float16": m.DataType.Float16,
-            "int32": m.DataType.Int32}[name]
+            "bfloat16": m.DataType.BFloat16,
+            "int32": m.DataType.Int32,
+            "int8": m.DataType.Int8}[name]
 
 def _tensor_options_for_dtype(dtype_name):
     m = __import__("munet")

@@ -23,6 +23,9 @@ static bool is_batched_matmul_shape(const Shape& a_shape, const Shape& b_shape) 
 // Helper to perform matmul on CPU with dtype conversion
 // This is used when the target backend doesn't support the dtype (e.g., Float16)
 static Tensor matmul_cpu_fallback(const Tensor& a, const Tensor& b, bool transA = false, bool transB = false) {
+  if (a.dtype() != DataType::Float32 && a.dtype() != DataType::Float16) {
+    return detail::matmul_cpu_fallback(a, b, transA, transB);
+  }
   Device cpu{DeviceType::CPU, 0};
   
   // Convert to CPU if needed
@@ -127,6 +130,9 @@ Tensor matmul_2d(const Tensor &a, const Tensor &b) {
 
 // Helper for batched matmul with CPU fallback
 static Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool transA, bool transB) {
+  if (a.dtype() != DataType::Float32 && a.dtype() != DataType::Float16) {
+    return detail::batched_matmul_cpu_fallback(a, b, transA, transB);
+  }
   Device cpu{DeviceType::CPU, 0};
   
   // Convert to CPU if needed

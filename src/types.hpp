@@ -13,7 +13,7 @@
 namespace munet {
 
 enum class DeviceType { CPU, CUDA, VULKAN, UNKNOWN };
-enum class DataType { Float32, Float16, Int32 };
+enum class DataType { Float32, Float16, BFloat16, Int32, Int8 };
 enum class AccumulationOp {
   Elementwise,
   Reduction,
@@ -40,20 +40,30 @@ inline std::string dtype_name(DataType dt) {
     return "float32";
   case DataType::Float16:
     return "float16";
+  case DataType::BFloat16:
+    return "bfloat16";
   case DataType::Int32:
     return "int32";
+  case DataType::Int8:
+    return "int8";
   default:
     return "unknown";
   }
 }
 
 inline bool is_floating(DataType dt) {
-  return dt == DataType::Float32 || dt == DataType::Float16;
+  return dt == DataType::Float32 || dt == DataType::Float16 ||
+         dt == DataType::BFloat16;
 }
 
-inline bool is_integral(DataType dt) { return dt == DataType::Int32; }
+inline bool is_integral(DataType dt) {
+  return dt == DataType::Int32 || dt == DataType::Int8;
+}
 
-inline bool is_low_precision(DataType dt) { return dt == DataType::Float16; }
+inline bool is_low_precision(DataType dt) {
+  return dt == DataType::Float16 || dt == DataType::BFloat16 ||
+         dt == DataType::Int8;
+}
 
 inline size_t dtype_size(DataType dt) {
   switch (dt) {
@@ -62,7 +72,10 @@ inline size_t dtype_size(DataType dt) {
   case DataType::Int32:
     return 4;
   case DataType::Float16:
+  case DataType::BFloat16:
     return 2;
+  case DataType::Int8:
+    return 1;
   default:
     return 0;
   }
@@ -73,8 +86,15 @@ inline DataType promote_types(DataType a, DataType b) {
     return a;
   if (a == DataType::Float32 || b == DataType::Float32)
     return DataType::Float32;
+  if (a == DataType::BFloat16 || b == DataType::BFloat16) {
+    if (is_floating(a) && is_floating(b))
+      return DataType::BFloat16;
+    return DataType::Float32;
+  }
   if (a == DataType::Float16 || b == DataType::Float16)
     return DataType::Float16;
+  if (a == DataType::Int8 && b == DataType::Int8)
+    return DataType::Int8;
   if (a == DataType::Int32 && b == DataType::Int32)
     return DataType::Int32;
   return DataType::Float32;
@@ -87,7 +107,10 @@ inline DataType accumulation_type(AccumulationOp op, DataType dtype) {
   case AccumulationOp::Matmul:
   case AccumulationOp::Convolution:
   case AccumulationOp::Normalization:
-    return (dtype == DataType::Float16) ? DataType::Float32 : dtype;
+    return (dtype == DataType::Float16 || dtype == DataType::BFloat16 ||
+            dtype == DataType::Int8)
+               ? DataType::Float32
+               : dtype;
   default:
     return dtype;
   }
@@ -190,8 +213,12 @@ inline DTypeInfo dtype_info(DataType dt) {
     return {dt, "float32", 4, true, false, false};
   case DataType::Float16:
     return {dt, "float16", 2, true, false, true};
+  case DataType::BFloat16:
+    return {dt, "bfloat16", 2, true, false, true};
   case DataType::Int32:
     return {dt, "int32", 4, false, true, false};
+  case DataType::Int8:
+    return {dt, "int8", 1, false, true, true};
   default:
     throw std::runtime_error("Unsupported dtype info query");
   }
@@ -281,6 +308,21 @@ inline float half_bits_to_float(uint16_t value) {
   return out;
 }
 
+inline uint16_t float_to_bfloat16_bits(float value) {
+  uint32_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  const uint32_t lsb = (bits >> 16) & 1u;
+  bits += 0x7fffu + lsb;
+  return static_cast<uint16_t>(bits >> 16);
+}
+
+inline float bfloat16_bits_to_float(uint16_t value) {
+  uint32_t bits = static_cast<uint32_t>(value) << 16;
+  float out = 0.0f;
+  std::memcpy(&out, &bits, sizeof(out));
+  return out;
+}
+
 inline void write_scalar_to_buffer(void *dst, DataType dtype, double value) {
   switch (dtype) {
   case DataType::Float32: {
@@ -293,8 +335,18 @@ inline void write_scalar_to_buffer(void *dst, DataType dtype, double value) {
     std::memcpy(dst, &converted, sizeof(converted));
     return;
   }
+  case DataType::BFloat16: {
+    uint16_t converted = float_to_bfloat16_bits(static_cast<float>(value));
+    std::memcpy(dst, &converted, sizeof(converted));
+    return;
+  }
   case DataType::Int32: {
     int32_t converted = static_cast<int32_t>(value);
+    std::memcpy(dst, &converted, sizeof(converted));
+    return;
+  }
+  case DataType::Int8: {
+    int8_t converted = static_cast<int8_t>(value);
     std::memcpy(dst, &converted, sizeof(converted));
     return;
   }
@@ -319,8 +371,20 @@ inline ScalarValue read_scalar_from_buffer(const void *src, DataType dtype) {
     out.value = half_bits_to_float(value);
     return out;
   }
+  case DataType::BFloat16: {
+    uint16_t value = 0;
+    std::memcpy(&value, src, sizeof(value));
+    out.value = bfloat16_bits_to_float(value);
+    return out;
+  }
   case DataType::Int32: {
     int32_t value = 0;
+    std::memcpy(&value, src, sizeof(value));
+    out.value = static_cast<double>(value);
+    return out;
+  }
+  case DataType::Int8: {
+    int8_t value = 0;
     std::memcpy(&value, src, sizeof(value));
     out.value = static_cast<double>(value);
     return out;

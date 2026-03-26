@@ -22,8 +22,9 @@ This inventory tracks dtype behavior across core ops with focus on Float16 pathw
 ## Remaining parity work (next)
 
 1. **BFloat16 / Int8 pathways**
-   - Add new dtype enum/storage support and conversion helpers.
-   - Add dispatch + kernel/fallback coverage tests for bf16/int8 matmul/conv/loss.
+   - `DataType` now includes `BFloat16` and `Int8` with scalar conversion helpers.
+   - Initial fallback coverage tests were added for bf16/int8 in matmul/conv/loss paths.
+   - Remaining: expand operator-level execution support beyond current fallback coverage and formalize quantized math semantics.
 2. **Backend-native low precision kernels**
    - CUDA: native fp16/bf16/int8 kernels for matmul/conv/reduction.
    - Vulkan: native fp16 path where hardware/driver capabilities permit.
