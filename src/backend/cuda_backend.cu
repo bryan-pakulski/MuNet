@@ -1,11 +1,12 @@
 #include "../core/util.hpp"
-#include "../core/all_reduce_runtime.hpp"
 #include "../storage.hpp"
 #include "cpu_backend.hpp"
 #include "cuda_backend.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
+#include <cstdlib>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -919,7 +920,21 @@ void CUDABackend::synchronize() {
 }
 
 void CUDABackend::all_reduce(Storage &buffer, size_t num_elements) {
-  detail::all_reduce_via_host(buffer, num_elements, *this, buffer.device());
+  const size_t bytes = num_elements * dtype_size(buffer.dtype());
+  if (bytes > buffer.size_bytes()) {
+    throw std::runtime_error("cuda all_reduce: num_elements exceeds storage size");
+  }
+
+  const char *world_env = std::getenv("MUNET_ALLREDUCE_WORLD_SIZE");
+  const int world_size = world_env ? std::max(1, std::atoi(world_env)) : 1;
+  if (world_size <= 1) {
+    // Single-device all-reduce is identity and stays on-device.
+    return;
+  }
+
+  throw std::runtime_error(
+      "cuda all_reduce: native multi-device collective not implemented yet "
+      "(requires NCCL/RCCL integration)");
 }
 
 void CUDABackend::add(const Storage &a, const Storage &b, Storage &out,
