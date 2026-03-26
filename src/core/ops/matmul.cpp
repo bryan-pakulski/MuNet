@@ -7,6 +7,7 @@
 #include "../op_dispatch.hpp"
 #include <sstream>
 #include <cmath>
+#include <stdexcept>
 #include <vector>
 
 namespace munet {
@@ -81,6 +82,11 @@ static Tensor matmul_cpu_fallback(const Tensor& a, const Tensor& b, bool transA 
 
 // Handle 2D matmul by delegating to regular matmul
 Tensor matmul_2d(const Tensor &a, const Tensor &b) {
+  if (a.device() != b.device()) {
+    throw std::runtime_error("matmul: inputs must be on the same device");
+  }
+  detail::require_same_dtype("matmul", a, b);
+
   const auto dispatch = resolve_dispatch(OpId::Matmul, a);
 
   // Use CPU fallback if needed (backend doesn't support this dtype)
@@ -98,18 +104,14 @@ Tensor matmul_2d(const Tensor &a, const Tensor &b) {
   
   // Validate dimensions
   if (a_shape[1] != b_shape[0]) {
-    MUNET_ERROR << "matmul: dimension mismatch: a.shape = [" 
-                << a_shape[0] << ", " << a_shape[1] << "], b.shape = [" 
-                << b_shape[0] << ", " << b_shape[1] << "]" << std::endl;
-    return Tensor();
+    throw std::runtime_error("matmul: dimension mismatch");
   }
   
   // Get BLAS capability
   Backend* backend = &a.impl_->backend();
   auto* blas = backend->blas_capability();
   if (!blas) {
-    MUNET_ERROR << "matmul: Backend does not support BLAS operations" << std::endl;
-    return Tensor();
+    throw std::runtime_error("matmul: backend does not support BLAS operations");
   }
   
   // Create output tensor
@@ -220,14 +222,20 @@ static Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool
 }
 
 Tensor batched_matmul_internal(const Tensor &a, const Tensor &b, bool transA, bool transB) {
+  if (a.device() != b.device()) {
+    throw std::runtime_error(
+        "batched_matmul: inputs must be on the same device");
+  }
+  detail::require_same_dtype("batched_matmul", a, b);
+
   // Get shapes
   Shape a_shape = a.shape();
   Shape b_shape = b.shape();
   
   // Check for batched dimensions
   if (a_shape.size() < 2 || b_shape.size() < 2) {
-    MUNET_ERROR << "batched_matmul: tensors must have at least 2 dimensions" << std::endl;
-    return Tensor();
+    throw std::runtime_error(
+        "batched_matmul: tensors must have at least 2 dimensions");
   }
   
   // Resolve dispatch to check for dtype support
@@ -249,9 +257,7 @@ Tensor batched_matmul_internal(const Tensor &a, const Tensor &b, bool transA, bo
   
   // Validate K dimensions
   if (K_a != K_b) {
-    MUNET_ERROR << "batched_matmul: K dimension mismatch: K_a=" << K_a 
-                << ", K_b=" << K_b << std::endl;
-    return Tensor();
+    throw std::runtime_error("batched_matmul: K dimension mismatch");
   }
   int K = K_a;
   
@@ -281,9 +287,7 @@ Tensor batched_matmul_internal(const Tensor &a, const Tensor &b, bool transA, bo
       b_batch *= static_cast<int>(b_shape[i]);
     }
     if (b_batch != batch) {
-      MUNET_ERROR << "batched_matmul: batch size mismatch: a_batch=" << batch 
-                  << ", b_batch=" << b_batch << std::endl;
-      return Tensor();
+      throw std::runtime_error("batched_matmul: batch size mismatch");
     }
   }
   
@@ -307,8 +311,8 @@ Tensor batched_matmul_internal(const Tensor &a, const Tensor &b, bool transA, bo
   Backend* backend = &a.impl_->backend();
   auto* blas = backend->blas_capability();
   if (!blas) {
-    MUNET_ERROR << "batched_matmul: Backend does not support BLAS operations" << std::endl;
-    return Tensor();
+    throw std::runtime_error(
+        "batched_matmul: backend does not support BLAS operations");
   }
   
   // Call backend batched_matmul
@@ -319,6 +323,11 @@ Tensor batched_matmul_internal(const Tensor &a, const Tensor &b, bool transA, bo
 }
 
 Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA, bool transB) {
+  if (a.device() != b.device()) {
+    throw std::runtime_error("matmul: inputs must be on the same device");
+  }
+  detail::require_same_dtype("matmul", a, b);
+
   // Get shapes
   Shape a_shape = a.shape();
   Shape b_shape = b.shape();
@@ -330,8 +339,7 @@ Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA, bool trans
   
   // Validate 2D shapes
   if (a_shape.size() != 2 || b_shape.size() != 2) {
-    MUNET_ERROR << "matmul: tensors must be 2D or batched 3D" << std::endl;
-    return Tensor();
+    throw std::runtime_error("matmul: tensors must be 2D or batched 3D");
   }
   
   // Resolve dispatch to check for dtype support
@@ -355,20 +363,15 @@ Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA, bool trans
 
   // Validate dimensions after applying transpose flags.
   if (K_a_eff != K_b_eff) {
-    MUNET_ERROR << "matmul: dimension mismatch after transpose handling: "
-                << "a.shape=[" << a_shape[0] << ", " << a_shape[1]
-                << "], b.shape=[" << b_shape[0] << ", " << b_shape[1]
-                << "], transA=" << transA << ", transB=" << transB
-                << ", K_a=" << K_a_eff << ", K_b=" << K_b_eff << std::endl;
-    return Tensor();
+    throw std::runtime_error(
+        "matmul: dimension mismatch after transpose handling");
   }
   
   // Get BLAS capability
   Backend* backend = &a.impl_->backend();
   auto* blas = backend->blas_capability();
   if (!blas) {
-    MUNET_ERROR << "matmul: Backend does not support BLAS operations" << std::endl;
-    return Tensor();
+    throw std::runtime_error("matmul: backend does not support BLAS operations");
   }
   
   // Create output tensor

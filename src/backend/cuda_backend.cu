@@ -879,6 +879,20 @@ void CUDABackend::memset(void *ptr, int value, size_t bytes) {
 
 void CUDABackend::copy(const void *src, void *dst, size_t bytes, Device src_dev,
                        Device dst_dev) {
+  if (bytes > 0 && (src == nullptr || dst == nullptr)) {
+    throw std::runtime_error("cuda copy: null pointer with non-zero byte count");
+  }
+  const bool src_is_cuda = src_dev.type == DeviceType::CUDA;
+  const bool dst_is_cuda = dst_dev.type == DeviceType::CUDA;
+  if (!src_is_cuda && !dst_is_cuda) {
+    throw std::runtime_error(
+        "cuda copy: expected at least one CUDA endpoint for CUDA backend copy");
+  }
+  if ((src_is_cuda && src_dev.index != device_index_) ||
+      (dst_is_cuda && dst_dev.index != device_index_)) {
+    throw std::runtime_error(
+        "cuda copy: device index mismatch for active CUDABackend instance");
+  }
   cudaSetDevice(device_index_);
   cudaEventRecord((cudaEvent_t)start_event_);
   cudaMemcpyKind kind = cudaMemcpyDefault;

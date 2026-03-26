@@ -136,6 +136,46 @@ TEST(TensorDTypeTest, Float16MatmulAndSumUseTypedFallbacks) {
   EXPECT_NEAR(static_cast<float *>(total.data())[0], 415.0f, 5e-1f);
 }
 
+TEST(TensorDTypeTest, MatmulRejectsDTypeMismatch) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a({2, 2}, cpu, DataType::Float32);
+  Tensor b({2, 2}, cpu, DataType::Float16);
+  EXPECT_THROW((void)a.matmul(b), std::runtime_error);
+}
+
+TEST(TensorDTypeTest, CpuBackendCopyValidatesTransferEndpoints) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor src({2}, cpu, DataType::Float32);
+  Tensor dst({2}, cpu, DataType::Float32);
+
+  EXPECT_THROW(
+      src.impl_->backend().copy(src.data(), dst.data(), src.bytes(),
+                                Device{DeviceType::CUDA, 0}, cpu),
+      std::runtime_error);
+
+  EXPECT_THROW(src.impl_->backend().copy(nullptr, dst.data(), src.bytes(), cpu,
+                                         cpu),
+               std::runtime_error);
+}
+
+TEST(TensorDTypeTest, VulkanMatmulRejectsUnsupportedFloat16WhenAvailable) {
+  Device vk{DeviceType::VULKAN, 0};
+  try {
+    (void)Tensor({1}, vk, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "Vulkan backend unavailable in this environment";
+  }
+
+  Tensor a32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);
+  Tensor b32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);
+  a32.fill_(make_scalar(1.0f));
+  b32.fill_(make_scalar(1.0f));
+
+  Tensor a = a32.to(vk).to(DataType::Float16);
+  Tensor b = b32.to(vk).to(DataType::Float16);
+  EXPECT_THROW((void)a.matmul(b), std::runtime_error);
+}
+
 class TensorTest : public ::testing::TestWithParam<Device> {
 protected:
   Device dev() { return GetParam(); }
