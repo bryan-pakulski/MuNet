@@ -1,4 +1,5 @@
 #include "../core/util.hpp"
+#include "../core/all_reduce_runtime.hpp"
 #include "../storage.hpp"
 #include "cpu_backend.hpp"
 #include "cuda_backend.hpp"
@@ -917,8 +918,9 @@ void CUDABackend::synchronize() {
   }
 }
 
-// TODO: IMPL
-void CUDABackend::all_reduce(Storage &buffer, size_t num_elements) {}
+void CUDABackend::all_reduce(Storage &buffer, size_t num_elements) {
+  detail::all_reduce_via_host(buffer, num_elements, *this, buffer.device());
+}
 
 void CUDABackend::add(const Storage &a, const Storage &b, Storage &out,
                       const BroadcastInfo &info) {

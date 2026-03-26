@@ -1,5 +1,6 @@
 #pragma once
 #include "core/backend.hpp"
+#include "core/all_reduce_runtime.hpp"
 #include "core/util.hpp"
 #include "storage.hpp"
 #include "core/ops/common.hpp"
@@ -237,7 +238,9 @@ public:
     std::memcpy(dst, src, bytes);
   }
   void synchronize() override {}
-  void all_reduce(Storage &buffer, size_t num_elements) override {}
+  void all_reduce(Storage &buffer, size_t num_elements) override {
+    detail::all_reduce_via_host(buffer, num_elements, *this, buffer.device());
+  }
 
   void add(const Storage &a, const Storage &b, Storage &out,
            const BroadcastInfo &info) override {

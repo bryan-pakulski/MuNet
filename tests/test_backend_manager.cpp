@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -957,4 +958,32 @@ TEST(BackendManagerTest, TraceContextCorrelatesTransferDispatchAndLogs) {
   EXPECT_NE(stderr_output.find("[trace_id=4242 span=run.forward]"),
             std::string::npos);
   EXPECT_NE(stderr_output.find("dispatch_fallback"), std::string::npos);
+}
+
+TEST(BackendManagerTest, CpuAllReduceAggregatesAcrossParticipants) {
+  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "2", 1);
+  BackendManager::registry().clear_cache(DeviceType::CPU);
+
+  const Device cpu{DeviceType::CPU, 0};
+  auto backend = BackendManager::get(cpu);
+  ASSERT_NE(backend, nullptr);
+
+  Storage a(2 * sizeof(float), cpu, DataType::Float32, {2});
+  Storage b(2 * sizeof(float), cpu, DataType::Float32, {2});
+  float *ap = static_cast<float *>(a.data());
+  float *bp = static_cast<float *>(b.data());
+  ap[0] = 1.0f;
+  ap[1] = 2.0f;
+  bp[0] = 3.0f;
+  bp[1] = 4.0f;
+
+  std::thread t1([&] { backend->all_reduce(a, 2); });
+  std::thread t2([&] { backend->all_reduce(b, 2); });
+  t1.join();
+  t2.join();
+
+  EXPECT_FLOAT_EQ(ap[0], 4.0f);
+  EXPECT_FLOAT_EQ(ap[1], 6.0f);
+  EXPECT_FLOAT_EQ(bp[0], 4.0f);
+  EXPECT_FLOAT_EQ(bp[1], 6.0f);
 }

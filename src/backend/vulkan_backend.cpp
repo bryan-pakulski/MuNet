@@ -1,4 +1,5 @@
 #include "vulkan_backend.hpp"
+#include "core/all_reduce_runtime.hpp"
 #include "core/util.hpp"
 #include "cpu_backend.hpp"
 #include "storage.hpp"
@@ -2434,7 +2435,9 @@ void VulkanBackend::synchronize() {
     }
   }
 }
-void VulkanBackend::all_reduce(Storage &buffer, size_t num_elements) {}
+void VulkanBackend::all_reduce(Storage &buffer, size_t num_elements) {
+  detail::all_reduce_via_host(buffer, num_elements, *this, buffer.device());
+}
 
 void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                                     const std::vector<void *> &buffers,
