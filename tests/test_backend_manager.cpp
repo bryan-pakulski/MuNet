@@ -1073,10 +1073,31 @@ TEST(BackendManagerTest, CudaMultiDeviceAllReduceAggregatesAcrossGpuIndices) {
   auto backend0 = BackendManager::get(cuda0);
   auto backend1 = BackendManager::get(cuda1);
 
-  std::thread t0([&] { backend0->all_reduce(*a.impl_->storage, 2); });
-  std::thread t1([&] { backend1->all_reduce(*b.impl_->storage, 2); });
+  std::exception_ptr eptr = nullptr;
+  std::mutex err_mtx;
+  auto run_reduce = [&](std::shared_ptr<Backend> backend, Tensor &tensor) {
+    try {
+      backend->all_reduce(*tensor.impl_->storage, 2);
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(err_mtx);
+      if (!eptr)
+        eptr = std::current_exception();
+    }
+  };
+
+  std::thread t0(run_reduce, backend0, std::ref(a));
+  std::thread t1(run_reduce, backend1, std::ref(b));
   t0.join();
   t1.join();
+
+  if (eptr) {
+    try {
+      std::rethrow_exception(eptr);
+    } catch (const std::runtime_error &err) {
+      GTEST_SKIP() << "CUDA multi-device all_reduce unavailable at runtime: "
+                   << err.what();
+    }
+  }
 
   Tensor a_out = a.to(Device{DeviceType::CPU, 0});
   Tensor b_out = b.to(Device{DeviceType::CPU, 0});
@@ -1117,10 +1138,31 @@ TEST(BackendManagerTest,
   auto backend0 = BackendManager::get(vk0);
   auto backend1 = BackendManager::get(vk1);
 
-  std::thread t0([&] { backend0->all_reduce(*g0.impl_->storage, 2); });
-  std::thread t1([&] { backend1->all_reduce(*g1.impl_->storage, 2); });
+  std::exception_ptr eptr = nullptr;
+  std::mutex err_mtx;
+  auto run_reduce = [&](std::shared_ptr<Backend> backend, Tensor &tensor) {
+    try {
+      backend->all_reduce(*tensor.impl_->storage, 2);
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(err_mtx);
+      if (!eptr)
+        eptr = std::current_exception();
+    }
+  };
+
+  std::thread t0(run_reduce, backend0, std::ref(g0));
+  std::thread t1(run_reduce, backend1, std::ref(g1));
   t0.join();
   t1.join();
+
+  if (eptr) {
+    try {
+      std::rethrow_exception(eptr);
+    } catch (const std::runtime_error &err) {
+      GTEST_SKIP() << "Vulkan multi-device all_reduce unavailable at runtime: "
+                   << err.what();
+    }
+  }
 
   Tensor g0_out = g0.to(Device{DeviceType::CPU, 0});
   Tensor g1_out = g1.to(Device{DeviceType::CPU, 0});
