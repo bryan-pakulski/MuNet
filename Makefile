@@ -121,6 +121,11 @@ dtype-coverage-report: build-debug
 	@echo "Wrote ./$(BUILD_DEBUG)/dtype_coverage_report.csv"
 	@cat ./$(BUILD_DEBUG)/dtype_coverage_report.csv
 
+runtime-execution-coverage-report: build-debug
+	./$(BUILD_DEBUG)/munet_runtime_execution_coverage_report > ./$(BUILD_DEBUG)/runtime_execution_coverage_report.csv
+	@echo "Wrote ./$(BUILD_DEBUG)/runtime_execution_coverage_report.csv"
+	@cat ./$(BUILD_DEBUG)/runtime_execution_coverage_report.csv
+
 format:
 	find src tests -regex '.*\.\(cpp\|hpp\|cc\|cxx\|c\|h\|cu\)' -exec clang-format -style=file -i {} \;
 	find src tests -regex '.*\.\(cpp\|hpp\|cc\|cxx\|c\|h\|cu\|txt\|md\|sh\)' -exec sed -i 's/[[:space:]]*$$//' {} \;
