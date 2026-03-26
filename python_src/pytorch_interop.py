@@ -375,7 +375,11 @@ def create_munet_layer(config: Dict[str, Any]):
     
     raise ValueError(f"Unsupported layer type: {layer_type}")
 
-def copy_weights_to_munet(weights_dict: Dict[str, np.ndarray], munet_model):
+def copy_weights_to_munet(
+    weights_dict: Dict[str, np.ndarray],
+    munet_model,
+    strict: bool = True
+):
     """
     Copy weights from NumPy dict to MuNet model.
     
@@ -390,22 +394,39 @@ def copy_weights_to_munet(weights_dict: Dict[str, np.ndarray], munet_model):
         raise ImportError("MuNet is required for copy_weights_to_munet")
     
     named_params = dict(munet_model.named_parameters())
-    
-    
-    # Debug output
-    print(f"PyTorch weight names: {sorted(weights_dict.keys())}")
-    print(f"MuNet param names: {sorted(named_params.keys())}")
-    
+
+    missing_in_source = []
     for name, param in named_params.items():
-        if name in weights_dict:
-            numpy_array = weights_dict[name]
-            # Transpose Linear layer weights (PyTorch: [out, in], MuNet: [in, out])
-            if '.weight' in name and len(numpy_array.shape) == 2:
-                numpy_array = numpy_array.T
-            print(f"Copying {name}: numpy shape {list(numpy_array.shape)} -> MuNet shape {list(param.shape)}")
-            if list(numpy_array.shape) != list(param.shape):
-                print(f"  WARNING: Shape mismatch for {name}!")
-            param.copy_from_numpy(numpy_array)
+        if name not in weights_dict:
+            missing_in_source.append(name)
+            continue
+
+        numpy_array = weights_dict[name]
+        # Transpose Linear layer weights (PyTorch: [out, in], MuNet: [in, out])
+        if '.weight' in name and len(numpy_array.shape) == 2:
+            numpy_array = numpy_array.T
+
+        if list(numpy_array.shape) != list(param.shape):
+            raise ValueError(
+                f"Shape mismatch for parameter '{name}': "
+                f"source {list(numpy_array.shape)} vs target {list(param.shape)}"
+            )
+
+        param.copy_from_numpy(numpy_array)
+
+    extra_in_source = sorted(set(weights_dict.keys()) - set(named_params.keys()))
+    if strict and (missing_in_source or extra_in_source):
+        details = []
+        if missing_in_source:
+            details.append(
+                "missing source weights for target params: "
+                + ", ".join(sorted(missing_in_source))
+            )
+        if extra_in_source:
+            details.append(
+                "unused source weights: " + ", ".join(extra_in_source)
+            )
+        raise ValueError("Weight mapping mismatch: " + "; ".join(details))
 
 
 def save_as_npz(
