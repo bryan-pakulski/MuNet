@@ -18,6 +18,7 @@ BUILD_GPU := $(BUILD_ROOT)/gpu-debug
 	configure-debug configure-release configure-asan configure-gpu \
 	unit-test test-debug test-release test-asan ctest-debug ctest-release ctest-asan \
 	mem-test gpu-mem-test perf-test py-test \
+	dtype-coverage-report \
 	format doc clean clean-debug clean-release clean-asan clean-gpu \
 	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-gpu \
 	docker-build
@@ -40,6 +41,7 @@ help:
 	@echo "  gpu-mem-test     Run compute-sanitizer memcheck"
 	@echo "  perf-test        Run performance tests from release build"
 	@echo "  py-test          Run python tests"
+	@echo "  dtype-coverage-report  Generate backend/dtype/op dispatch coverage CSV"
 	@echo "  format           Format code"
 	@echo "  doc              Build docs"
 	@echo "  clean            Remove all build directories"
@@ -113,6 +115,11 @@ perf-test: build-release
 
 py-test: build-debug
 	cd tests && python3 test_python.py && python3 test_pytorch_interop.py
+
+dtype-coverage-report: build-debug
+	./$(BUILD_DEBUG)/munet_dtype_coverage_report > ./$(BUILD_DEBUG)/dtype_coverage_report.csv
+	@echo "Wrote ./$(BUILD_DEBUG)/dtype_coverage_report.csv"
+	@cat ./$(BUILD_DEBUG)/dtype_coverage_report.csv
 
 format:
 	find src tests -regex '.*\.\(cpp\|hpp\|cc\|cxx\|c\|h\|cu\)' -exec clang-format -style=file -i {} \;

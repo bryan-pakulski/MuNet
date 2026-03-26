@@ -235,6 +235,9 @@ add_executable(munet_inference_boundary_check tools/inference_boundary_check.cpp
 target_link_libraries(munet_inference_boundary_check PRIVATE munet_inference munet_build_flags)
 add_test(NAME munet_inference_boundary_check COMMAND munet_inference_boundary_check)
 
+add_executable(munet_dtype_coverage_report tools/dtype_coverage_report.cpp)
+target_link_libraries(munet_dtype_coverage_report PRIVATE munet_training munet_inference munet_build_flags)
+
 include(GoogleTest)
 gtest_add_tests(
     TARGET munet_tests
