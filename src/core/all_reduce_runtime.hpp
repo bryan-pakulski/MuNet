@@ -44,6 +44,23 @@ inline int configured_all_reduce_world_size() {
   return parsed > 0 ? parsed : 1;
 }
 
+enum class AllReduceExecutionMode {
+  DeviceNative,
+  HostFallback,
+};
+
+inline AllReduceExecutionMode configured_all_reduce_mode() {
+  const char *env = std::getenv("MUNET_ALLREDUCE_MODE");
+  if (!env) {
+    return AllReduceExecutionMode::DeviceNative;
+  }
+  const std::string mode(env);
+  if (mode == "host_fallback") {
+    return AllReduceExecutionMode::HostFallback;
+  }
+  return AllReduceExecutionMode::DeviceNative;
+}
+
 inline std::string all_reduce_key(const Device &device, DataType dtype,
                                   size_t num_elements) {
   return device.to_string() + "|" + dtype_name(dtype) + "|" +
@@ -105,6 +122,16 @@ inline void all_reduce_via_host(Storage &buffer, size_t num_elements,
   const int world_size = configured_all_reduce_world_size();
   if (world_size <= 1) {
     return;
+  }
+
+  const auto mode = configured_all_reduce_mode();
+  const bool accelerator_device = device.type == DeviceType::CUDA ||
+                                  device.type == DeviceType::VULKAN;
+  if (accelerator_device && mode == AllReduceExecutionMode::DeviceNative) {
+    throw std::runtime_error(
+        "all_reduce: device-native mode is default for CUDA/Vulkan in "
+        "multi-GPU runs; native collective backend not implemented yet. "
+        "Set MUNET_ALLREDUCE_MODE=host_fallback to use host staging.");
   }
 
   const DataType dtype = buffer.dtype();
