@@ -1259,9 +1259,14 @@ TEST(BackendManagerTest, MixedCpuCudaVulkanAllReduceAggregatesTogether) {
     try {
       std::rethrow_exception(eptr);
     } catch (const std::runtime_error &err) {
-      GTEST_SKIP()
-          << "Mixed CPU/CUDA/Vulkan all_reduce unavailable at runtime: "
-          << err.what();
+      FAIL() << "Mixed CPU/CUDA/Vulkan all_reduce failed at runtime: "
+             << err.what();
+    } catch (const std::exception &err) {
+      FAIL() << "Mixed CPU/CUDA/Vulkan all_reduce failed with exception: "
+             << err.what();
+    } catch (...) {
+      FAIL() << "Mixed CPU/CUDA/Vulkan all_reduce failed with unknown "
+                "exception";
     }
   }
 
