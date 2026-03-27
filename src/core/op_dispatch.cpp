@@ -317,6 +317,8 @@ const DispatchFallbackRule *find_matching_dispatch_rule(
 
 } // namespace
 
+namespace {
+
 std::optional<DispatchDecision>
 stage_metadata_validation(const OpMetadata &meta, const Tensor &tensor,
                           Timer *timer) {
@@ -435,6 +437,8 @@ stage_policy_engine_evaluation(OpId id, const OpMetadata &meta,
       "' for dtype " + dtype_name(tensor.dtype()) + " (fallback policy: " +
       backend_fallback_policy_name(policy.support.fallback_policy) + ")");
 }
+
+} // namespace
 
 const OpMetadata &op_metadata(OpId id) {
   const auto &map = registry();

@@ -886,6 +886,28 @@ TEST(BackendManagerTest,
   }
 }
 
+TEST(BackendManagerTest,
+     DispatchDenyFallbackErrorIncludesBackendAndDeviceContext) {
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device unknown{DeviceType::UNKNOWN, 0};
+  Tensor x({2, 2}, unknown, DataType::Float32);
+  x.fill_(1.0f);
+
+  try {
+    (void)x.softmax(-1);
+    FAIL() << "Expected softmax fallback deny rule to throw";
+  } catch (const std::runtime_error &err) {
+    const std::string message = err.what();
+    EXPECT_NE(message.find("UNKNOWN softmax op-specific float32 fallback denied"),
+              std::string::npos);
+    EXPECT_NE(message.find("for backend 'partial_matmul'"), std::string::npos);
+    EXPECT_NE(message.find("on device 'unknown:0'"), std::string::npos);
+  }
+}
+
 TEST(BackendManagerTest, CudaMatmulBFloat16FallbackDeniedWhenCudaAvailable) {
   const Device cuda{DeviceType::CUDA, 0};
   try {
