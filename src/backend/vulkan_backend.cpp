@@ -2028,85 +2028,91 @@ void main() {
 }
 
 VulkanBackend::~VulkanBackend() {
-  vkDeviceWaitIdle(device); // Full stop
-  for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-    vkDestroyFence(device, inFlightFences[i], nullptr);
-    vkDestroyDescriptorPool(device, descriptorPools[i], nullptr);
-    vkDestroyQueryPool(device, queryPools[i], nullptr);
+  if (device != VK_NULL_HANDLE) {
+    vkDeviceWaitIdle(device); // Full stop
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      vkDestroyFence(device, inFlightFences[i], nullptr);
+      vkDestroyDescriptorPool(device, descriptorPools[i], nullptr);
+      vkDestroyQueryPool(device, queryPools[i], nullptr);
+    }
+    for (auto &pair : allocation_memory) {
+      vkDestroyBuffer(device, (VkBuffer)pair.first, nullptr);
+      vkFreeMemory(device, pair.second, nullptr);
+    }
+    if (stagingBuffer) {
+      if (stagingMapped) {
+        vkUnmapMemory(device, stagingMemory);
+      }
+      vkDestroyBuffer(device, stagingBuffer, nullptr);
+      vkFreeMemory(device, stagingMemory, nullptr);
+    }
+    vkDestroyPipeline(device, adamStepPipeline, nullptr);
+
+    vkDestroyPipeline(device, conv2dPipeline, nullptr);
+    vkDestroyPipeline(device, conv2dBackInputPipeline, nullptr);
+    vkDestroyPipeline(device, conv2dBackWeightPipeline, nullptr);
+    vkDestroyPipeline(device, conv2dBackBiasPipeline, nullptr);
+
+    vkDestroyPipeline(device, maxPoolPipeline, nullptr);
+    vkDestroyPipeline(device, maxPoolBackPipeline, nullptr);
+
+    vkDestroyPipeline(device, concatPipeline, nullptr);
+    vkDestroyPipeline(device, broadcastRowPipeline, nullptr);
+
+    vkDestroyPipeline(device, upsamplePipeline, nullptr);
+    vkDestroyPipeline(device, upsampleBackPipeline, nullptr);
+
+    vkDestroyPipeline(device, uniformPipeline, nullptr);
+    vkDestroyPipeline(device, sumPipeline, nullptr);
+    vkDestroyPipeline(device, toContiguousPipeline, nullptr);
+
+    vkDestroyPipeline(device, bnCollectPipeline, nullptr);
+    vkDestroyPipeline(device, bnUpdatePipeline, nullptr);
+    vkDestroyPipeline(device, bnNormalizePipeline, nullptr);
+    vkDestroyPipeline(device, bnBackReducePipeline, nullptr);
+    vkDestroyPipeline(device, bnBackDxPipeline, nullptr);
+
+    vkDestroyPipeline(device, addPipeline, nullptr);
+    vkDestroyPipeline(device, mulPipeline, nullptr);
+    vkDestroyPipeline(device, subPipeline, nullptr);
+    vkDestroyPipeline(device, divPipeline, nullptr);
+
+    vkDestroyPipeline(device, addBCPipeline, nullptr);
+    vkDestroyPipeline(device, mulBCPipeline, nullptr);
+    vkDestroyPipeline(device, subBCPipeline, nullptr);
+    vkDestroyPipeline(device, divBCPipeline, nullptr);
+    vkDestroyPipeline(device, sumToShapePipeline, nullptr);
+
+    vkDestroyPipeline(device, rsqrtPipeline, nullptr);
+    vkDestroyPipeline(device, sinPipeline, nullptr);
+    vkDestroyPipeline(device, cosPipeline, nullptr);
+    vkDestroyPipeline(device, meanLastDimPipeline, nullptr);
+
+    vkDestroyPipeline(device, updatePipeline, nullptr);
+
+    vkDestroyPipeline(device, reluPipeline, nullptr);
+    vkDestroyPipeline(device, reluBackwardPipeline, nullptr);
+    vkDestroyPipeline(device, sigmoidPipeline, nullptr);
+    vkDestroyPipeline(device, sigmoidBackwardPipeline, nullptr);
+
+    vkDestroyPipeline(device, softmaxPipeline, nullptr);
+    vkDestroyPipeline(device, softmaxBackwardPipeline, nullptr);
+    vkDestroyPipeline(device, mseLossPipeline, nullptr);
+    vkDestroyPipeline(device, mseLossBackwardPipeline, nullptr);
+    vkDestroyPipeline(device, crossEntropyPipeline, nullptr);
+    vkDestroyPipeline(device, crossEntropyBackwardPipeline, nullptr);
+
+    vkDestroyPipeline(device, matmulPipeline, nullptr);
+    vkDestroyPipeline(device, batchedMatmulPipeline, nullptr);
+
+    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+    vkDestroyCommandPool(device, commandPool, nullptr);
+    vkDestroyDevice(device, nullptr);
   }
-  for (auto &pair : allocation_memory) {
-    vkDestroyBuffer(device, (VkBuffer)pair.first, nullptr);
-    vkFreeMemory(device, pair.second, nullptr);
+  if (instance != VK_NULL_HANDLE) {
+    vkDestroyInstance(instance, nullptr);
   }
-  if (stagingBuffer) {
-    vkUnmapMemory(device, stagingMemory);
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingMemory, nullptr);
-  }
-  vkDestroyPipeline(device, adamStepPipeline, nullptr);
-
-  vkDestroyPipeline(device, conv2dPipeline, nullptr);
-  vkDestroyPipeline(device, conv2dBackInputPipeline, nullptr);
-  vkDestroyPipeline(device, conv2dBackWeightPipeline, nullptr);
-  vkDestroyPipeline(device, conv2dBackBiasPipeline, nullptr);
-
-  vkDestroyPipeline(device, maxPoolPipeline, nullptr);
-  vkDestroyPipeline(device, maxPoolBackPipeline, nullptr);
-
-  vkDestroyPipeline(device, concatPipeline, nullptr);
-  vkDestroyPipeline(device, broadcastRowPipeline, nullptr);
-
-  vkDestroyPipeline(device, upsamplePipeline, nullptr);
-  vkDestroyPipeline(device, upsampleBackPipeline, nullptr);
-
-  vkDestroyPipeline(device, uniformPipeline, nullptr);
-  vkDestroyPipeline(device, sumPipeline, nullptr);
-  vkDestroyPipeline(device, toContiguousPipeline, nullptr);
-
-  vkDestroyPipeline(device, bnCollectPipeline, nullptr);
-  vkDestroyPipeline(device, bnUpdatePipeline, nullptr);
-  vkDestroyPipeline(device, bnNormalizePipeline, nullptr);
-  vkDestroyPipeline(device, bnBackReducePipeline, nullptr);
-  vkDestroyPipeline(device, bnBackDxPipeline, nullptr);
-
-  vkDestroyPipeline(device, addPipeline, nullptr);
-  vkDestroyPipeline(device, mulPipeline, nullptr);
-  vkDestroyPipeline(device, subPipeline, nullptr);
-  vkDestroyPipeline(device, divPipeline, nullptr);
-
-  vkDestroyPipeline(device, addBCPipeline, nullptr);
-  vkDestroyPipeline(device, mulBCPipeline, nullptr);
-  vkDestroyPipeline(device, subBCPipeline, nullptr);
-  vkDestroyPipeline(device, divBCPipeline, nullptr);
-  vkDestroyPipeline(device, sumToShapePipeline, nullptr);
-
-  vkDestroyPipeline(device, rsqrtPipeline, nullptr);
-  vkDestroyPipeline(device, sinPipeline, nullptr);
-  vkDestroyPipeline(device, cosPipeline, nullptr);
-  vkDestroyPipeline(device, meanLastDimPipeline, nullptr);
-
-  vkDestroyPipeline(device, updatePipeline, nullptr);
-
-  vkDestroyPipeline(device, reluPipeline, nullptr);
-  vkDestroyPipeline(device, reluBackwardPipeline, nullptr);
-  vkDestroyPipeline(device, sigmoidPipeline, nullptr);
-  vkDestroyPipeline(device, sigmoidBackwardPipeline, nullptr);
-
-  vkDestroyPipeline(device, softmaxPipeline, nullptr);
-  vkDestroyPipeline(device, softmaxBackwardPipeline, nullptr);
-  vkDestroyPipeline(device, mseLossPipeline, nullptr);
-  vkDestroyPipeline(device, mseLossBackwardPipeline, nullptr);
-  vkDestroyPipeline(device, crossEntropyPipeline, nullptr);
-  vkDestroyPipeline(device, crossEntropyBackwardPipeline, nullptr);
-
-  vkDestroyPipeline(device, matmulPipeline, nullptr);
-  vkDestroyPipeline(device, batchedMatmulPipeline, nullptr);
-
-  vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-  vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-  vkDestroyCommandPool(device, commandPool, nullptr);
-  vkDestroyDevice(device, nullptr);
-  vkDestroyInstance(instance, nullptr);
 
   instance = VK_NULL_HANDLE;
   physicalDevice = VK_NULL_HANDLE;
