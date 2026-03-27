@@ -1,6 +1,7 @@
 #include "backend.hpp"
 #include "backend/cpu_backend.hpp"
 #include "core/all_reduce_runtime.hpp"
+#include "core/op_dispatch.hpp"
 #include "core/util/profiler.hpp"
 #include "tensor.hpp"
 #include <cstdlib>
@@ -17,6 +18,15 @@
 using namespace munet;
 
 namespace {
+
+bool runtime_device_available(Device device) {
+  try {
+    (void)Tensor({1}, device, DataType::Float32);
+    return true;
+  } catch (const std::runtime_error &) {
+    return false;
+  }
+}
 
 class ScopedProfileOverride {
 public:
@@ -1284,4 +1294,75 @@ TEST(BackendManagerTest, MixedCpuCudaVulkanAllReduceAggregatesTogether) {
   EXPECT_FLOAT_EQ(ou[1], 9.0f);
   EXPECT_FLOAT_EQ(ov[0], 6.0f);
   EXPECT_FLOAT_EQ(ov[1], 9.0f);
+}
+
+TEST(BackendManagerTest, AcceleratorBackendsAdvertiseFloat32FeatureSupport) {
+  const std::vector<Device> accelerators = {
+      Device{DeviceType::CUDA, 0},
+      Device{DeviceType::VULKAN, 0},
+  };
+  const std::vector<BackendFeature> required_features = {
+      BackendFeature::ElementwiseBinary, BackendFeature::BroadcastRow,
+      BackendFeature::Matmul,            BackendFeature::UnaryActivation,
+      BackendFeature::Softmax,           BackendFeature::Concat,
+      BackendFeature::Loss,              BackendFeature::Convolution,
+      BackendFeature::Pooling,           BackendFeature::BatchNorm,
+      BackendFeature::Reduction,         BackendFeature::OptimizerStep,
+      BackendFeature::RandomFill,
+  };
+
+  bool validated_any = false;
+  for (const auto &device : accelerators) {
+    if (!runtime_device_available(device)) {
+      continue;
+    }
+    validated_any = true;
+    auto backend = BackendManager::get(device);
+    for (const auto feature : required_features) {
+      const auto support = backend->query_support(feature, DataType::Float32);
+      EXPECT_TRUE(support.available)
+          << "Expected float32 acceleration support for feature '"
+          << backend_feature_name(feature) << "' on " << device.to_string()
+          << " backend '" << backend->name() << "'";
+    }
+  }
+
+  if (!validated_any) {
+    GTEST_SKIP() << "No CUDA/Vulkan runtime available for float32 support "
+                    "validation";
+  }
+}
+
+TEST(BackendManagerTest, AcceleratorDispatchUsesBackendForRepresentativeFloat32Ops) {
+  const std::vector<Device> accelerators = {
+      Device{DeviceType::CUDA, 0},
+      Device{DeviceType::VULKAN, 0},
+  };
+  const std::vector<std::pair<ops::OpId, Shape>> representative_ops = {
+      {ops::OpId::Add, {2, 2}},      {ops::OpId::Matmul, {2, 2}},
+      {ops::OpId::Conv2D, {1, 1, 4, 4}}, {ops::OpId::Softmax, {2, 3}},
+      {ops::OpId::MSELoss, {2, 2}},
+  };
+
+  bool validated_any = false;
+  for (const auto &device : accelerators) {
+    if (!runtime_device_available(device)) {
+      continue;
+    }
+    validated_any = true;
+    for (const auto &[op_id, shape] : representative_ops) {
+      Tensor probe(shape, device, DataType::Float32, false);
+      const auto decision = ops::resolve_dispatch(op_id, probe);
+      EXPECT_TRUE(decision.use_backend)
+          << "Expected backend dispatch for op '" << decision.metadata.name
+          << "' on " << device.to_string();
+      EXPECT_FALSE(decision.use_cpu_fallback)
+          << "Unexpected CPU fallback for op '" << decision.metadata.name
+          << "' on " << device.to_string();
+    }
+  }
+
+  if (!validated_any) {
+    GTEST_SKIP() << "No CUDA/Vulkan runtime available for dispatch validation";
+  }
 }
