@@ -221,35 +221,66 @@ void log_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
 }
 
 struct DispatchFallbackRule {
-  OpId op;
   DeviceType device_type;
+  std::optional<BackendFeature> feature;
+  std::optional<OpId> op;
   std::optional<DataType> dtype;
+  bool deny_cpu_fallback = false;
   const char *error_message;
 };
 
 const std::vector<DispatchFallbackRule> &dispatch_fallback_rules() {
   static const std::vector<DispatchFallbackRule> kRules = {
-      {OpId::Matmul, DeviceType::VULKAN, DataType::Float16,
+      {DeviceType::VULKAN, BackendFeature::Matmul, OpId::Matmul,
+       DataType::Float16, true,
        "Vulkan backend does not support float16 matmul fallback"},
-      {OpId::Matmul, DeviceType::VULKAN, DataType::BFloat16,
+      {DeviceType::VULKAN, BackendFeature::Matmul, OpId::Matmul,
+       DataType::BFloat16, true,
        "Vulkan backend does not support bfloat16 matmul fallback"},
   };
   return kRules;
 }
 
-const DispatchFallbackRule *
-find_cpu_fallback_deny_rule(OpId id, const Tensor &tensor) {
+int dispatch_rule_specificity(const DispatchFallbackRule &rule) {
+  int score = 0;
+  if (rule.feature.has_value()) {
+    score += 4;
+  }
+  if (rule.op.has_value()) {
+    score += 2;
+  }
+  if (rule.dtype.has_value()) {
+    score += 1;
+  }
+  return score;
+}
+
+const DispatchFallbackRule *find_matching_dispatch_rule(
+    OpId id, BackendFeature feature, const Tensor &tensor) {
   const DeviceType device_type = tensor.device().type;
   const DataType dtype = tensor.dtype();
+  const DispatchFallbackRule *best = nullptr;
+  int best_score = -1;
   for (const auto &rule : dispatch_fallback_rules()) {
-    if (rule.op != id || rule.device_type != device_type) {
+    if (rule.device_type != device_type) {
       continue;
     }
-    if (!rule.dtype.has_value() || *rule.dtype == dtype) {
-      return &rule;
+    if (rule.feature.has_value() && *rule.feature != feature) {
+      continue;
+    }
+    if (rule.op.has_value() && *rule.op != id) {
+      continue;
+    }
+    if (rule.dtype.has_value() && *rule.dtype != dtype) {
+      continue;
+    }
+    const int score = dispatch_rule_specificity(rule);
+    if (score > best_score) {
+      best = &rule;
+      best_score = score;
     }
   }
-  return nullptr;
+  return best;
 }
 
 } // namespace
@@ -304,9 +335,10 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     return {meta, true, false, support};
   }
 
-  const DispatchFallbackRule *fallback_deny_rule =
-      find_cpu_fallback_deny_rule(id, tensor);
-  const bool disallow_cpu_fallback = fallback_deny_rule != nullptr;
+  const DispatchFallbackRule *matched_rule =
+      find_matching_dispatch_rule(id, feature, tensor);
+  const bool disallow_cpu_fallback =
+      matched_rule != nullptr && matched_rule->deny_cpu_fallback;
 
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
       support.fallback_policy == BackendFallbackPolicy::CPUFallback &&
@@ -332,7 +364,7 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   if (disallow_cpu_fallback) {
     throw std::runtime_error(
         std::string(meta.name) + ": " +
-        std::string(fallback_deny_rule->error_message) + " for backend '" +
+        std::string(matched_rule->error_message) + " for backend '" +
         std::string(tensor.impl_->backend().name()) +
         "' on device '" + tensor.device().to_string() + "'");
   }
