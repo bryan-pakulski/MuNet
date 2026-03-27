@@ -25,14 +25,6 @@ public:
   ~CUDABackend() override;
 
   const char *name() const override { return "cuda"; }
-  BackendFallbackPolicy
-  preferred_fallback_policy(BackendFeature feature,
-                            DataType dtype) const override {
-    if (feature == BackendFeature::Convolution && dtype == DataType::Float16) {
-      return BackendFallbackPolicy::CPUFallback;
-    }
-    return Backend::preferred_fallback_policy(feature, dtype);
-  }
 
   BackendAllocationTransferCapability *
   allocation_transfer_capability() override {

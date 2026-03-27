@@ -223,6 +223,7 @@ void log_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
 struct DispatchFallbackRule {
   enum class Action {
     DenyCPUFallback,
+    ForceCPUFallback,
   };
 
   DeviceType device_type;
@@ -241,6 +242,18 @@ const std::vector<DispatchFallbackRule> &dispatch_fallback_rules() {
       {DeviceType::VULKAN, BackendFeature::Matmul, std::nullopt,
        DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
        "Vulkan backend does not support bfloat16 matmul-feature fallback"},
+      {DeviceType::CPU, BackendFeature::Convolution, std::nullopt,
+       DataType::Float16, DispatchFallbackRule::Action::ForceCPUFallback,
+       "CPU backend forces float16 convolution fallback"},
+      {DeviceType::CPU, BackendFeature::Convolution, std::nullopt,
+       DataType::BFloat16, DispatchFallbackRule::Action::ForceCPUFallback,
+       "CPU backend forces bfloat16 convolution fallback"},
+      {DeviceType::CUDA, BackendFeature::Convolution, std::nullopt,
+       DataType::Float16, DispatchFallbackRule::Action::ForceCPUFallback,
+       "CUDA backend forces float16 convolution fallback"},
+      {DeviceType::VULKAN, BackendFeature::Convolution, std::nullopt,
+       DataType::Float16, DispatchFallbackRule::Action::ForceCPUFallback,
+       "Vulkan backend forces float16 convolution fallback"},
       {DeviceType::CUDA, BackendFeature::Matmul, std::nullopt,
        DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
        "CUDA backend does not support bfloat16 matmul-feature fallback"},
@@ -344,8 +357,25 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   }
 
   const auto feature = *meta.feature;
-  const auto support = tensor.impl_->backend().query_support(
+  auto support = tensor.impl_->backend().query_support(
       feature, tensor.dtype(), &tensor.shape());
+
+  const DispatchFallbackRule *matched_rule =
+      find_matching_dispatch_rule(id, feature, tensor);
+  const bool force_cpu_fallback =
+      matched_rule != nullptr &&
+      matched_rule->action == DispatchFallbackRule::Action::ForceCPUFallback;
+  const bool disallow_cpu_fallback =
+      matched_rule != nullptr &&
+      matched_rule->action == DispatchFallbackRule::Action::DenyCPUFallback;
+
+  if (force_cpu_fallback) {
+    support.fallback_policy = BackendFallbackPolicy::CPUFallback;
+    if (timer) {
+      record_dispatch_profile("cpu_fallback", meta, tensor, timer->elapsed_us());
+    }
+    return {meta, false, true, support};
+  }
 
   if (support.available) {
     if (timer) {
@@ -353,12 +383,6 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     }
     return {meta, true, false, support};
   }
-
-  const DispatchFallbackRule *matched_rule =
-      find_matching_dispatch_rule(id, feature, tensor);
-  const bool disallow_cpu_fallback =
-      matched_rule != nullptr &&
-      matched_rule->action == DispatchFallbackRule::Action::DenyCPUFallback;
 
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
       support.fallback_policy == BackendFallbackPolicy::CPUFallback &&
