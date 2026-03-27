@@ -4,6 +4,8 @@
 #include "../types.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
@@ -33,6 +35,7 @@ struct AllReduceState {
   int arrived = 0;
   std::vector<std::vector<uint8_t>> payloads;
   std::vector<AllReduceTarget> targets;
+  std::vector<uint64_t> tickets;
 };
 
 inline int configured_all_reduce_world_size() {
@@ -59,6 +62,15 @@ inline AllReduceExecutionMode configured_all_reduce_mode() {
     return AllReduceExecutionMode::HostFallback;
   }
   return AllReduceExecutionMode::DeviceNative;
+}
+
+inline int configured_all_reduce_timeout_ms() {
+  const char *env = std::getenv("MUNET_ALLREDUCE_TIMEOUT_MS");
+  if (!env) {
+    return 10000;
+  }
+  int parsed = std::atoi(env);
+  return parsed > 0 ? parsed : 10000;
 }
 
 inline std::string all_reduce_key(const Device &device, DataType dtype,
@@ -160,12 +172,15 @@ inline void all_reduce_via_host(Storage &buffer, size_t num_elements,
   static std::mutex mutex;
   static std::condition_variable cv;
   static std::unordered_map<std::string, AllReduceState> states;
+  static std::atomic<uint64_t> next_ticket{1};
 
   const std::string key = all_reduce_key(device, dtype, num_elements);
   std::vector<uint8_t> reduced;
   std::vector<AllReduceTarget> targets;
   int generation = 0;
   bool last_arrival = false;
+  const uint64_t ticket = next_ticket.fetch_add(1, std::memory_order_relaxed);
+  const int timeout_ms = configured_all_reduce_timeout_ms();
 
   {
     std::unique_lock<std::mutex> lock(mutex);
@@ -173,6 +188,7 @@ inline void all_reduce_via_host(Storage &buffer, size_t num_elements,
     generation = state.generation;
     state.payloads.push_back(std::move(payload));
     state.targets.push_back(AllReduceTarget{&buffer, &backend, device});
+    state.tickets.push_back(ticket);
     ++state.arrived;
 
     if (state.arrived == world_size) {
@@ -180,12 +196,33 @@ inline void all_reduce_via_host(Storage &buffer, size_t num_elements,
       targets = state.targets;
       state.payloads.clear();
       state.targets.clear();
+      state.tickets.clear();
       state.arrived = 0;
       ++state.generation;
       last_arrival = true;
       cv.notify_all();
     } else {
-      cv.wait(lock, [&] { return state.generation != generation; });
+      const bool advanced = cv.wait_for(
+          lock, std::chrono::milliseconds(timeout_ms),
+          [&] { return state.generation != generation; });
+      if (!advanced) {
+        auto it = std::find(state.tickets.begin(), state.tickets.end(), ticket);
+        if (it != state.tickets.end()) {
+          const size_t idx = static_cast<size_t>(it - state.tickets.begin());
+          state.tickets.erase(it);
+          if (idx < state.payloads.size()) {
+            state.payloads.erase(state.payloads.begin() + static_cast<long>(idx));
+          }
+          if (idx < state.targets.size()) {
+            state.targets.erase(state.targets.begin() + static_cast<long>(idx));
+          }
+          state.arrived = std::max(0, state.arrived - 1);
+        }
+        cv.notify_all();
+        throw std::runtime_error(
+            "all_reduce: timeout waiting for participants in group '" + key +
+            "' (waited " + std::to_string(timeout_ms) + " ms)");
+      }
       return;
     }
   }

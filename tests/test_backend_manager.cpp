@@ -1026,6 +1026,22 @@ TEST(BackendManagerTest, CpuAllReduceAggregatesAcrossParticipants) {
   EXPECT_FLOAT_EQ(bp[1], 6.0f);
 }
 
+TEST(BackendManagerTest, AllReduceTimesOutWhenParticipantsNeverArrive) {
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  ScopedEnvVar timeout_ms("MUNET_ALLREDUCE_TIMEOUT_MS", "50");
+  ScopedEnvVar group("MUNET_ALLREDUCE_GROUP", "timeout_guard_cpu");
+
+  Tensor a({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  float *pa = static_cast<float *>(a.data());
+  pa[0] = 1.0f;
+  pa[1] = 2.0f;
+
+  EXPECT_THROW(
+      BackendManager::get(Device{DeviceType::CPU, 0})
+          ->all_reduce(*a.impl_->storage, 2),
+      std::runtime_error);
+}
+
 TEST(BackendManagerTest,
      AllReduceHostPathRequiresExplicitOverrideForAcceleratorDevices) {
   ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
