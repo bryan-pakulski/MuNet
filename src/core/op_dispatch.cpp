@@ -221,21 +221,25 @@ void log_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
 }
 
 struct DispatchFallbackRule {
+  enum class Action {
+    DenyCPUFallback,
+  };
+
   DeviceType device_type;
   std::optional<BackendFeature> feature;
   std::optional<OpId> op;
   std::optional<DataType> dtype;
-  bool deny_cpu_fallback = false;
+  Action action = Action::DenyCPUFallback;
   const char *error_message;
 };
 
 const std::vector<DispatchFallbackRule> &dispatch_fallback_rules() {
   static const std::vector<DispatchFallbackRule> kRules = {
       {DeviceType::VULKAN, BackendFeature::Matmul, OpId::Matmul,
-       DataType::Float16, true,
+       DataType::Float16, DispatchFallbackRule::Action::DenyCPUFallback,
        "Vulkan backend does not support float16 matmul fallback"},
       {DeviceType::VULKAN, BackendFeature::Matmul, OpId::Matmul,
-       DataType::BFloat16, true,
+       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
        "Vulkan backend does not support bfloat16 matmul fallback"},
   };
   return kRules;
@@ -338,7 +342,8 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   const DispatchFallbackRule *matched_rule =
       find_matching_dispatch_rule(id, feature, tensor);
   const bool disallow_cpu_fallback =
-      matched_rule != nullptr && matched_rule->deny_cpu_fallback;
+      matched_rule != nullptr &&
+      matched_rule->action == DispatchFallbackRule::Action::DenyCPUFallback;
 
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
       support.fallback_policy == BackendFallbackPolicy::CPUFallback &&
