@@ -300,6 +300,8 @@ PYBIND11_MODULE(munet, m) {
           "Returns the total number of elements in the tensor.")
       .def("detach", &Tensor::detach,
            "Returns a new Tensor, detached from the current autograd graph.")
+      .def("clone", &Tensor::clone,
+           "Returns a deep copy of this tensor.")
       .def("__repr__",
            [](const Tensor &t) {
              if (!t.impl_)
@@ -340,6 +342,22 @@ PYBIND11_MODULE(munet, m) {
       // Autograd
       .def("zero_grad", &Tensor::zero_grad,
            "Clears the gradient of the tensor.")
+      .def("has_grad", &Tensor::has_grad,
+           "Returns whether this tensor currently has gradient storage.")
+      .def(
+          "register_gradient_hook",
+          [](Tensor &t, py::function hook) {
+            t.register_gradient_hook([hook](const Tensor &grad) {
+              py::gil_scoped_acquire acquire;
+              py::object out = hook(grad);
+              if (out.is_none()) {
+                return grad;
+              }
+              return out.cast<Tensor>();
+            });
+          },
+          py::arg("hook"),
+          "Registers a gradient hook. Return None to keep the original grad.")
       .def(
           "backward",
           [](Tensor &t, bool retain_graph) { t.backward(retain_graph); },
@@ -427,6 +445,14 @@ PYBIND11_MODULE(munet, m) {
       .def("uniform_", &Tensor::uniform_, py::arg("low") = -1.0f,
            py::arg("high") = 1.0f,
            "Fills the tensor with values from a uniform distribution.")
+      .def(
+          "fill_",
+          [](Tensor &self, float value) -> Tensor & {
+            self.fill_(value);
+            return self;
+          },
+          py::arg("value"), py::return_value_policy::reference_internal,
+          "In-place fills the tensor with a scalar value and returns self.")
       .def("step", &Tensor::step, py::arg("lr"),
            "Applies a simple SGD step manually directly to the tensor.")
 
@@ -464,6 +490,9 @@ PYBIND11_MODULE(munet, m) {
            py::arg("running_var"), py::arg("weight"), py::arg("bias"),
            py::arg("training"), py::arg("momentum") = 0.1,
            py::arg("eps") = 1e-5, "Applies Batch Normalization.")
+      .def("layer_norm", &Tensor::layer_norm, py::arg("weight"),
+           py::arg("bias"), py::arg("eps") = 1e-5f,
+           "Applies Layer Normalization over the last tensor dimension.")
       .def("mse_loss", &Tensor::mse_loss, py::arg("target"),
            "Computes Mean Squared Error against the target tensor.")
       .def("cross_entropy", &Tensor::cross_entropy, py::arg("target"),
