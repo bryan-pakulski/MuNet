@@ -272,23 +272,6 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     return {meta, true, false, support};
   }
 
-  const bool accelerator_device = tensor.device().type == DeviceType::CUDA ||
-                                  tensor.device().type == DeviceType::VULKAN;
-  if (accelerator_device) {
-    const auto reason =
-        classify_dispatch_fallback(meta, tensor, feature, support);
-    log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
-    record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
-    if (timer) {
-      record_dispatch_profile("unsupported", meta, tensor, timer->elapsed_us());
-    }
-    throw std::runtime_error(
-        std::string(meta.name) + ": accelerator backend '" +
-        std::string(tensor.impl_->backend().name()) +
-        "' lacks native support for dtype " + dtype_name(tensor.dtype()) +
-        " and no accelerator fallback is allowed");
-  }
-
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
       support.fallback_policy == BackendFallbackPolicy::CPUFallback) {
     const auto reason =
