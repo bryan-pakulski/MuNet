@@ -51,6 +51,7 @@ static VkFence inFlightFences[MAX_FRAMES_IN_FLIGHT];
 static VkQueryPool queryPools[MAX_FRAMES_IN_FLIGHT];
 
 static float timestampPeriod = 1.0f;
+static bool vulkan_runtime_ready = false;
 
 // --- Allocator State ---
 static std::unordered_map<size_t, std::vector<uint64_t>> free_pool;
@@ -2025,10 +2026,14 @@ void main() {
           dst[idx] = src[src_off];
       }
   )");
+  vulkan_runtime_ready = true;
 }
 
 VulkanBackend::~VulkanBackend() {
-  if (device != VK_NULL_HANDLE) {
+  const bool can_destroy_runtime =
+      vulkan_runtime_ready && device != VK_NULL_HANDLE;
+  vulkan_runtime_ready = false;
+  if (can_destroy_runtime) {
     vkDeviceWaitIdle(device); // Full stop
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
       vkDestroyFence(device, inFlightFences[i], nullptr);
