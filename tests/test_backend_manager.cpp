@@ -1,12 +1,16 @@
 #include "backend.hpp"
 #include "backend/cpu_backend.hpp"
+#include "core/all_reduce_runtime.hpp"
 #include "core/util/profiler.hpp"
 #include "tensor.hpp"
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <functional>
 #include <gtest/gtest.h>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -30,6 +34,31 @@ public:
   }
 
   ~ScopedDebugOverride() { set_debug_enabled_override(std::nullopt); }
+};
+
+class ScopedEnvVar {
+public:
+  ScopedEnvVar(const char *name, const char *value) : name_(name) {
+    const char *existing = std::getenv(name_);
+    if (existing) {
+      had_original_ = true;
+      original_value_ = existing;
+    }
+    setenv(name_, value, 1);
+  }
+
+  ~ScopedEnvVar() {
+    if (had_original_) {
+      setenv(name_, original_value_.c_str(), 1);
+    } else {
+      unsetenv(name_);
+    }
+  }
+
+private:
+  const char *name_;
+  bool had_original_{false};
+  std::string original_value_;
 };
 
 class PartialMatmulBackend : public Backend,
@@ -957,4 +986,302 @@ TEST(BackendManagerTest, TraceContextCorrelatesTransferDispatchAndLogs) {
   EXPECT_NE(stderr_output.find("[trace_id=4242 span=run.forward]"),
             std::string::npos);
   EXPECT_NE(stderr_output.find("dispatch_fallback"), std::string::npos);
+}
+
+TEST(BackendManagerTest, CpuAllReduceAggregatesAcrossParticipants) {
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  BackendManager::registry().clear_cache(DeviceType::CPU);
+
+  const Device cpu{DeviceType::CPU, 0};
+  auto backend = BackendManager::get(cpu);
+  ASSERT_NE(backend, nullptr);
+
+  Storage a(2 * sizeof(float), cpu, DataType::Float32, {2});
+  Storage b(2 * sizeof(float), cpu, DataType::Float32, {2});
+  float *ap = static_cast<float *>(a.data());
+  float *bp = static_cast<float *>(b.data());
+  ap[0] = 1.0f;
+  ap[1] = 2.0f;
+  bp[0] = 3.0f;
+  bp[1] = 4.0f;
+
+  std::thread t1([&] { backend->all_reduce(a, 2); });
+  std::thread t2([&] { backend->all_reduce(b, 2); });
+  t1.join();
+  t2.join();
+
+  EXPECT_FLOAT_EQ(ap[0], 4.0f);
+  EXPECT_FLOAT_EQ(ap[1], 6.0f);
+  EXPECT_FLOAT_EQ(bp[0], 4.0f);
+  EXPECT_FLOAT_EQ(bp[1], 6.0f);
+}
+
+TEST(BackendManagerTest,
+     AllReduceHostPathRequiresExplicitOverrideForAcceleratorDevices) {
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  ScopedEnvVar mode("MUNET_ALLREDUCE_MODE", "device_native");
+  BackendManager::registry().clear_cache(DeviceType::UNKNOWN);
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device unknown{DeviceType::UNKNOWN, 0};
+  Storage a(2 * sizeof(float), unknown, DataType::Float32, {2});
+  float *ap = static_cast<float *>(a.data());
+  ap[0] = 1.0f;
+  ap[1] = 2.0f;
+
+  EXPECT_THROW(
+      detail::all_reduce_via_host(a, 2, a.backend(), Device{DeviceType::CUDA, 0}),
+      std::runtime_error);
+}
+
+TEST(BackendManagerTest, ForcedHostAllReduceSupportsAcceleratorDeviceKeys) {
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  ScopedEnvVar mode("MUNET_ALLREDUCE_MODE", "device_native");
+  BackendManager::registry().clear_cache(DeviceType::UNKNOWN);
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device unknown{DeviceType::UNKNOWN, 0};
+  Storage a(2 * sizeof(float), unknown, DataType::Float32, {2});
+  Storage b(2 * sizeof(float), unknown, DataType::Float32, {2});
+  float *ap = static_cast<float *>(a.data());
+  float *bp = static_cast<float *>(b.data());
+  ap[0] = 1.0f;
+  ap[1] = 2.0f;
+  bp[0] = 3.0f;
+  bp[1] = 4.0f;
+
+  std::thread t1([&] {
+    detail::all_reduce_via_host(a, 2, a.backend(), Device{DeviceType::CUDA, 0},
+                                true);
+  });
+  std::thread t2([&] {
+    detail::all_reduce_via_host(b, 2, b.backend(), Device{DeviceType::CUDA, 0},
+                                true);
+  });
+  t1.join();
+  t2.join();
+
+  EXPECT_FLOAT_EQ(ap[0], 4.0f);
+  EXPECT_FLOAT_EQ(ap[1], 6.0f);
+  EXPECT_FLOAT_EQ(bp[0], 4.0f);
+  EXPECT_FLOAT_EQ(bp[1], 6.0f);
+}
+
+TEST(BackendManagerTest, CudaMultiDeviceAllReduceAggregatesAcrossGpuIndices) {
+  const Device cuda0{DeviceType::CUDA, 0};
+  const Device cuda1{DeviceType::CUDA, 1};
+  try {
+    (void)Tensor({1}, cuda0, DataType::Float32);
+    (void)Tensor({1}, cuda1, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "CUDA multi-device environment unavailable";
+  }
+
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  ScopedEnvVar mode("MUNET_ALLREDUCE_MODE", "device_native");
+
+  Tensor a_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  Tensor b_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  float *ac = static_cast<float *>(a_cpu.data());
+  float *bc = static_cast<float *>(b_cpu.data());
+  ac[0] = 1.0f;
+  ac[1] = 2.0f;
+  bc[0] = 3.0f;
+  bc[1] = 4.0f;
+
+  Tensor a = a_cpu.to(cuda0);
+  Tensor b = b_cpu.to(cuda1);
+  auto backend0 = BackendManager::get(cuda0);
+  auto backend1 = BackendManager::get(cuda1);
+
+  std::exception_ptr eptr = nullptr;
+  std::mutex err_mtx;
+  auto run_reduce = [&](std::shared_ptr<Backend> backend, Tensor &tensor) {
+    try {
+      backend->all_reduce(*tensor.impl_->storage, 2);
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(err_mtx);
+      if (!eptr)
+        eptr = std::current_exception();
+    }
+  };
+
+  std::thread t0(run_reduce, backend0, std::ref(a));
+  std::thread t1(run_reduce, backend1, std::ref(b));
+  t0.join();
+  t1.join();
+
+  if (eptr) {
+    try {
+      std::rethrow_exception(eptr);
+    } catch (const std::runtime_error &err) {
+      GTEST_SKIP() << "CUDA multi-device all_reduce unavailable at runtime: "
+                   << err.what();
+    }
+  }
+
+  Tensor a_out = a.to(Device{DeviceType::CPU, 0});
+  Tensor b_out = b.to(Device{DeviceType::CPU, 0});
+  const float *ao = static_cast<const float *>(a_out.data());
+  const float *bo = static_cast<const float *>(b_out.data());
+  EXPECT_FLOAT_EQ(ao[0], 4.0f);
+  EXPECT_FLOAT_EQ(ao[1], 6.0f);
+  EXPECT_FLOAT_EQ(bo[0], 4.0f);
+  EXPECT_FLOAT_EQ(bo[1], 6.0f);
+}
+
+TEST(BackendManagerTest,
+     VulkanMultiDeviceTrainingGradientAllReduceAggregatesAcrossGpuIndices) {
+  const Device vk0{DeviceType::VULKAN, 0};
+  const Device vk1{DeviceType::VULKAN, 1};
+  try {
+    (void)Tensor({1}, vk0, DataType::Float32);
+    (void)Tensor({1}, vk1, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "Vulkan multi-device environment unavailable";
+  }
+
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  ScopedEnvVar mode("MUNET_ALLREDUCE_MODE", "device_native");
+
+  // Simulate two training replicas with per-replica gradient buffers.
+  Tensor g0_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  Tensor g1_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  float *g0p = static_cast<float *>(g0_cpu.data());
+  float *g1p = static_cast<float *>(g1_cpu.data());
+  g0p[0] = 0.5f;
+  g0p[1] = 1.5f;
+  g1p[0] = 1.0f;
+  g1p[1] = 2.0f;
+
+  Tensor g0 = g0_cpu.to(vk0);
+  Tensor g1 = g1_cpu.to(vk1);
+  auto backend0 = BackendManager::get(vk0);
+  auto backend1 = BackendManager::get(vk1);
+
+  std::exception_ptr eptr = nullptr;
+  std::mutex err_mtx;
+  auto run_reduce = [&](std::shared_ptr<Backend> backend, Tensor &tensor) {
+    try {
+      backend->all_reduce(*tensor.impl_->storage, 2);
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(err_mtx);
+      if (!eptr)
+        eptr = std::current_exception();
+    }
+  };
+
+  std::thread t0(run_reduce, backend0, std::ref(g0));
+  std::thread t1(run_reduce, backend1, std::ref(g1));
+  t0.join();
+  t1.join();
+
+  if (eptr) {
+    try {
+      std::rethrow_exception(eptr);
+    } catch (const std::runtime_error &err) {
+      GTEST_SKIP() << "Vulkan multi-device all_reduce unavailable at runtime: "
+                   << err.what();
+    }
+  }
+
+  Tensor g0_out = g0.to(Device{DeviceType::CPU, 0});
+  Tensor g1_out = g1.to(Device{DeviceType::CPU, 0});
+  const float *o0 = static_cast<const float *>(g0_out.data());
+  const float *o1 = static_cast<const float *>(g1_out.data());
+  EXPECT_FLOAT_EQ(o0[0], 1.5f);
+  EXPECT_FLOAT_EQ(o0[1], 3.5f);
+  EXPECT_FLOAT_EQ(o1[0], 1.5f);
+  EXPECT_FLOAT_EQ(o1[1], 3.5f);
+}
+
+TEST(BackendManagerTest, MixedCpuCudaVulkanAllReduceAggregatesTogether) {
+  const Device cpu{DeviceType::CPU, 0};
+  const Device cuda{DeviceType::CUDA, 0};
+  const Device vk{DeviceType::VULKAN, 0};
+  try {
+    (void)Tensor({1}, cpu, DataType::Float32);
+    (void)Tensor({1}, cuda, DataType::Float32);
+    (void)Tensor({1}, vk, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "CPU/CUDA/Vulkan mixed backend environment unavailable";
+  }
+
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "3");
+  ScopedEnvVar mode("MUNET_ALLREDUCE_MODE", "device_native");
+  ScopedEnvVar group("MUNET_ALLREDUCE_GROUP", "mixed_cpu_cuda_vulkan");
+
+  Tensor c0({2}, cpu, DataType::Float32);
+  Tensor c1({2}, cpu, DataType::Float32);
+  Tensor c2({2}, cpu, DataType::Float32);
+  float *p0 = static_cast<float *>(c0.data());
+  float *p1 = static_cast<float *>(c1.data());
+  float *p2 = static_cast<float *>(c2.data());
+  p0[0] = 1.0f;
+  p0[1] = 2.0f;
+  p1[0] = 2.0f;
+  p1[1] = 3.0f;
+  p2[0] = 3.0f;
+  p2[1] = 4.0f;
+
+  Tensor t_cpu = c0;
+  Tensor t_cuda = c1.to(cuda);
+  Tensor t_vk = c2.to(vk);
+
+  auto b_cpu = BackendManager::get(cpu);
+  auto b_cuda = BackendManager::get(cuda);
+  auto b_vk = BackendManager::get(vk);
+  std::exception_ptr eptr = nullptr;
+  std::mutex err_mtx;
+
+  auto run_reduce = [&](std::shared_ptr<Backend> backend, Tensor &tensor) {
+    try {
+      backend->all_reduce(*tensor.impl_->storage, 2);
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(err_mtx);
+      if (!eptr)
+        eptr = std::current_exception();
+    }
+  };
+
+  std::thread t0(run_reduce, b_cpu, std::ref(t_cpu));
+  std::thread t1(run_reduce, b_cuda, std::ref(t_cuda));
+  std::thread t2(run_reduce, b_vk, std::ref(t_vk));
+  t0.join();
+  t1.join();
+  t2.join();
+
+  if (eptr) {
+    try {
+      std::rethrow_exception(eptr);
+    } catch (const std::runtime_error &err) {
+      FAIL() << "Mixed CPU/CUDA/Vulkan all_reduce failed at runtime: "
+             << err.what();
+    } catch (const std::exception &err) {
+      FAIL() << "Mixed CPU/CUDA/Vulkan all_reduce failed with exception: "
+             << err.what();
+    } catch (...) {
+      FAIL() << "Mixed CPU/CUDA/Vulkan all_reduce failed with unknown "
+                "exception";
+    }
+  }
+
+  Tensor out_cpu = t_cpu.to(Device{DeviceType::CPU, 0});
+  Tensor out_cuda = t_cuda.to(Device{DeviceType::CPU, 0});
+  Tensor out_vk = t_vk.to(Device{DeviceType::CPU, 0});
+
+  const float *oc = static_cast<const float *>(out_cpu.data());
+  const float *ou = static_cast<const float *>(out_cuda.data());
+  const float *ov = static_cast<const float *>(out_vk.data());
+
+  EXPECT_FLOAT_EQ(oc[0], 6.0f);
+  EXPECT_FLOAT_EQ(oc[1], 9.0f);
+  EXPECT_FLOAT_EQ(ou[0], 6.0f);
+  EXPECT_FLOAT_EQ(ou[1], 9.0f);
+  EXPECT_FLOAT_EQ(ov[0], 6.0f);
+  EXPECT_FLOAT_EQ(ov[1], 9.0f);
 }

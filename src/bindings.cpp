@@ -27,11 +27,18 @@ DataType numpy_dtype_to_data_type(const py::buffer_info &buf) {
       buf.format == py::format_descriptor<int32_t>::format()) {
     return DataType::Int32;
   }
+  if (buf.itemsize == static_cast<py::ssize_t>(sizeof(int8_t)) &&
+      buf.format == py::format_descriptor<int8_t>::format()) {
+    return DataType::Int8;
+  }
   if (buf.itemsize == 2 && buf.format.find('e') != std::string::npos) {
     return DataType::Float16;
   }
+  if (buf.itemsize == 2 && buf.format.find('H') != std::string::npos) {
+    return DataType::BFloat16;
+  }
   throw std::runtime_error(
-      "Unsupported NumPy dtype; expected float32, float16, or int32");
+      "Unsupported NumPy dtype; expected float32, float16/bfloat16, int32, or int8");
 }
 
 std::string numpy_format_for_dtype(DataType dtype) {
@@ -40,8 +47,12 @@ std::string numpy_format_for_dtype(DataType dtype) {
     return py::format_descriptor<float>::format();
   case DataType::Float16:
     return "e";
+  case DataType::BFloat16:
+    return "H";
   case DataType::Int32:
     return py::format_descriptor<int32_t>::format();
+  case DataType::Int8:
+    return py::format_descriptor<int8_t>::format();
   default:
     throw std::runtime_error("Unsupported tensor dtype for NumPy conversion");
   }
@@ -186,7 +197,9 @@ PYBIND11_MODULE(munet, m) {
   py::enum_<DataType>(m, "DataType", "Supported data types for tensors.")
       .value("Float32", DataType::Float32)
       .value("Float16", DataType::Float16)
+      .value("BFloat16", DataType::BFloat16)
       .value("Int32", DataType::Int32)
+      .value("Int8", DataType::Int8)
       .export_values();
 
   py::enum_<BackendFeature>(m, "BackendFeature",
@@ -287,6 +300,8 @@ PYBIND11_MODULE(munet, m) {
           "Returns the total number of elements in the tensor.")
       .def("detach", &Tensor::detach,
            "Returns a new Tensor, detached from the current autograd graph.")
+      .def("clone", &Tensor::clone,
+           "Returns a deep copy of this tensor.")
       .def("__repr__",
            [](const Tensor &t) {
              if (!t.impl_)
@@ -327,6 +342,22 @@ PYBIND11_MODULE(munet, m) {
       // Autograd
       .def("zero_grad", &Tensor::zero_grad,
            "Clears the gradient of the tensor.")
+      .def("has_grad", &Tensor::has_grad,
+           "Returns whether this tensor currently has gradient storage.")
+      .def(
+          "register_gradient_hook",
+          [](Tensor &t, py::function hook) {
+            t.register_gradient_hook([hook](const Tensor &grad) {
+              py::gil_scoped_acquire acquire;
+              py::object out = hook(grad);
+              if (out.is_none()) {
+                return grad;
+              }
+              return out.cast<Tensor>();
+            });
+          },
+          py::arg("hook"),
+          "Registers a gradient hook. Return None to keep the original grad.")
       .def(
           "backward",
           [](Tensor &t, bool retain_graph) { t.backward(retain_graph); },
@@ -339,6 +370,27 @@ PYBIND11_MODULE(munet, m) {
           },
           py::arg("grad"), py::arg("retain_graph") = false,
           "Computes the gradient with a given upstream gradient.")
+      .def(
+          "all_reduce",
+          [](Tensor &t, std::optional<size_t> num_elements) {
+            if (!t.impl_ || !t.impl_->storage) {
+              throw std::runtime_error("Cannot all_reduce an uninitialized tensor.");
+            }
+            if (t.storage_offset() != 0 ||
+                t.bytes() != t.impl_->storage->size_bytes()) {
+              throw std::runtime_error(
+                  "all_reduce currently requires a base tensor (no view/slice offset).");
+            }
+            const size_t elems = num_elements.value_or(t.size());
+            if (elems > t.size()) {
+              throw std::runtime_error("all_reduce num_elements exceeds tensor size.");
+            }
+            t.impl_->backend().all_reduce(*t.impl_->storage, elems);
+            return t;
+          },
+          py::arg("num_elements") = std::nullopt,
+          py::call_guard<py::gil_scoped_release>(),
+          "Performs in-place all-reduce on this tensor via the active backend.")
 
       // Math & Ops
       .def("__add__", [](const Tensor &a, const Tensor &b) { return a + b; })
@@ -393,6 +445,14 @@ PYBIND11_MODULE(munet, m) {
       .def("uniform_", &Tensor::uniform_, py::arg("low") = -1.0f,
            py::arg("high") = 1.0f,
            "Fills the tensor with values from a uniform distribution.")
+      .def(
+          "fill_",
+          [](Tensor &self, float value) -> Tensor & {
+            self.fill_(value);
+            return self;
+          },
+          py::arg("value"), py::return_value_policy::reference_internal,
+          "In-place fills the tensor with a scalar value and returns self.")
       .def("step", &Tensor::step, py::arg("lr"),
            "Applies a simple SGD step manually directly to the tensor.")
 
@@ -430,6 +490,9 @@ PYBIND11_MODULE(munet, m) {
            py::arg("running_var"), py::arg("weight"), py::arg("bias"),
            py::arg("training"), py::arg("momentum") = 0.1,
            py::arg("eps") = 1e-5, "Applies Batch Normalization.")
+      .def("layer_norm", &Tensor::layer_norm, py::arg("weight"),
+           py::arg("bias"), py::arg("eps") = 1e-5f,
+           "Applies Layer Normalization over the last tensor dimension.")
       .def("mse_loss", &Tensor::mse_loss, py::arg("target"),
            "Computes Mean Squared Error against the target tensor.")
       .def("cross_entropy", &Tensor::cross_entropy, py::arg("target"),
@@ -1052,13 +1115,17 @@ def _tensor_dtype_name(t):
     m = __import__("munet")
     return {m.DataType.Float32: "float32",
             m.DataType.Float16: "float16",
-            m.DataType.Int32: "int32"}[t.dtype]
+            m.DataType.BFloat16: "bfloat16",
+            m.DataType.Int32: "int32",
+            m.DataType.Int8: "int8"}[t.dtype]
 
 def _dtype_from_name(name):
     m = __import__("munet")
     return {"float32": m.DataType.Float32,
             "float16": m.DataType.Float16,
-            "int32": m.DataType.Int32}[name]
+            "bfloat16": m.DataType.BFloat16,
+            "int32": m.DataType.Int32,
+            "int8": m.DataType.Int8}[name]
 
 def _tensor_options_for_dtype(dtype_name):
     m = __import__("munet")

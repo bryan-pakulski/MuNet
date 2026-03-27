@@ -174,12 +174,12 @@ backend_feature_default_fallback_policy(BackendFeature feature) {
   case BackendFeature::Softmax:
   case BackendFeature::Reduction:
   case BackendFeature::RandomFill:
-    return BackendFallbackPolicy::CPUFallback;
-  case BackendFeature::Concat:
   case BackendFeature::Loss:
-  case BackendFeature::Convolution:
   case BackendFeature::Pooling:
   case BackendFeature::BatchNorm:
+    return BackendFallbackPolicy::CPUFallback;
+  case BackendFeature::Convolution:
+  case BackendFeature::Concat:
   case BackendFeature::OptimizerStep:
     return BackendFallbackPolicy::ExplicitUnsupported;
   default:

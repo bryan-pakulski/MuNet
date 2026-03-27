@@ -9,8 +9,13 @@ using namespace munet;
 TEST(TensorDTypeTest, DTypeUtilitiesProvidePromotionAndAccumulationRules) {
   EXPECT_TRUE(is_floating(DataType::Float32));
   EXPECT_TRUE(is_low_precision(DataType::Float16));
+  EXPECT_TRUE(is_floating(DataType::BFloat16));
+  EXPECT_TRUE(is_low_precision(DataType::Int8));
   EXPECT_TRUE(is_integral(DataType::Int32));
+  EXPECT_TRUE(is_integral(DataType::Int8));
   EXPECT_EQ(dtype_name(DataType::Float16), "float16");
+  EXPECT_EQ(dtype_name(DataType::BFloat16), "bfloat16");
+  EXPECT_EQ(dtype_name(DataType::Int8), "int8");
   DTypeInfo float16_info = dtype_info(DataType::Float16);
   EXPECT_EQ(float16_info.name, std::string("float16"));
   EXPECT_EQ(float16_info.size_bytes, 2u);
@@ -18,7 +23,13 @@ TEST(TensorDTypeTest, DTypeUtilitiesProvidePromotionAndAccumulationRules) {
   EXPECT_TRUE(float16_info.low_precision);
   EXPECT_EQ(promote_types(DataType::Int32, DataType::Float16),
             DataType::Float16);
+  EXPECT_EQ(promote_types(DataType::BFloat16, DataType::Float16),
+            DataType::BFloat16);
   EXPECT_EQ(accumulation_type(AccumulationOp::Elementwise, DataType::Float16),
+            DataType::Float32);
+  EXPECT_EQ(accumulation_type(AccumulationOp::Elementwise, DataType::BFloat16),
+            DataType::Float32);
+  EXPECT_EQ(accumulation_type(AccumulationOp::Elementwise, DataType::Int8),
             DataType::Float32);
   EXPECT_EQ(accumulation_type(AccumulationOp::Reduction, DataType::Float16),
             DataType::Float32);
@@ -134,6 +145,68 @@ TEST(TensorDTypeTest, Float16MatmulAndSumUseTypedFallbacks) {
 
   Tensor total = out.sum().to(DataType::Float32);
   EXPECT_NEAR(static_cast<float *>(total.data())[0], 415.0f, 5e-1f);
+}
+
+TEST(TensorDTypeTest, MatmulRejectsDTypeMismatch) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a({2, 2}, cpu, DataType::Float32);
+  Tensor b({2, 2}, cpu, DataType::Float16);
+  EXPECT_THROW((void)a.matmul(b), std::runtime_error);
+}
+
+TEST(TensorDTypeTest, BFloat16AndInt8MatmulFallbacksProduceOutputs) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor a32({2, 2}, cpu, DataType::Float32);
+  Tensor b32({2, 2}, cpu, DataType::Float32);
+  float *a = static_cast<float *>(a32.data());
+  float *b = static_cast<float *>(b32.data());
+  a[0] = 1.0f; a[1] = 2.0f; a[2] = 3.0f; a[3] = 4.0f;
+  b[0] = 1.0f; b[1] = 0.0f; b[2] = 0.0f; b[3] = 1.0f;
+
+  Tensor bf_out = a32.to(DataType::BFloat16).matmul(b32.to(DataType::BFloat16));
+  EXPECT_EQ(bf_out.dtype(), DataType::BFloat16);
+
+  Tensor ai8({2, 2}, cpu, DataType::Int8);
+  Tensor bi8({2, 2}, cpu, DataType::Int8);
+  int8_t *ai8p = static_cast<int8_t *>(ai8.data());
+  int8_t *bi8p = static_cast<int8_t *>(bi8.data());
+  ai8p[0] = 1; ai8p[1] = 2; ai8p[2] = 3; ai8p[3] = 4;
+  bi8p[0] = 1; bi8p[1] = 0; bi8p[2] = 0; bi8p[3] = 1;
+  Tensor i8_out = ai8.matmul(bi8);
+  EXPECT_EQ(i8_out.dtype(), DataType::Int8);
+}
+
+TEST(TensorDTypeTest, CpuBackendCopyValidatesTransferEndpoints) {
+  Device cpu{DeviceType::CPU, 0};
+  Tensor src({2}, cpu, DataType::Float32);
+  Tensor dst({2}, cpu, DataType::Float32);
+
+  EXPECT_THROW(
+      src.impl_->backend().copy(src.data(), dst.data(), src.bytes(),
+                                Device{DeviceType::CUDA, 0}, cpu),
+      std::runtime_error);
+
+  EXPECT_THROW(src.impl_->backend().copy(nullptr, dst.data(), src.bytes(), cpu,
+                                         cpu),
+               std::runtime_error);
+}
+
+TEST(TensorDTypeTest, VulkanMatmulRejectsUnsupportedFloat16WhenAvailable) {
+  Device vk{DeviceType::VULKAN, 0};
+  try {
+    (void)Tensor({1}, vk, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "Vulkan backend unavailable in this environment";
+  }
+
+  Tensor a32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);
+  Tensor b32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);
+  a32.fill_(make_scalar(1.0f));
+  b32.fill_(make_scalar(1.0f));
+
+  Tensor a = a32.to(vk).to(DataType::Float16);
+  Tensor b = b32.to(vk).to(DataType::Float16);
+  EXPECT_THROW((void)a.matmul(b), std::runtime_error);
 }
 
 class TensorTest : public ::testing::TestWithParam<Device> {

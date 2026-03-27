@@ -1,5 +1,6 @@
 #pragma once
 #include "core/backend.hpp"
+#include "core/all_reduce_runtime.hpp"
 #include "core/util.hpp"
 #include "storage.hpp"
 #include "core/ops/common.hpp"
@@ -127,6 +128,13 @@ private:
 
 public:
   const char *name() const override { return "cpu"; }
+  BackendFallbackPolicy
+  preferred_fallback_policy(BackendFeature feature, DataType dtype) const override {
+    if (feature == BackendFeature::Convolution && dtype == DataType::Float16) {
+      return BackendFallbackPolicy::CPUFallback;
+    }
+    return Backend::preferred_fallback_policy(feature, dtype);
+  }
 
   BackendAllocationTransferCapability *
   allocation_transfer_capability() override {
@@ -212,10 +220,27 @@ public:
   }
   void copy(const void *src, void *dst, size_t bytes, Device src_dev,
             Device dst_dev) override {
+    if (bytes > 0 && (src == nullptr || dst == nullptr)) {
+      throw std::runtime_error("cpu copy: null pointer with non-zero byte count");
+    }
+    const auto unsupported_endpoint = [](DeviceType type) {
+      return type == DeviceType::CUDA || type == DeviceType::VULKAN;
+    };
+    if (unsupported_endpoint(src_dev.type) || unsupported_endpoint(dst_dev.type)) {
+      throw std::runtime_error(
+          "cpu copy: CPU backend cannot service CUDA/Vulkan transfer endpoints");
+    }
+    if ((src_dev.type == DeviceType::CPU && src_dev.index != 0) ||
+        (dst_dev.type == DeviceType::CPU && dst_dev.index != 0)) {
+      throw std::runtime_error(
+          "cpu copy: CPU endpoint device index must be 0");
+    }
     std::memcpy(dst, src, bytes);
   }
   void synchronize() override {}
-  void all_reduce(Storage &buffer, size_t num_elements) override {}
+  void all_reduce(Storage &buffer, size_t num_elements) override {
+    detail::all_reduce_via_host(buffer, num_elements, *this, buffer.device());
+  }
 
   void add(const Storage &a, const Storage &b, Storage &out,
            const BroadcastInfo &info) override {
@@ -315,11 +340,7 @@ public:
 
   void matmul(const Storage &a, const Storage &b, Storage &out, int M, int K,
               int N, bool transA, bool transB) override {
-    // TODO: Handle Float16 with typed implementation
     if (a.dtype() == DataType::Float16) {
-      throw std::runtime_error("matmul: Float16 not supported");
-      /*
-      // Note: cpu_half_to_float() and float_to_half_bits() are not implemented
       const uint16_t *ap = (const uint16_t *)a.data();
       const uint16_t *bp = (const uint16_t *)b.data();
       uint16_t *cp = (uint16_t *)out.data();
@@ -328,16 +349,17 @@ public:
           for (int n = 0; n < N; ++n) {
             float sum = 0.0f;
             for (int k = 0; k < K; ++k) {
-              float a_val = transA ? cpu_half_to_float(ap[k * M + m]) : cpu_half_to_float(ap[m * K + k]);
-              float b_val = transB ? cpu_half_to_float(bp[n * K + k]) : cpu_half_to_float(bp[k * N + n]);
+              float a_val = transA ? half_bits_to_float(ap[k * M + m])
+                                   : half_bits_to_float(ap[m * K + k]);
+              float b_val = transB ? half_bits_to_float(bp[n * K + k])
+                                   : half_bits_to_float(bp[k * N + n]);
               sum += a_val * b_val;
             }
-            cp[m * N + n] = cpu_float_to_half(sum);
+            cp[m * N + n] = float_to_half_bits(sum);
           }
         }
       });
       return;
-      */
     }
 
     const float *ap = (const float *)a.data();
@@ -361,12 +383,40 @@ public:
   void batched_matmul(const Storage &a, const Storage &b, Storage &out,
                       int batch_size, int M, int K, int N, bool transA, bool transB,
                       int64_t stride_a, int64_t stride_b, int64_t stride_out) override {
+    if (a.dtype() == DataType::Float16) {
+      const uint16_t *ap = (const uint16_t *)a.data();
+      const uint16_t *bp = (const uint16_t *)b.data();
+      uint16_t *cp = (uint16_t *)out.data();
+      for (int b_idx = 0; b_idx < batch_size; ++b_idx) {
+        const uint16_t *a_batch = ap + b_idx * stride_a;
+        const uint16_t *b_batch = bp + b_idx * stride_b;
+        uint16_t *out_batch = cp + b_idx * stride_out;
+        for (int m = 0; m < M; ++m) {
+          for (int n = 0; n < N; ++n) {
+            float sum = 0.0f;
+            for (int k = 0; k < K; ++k) {
+              const float a_val =
+                  transA ? half_bits_to_float(a_batch[k * M + m])
+                         : half_bits_to_float(a_batch[m * K + k]);
+              const float b_val =
+                  transB ? half_bits_to_float(b_batch[n * K + k])
+                         : half_bits_to_float(b_batch[k * N + n]);
+              sum += a_val * b_val;
+            }
+            out_batch[m * N + n] = float_to_half_bits(sum);
+          }
+        }
+      }
+      return;
+    }
+
     const float *ap = (const float *)a.data();
     const float *bp = (const float *)b.data();
     float *cp = (float *)out.data();
     for (int b_idx = 0; b_idx < batch_size; ++b_idx) {
-      ops::detail::batched_matmul_cpu_fallback(ap + b_idx * stride_a, bp + b_idx * stride_b,
-                                                cp + b_idx * stride_out, M, K, N, transA, transB);
+      ops::detail::batched_matmul_cpu_fallback(
+          ap + b_idx * stride_a, bp + b_idx * stride_b, cp + b_idx * stride_out,
+          M, K, N, transA, transB);
     }
   }
 

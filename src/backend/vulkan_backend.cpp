@@ -1,4 +1,5 @@
 #include "vulkan_backend.hpp"
+#include "core/all_reduce_runtime.hpp"
 #include "core/util.hpp"
 #include "cpu_backend.hpp"
 #include "storage.hpp"
@@ -2258,6 +2259,22 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
                          Device src_dev, Device dst_dev) {
   if (bytes == 0)
     return;
+  if (src == nullptr || dst == nullptr) {
+    throw std::runtime_error(
+        "vulkan copy: null pointer with non-zero byte count");
+  }
+
+  const bool src_is_vk = src_dev.type == DeviceType::VULKAN;
+  const bool dst_is_vk = dst_dev.type == DeviceType::VULKAN;
+  if (!src_is_vk && !dst_is_vk) {
+    throw std::runtime_error(
+        "vulkan copy: expected at least one Vulkan endpoint for Vulkan backend copy");
+  }
+  if ((src_is_vk && src_dev.index != device_index_) ||
+      (dst_is_vk && dst_dev.index != device_index_)) {
+    throw std::runtime_error(
+        "vulkan copy: device index mismatch for active VulkanBackend instance");
+  }
 
   if (src_dev.type == DeviceType::VULKAN &&
       dst_dev.type == DeviceType::VULKAN) {
@@ -2379,6 +2396,9 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     profile_cpu_event("vulkan.copy_d2h_memcpy", d2h_memcpy_start, bytes);
     stagingOffset =
         0; // Free entire staging buffer since we just forced a full wait
+  } else {
+    throw std::runtime_error(
+        "vulkan copy: unsupported transfer endpoints for Vulkan backend copy");
   }
 }
 
@@ -2415,7 +2435,10 @@ void VulkanBackend::synchronize() {
     }
   }
 }
-void VulkanBackend::all_reduce(Storage &buffer, size_t num_elements) {}
+void VulkanBackend::all_reduce(Storage &buffer, size_t num_elements) {
+  detail::all_reduce_via_host(buffer, num_elements, *this, buffer.device(),
+                              true);
+}
 
 void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                                     const std::vector<void *> &buffers,
@@ -2697,6 +2720,16 @@ void VulkanBackend::update(Storage &weight, const Storage &grad, float lr,
 }
 void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
                            int M, int K, int N, bool transA, bool transB) {
+  if (a.dtype() != b.dtype() || a.dtype() != out.dtype()) {
+    throw std::runtime_error("vulkan matmul: dtype mismatch");
+  }
+  if (a.dtype() != DataType::Float32) {
+    throw std::runtime_error(
+        "vulkan matmul: only float32 is currently supported");
+  }
+  if (M <= 0 || K <= 0 || N <= 0) {
+    throw std::runtime_error("vulkan matmul: dimensions must be positive");
+  }
   struct {
     int m, k, n, ta, tb;
   } pc = {M, K, N, transA, transB};
@@ -2709,6 +2742,21 @@ void VulkanBackend::batched_matmul(const Storage &a, const Storage &b,
                                    Storage &out, int B, int M, int K, int N,
                                    bool transA, bool transB,
                                    int64_t stride_a, int64_t stride_b, int64_t stride_out) {
+  if (a.dtype() != b.dtype() || a.dtype() != out.dtype()) {
+    throw std::runtime_error("vulkan batched_matmul: dtype mismatch");
+  }
+  if (a.dtype() != DataType::Float32) {
+    throw std::runtime_error(
+        "vulkan batched_matmul: only float32 is currently supported");
+  }
+  if (B <= 0 || M <= 0 || K <= 0 || N <= 0) {
+    throw std::runtime_error(
+        "vulkan batched_matmul: dimensions must be positive");
+  }
+  if (stride_a < 0 || stride_b < 0 || stride_out < 0) {
+    throw std::runtime_error(
+        "vulkan batched_matmul: strides must be non-negative");
+  }
   struct {
     int batch, m, k, n, ta, tb;
     int stride_a, stride_b, stride_out;  // Use int to match GLSL
