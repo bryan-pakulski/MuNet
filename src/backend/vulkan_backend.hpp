@@ -1,5 +1,7 @@
 #pragma once
 #include "../backend.hpp"
+#include <functional>
+#include <memory>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -196,8 +198,19 @@ public:
                      const Strides &strides, size_t offset) override;
 
 private:
+  struct VulkanRuntimeState {
+    int current_frame = 0;
+    int current_batch_size = 0;
+    bool is_recording = false;
+  };
+  std::unique_ptr<VulkanRuntimeState> runtime_;
+
   void dispatch_kernel(VkPipeline pipeline, const std::vector<void *> &buffers,
                        void *pc, size_t pcSize, int x, int y, int z);
+  void reset_runtime_state();
+  void ensure_recording();
+  void flush_batch();
+  void run_immediate_command(std::function<void(VkCommandBuffer)> func);
 
   VkPipeline adamStepPipeline;
 

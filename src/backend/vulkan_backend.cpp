@@ -52,11 +52,6 @@ static VkQueryPool queryPools[MAX_FRAMES_IN_FLIGHT];
 
 static float timestampPeriod = 1.0f;
 
-// Batching State
-static int currentFrame = 0;
-static int currentBatchSize = 0;
-static bool isRecording = false;
-
 // --- Allocator State ---
 static std::unordered_map<size_t, std::vector<uint64_t>> free_pool;
 static std::unordered_map<uint64_t, size_t> allocation_sizes;
@@ -194,10 +189,10 @@ static void allocate_frame_descriptor_sets(int frame) {
   descriptorSetCursor[frame] = 0;
 }
 
-static void reset_runtime_state() {
-  currentFrame = 0;
-  currentBatchSize = 0;
-  isRecording = false;
+void VulkanBackend::reset_runtime_state() {
+  runtime_->current_frame = 0;
+  runtime_->current_batch_size = 0;
+  runtime_->is_recording = false;
   queueFamilyIndex = UINT32_MAX;
 
   free_pool.clear();
@@ -214,7 +209,9 @@ static void reset_runtime_state() {
   stagingMapped = nullptr;
 }
 
-VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
+VulkanBackend::VulkanBackend(int device_index)
+    : device_index_(device_index),
+      runtime_(std::make_unique<VulkanRuntimeState>()) {
   reset_runtime_state();
 
   VkApplicationInfo appInfo{};
@@ -2164,7 +2161,7 @@ void VulkanBackend::deallocate(void *ptr) {
     return;
   auto free_start = profile_now();
   uint64_t handle = (uint64_t)ptr;
-  deferred_frees[currentFrame].push_back(handle);
+  deferred_frees[runtime_->current_frame].push_back(handle);
   profile_backend_event(
       "allocator", "deallocate", free_start,
       allocation_sizes.count(handle) ? allocation_sizes[handle] : 0);
@@ -2172,12 +2169,12 @@ void VulkanBackend::deallocate(void *ptr) {
 
 // --- Batch Management ---
 
-void flush_batch() {
-  if (!isRecording)
+void VulkanBackend::flush_batch() {
+  if (!runtime_->is_recording)
     return;
 
   auto flush_start = profile_now();
-  VkCommandBuffer cmd = commandBuffers[currentFrame];
+  VkCommandBuffer cmd = commandBuffers[runtime_->current_frame];
 
   VK_CHECK(vkEndCommandBuffer(cmd));
 
@@ -2186,25 +2183,27 @@ void flush_batch() {
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &cmd;
   VK_CHECK(vkQueueSubmit(computeQueue, 1, &submitInfo,
-                         inFlightFences[currentFrame]));
+                         inFlightFences[runtime_->current_frame]));
 
   profile_cpu_event("vulkan.flush_batch", flush_start);
 
   // Advance Frame
-  currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-  isRecording = false;
-  currentBatchSize = 0;
+  runtime_->current_frame =
+      (runtime_->current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+  runtime_->is_recording = false;
+  runtime_->current_batch_size = 0;
 }
 
-void ensure_recording() {
-  if (isRecording)
+void VulkanBackend::ensure_recording() {
+  if (runtime_->is_recording)
     return;
 
   auto ensure_start = profile_now();
 
   // Wait for the NEXT frame slot to be free (Fence Wait)
   auto wait_start = profile_now();
-  VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE,
+  VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[runtime_->current_frame],
+                           VK_TRUE,
                            UINT64_MAX));
   profile_cpu_event("vulkan.wait_for_fence", wait_start);
   profile_backend_event("queue_wait", "in_flight_frame", wait_start);
@@ -2212,13 +2211,13 @@ void ensure_recording() {
   // Process deferred frees safely now that the GPU is done with this frame
   auto deferred_flush_start = profile_now();
   size_t deferred_flush_bytes = 0;
-  for (uint64_t handle : deferred_frees[currentFrame]) {
+  for (uint64_t handle : deferred_frees[runtime_->current_frame]) {
     if (allocation_sizes.count(handle)) {
       deferred_flush_bytes += allocation_sizes[handle];
       free_pool[allocation_sizes[handle]].push_back(handle);
     }
   }
-  deferred_frees[currentFrame].clear();
+  deferred_frees[runtime_->current_frame].clear();
   profile_backend_event("allocator", "deferred_free_flush",
                         deferred_flush_start, deferred_flush_bytes);
 
@@ -2227,15 +2226,16 @@ void ensure_recording() {
   // Since we wait on the frame fence above, the GPU is done with this frame's
   // descriptors and it is safe to reuse them by just rewinding the cursor.
   auto descriptor_reuse_start = profile_now();
-  descriptorSetCursor[currentFrame] = 0;
+  descriptorSetCursor[runtime_->current_frame] = 0;
   profile_cpu_event("vulkan.descriptor_set_reuse", descriptor_reuse_start);
   profile_backend_event("queue_starvation", "descriptor_reuse",
                         descriptor_reuse_start);
 
-  VK_CHECK(vkResetFences(device, 1, &inFlightFences[currentFrame]));
+  VK_CHECK(
+      vkResetFences(device, 1, &inFlightFences[runtime_->current_frame]));
 
   // Start Recording
-  VkCommandBuffer cmd = commandBuffers[currentFrame];
+  VkCommandBuffer cmd = commandBuffers[runtime_->current_frame];
   VK_CHECK(vkResetCommandBuffer(cmd, 0));
 
   VkCommandBufferBeginInfo beginInfo{};
@@ -2243,16 +2243,17 @@ void ensure_recording() {
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
   if (is_profile_enabled()) {
-    vkCmdResetQueryPool(cmd, queryPools[currentFrame], 0, 2);
+    vkCmdResetQueryPool(cmd, queryPools[runtime_->current_frame], 0, 2);
   }
-  isRecording = true;
+  runtime_->is_recording = true;
 
   profile_cpu_event("vulkan.ensure_recording", ensure_start);
 }
 
-static void runImmediateCommand(std::function<void(VkCommandBuffer)> func) {
+void VulkanBackend::run_immediate_command(
+    std::function<void(VkCommandBuffer)> func) {
   auto total_start = profile_now();
-  if (isRecording)
+  if (runtime_->is_recording)
     flush_batch(); // Flush pending work first
 
   auto pre_idle_start = profile_now();
@@ -2283,7 +2284,7 @@ void VulkanBackend::memset(void *ptr, int value, size_t bytes) {
     return;
 
   ensure_recording();
-  vkCmdFillBuffer(commandBuffers[currentFrame], (VkBuffer)(uint64_t)ptr, 0,
+  vkCmdFillBuffer(commandBuffers[runtime_->current_frame], (VkBuffer)(uint64_t)ptr, 0,
                   bytes, value);
 
   VkMemoryBarrier mb{};
@@ -2291,11 +2292,11 @@ void VulkanBackend::memset(void *ptr, int value, size_t bytes) {
   mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
   mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
   vkCmdPipelineBarrier(
-      commandBuffers[currentFrame], VK_PIPELINE_STAGE_TRANSFER_BIT,
+      commandBuffers[runtime_->current_frame], VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
 
-  currentBatchSize++;
-  if (currentBatchSize >= BATCH_SIZE_LIMIT)
+  runtime_->current_batch_size++;
+  if (runtime_->current_batch_size >= BATCH_SIZE_LIMIT)
     flush_batch();
 }
 
@@ -2325,20 +2326,20 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     ensure_recording();
     VkBufferCopy copyRegion{};
     copyRegion.size = bytes;
-    vkCmdCopyBuffer(commandBuffers[currentFrame], (VkBuffer)(uint64_t)src,
+    vkCmdCopyBuffer(commandBuffers[runtime_->current_frame], (VkBuffer)(uint64_t)src,
                     (VkBuffer)(uint64_t)dst, 1, &copyRegion);
 
     VkMemoryBarrier mb{};
     mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(commandBuffers[currentFrame],
+    vkCmdPipelineBarrier(commandBuffers[runtime_->current_frame],
                          VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0,
                          nullptr, 0, nullptr);
 
-    currentBatchSize++;
-    if (currentBatchSize >= BATCH_SIZE_LIMIT)
+    runtime_->current_batch_size++;
+    if (runtime_->current_batch_size >= BATCH_SIZE_LIMIT)
       flush_batch();
     return;
   }
@@ -2346,7 +2347,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
   auto get_staging = [&](size_t req_bytes, size_t &offset) {
     size_t aligned = (req_bytes + 255) & ~255;
     if (!stagingBuffer || stagingOffset + aligned > stagingSize) {
-      if (isRecording)
+      if (runtime_->is_recording)
         flush_batch();
       auto staging_wait_start = profile_now();
       VK_CHECK(vkWaitForFences(device, MAX_FRAMES_IN_FLIGHT, inFlightFences,
@@ -2391,20 +2392,20 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     copyRegion.srcOffset = offset;
     copyRegion.dstOffset = 0;
     copyRegion.size = bytes;
-    vkCmdCopyBuffer(commandBuffers[currentFrame], stagingBuffer,
+    vkCmdCopyBuffer(commandBuffers[runtime_->current_frame], stagingBuffer,
                     (VkBuffer)(uint64_t)dst, 1, &copyRegion);
 
     VkMemoryBarrier mb{};
     mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(commandBuffers[currentFrame],
+    vkCmdPipelineBarrier(commandBuffers[runtime_->current_frame],
                          VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0,
                          nullptr, 0, nullptr);
 
-    currentBatchSize++;
-    if (currentBatchSize >= BATCH_SIZE_LIMIT)
+    runtime_->current_batch_size++;
+    if (runtime_->current_batch_size >= BATCH_SIZE_LIMIT)
       flush_batch();
   } else if (src_dev.type == DeviceType::VULKAN &&
              dst_dev.type == DeviceType::CPU) {
@@ -2417,20 +2418,20 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(
-        commandBuffers[currentFrame], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        commandBuffers[runtime_->current_frame], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
 
     VkBufferCopy copyRegion{};
     copyRegion.srcOffset = 0;
     copyRegion.dstOffset = offset;
     copyRegion.size = bytes;
-    vkCmdCopyBuffer(commandBuffers[currentFrame], (VkBuffer)(uint64_t)src,
+    vkCmdCopyBuffer(commandBuffers[runtime_->current_frame], (VkBuffer)(uint64_t)src,
                     stagingBuffer, 1, &copyRegion);
-    currentBatchSize++;
+    runtime_->current_batch_size++;
     flush_batch();
     auto d2h_wait_start = profile_now();
     int submitted_frame =
-        (currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
+        (runtime_->current_frame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
     VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[submitted_frame],
                              VK_TRUE, UINT64_MAX));
     profile_cpu_event("vulkan.copy_d2h_wait_fence", d2h_wait_start, bytes);
@@ -2447,7 +2448,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
 }
 
 void VulkanBackend::synchronize() {
-  if (isRecording)
+  if (runtime_->is_recording)
     flush_batch();
 
   auto sync_wait_start = profile_now();
@@ -2462,7 +2463,7 @@ void VulkanBackend::synchronize() {
     uint64_t results[2];
     // The work we want to measure is in the frame we JUST flushed
     int frameToQuery =
-        (currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
+        (runtime_->current_frame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
 
     auto query_start = profile_now();
     VkResult res = vkGetQueryPoolResults(
@@ -2490,10 +2491,10 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                                     int z) {
   auto encode_start = profile_now();
   ensure_recording();
-  VkCommandBuffer cmd = commandBuffers[currentFrame];
+  VkCommandBuffer cmd = commandBuffers[runtime_->current_frame];
 
-  if (descriptorSetCursor[currentFrame] >=
-      frameDescriptorSets[currentFrame].size()) {
+  if (descriptorSetCursor[runtime_->current_frame] >=
+      frameDescriptorSets[runtime_->current_frame].size()) {
     auto starvation_start = profile_now();
     flush_batch();
     ensure_recording();
@@ -2502,7 +2503,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   }
 
   VkDescriptorSet ds =
-      frameDescriptorSets[currentFrame][descriptorSetCursor[currentFrame]++];
+      frameDescriptorSets[runtime_->current_frame][descriptorSetCursor[runtime_->current_frame]++];
 
   // Update only the bindings used by this kernel to lower CPU overhead.
   const uint32_t write_count = static_cast<uint32_t>(
@@ -2545,16 +2546,16 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
 
   if (is_profile_enabled()) {
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        queryPools[currentFrame], 0);
+                        queryPools[runtime_->current_frame], 0);
   }
   vkCmdDispatch(cmd, x, y, z);
   if (is_profile_enabled()) {
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                        queryPools[currentFrame], 1);
+                        queryPools[runtime_->current_frame], 1);
   }
 
-  currentBatchSize++;
-  if (currentBatchSize >= BATCH_SIZE_LIMIT) {
+  runtime_->current_batch_size++;
+  if (runtime_->current_batch_size >= BATCH_SIZE_LIMIT) {
     flush_batch();
   }
 
