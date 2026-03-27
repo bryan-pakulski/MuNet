@@ -193,7 +193,30 @@ static void allocate_frame_descriptor_sets(int frame) {
                                     frameDescriptorSets[frame].data()));
   descriptorSetCursor[frame] = 0;
 }
+
+static void reset_runtime_state() {
+  currentFrame = 0;
+  currentBatchSize = 0;
+  isRecording = false;
+  queueFamilyIndex = UINT32_MAX;
+
+  free_pool.clear();
+  allocation_sizes.clear();
+  allocation_memory.clear();
+  for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+    frameDescriptorSets[i].clear();
+    descriptorSetCursor[i] = 0;
+    deferred_frees[i].clear();
+  }
+
+  stagingOffset = 0;
+  stagingSize = 0;
+  stagingMapped = nullptr;
+}
+
 VulkanBackend::VulkanBackend(int device_index) : device_index_(device_index) {
+  reset_runtime_state();
+
   VkApplicationInfo appInfo{};
   appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
   appInfo.apiVersion = VK_API_VERSION_1_2;
@@ -2087,6 +2110,24 @@ VulkanBackend::~VulkanBackend() {
   vkDestroyCommandPool(device, commandPool, nullptr);
   vkDestroyDevice(device, nullptr);
   vkDestroyInstance(instance, nullptr);
+
+  instance = VK_NULL_HANDLE;
+  physicalDevice = VK_NULL_HANDLE;
+  device = VK_NULL_HANDLE;
+  computeQueue = VK_NULL_HANDLE;
+  commandPool = VK_NULL_HANDLE;
+  descriptorSetLayout = VK_NULL_HANDLE;
+  immediateCmdBuffer = VK_NULL_HANDLE;
+  pipelineLayout = VK_NULL_HANDLE;
+  for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+    descriptorPools[i] = VK_NULL_HANDLE;
+    commandBuffers[i] = VK_NULL_HANDLE;
+    inFlightFences[i] = VK_NULL_HANDLE;
+    queryPools[i] = VK_NULL_HANDLE;
+  }
+  stagingBuffer = VK_NULL_HANDLE;
+  stagingMemory = VK_NULL_HANDLE;
+  reset_runtime_state();
 }
 
 void *VulkanBackend::allocate(size_t bytes) {
