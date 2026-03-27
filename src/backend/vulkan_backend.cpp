@@ -2402,6 +2402,22 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
   }
 }
 
+BackendSupport VulkanBackend::query_support(BackendFeature feature,
+                                            DataType dtype,
+                                            const Shape *shape) const {
+  BackendSupport support = Backend::query_support(feature, dtype, shape);
+  if (dtype == DataType::Float32) {
+    support.available = true;
+    support.fallback_policy = BackendFallbackPolicy::ExplicitUnsupported;
+  } else {
+    support.available = false;
+    support.fallback_policy = BackendFallbackPolicy::ExplicitUnsupported;
+  }
+  support.preferred_accumulation_dtype =
+      preferred_accumulation_dtype(feature, dtype);
+  return support;
+}
+
 void VulkanBackend::synchronize() {
   if (isRecording)
     flush_batch();

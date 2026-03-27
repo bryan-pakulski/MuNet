@@ -26,12 +26,14 @@ public:
 
   const char *name() const override { return "vulkan"; }
   BackendFallbackPolicy
-  preferred_fallback_policy(BackendFeature feature, DataType dtype) const override {
-    if (feature == BackendFeature::Convolution && dtype == DataType::Float16) {
-      return BackendFallbackPolicy::CPUFallback;
-    }
-    return Backend::preferred_fallback_policy(feature, dtype);
+  preferred_fallback_policy(BackendFeature feature,
+                            DataType dtype) const override {
+    (void)feature;
+    (void)dtype;
+    return BackendFallbackPolicy::ExplicitUnsupported;
   }
+  BackendSupport query_support(BackendFeature feature, DataType dtype,
+                               const Shape *shape) const override;
 
   BackendAllocationTransferCapability *
   allocation_transfer_capability() override {
