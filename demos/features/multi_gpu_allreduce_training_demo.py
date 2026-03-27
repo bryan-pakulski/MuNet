@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import threading
 import numpy as np
 
 import munet
@@ -36,15 +37,17 @@ def detect_accelerators(max_index: int = 4):
     return devices
 
 
-def allreduce_avg_gradients(param_replicas):
-    grad_sum = None
-    for p in param_replicas:
-        g_cpu = p.grad.to(CPU).detach()
-        grad_sum = g_cpu if grad_sum is None else (grad_sum + g_cpu)
-    grad_avg = grad_sum / float(len(param_replicas))
+def allreduce_gradients(param_replicas):
+    threads = [threading.Thread(target=lambda p=p: p.grad.all_reduce()) for p in param_replicas]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
+    # Convert all-reduce sum to average for optimizer step parity.
+    scale = 1.0 / float(len(param_replicas))
     for p in param_replicas:
-        p.grad.replace_(grad_avg.to(p.device))
+        p.grad.replace_(p.grad * scale)
 
 
 def make_model_replicas(devices):
@@ -104,8 +107,8 @@ def main():
             loss.backward()
             losses.append(float(np.array(loss.to(CPU), copy=False)))
 
-        allreduce_avg_gradients(ws)
-        allreduce_avg_gradients(bs)
+        allreduce_gradients(ws)
+        allreduce_gradients(bs)
 
         for w in ws:
             w.step(args.lr)

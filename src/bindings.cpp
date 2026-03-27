@@ -352,6 +352,27 @@ PYBIND11_MODULE(munet, m) {
           },
           py::arg("grad"), py::arg("retain_graph") = false,
           "Computes the gradient with a given upstream gradient.")
+      .def(
+          "all_reduce",
+          [](Tensor &t, std::optional<size_t> num_elements) {
+            if (!t.impl_ || !t.impl_->storage) {
+              throw std::runtime_error("Cannot all_reduce an uninitialized tensor.");
+            }
+            if (t.storage_offset() != 0 ||
+                t.bytes() != t.impl_->storage->size_bytes()) {
+              throw std::runtime_error(
+                  "all_reduce currently requires a base tensor (no view/slice offset).");
+            }
+            const size_t elems = num_elements.value_or(t.size());
+            if (elems > t.size()) {
+              throw std::runtime_error("all_reduce num_elements exceeds tensor size.");
+            }
+            t.impl_->backend().all_reduce(*t.impl_->storage, elems);
+            return t;
+          },
+          py::arg("num_elements") = std::nullopt,
+          py::call_guard<py::gil_scoped_release>(),
+          "Performs in-place all-reduce on this tensor via the active backend.")
 
       // Math & Ops
       .def("__add__", [](const Tensor &a, const Tensor &b) { return a + b; })

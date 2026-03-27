@@ -1,6 +1,5 @@
 import os
-import subprocess
-from pathlib import Path
+import threading
 
 import pytest
 np = pytest.importorskip("numpy")
@@ -27,22 +26,17 @@ def _detect_accelerators(max_index: int = 4):
     return devices
 
 
-def _allreduce_grads_via_cpu_average(param_replicas):
-    """Host-staged gradient average across device replicas.
+def _allreduce_grads_via_runtime(param_replicas):
+    threads = [threading.Thread(target=lambda p=p: p.grad.all_reduce()) for p in param_replicas]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
-    This mirrors distributed data-parallel all-reduce semantics in Python by:
-      1) moving each replica gradient to CPU,
-      2) summing/averaging,
-      3) writing the averaged gradient back to each replica device.
-    """
-    grad_sum = None
+    # Runtime all_reduce computes SUM; convert to mean for SGD parity.
+    scale = 1.0 / float(len(param_replicas))
     for p in param_replicas:
-        g_cpu = p.grad.to(CPU).detach()
-        grad_sum = g_cpu if grad_sum is None else (grad_sum + g_cpu)
-    grad_avg = grad_sum / float(len(param_replicas))
-
-    for p in param_replicas:
-        p.grad.replace_(grad_avg.to(p.device))
+        p.grad.replace_(p.grad * scale)
 
 
 def _build_replicated_linear(accelerators):
@@ -95,8 +89,8 @@ def test_multigpu_data_parallel_gradient_allreduce_like_training_step():
         loss.backward()
         losses.append(loss)
 
-    _allreduce_grads_via_cpu_average([w_replicas[0], w_replicas[1]])
-    _allreduce_grads_via_cpu_average([b_replicas[0], b_replicas[1]])
+    _allreduce_grads_via_runtime([w_replicas[0], w_replicas[1]])
+    _allreduce_grads_via_runtime([b_replicas[0], b_replicas[1]])
 
     # After all-reduce average, gradients should be equal across replicas.
     w0g = np.array(w_replicas[0].grad.to(CPU), copy=False)
@@ -123,17 +117,20 @@ def test_multigpu_data_parallel_gradient_allreduce_like_training_step():
     np.testing.assert_allclose(b0, b1, rtol=1e-4, atol=1e-5)
 
 
-def test_cpp_backendmanager_allreduce_multidevice_smoke():
-    """Run the C++ all-reduce tests from Python as a smoke/integration check."""
-    test_bin = Path("build/debug/munet_tests")
-    if not test_bin.exists():
-        pytest.skip("build/debug/munet_tests not found; build test target first")
+def test_python_all_reduce_binding_cpu_smoke():
+    os.environ["MUNET_ALLREDUCE_WORLD_SIZE"] = "2"
+    os.environ["MUNET_ALLREDUCE_MODE"] = "host_fallback"
+    os.environ["MUNET_ALLREDUCE_GROUP"] = "pytest_python_binding_cpu"
 
-    cmd = [
-        str(test_bin),
-        "--gtest_filter=BackendManagerTest.CudaMultiDeviceAllReduceAggregatesAcrossGpuIndices:"
-        "BackendManagerTest.VulkanMultiDeviceTrainingGradientAllReduceAggregatesAcrossGpuIndices:"
-        "BackendManagerTest.MixedCpuCudaVulkanAllReduceAggregatesTogether",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
+    a = munet.from_numpy(np.array([1.0, 2.0], dtype=np.float32))
+    b = munet.from_numpy(np.array([3.0, 4.0], dtype=np.float32))
+
+    t0 = threading.Thread(target=lambda: a.all_reduce())
+    t1 = threading.Thread(target=lambda: b.all_reduce())
+    t0.start()
+    t1.start()
+    t0.join()
+    t1.join()
+
+    np.testing.assert_allclose(np.array(a, copy=False), np.array([4.0, 6.0], dtype=np.float32))
+    np.testing.assert_allclose(np.array(b, copy=False), np.array([4.0, 6.0], dtype=np.float32))
