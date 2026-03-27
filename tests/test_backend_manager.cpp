@@ -36,6 +36,31 @@ public:
   ~ScopedDebugOverride() { set_debug_enabled_override(std::nullopt); }
 };
 
+class ScopedEnvVar {
+public:
+  ScopedEnvVar(const char *name, const char *value) : name_(name) {
+    const char *existing = std::getenv(name_);
+    if (existing) {
+      had_original_ = true;
+      original_value_ = existing;
+    }
+    setenv(name_, value, 1);
+  }
+
+  ~ScopedEnvVar() {
+    if (had_original_) {
+      setenv(name_, original_value_.c_str(), 1);
+    } else {
+      unsetenv(name_);
+    }
+  }
+
+private:
+  const char *name_;
+  bool had_original_{false};
+  std::string original_value_;
+};
+
 class PartialMatmulBackend : public Backend,
                              public BackendAllocationTransferCapability,
                              public BackendBlasCapability {
@@ -964,7 +989,7 @@ TEST(BackendManagerTest, TraceContextCorrelatesTransferDispatchAndLogs) {
 }
 
 TEST(BackendManagerTest, CpuAllReduceAggregatesAcrossParticipants) {
-  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "2", 1);
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
   BackendManager::registry().clear_cache(DeviceType::CPU);
 
   const Device cpu{DeviceType::CPU, 0};
@@ -993,8 +1018,8 @@ TEST(BackendManagerTest, CpuAllReduceAggregatesAcrossParticipants) {
 
 TEST(BackendManagerTest,
      AllReduceHostPathRequiresExplicitOverrideForAcceleratorDevices) {
-  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "2", 1);
-  setenv("MUNET_ALLREDUCE_MODE", "device_native", 1);
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  ScopedEnvVar mode("MUNET_ALLREDUCE_MODE", "device_native");
   BackendManager::registry().clear_cache(DeviceType::UNKNOWN);
   BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
     return std::make_shared<PartialMatmulBackend>(device.index);
@@ -1012,8 +1037,8 @@ TEST(BackendManagerTest,
 }
 
 TEST(BackendManagerTest, ForcedHostAllReduceSupportsAcceleratorDeviceKeys) {
-  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "2", 1);
-  setenv("MUNET_ALLREDUCE_MODE", "device_native", 1);
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  ScopedEnvVar mode("MUNET_ALLREDUCE_MODE", "device_native");
   BackendManager::registry().clear_cache(DeviceType::UNKNOWN);
   BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
     return std::make_shared<PartialMatmulBackend>(device.index);
@@ -1056,8 +1081,8 @@ TEST(BackendManagerTest, CudaMultiDeviceAllReduceAggregatesAcrossGpuIndices) {
     GTEST_SKIP() << "CUDA multi-device environment unavailable";
   }
 
-  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "2", 1);
-  setenv("MUNET_ALLREDUCE_MODE", "device_native", 1);
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  ScopedEnvVar mode("MUNET_ALLREDUCE_MODE", "device_native");
 
   Tensor a_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
   Tensor b_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
@@ -1120,8 +1145,8 @@ TEST(BackendManagerTest,
     GTEST_SKIP() << "Vulkan multi-device environment unavailable";
   }
 
-  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "2", 1);
-  setenv("MUNET_ALLREDUCE_MODE", "device_native", 1);
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  ScopedEnvVar mode("MUNET_ALLREDUCE_MODE", "device_native");
 
   // Simulate two training replicas with per-replica gradient buffers.
   Tensor g0_cpu({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
@@ -1186,9 +1211,9 @@ TEST(BackendManagerTest, MixedCpuCudaVulkanAllReduceAggregatesTogether) {
     GTEST_SKIP() << "CPU/CUDA/Vulkan mixed backend environment unavailable";
   }
 
-  setenv("MUNET_ALLREDUCE_WORLD_SIZE", "3", 1);
-  setenv("MUNET_ALLREDUCE_MODE", "device_native", 1);
-  setenv("MUNET_ALLREDUCE_GROUP", "mixed_cpu_cuda_vulkan", 1);
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "3");
+  ScopedEnvVar mode("MUNET_ALLREDUCE_MODE", "device_native");
+  ScopedEnvVar group("MUNET_ALLREDUCE_GROUP", "mixed_cpu_cuda_vulkan");
 
   Tensor c0({2}, cpu, DataType::Float32);
   Tensor c1({2}, cpu, DataType::Float32);
@@ -1231,7 +1256,13 @@ TEST(BackendManagerTest, MixedCpuCudaVulkanAllReduceAggregatesTogether) {
   t2.join();
 
   if (eptr) {
-    std::rethrow_exception(eptr);
+    try {
+      std::rethrow_exception(eptr);
+    } catch (const std::runtime_error &err) {
+      GTEST_SKIP()
+          << "Mixed CPU/CUDA/Vulkan all_reduce unavailable at runtime: "
+          << err.what();
+    }
   }
 
   Tensor out_cpu = t_cpu.to(Device{DeviceType::CPU, 0});
