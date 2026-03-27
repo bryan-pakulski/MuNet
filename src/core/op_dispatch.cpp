@@ -235,12 +235,12 @@ struct DispatchFallbackRule {
 
 const std::vector<DispatchFallbackRule> &dispatch_fallback_rules() {
   static const std::vector<DispatchFallbackRule> kRules = {
-      {DeviceType::VULKAN, BackendFeature::Matmul, OpId::Matmul,
+      {DeviceType::VULKAN, BackendFeature::Matmul, std::nullopt,
        DataType::Float16, DispatchFallbackRule::Action::DenyCPUFallback,
-       "Vulkan backend does not support float16 matmul fallback"},
-      {DeviceType::VULKAN, BackendFeature::Matmul, OpId::Matmul,
+       "Vulkan backend does not support float16 matmul-feature fallback"},
+      {DeviceType::VULKAN, BackendFeature::Matmul, std::nullopt,
        DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
-       "Vulkan backend does not support bfloat16 matmul fallback"},
+       "Vulkan backend does not support bfloat16 matmul-feature fallback"},
   };
   return kRules;
 }
