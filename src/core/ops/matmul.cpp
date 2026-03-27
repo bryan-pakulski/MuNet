@@ -91,11 +91,6 @@ Tensor matmul_2d(const Tensor &a, const Tensor &b) {
   detail::require_same_dtype("matmul", a, b);
 
   const auto dispatch = resolve_dispatch(OpId::Matmul, a);
-  if (dispatch.use_cpu_fallback && a.device().type == DeviceType::VULKAN &&
-      a.dtype() != DataType::Float32) {
-    throw std::runtime_error(
-        "matmul: Vulkan backend does not support non-float32 matmul");
-  }
 
   // Use CPU fallback if needed (backend doesn't support this dtype)
   if (dispatch.use_cpu_fallback) {
@@ -251,11 +246,6 @@ Tensor batched_matmul_internal(const Tensor &a, const Tensor &b, bool transA, bo
   
   // Resolve dispatch to check for dtype support
   const auto dispatch = resolve_dispatch(OpId::Matmul, a);
-  if (dispatch.use_cpu_fallback && a.device().type == DeviceType::VULKAN &&
-      a.dtype() != DataType::Float32) {
-    throw std::runtime_error(
-        "batched_matmul: Vulkan backend does not support non-float32 matmul");
-  }
   
   // Use CPU fallback if needed
   if (dispatch.use_cpu_fallback) {
@@ -360,11 +350,6 @@ Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA, bool trans
   
   // Resolve dispatch to check for dtype support
   const auto dispatch = resolve_dispatch(OpId::Matmul, a);
-  if (dispatch.use_cpu_fallback && a.device().type == DeviceType::VULKAN &&
-      a.dtype() != DataType::Float32) {
-    throw std::runtime_error(
-        "matmul: Vulkan backend does not support non-float32 matmul");
-  }
   
   // Use CPU fallback if needed
   if (dispatch.use_cpu_fallback) {

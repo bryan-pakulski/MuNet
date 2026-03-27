@@ -220,6 +220,38 @@ void log_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
              << std::endl;
 }
 
+struct DispatchFallbackRule {
+  OpId op;
+  DeviceType device_type;
+  std::optional<DataType> dtype;
+  const char *error_message;
+};
+
+const std::vector<DispatchFallbackRule> &dispatch_fallback_rules() {
+  static const std::vector<DispatchFallbackRule> kRules = {
+      {OpId::Matmul, DeviceType::VULKAN, DataType::Float16,
+       "Vulkan backend does not support float16 matmul fallback"},
+      {OpId::Matmul, DeviceType::VULKAN, DataType::BFloat16,
+       "Vulkan backend does not support bfloat16 matmul fallback"},
+  };
+  return kRules;
+}
+
+const DispatchFallbackRule *
+find_cpu_fallback_deny_rule(OpId id, const Tensor &tensor) {
+  const DeviceType device_type = tensor.device().type;
+  const DataType dtype = tensor.dtype();
+  for (const auto &rule : dispatch_fallback_rules()) {
+    if (rule.op != id || rule.device_type != device_type) {
+      continue;
+    }
+    if (!rule.dtype.has_value() || *rule.dtype == dtype) {
+      return &rule;
+    }
+  }
+  return nullptr;
+}
+
 } // namespace
 
 const OpMetadata &op_metadata(OpId id) {
@@ -272,14 +304,13 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     return {meta, true, false, support};
   }
 
-  const DeviceType backend_device_type = tensor.device().type;
-  const bool disallow_fp32_accelerator_fallback =
-      tensor.dtype() == DataType::Float32 &&
-      backend_device_type == DeviceType::VULKAN;
+  const DispatchFallbackRule *fallback_deny_rule =
+      find_cpu_fallback_deny_rule(id, tensor);
+  const bool disallow_cpu_fallback = fallback_deny_rule != nullptr;
 
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
       support.fallback_policy == BackendFallbackPolicy::CPUFallback &&
-      !disallow_fp32_accelerator_fallback) {
+      !disallow_cpu_fallback) {
     const auto reason =
         classify_dispatch_fallback(meta, tensor, feature, support);
     log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
@@ -298,12 +329,12 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   if (timer) {
     record_dispatch_profile("unsupported", meta, tensor, timer->elapsed_us());
   }
-  if (disallow_fp32_accelerator_fallback) {
+  if (disallow_cpu_fallback) {
     throw std::runtime_error(
-        std::string(meta.name) + ": backend '" +
+        std::string(meta.name) + ": " +
+        std::string(fallback_deny_rule->error_message) + " for backend '" +
         std::string(tensor.impl_->backend().name()) +
-        "' attempted CPU fallback for float32 on accelerator backend '" +
-        tensor.device().to_string() + "'");
+        "' on device '" + tensor.device().to_string() + "'");
   }
   throw std::runtime_error(
       std::string(meta.name) + ": backend '" +
