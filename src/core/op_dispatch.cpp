@@ -275,8 +275,7 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   const DeviceType backend_device_type = tensor.device().type;
   const bool disallow_fp32_accelerator_fallback =
       tensor.dtype() == DataType::Float32 &&
-      (backend_device_type == DeviceType::CUDA ||
-       backend_device_type == DeviceType::VULKAN);
+      backend_device_type == DeviceType::VULKAN;
 
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
       support.fallback_policy == BackendFallbackPolicy::CPUFallback &&
