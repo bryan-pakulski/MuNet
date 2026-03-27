@@ -886,6 +886,34 @@ TEST(BackendManagerTest,
   }
 }
 
+TEST(BackendManagerTest, CudaMatmulBFloat16FallbackDeniedWhenCudaAvailable) {
+  const Device cuda{DeviceType::CUDA, 0};
+  try {
+    (void)Tensor({1}, cuda, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "CUDA backend unavailable in this environment";
+  }
+
+  Tensor a32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);
+  Tensor b32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);
+  a32.fill_(1.0f);
+  b32.fill_(1.0f);
+
+  Tensor a = a32.to(cuda).to(DataType::BFloat16);
+  Tensor b = b32.to(cuda).to(DataType::BFloat16);
+
+  try {
+    (void)a.matmul(b);
+    FAIL() << "Expected CUDA bfloat16 matmul fallback deny rule to throw";
+  } catch (const std::runtime_error &err) {
+    const std::string message = err.what();
+    EXPECT_NE(
+        message.find("CUDA backend does not support bfloat16 matmul-feature "
+                     "fallback"),
+        std::string::npos);
+  }
+}
+
 TEST(BackendManagerTest, ProfilingCapturesAllocatorAndSynchronizationMarkers) {
   ScopedProfileOverride profile(true);
   Profiler::get().reset();
