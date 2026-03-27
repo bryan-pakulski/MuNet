@@ -241,6 +241,15 @@ const std::vector<DispatchFallbackRule> &dispatch_fallback_rules() {
       {DeviceType::VULKAN, BackendFeature::Matmul, std::nullopt,
        DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
        "Vulkan backend does not support bfloat16 matmul-feature fallback"},
+      {DeviceType::UNKNOWN, BackendFeature::Softmax, std::nullopt, std::nullopt,
+       DispatchFallbackRule::Action::DenyCPUFallback,
+       "UNKNOWN softmax feature fallback denied"},
+      {DeviceType::UNKNOWN, BackendFeature::Softmax, std::nullopt,
+       DataType::Float32, DispatchFallbackRule::Action::DenyCPUFallback,
+       "UNKNOWN softmax float32 fallback denied"},
+      {DeviceType::UNKNOWN, BackendFeature::Softmax, OpId::Softmax,
+       DataType::Float32, DispatchFallbackRule::Action::DenyCPUFallback,
+       "UNKNOWN softmax op-specific float32 fallback denied"},
   };
   return kRules;
 }
