@@ -2201,6 +2201,9 @@ void ensure_recording() {
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
+  if (is_profile_enabled()) {
+    vkCmdResetQueryPool(cmd, queryPools[currentFrame], 0, 2);
+  }
   isRecording = true;
 
   profile_cpu_event("vulkan.ensure_recording", ensure_start);
