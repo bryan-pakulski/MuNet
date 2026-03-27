@@ -317,22 +317,9 @@ const DispatchFallbackRule *find_matching_dispatch_rule(
 
 } // namespace
 
-const OpMetadata &op_metadata(OpId id) {
-  const auto &map = registry();
-  const auto it = map.find(id);
-  if (it == map.end()) {
-    throw std::runtime_error("Unknown op metadata request");
-  }
-  return it->second;
-}
-
-DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
-  const auto &meta = op_metadata(id);
-  std::unique_ptr<Timer> timer;
-  if (is_profile_enabled()) {
-    timer = std::make_unique<Timer>();
-  }
-
+std::optional<DispatchDecision>
+stage_metadata_validation(const OpMetadata &meta, const Tensor &tensor,
+                          Timer *timer) {
   if (meta.requires_floating && !is_floating(tensor.dtype())) {
     if (timer) {
       record_dispatch_profile("dtype_error", meta, tensor, timer->elapsed_us());
@@ -351,15 +338,32 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
       record_dispatch_profile("metadata_fallback", meta, tensor,
                               timer->elapsed_us());
     }
-    return {meta, false,
-            meta.fallback_policy == BackendFallbackPolicy::CPUFallback,
-            support};
+    return DispatchDecision{meta, false,
+                            meta.fallback_policy == BackendFallbackPolicy::CPUFallback,
+                            support};
   }
 
-  const auto feature = *meta.feature;
-  auto support = tensor.impl_->backend().query_support(
-      feature, tensor.dtype(), &tensor.shape());
+  return std::nullopt;
+}
 
+std::pair<BackendFeature, BackendSupport>
+stage_backend_support_query(const Tensor &tensor, BackendFeature feature) {
+  auto support = tensor.impl_->backend().query_support(feature, tensor.dtype(),
+                                                       &tensor.shape());
+  return {feature, support};
+}
+
+struct PolicyStageResult {
+  bool use_backend = false;
+  bool use_cpu_fallback = false;
+  const DispatchFallbackRule *matched_rule = nullptr;
+  BackendSupport support;
+};
+
+PolicyStageResult
+stage_policy_engine_evaluation(OpId id, const OpMetadata &meta,
+                               const Tensor &tensor, BackendFeature feature,
+                               BackendSupport support, Timer *timer) {
   const DispatchFallbackRule *matched_rule =
       find_matching_dispatch_rule(id, feature, tensor);
   const bool force_cpu_fallback =
@@ -374,14 +378,14 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     if (timer) {
       record_dispatch_profile("cpu_fallback", meta, tensor, timer->elapsed_us());
     }
-    return {meta, false, true, support};
+    return {false, true, matched_rule, support};
   }
 
   if (support.available) {
     if (timer) {
       record_dispatch_profile("backend", meta, tensor, timer->elapsed_us());
     }
-    return {meta, true, false, support};
+    return {true, false, matched_rule, support};
   }
 
   if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
@@ -392,32 +396,83 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
     record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
     if (timer) {
-      record_dispatch_profile("cpu_fallback", meta, tensor,
-                              timer->elapsed_us());
+      record_dispatch_profile("cpu_fallback", meta, tensor, timer->elapsed_us());
     }
-    return {meta, false, true, support};
+    return {false, true, matched_rule, support};
   }
 
+  return {false, false, matched_rule, support};
+}
+
+[[noreturn]] void stage_final_decision_error(const OpMetadata &meta,
+                                             const Tensor &tensor,
+                                             BackendFeature feature,
+                                             const PolicyStageResult &policy,
+                                             Timer *timer) {
   const auto reason =
-      classify_dispatch_fallback(meta, tensor, feature, support);
-  log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
-  record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
+      classify_dispatch_fallback(meta, tensor, feature, policy.support);
+  log_dispatch_fallback_reason(meta, tensor, feature, policy.support, reason);
+  record_dispatch_fallback_reason(meta, tensor, feature, policy.support, reason);
   if (timer) {
     record_dispatch_profile("unsupported", meta, tensor, timer->elapsed_us());
   }
+
+  const bool disallow_cpu_fallback =
+      policy.matched_rule != nullptr &&
+      policy.matched_rule->action == DispatchFallbackRule::Action::DenyCPUFallback;
   if (disallow_cpu_fallback) {
     throw std::runtime_error(
         std::string(meta.name) + ": " +
-        std::string(matched_rule->error_message) + " for backend '" +
+        std::string(policy.matched_rule->error_message) + " for backend '" +
         std::string(tensor.impl_->backend().name()) +
         "' on device '" + tensor.device().to_string() + "'");
   }
+
   throw std::runtime_error(
       std::string(meta.name) + ": backend '" +
       std::string(tensor.impl_->backend().name()) +
       "' does not support feature '" + backend_feature_name(feature) +
       "' for dtype " + dtype_name(tensor.dtype()) + " (fallback policy: " +
-      backend_fallback_policy_name(support.fallback_policy) + ")");
+      backend_fallback_policy_name(policy.support.fallback_policy) + ")");
+}
+
+const OpMetadata &op_metadata(OpId id) {
+  const auto &map = registry();
+  const auto it = map.find(id);
+  if (it == map.end()) {
+    throw std::runtime_error("Unknown op metadata request");
+  }
+  return it->second;
+}
+
+DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
+  const auto &meta = op_metadata(id);
+  std::unique_ptr<Timer> timer;
+  if (is_profile_enabled()) {
+    timer = std::make_unique<Timer>();
+  }
+
+  // Stage 1: metadata validation.
+  if (auto stage1 = stage_metadata_validation(meta, tensor, timer.get())) {
+    return *stage1;
+  }
+
+  // Stage 2: backend support query.
+  const auto feature = *meta.feature;
+  auto [queried_feature, support] = stage_backend_support_query(tensor, feature);
+
+  // Stage 3: policy engine evaluation.
+  const auto policy = stage_policy_engine_evaluation(
+      id, meta, tensor, queried_feature, support, timer.get());
+  if (policy.use_backend) {
+    return {meta, true, false, policy.support};
+  }
+  if (policy.use_cpu_fallback) {
+    return {meta, false, true, policy.support};
+  }
+
+  // Stage 4: final decision/error.
+  stage_final_decision_error(meta, tensor, queried_feature, policy, timer.get());
 }
 
 void record_registered_trace(
