@@ -45,18 +45,6 @@ def detect_accelerators(max_index: int = 4):
     return devices
 
 
-def choose_homogeneous_pair(devices):
-    by_type = {}
-    for dev in devices:
-        by_type.setdefault(dev.type, []).append(dev)
-
-    for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
-        same_type = by_type.get(dev_type, [])
-        if len(same_type) >= 2:
-            return same_type[:2]
-    return []
-
-
 def allreduce_gradients(param_replicas):
     threads = [threading.Thread(target=lambda p=p: p.grad.all_reduce()) for p in param_replicas]
     for t in threads:
@@ -71,19 +59,16 @@ def allreduce_gradients(param_replicas):
 
 
 def make_model_replicas(devices):
-    w_cpu = munet.Tensor((4, 1), device=CPU, dtype=munet.DataType.Float32, requires_grad=False)
-    w_cpu.uniform_(-0.2, 0.2)
-    b_cpu = munet.zeros((1,), device=CPU, dtype=munet.DataType.Float32, requires_grad=False)
-
-    # Important: detach after `.to(dev)` so each replica is a leaf tensor on the
-    # target device. Otherwise backward tries to traverse cross-device copy nodes.
-    ws = [w_cpu.to(dev).detach() for dev in devices]
-    bs = [b_cpu.to(dev).detach() for dev in devices]
-
-    for w in ws:
-        w.requires_grad = True
-    for b in bs:
-        b.requires_grad = True
+    # Initialize directly on each target device so mixed backend pairs
+    # (e.g., CUDA + Vulkan) do not depend on cross-backend parameter copies.
+    ws = []
+    bs = []
+    for dev in devices:
+        w = munet.zeros((4, 1), device=dev, dtype=munet.DataType.Float32, requires_grad=True)
+        w.uniform_(-0.2, 0.2)
+        b = munet.zeros((1,), device=dev, dtype=munet.DataType.Float32, requires_grad=True)
+        ws.append(w)
+        bs.append(b)
     return ws, bs
 
 
@@ -94,9 +79,8 @@ def main():
     args = ap.parse_args()
 
     devices = detect_accelerators()
-    devices = choose_homogeneous_pair(devices)
     if len(devices) < 2:
-        print("Need at least two healthy accelerators of the same type (CUDA or Vulkan).")
+        print("Need at least two healthy accelerator devices (CUDA/Vulkan).")
         return
 
     # Match the all-reduce runtime knobs used by native backend tests.
@@ -104,6 +88,7 @@ def main():
     os.environ["MUNET_ALLREDUCE_MODE"] = "host_fallback"
     os.environ["MUNET_ALLREDUCE_GROUP"] = "python_demo_multigpu"
 
+    devices = devices[:2]
     print("Using devices:", [str(d) for d in devices])
 
     ws, bs = make_model_replicas(devices)
