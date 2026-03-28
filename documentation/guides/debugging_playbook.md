@@ -135,18 +135,14 @@ Suggested workflow:
 
 ## 5) Multi-device all-reduce issues (host fallback mode)
 
-For Python demos, ensure environment knobs are explicitly set:
-
-```bash
-MUNET_ALLREDUCE_MODE=host_fallback
-MUNET_ALLREDUCE_WORLD_SIZE=<num_devices>
-MUNET_ALLREDUCE_GROUP=<stable_group_name>
-```
+The multigpu Python demo uses host-staged gradient reduction directly in
+Python (copy grads to CPU, average, copy back), so it does **not** depend on
+backend all-reduce rendezvous environment variables.
 
 If gradients diverge between replicas:
 
-1. Verify all replicas call `grad.all_reduce()` every step.
-2. Verify gradients are averaged after all-reduce sum.
+1. Verify all replicas participate in the reduction each step.
+2. Verify reduced gradients are averaged (not summed) before optimizer step.
 3. Print per-replica max drift after each update.
 4. Mixed backend pairs (e.g. CUDA + Vulkan) are supported in the demo, but if
    a specific pair is unstable on your driver stack, retry with
