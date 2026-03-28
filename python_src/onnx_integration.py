@@ -419,7 +419,7 @@ def _try_compile_onnx_native_sequential_module(model, debug=False):
 
     if len(ctx.seq_layers) == 1:
         return ctx.seq_layers[0]
-    return munet.nn.Sequential(ctx.seq_layers)
+    return munet.nn.Sequential(*ctx.seq_layers)
 
 
 

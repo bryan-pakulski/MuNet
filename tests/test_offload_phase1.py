@@ -27,6 +27,15 @@ def _detect_accelerators(max_index: int = 4):
     return devices
 
 
+def _pick_cross_device_pair():
+    accelerators = _detect_accelerators(max_index=4)
+    if not accelerators:
+        return None
+
+    # Prefer CPU<->accelerator boundaries first; these are broadly supported.
+    return CPU, accelerators[0]
+
+
 def _make_model():
     return munet.nn.Sequential(
         munet.nn.Linear(4, 8),
@@ -56,11 +65,11 @@ def test_offload_unknown_layer_raises():
 
 
 def test_offload_boundary_transfer_and_backward_mixed_chain():
-    accelerators = _detect_accelerators(max_index=4)
-    if len(accelerators) < 2:
-        pytest.skip("Need >=2 accelerators for boundary transfer mixed-chain test")
+    pair = _pick_cross_device_pair()
+    if pair is None:
+        pytest.skip("Need at least one accelerator for boundary transfer mixed-chain test")
 
-    d0, d1 = accelerators[0], accelerators[1]
+    d0, d1 = pair
     model = _make_model()
     model.offload(d0, layers=["0", "1"])
     model.offload(d1, layers=["2"])
@@ -80,11 +89,11 @@ def test_offload_boundary_transfer_and_backward_mixed_chain():
 
 
 def test_offload_inference_parity_vs_single_device():
-    accelerators = _detect_accelerators(max_index=4)
-    if len(accelerators) < 2:
-        pytest.skip("Need >=2 accelerators for inference parity test")
+    pair = _pick_cross_device_pair()
+    if pair is None:
+        pytest.skip("Need at least one accelerator for inference parity test")
 
-    d0, d1 = accelerators[0], accelerators[1]
+    d0, d1 = pair
     x = munet.from_numpy(np.random.randn(8, 4).astype(np.float32))
 
     baseline = _make_model()
