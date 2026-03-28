@@ -145,6 +145,33 @@ void record_dispatch_profile(const std::string &path, const OpMetadata &meta,
                          0.0, 0, to_string(tensor.shape()));
 }
 
+void record_dispatch_stage_profile(const char *stage, const OpMetadata &meta,
+                                   const Tensor &tensor, double cpu_us) {
+  if (!is_profile_enabled()) {
+    return;
+  }
+  Profiler::get().record("dispatch.stage." + std::string(stage) + "." + meta.name,
+                         cpu_us, 0.0, 0, to_string(tensor.shape()));
+}
+
+void log_dispatch_stage(const char *stage, const OpMetadata &meta,
+                        const Tensor &tensor) {
+  if (!is_debug_enabled()) {
+    return;
+  }
+  MUNET_INFO << "dispatch_stage stage=" << stage << " op=" << meta.name
+             << " backend=" << tensor.impl_->backend().name()
+             << " dtype=" << dtype_name(tensor.dtype())
+             << " shape=" << to_string(tensor.shape()) << std::endl;
+}
+
+void record_dispatch_stage(const char *stage, const OpMetadata &meta,
+                           const Tensor &tensor, Timer *timer) {
+  const double cpu_us = timer ? timer->elapsed_us() : 0.0;
+  record_dispatch_stage_profile(stage, meta, tensor, cpu_us);
+  log_dispatch_stage(stage, meta, tensor);
+}
+
 const char *dispatch_fallback_reason_name(DispatchFallbackReason reason) {
   switch (reason) {
   case DispatchFallbackReason::DType:
@@ -457,15 +484,18 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   }
 
   // Stage 1: metadata validation.
+  record_dispatch_stage("metadata_validation", meta, tensor, timer.get());
   if (auto stage1 = stage_metadata_validation(meta, tensor, timer.get())) {
     return *stage1;
   }
 
   // Stage 2: backend support query.
+  record_dispatch_stage("backend_support_query", meta, tensor, timer.get());
   const auto feature = *meta.feature;
   auto [queried_feature, support] = stage_backend_support_query(tensor, feature);
 
   // Stage 3: policy engine evaluation.
+  record_dispatch_stage("policy_engine_evaluation", meta, tensor, timer.get());
   const auto policy = stage_policy_engine_evaluation(
       id, meta, tensor, queried_feature, support, timer.get());
   if (policy.use_backend) {
@@ -476,6 +506,7 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   }
 
   // Stage 4: final decision/error.
+  record_dispatch_stage("final_decision_error", meta, tensor, timer.get());
   stage_final_decision_error(meta, tensor, queried_feature, policy, timer.get());
 }
 

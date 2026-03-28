@@ -802,17 +802,39 @@ TEST(BackendManagerTest, ProfilingCapturesDispatchPathMarkers) {
 
   (void)(a + b);
   (void)a.matmul(b);
+  try {
+    (void)Tensor::cat({a, b}, 0);
+    FAIL() << "Expected concat to fail for partial backend";
+  } catch (const std::runtime_error &) {
+  }
 
   const auto snapshot = Profiler::get().snapshot();
   EXPECT_NE(snapshot.stats.find("dispatch.resolve.cpu_fallback.Add"),
             snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("dispatch.resolve.backend.Matmul"),
             snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.metadata_validation.Add"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.backend_support_query.Add"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.policy_engine_evaluation.Add"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.metadata_validation.Concat"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.backend_support_query.Concat"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.policy_engine_evaluation.Concat"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.final_decision_error.Concat"),
+            snapshot.stats.end());
   const auto feature_reason =
       snapshot.stats.find("dispatch.fallback.reason.feature");
   ASSERT_NE(feature_reason, snapshot.stats.end());
-  EXPECT_NE(feature_reason->second.last_shape.find("op=Add"),
-            std::string::npos);
+  const bool has_add_reason =
+      feature_reason->second.last_shape.find("op=Add") != std::string::npos;
+  const bool has_concat_reason =
+      feature_reason->second.last_shape.find("op=Concat") != std::string::npos;
+  EXPECT_TRUE(has_add_reason || has_concat_reason);
   EXPECT_NE(feature_reason->second.last_shape.find("reason=feature"),
             std::string::npos);
 }
