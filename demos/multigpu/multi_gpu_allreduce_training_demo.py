@@ -101,7 +101,7 @@ def main():
         for rank, dev in enumerate(devices):
             xs = munet.from_numpy(x[rank * shard : (rank + 1) * shard]).to(dev)
             ys = munet.from_numpy(y[rank * shard : (rank + 1) * shard]).to(dev)
-            pred = xs.matmul(ws[rank]) + bs[rank]
+            pred = (xs @ ws[rank]) + bs[rank]
             loss = munet.mse_loss(pred, ys)
             loss.backward()
             losses.append(float(np.array(loss.to(CPU), copy=False)))
