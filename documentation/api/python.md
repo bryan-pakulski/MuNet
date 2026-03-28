@@ -17,6 +17,7 @@ This guide summarizes the currently exposed Python surface in `munet`.
 
 - `munet.supports(device, feature, dtype)`
 - `munet.dispatch_policy_snapshot()`
+- `munet.dispatch_decision_debug_dump(op_name, tensor)`
 - `munet.fallback_telemetry_snapshot()`
 - `munet.reset_fallback_telemetry()`
 
@@ -141,4 +142,3 @@ The Python module injects serialization helpers and metadata constants (for
 example `save`, `load`, `load_weights`, `load_for_inference`,
 `serialization_format_info`) during module initialization. See
 `demos/inference/serialization_roundtrip_demo.py` for end-to-end usage.
-

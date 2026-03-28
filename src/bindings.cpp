@@ -13,6 +13,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace py = pybind11;
 using namespace munet;
@@ -170,6 +171,48 @@ Tensor tensor_getitem(const Tensor &t, py::object key) {
     }
     return result;
   }
+}
+
+ops::OpId parse_op_id_name(const std::string &name) {
+  static const std::unordered_map<std::string, ops::OpId> kNameToOp = {
+      {"add", ops::OpId::Add},
+      {"sub", ops::OpId::Sub},
+      {"mul", ops::OpId::Mul},
+      {"div", ops::OpId::Div},
+      {"masked_fill", ops::OpId::MaskedFill},
+      {"matmul", ops::OpId::Matmul},
+      {"relu", ops::OpId::Relu},
+      {"sigmoid", ops::OpId::Sigmoid},
+      {"exp", ops::OpId::Exp},
+      {"log", ops::OpId::Log},
+      {"sqrt", ops::OpId::Sqrt},
+      {"rsqrt", ops::OpId::Rsqrt},
+      {"sin", ops::OpId::Sin},
+      {"cos", ops::OpId::Cos},
+      {"softmax", ops::OpId::Softmax},
+      {"log_softmax", ops::OpId::LogSoftmax},
+      {"cat", ops::OpId::Cat},
+      {"sum", ops::OpId::Sum},
+      {"sum_to_shape", ops::OpId::SumToShape},
+      {"mean", ops::OpId::Mean},
+      {"reshape", ops::OpId::Reshape},
+      {"conv2d", ops::OpId::Conv2D},
+      {"max_pool2d", ops::OpId::MaxPool2D},
+      {"upsample2d", ops::OpId::Upsample2D},
+      {"batch_norm", ops::OpId::BatchNorm},
+      {"layer_norm", ops::OpId::LayerNorm},
+      {"mse_loss", ops::OpId::MSELoss},
+      {"cross_entropy", ops::OpId::CrossEntropy},
+      {"transpose", ops::OpId::Transpose},
+      {"narrow", ops::OpId::Narrow},
+      {"zeros", ops::OpId::Zeros},
+  };
+  auto it = kNameToOp.find(name);
+  if (it == kNameToOp.end()) {
+    throw std::runtime_error("Unknown op name for dispatch debug dump: " +
+                             name);
+  }
+  return it->second;
 }
 
 } // namespace
@@ -1078,6 +1121,15 @@ PYBIND11_MODULE(munet, m) {
   m.def(
       "reset_fallback_telemetry", &ops::reset_fallback_telemetry,
       "Clears dispatch telemetry counters for accelerator->CPU fallbacks.");
+  m.def(
+      "dispatch_decision_debug_dump",
+      [](const std::string &op_name, const Tensor &tensor) {
+        return ops::dispatch_decision_debug_dump(parse_op_id_name(op_name),
+                                                 tensor);
+      },
+      py::arg("op_name"), py::arg("tensor"),
+      "Returns a structured dispatch-decision line for the provided op name "
+      "and tensor context.");
 
   // ============================================================================
   // Python Injected Helpers
