@@ -117,7 +117,7 @@ def main():
             pred = (xs @ ws[rank]) + bs[rank]
             loss = pred.mse_loss(ys)
             loss.backward()
-            losses.append(float(np.array(loss.to(CPU), copy=False)))
+            losses.append(float(loss.detach().to(CPU).item()))
 
         allreduce_gradients(ws)
         allreduce_gradients(bs)
@@ -128,8 +128,8 @@ def main():
             b.step(args.lr)
 
         # Check synchronization drift
-        w0 = np.array(ws[0].to(CPU), copy=False)
-        w1 = np.array(ws[1].to(CPU), copy=False)
+        w0 = np.array(ws[0].detach().to(CPU), copy=False)
+        w1 = np.array(ws[1].detach().to(CPU), copy=False)
         drift = np.abs(w0 - w1).max()
         if step % 5 == 0 or step == args.steps - 1:
             print(f"step={step:03d} mean_loss={np.mean(losses):.6f} max_param_drift={drift:.6e}")
