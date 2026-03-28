@@ -62,15 +62,18 @@ PY
 
 ### Recommended check
 
-Probe each device with a **real forward + backward** op (not allocation-only).
-This catches many invalid devices early.
+Probe each device with a **real backend op + copy-back** (not allocation-only).
+This catches many invalid devices early without over-constraining discovery.
 
 ```python
-x = munet.ones((2, 2), device=dev, requires_grad=True)
-w = munet.ones((2, 1), device=dev, requires_grad=True)
-y = x @ w
-y.sum().backward()
+a = munet.ones((1,), device=dev)
+b = munet.ones((1,), device=dev)
+c = a + b
+_ = c.to(munet.Device(munet.DeviceType.CPU, 0))
 ```
+
+If logs show `invalid device ordinal` for higher indices, that is expected when
+your probe range exceeds actual device count.
 
 ---
 

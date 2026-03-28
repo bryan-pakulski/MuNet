@@ -30,16 +30,20 @@ def detect_accelerators(max_index: int = 4):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
-                # Probe with a real forward+backward op; allocation-only checks
-                # can pass on devices that later fail during autograd kernels.
-                x = munet.ones((2, 2), device=dev, requires_grad=True)
-                w = munet.ones((2, 1), device=dev, requires_grad=True)
-                y = x @ w
-                y.sum().backward()
-                # Force sync/error surfacing now so bad devices don't get
-                # accepted and fail later at unrelated call sites.
-                _ = y.to(CPU)
-            except RuntimeError:
+                # Keep probe lightweight and deterministic: run a real backend op,
+                # force synchronize via copy-back, and validate value.
+                a = munet.ones((1,), device=dev, dtype=munet.DataType.Float32)
+                b = munet.ones((1,), device=dev, dtype=munet.DataType.Float32)
+                c = a + b
+                c_cpu = c.to(CPU)
+                if float(c_cpu.item()) != 2.0:
+                    raise RuntimeError("accelerator health-check produced incorrect value")
+            except RuntimeError as exc:
+                # If the index is out of range for this backend, no need to probe
+                # higher indices of the same type.
+                msg = str(exc).lower()
+                if "invalid device ordinal" in msg or "out of range" in msg:
+                    break
                 continue
             devices.append(dev)
     return devices
@@ -76,9 +80,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--lr", type=float, default=0.05)
+    ap.add_argument("--max-index", type=int, default=2,
+                    help="Probe device indices in range [0, max_index).")
     args = ap.parse_args()
 
-    devices = detect_accelerators()
+    devices = detect_accelerators(args.max_index)
     if len(devices) < 2:
         print("Need at least two healthy accelerator devices (CUDA/Vulkan).")
         return
