@@ -5,6 +5,9 @@
 - `MUNET_PROFILE=1`: enable profiler collection + auto summary on process exit.
 - `MUNET_DEBUG=1`: enable debug validation/logs.
 - `MUNET_LOG_LEVEL=0..3`: control logging verbosity.
+- `MUNET_DISPATCH_DECISION_DUMP=1`: emit structured dispatch decision lines.
+- `MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK=1`: throw on CUDA/Vulkan tensor
+  CPU fallback (useful for CI and flaky fallback detection).
 - When these flags are **disabled**, MuNet takes a cheap fast path that avoids
   timer/string work in hot profiling call sites; runtime overrides are intended
   primarily for tests/debug harnesses rather than production toggling.
@@ -56,6 +59,9 @@
 - `dispatch.fallback.reason.*` tells you why that happened. The row count is the
   frequency; the attached detail string records the latest `op=`, `backend=`,
   `feature=`, `dtype=`, `shape=`, `reason=`, and `policy=` context.
+- In addition to profiler rows, dispatch keeps in-process accelerator fallback
+  counters (`fallback_telemetry_snapshot()` / `reset_fallback_telemetry()` in
+  `op_dispatch`) so tests can assert fallback behavior directly.
 
 ### Trace/span correlation
 
