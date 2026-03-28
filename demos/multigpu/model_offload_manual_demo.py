@@ -18,9 +18,14 @@ import munet
 CPU = munet.Device(munet.DeviceType.CPU, 0)
 
 
-def detect_accelerators(max_index: int = 4):
+def detect_accelerators(max_index: int = 4, backend: str = "cuda"):
     devices = []
-    for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+    backend_map = {
+        "cuda": (munet.DeviceType.CUDA,),
+        "vulkan": (munet.DeviceType.VULKAN,),
+        "auto": (munet.DeviceType.CUDA, munet.DeviceType.VULKAN),
+    }
+    for dev_type in backend_map[backend]:
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
@@ -50,14 +55,14 @@ def pick_offload_pair(accelerators):
         for j in range(i + 1, len(accelerators)):
             d0, d1 = accelerators[i], accelerators[j]
             if can_transfer(d0, d1):
-                return d0, d1
+                return d0, d1, "accelerator_pair"
 
-    # Fall back to CPU↔accelerator if same-backend multi-device transfer is unsupported.
+    # Fall back to CPU↔accelerator if multi-accelerator transfer is unsupported.
     for dev in accelerators:
         if can_transfer(CPU, dev) and can_transfer(dev, CPU):
-            return CPU, dev
+            return CPU, dev, "cpu_accelerator_fallback"
 
-    return None
+    return None, None, "none"
 
 
 def main():
@@ -65,19 +70,30 @@ def main():
     ap.add_argument("--steps", type=int, default=10)
     ap.add_argument("--lr", type=float, default=0.03)
     ap.add_argument("--max-index", type=int, default=2)
+    ap.add_argument(
+        "--backend",
+        choices=["cuda", "vulkan", "auto"],
+        default="cuda",
+        help="Accelerator backend selection policy (default: cuda).",
+    )
     args = ap.parse_args()
 
-    devices = detect_accelerators(args.max_index)
+    devices = detect_accelerators(args.max_index, backend=args.backend)
     if not devices:
-        print("Need at least one accelerator device for manual offload demo.")
+        print(f"Need at least one {args.backend} accelerator device for manual offload demo.")
         return
 
-    pair = pick_offload_pair(devices)
-    if pair is None:
+    d0, d1, mode = pick_offload_pair(devices)
+    if d0 is None or d1 is None:
         print("Could not find a compatible device pair for boundary transfers.")
         return
 
-    d0, d1 = pair
+    if mode == "cpu_accelerator_fallback":
+        print(
+            "Note: no compatible accelerator↔accelerator transfer pair detected; "
+            "falling back to CPU↔accelerator split."
+        )
+
     print("Using devices:", d0, d1)
 
     model = munet.nn.Sequential(
