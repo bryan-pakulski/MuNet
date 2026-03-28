@@ -39,8 +39,6 @@ namespace munet {
 static const int MAX_FRAMES_IN_FLIGHT = 2;
 static const int BATCH_SIZE_LIMIT = 2048; // Flush after this many ops
 static const int MAX_DESCRIPTORS_PER_FRAME = 2048;
-static std::mutex vulkan_lifecycle_mutex;
-static std::atomic<uint64_t> shader_compile_counter{0};
 
 // --- Helpers ---
 static inline std::chrono::high_resolution_clock::time_point profile_now() {
@@ -118,9 +116,10 @@ void VulkanBackend::create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
   VK_CHECK(vkBindBufferMemory(device_, buffer, bufferMemory, 0));
 }
 
-static std::vector<uint32_t> compileShader(const std::string &name,
-                                           const std::string &source) {
-  const uint64_t serial = shader_compile_counter.fetch_add(1);
+std::vector<uint32_t>
+VulkanBackend::compile_shader(const std::string &name,
+                              const std::string &source) const {
+  const uint64_t serial = shader_compile_counter_.fetch_add(1);
   const auto tid_hash =
       std::hash<std::thread::id>{}(std::this_thread::get_id());
   std::ostringstream base_name;
@@ -196,7 +195,7 @@ void VulkanBackend::reset_runtime_state() {
 VulkanBackend::VulkanBackend(int device_index)
     : device_index_(device_index),
       runtime_(std::make_unique<VulkanRuntimeState>()) {
-  std::lock_guard<std::mutex> lock(vulkan_lifecycle_mutex);
+  std::lock_guard<std::mutex> lock(lifecycle_mutex_);
   reset_runtime_state();
 
   VkApplicationInfo appInfo{};
@@ -337,7 +336,7 @@ VulkanBackend::VulkanBackend(int device_index)
   // Load Kernels
   auto createComputePipeline = [&](const std::string &name,
                                    const std::string &glsl) {
-    std::vector<uint32_t> code = compileShader(name, glsl);
+    std::vector<uint32_t> code = compile_shader(name, glsl);
     VkShaderModuleCreateInfo smInfo{};
     smInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     smInfo.codeSize = code.size() * 4;
@@ -2015,7 +2014,7 @@ void main() {
 }
 
 VulkanBackend::~VulkanBackend() {
-  std::lock_guard<std::mutex> lock(vulkan_lifecycle_mutex);
+  std::lock_guard<std::mutex> lock(lifecycle_mutex_);
   const bool can_destroy_runtime =
       runtime_ready_ && device_ != VK_NULL_HANDLE;
   runtime_ready_ = false;

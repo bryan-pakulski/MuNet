@@ -1,8 +1,11 @@
 #pragma once
 #include "../backend.hpp"
+#include <atomic>
 #include <array>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -232,6 +235,8 @@ private:
   void create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
                      VkMemoryPropertyFlags properties, VkBuffer &buffer,
                      VkDeviceMemory &buffer_memory) const;
+  std::vector<uint32_t> compile_shader(const std::string &name,
+                                       const std::string &source) const;
 
   VkInstance instance_ = VK_NULL_HANDLE;
   VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
@@ -243,6 +248,8 @@ private:
   VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
   float timestamp_period_ = 1.0f;
   bool runtime_ready_ = false;
+  mutable std::mutex lifecycle_mutex_;
+  mutable std::atomic<uint64_t> shader_compile_counter_{0};
 
   VkPipeline addPipeline = VK_NULL_HANDLE;
   VkPipeline mulPipeline = VK_NULL_HANDLE;
