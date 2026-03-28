@@ -18,6 +18,7 @@ Welcome to MuNet docs. This documentation is structured for interactive/searchab
 - [Serialization & Model Loading](guides/serialization.md)
 - [Common Design Patterns](guides/design_patterns.md)
 - [Training Precision & AMP Flows](guides/training_precision.md)
+- [Debugging Playbook](guides/debugging_playbook.md)
 - [E2E Tutorial](tutorials/e2e_workflow.md)
 
 ## Existing architecture and perf docs
