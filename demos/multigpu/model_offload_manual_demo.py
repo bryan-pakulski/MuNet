@@ -35,6 +35,31 @@ def detect_accelerators(max_index: int = 4):
     return devices
 
 
+def can_transfer(src, dst) -> bool:
+    try:
+        probe = munet.ones((2,), device=src)
+        moved = probe.to(dst)
+        return float(moved.to(CPU).sum().item()) == 2.0
+    except RuntimeError:
+        return False
+
+
+def pick_offload_pair(accelerators):
+    # Prefer true accelerator↔accelerator pairs when transfer works.
+    for i in range(len(accelerators)):
+        for j in range(i + 1, len(accelerators)):
+            d0, d1 = accelerators[i], accelerators[j]
+            if can_transfer(d0, d1):
+                return d0, d1
+
+    # Fall back to CPU↔accelerator if same-backend multi-device transfer is unsupported.
+    for dev in accelerators:
+        if can_transfer(CPU, dev) and can_transfer(dev, CPU):
+            return CPU, dev
+
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=10)
@@ -43,11 +68,16 @@ def main():
     args = ap.parse_args()
 
     devices = detect_accelerators(args.max_index)
-    if len(devices) < 2:
-        print("Need >=2 accelerator devices for manual offload demo.")
+    if not devices:
+        print("Need at least one accelerator device for manual offload demo.")
         return
 
-    d0, d1 = devices[0], devices[1]
+    pair = pick_offload_pair(devices)
+    if pair is None:
+        print("Could not find a compatible device pair for boundary transfers.")
+        return
+
+    d0, d1 = pair
     print("Using devices:", d0, d1)
 
     model = munet.nn.Sequential(
