@@ -127,7 +127,12 @@ Tensor layer_norm(const Tensor &x, const Tensor &weight, const Tensor &bias,
   detail::require_same_dtype(op_metadata(OpId::LayerNorm).name, x, weight);
   detail::require_same_dtype(op_metadata(OpId::LayerNorm).name, x, bias);
   const auto dispatch = resolve_dispatch(OpId::LayerNorm, x);
-  (void)dispatch;
+  const bool use_cpu_fallback = dispatch.use_cpu_fallback;
+  if (!use_cpu_fallback) {
+    throw std::runtime_error(
+        "LayerNorm: backend execution path is not implemented for backend '" +
+        std::string(x.impl_->backend().name()) + "'");
+  }
 
   if (x.shape().empty()) {
     throw std::runtime_error("LayerNorm: input must have at least 1 dim");
