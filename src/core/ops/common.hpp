@@ -368,7 +368,8 @@ inline Tensor sum_to_shape(const Tensor &t, const Shape &target_shape) {
     return t;
   }
 
-  if (!detail::backend_supports(t, BackendFeature::Reduction)) {
+  const auto dispatch = resolve_dispatch(OpId::SumToShape, t);
+  if (dispatch.use_cpu_fallback) {
     return detail::sum_to_shape_cpu_fallback(t, target_shape);
   }
 

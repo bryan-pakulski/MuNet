@@ -1,6 +1,7 @@
 #include "backend.hpp"
 #include "backend/cpu_backend.hpp"
 #include "core/all_reduce_runtime.hpp"
+#include "core/op_dispatch.hpp"
 #include "core/util/profiler.hpp"
 #include "tensor.hpp"
 #include <cstdlib>
@@ -60,6 +61,32 @@ private:
   bool had_original_{false};
   std::string original_value_;
 };
+
+enum class ExpectedPolicyResult {
+  Backend,
+  CpuFallback,
+  Deny,
+};
+
+struct PolicyCase {
+  const char *name;
+  DeviceType backend;
+  ops::OpId op;
+  DataType dtype;
+  ExpectedPolicyResult expected;
+};
+
+bool backend_available(DeviceType type) {
+  if (type == DeviceType::CPU) {
+    return true;
+  }
+  try {
+    (void)BackendManager::get(Device{type, 0});
+    return true;
+  } catch (const std::runtime_error &) {
+    return false;
+  }
+}
 
 class PartialMatmulBackend : public Backend,
                              public BackendAllocationTransferCapability,
@@ -802,17 +829,39 @@ TEST(BackendManagerTest, ProfilingCapturesDispatchPathMarkers) {
 
   (void)(a + b);
   (void)a.matmul(b);
+  try {
+    (void)Tensor::cat({a, b}, 0);
+    FAIL() << "Expected concat to fail for partial backend";
+  } catch (const std::runtime_error &) {
+  }
 
   const auto snapshot = Profiler::get().snapshot();
   EXPECT_NE(snapshot.stats.find("dispatch.resolve.cpu_fallback.Add"),
             snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("dispatch.resolve.backend.Matmul"),
             snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.metadata_validation.Add"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.backend_support_query.Add"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.policy_engine_evaluation.Add"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.metadata_validation.Concat"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.backend_support_query.Concat"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.policy_engine_evaluation.Concat"),
+            snapshot.stats.end());
+  EXPECT_NE(snapshot.stats.find("dispatch.stage.final_decision_error.Concat"),
+            snapshot.stats.end());
   const auto feature_reason =
       snapshot.stats.find("dispatch.fallback.reason.feature");
   ASSERT_NE(feature_reason, snapshot.stats.end());
-  EXPECT_NE(feature_reason->second.last_shape.find("op=Add"),
-            std::string::npos);
+  const bool has_add_reason =
+      feature_reason->second.last_shape.find("op=Add") != std::string::npos;
+  const bool has_concat_reason =
+      feature_reason->second.last_shape.find("op=Concat") != std::string::npos;
+  EXPECT_TRUE(has_add_reason || has_concat_reason);
   EXPECT_NE(feature_reason->second.last_shape.find("reason=feature"),
             std::string::npos);
 }
@@ -844,6 +893,247 @@ TEST(BackendManagerTest, ProfilingCapturesDTypeFallbackReasonMarkers) {
             std::string::npos);
   EXPECT_NE(dtype_reason->second.last_shape.find("reason=dtype"),
             std::string::npos);
+}
+
+class DispatchPolicyMatrixTest : public ::testing::TestWithParam<PolicyCase> {};
+
+TEST_P(DispatchPolicyMatrixTest, ResolvesExpectedPolicy) {
+  const auto param = GetParam();
+  const Device device{param.backend, 0};
+  if (!backend_available(param.backend)) {
+    GTEST_SKIP() << "Backend unavailable for matrix case: " << param.name;
+  }
+
+  Tensor x({2, 2}, device, param.dtype);
+  x.fill_(1.0f);
+
+  if (param.expected == ExpectedPolicyResult::Deny) {
+    EXPECT_THROW((void)ops::resolve_dispatch(param.op, x), std::runtime_error);
+    return;
+  }
+
+  const auto decision = ops::resolve_dispatch(param.op, x);
+  if (param.expected == ExpectedPolicyResult::Backend) {
+    EXPECT_TRUE(decision.use_backend);
+    EXPECT_FALSE(decision.use_cpu_fallback);
+  } else {
+    EXPECT_FALSE(decision.use_backend);
+    EXPECT_TRUE(decision.use_cpu_fallback);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    DispatchPolicyMatrix, DispatchPolicyMatrixTest,
+    ::testing::Values(
+        PolicyCase{"cpu_add_float32_backend", DeviceType::CPU, ops::OpId::Add,
+                   DataType::Float32, ExpectedPolicyResult::Backend},
+        PolicyCase{"cpu_conv_float16_cpu_fallback", DeviceType::CPU,
+                   ops::OpId::Conv2D, DataType::Float16,
+                   ExpectedPolicyResult::CpuFallback},
+        PolicyCase{"cuda_matmul_bfloat16_deny", DeviceType::CUDA,
+                   ops::OpId::Matmul, DataType::BFloat16,
+                   ExpectedPolicyResult::Deny},
+        PolicyCase{"cuda_conv_float16_cpu_fallback", DeviceType::CUDA,
+                   ops::OpId::Conv2D, DataType::Float16,
+                   ExpectedPolicyResult::CpuFallback},
+        PolicyCase{"vulkan_matmul_float16_deny", DeviceType::VULKAN,
+                   ops::OpId::Matmul, DataType::Float16,
+                   ExpectedPolicyResult::Deny},
+        PolicyCase{"vulkan_softmax_bfloat16_deny", DeviceType::VULKAN,
+                   ops::OpId::Softmax, DataType::BFloat16,
+                   ExpectedPolicyResult::Deny}));
+
+TEST(BackendManagerTest, DispatchPolicySnapshotIsStable) {
+  const std::string expected =
+      "device=cuda;feature=elementwise_binary;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=CUDA backend does not support bfloat16 "
+      "elementwise-feature fallback\n"
+      "device=vulkan;feature=elementwise_binary;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=Vulkan backend does not support bfloat16 "
+      "elementwise-feature fallback\n"
+      "device=cuda;feature=matmul;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=CUDA backend does not support bfloat16 "
+      "matmul-feature fallback\n"
+      "device=vulkan;feature=matmul;op=<any>;dtype=float16;action="
+      "deny_cpu_fallback;error=Vulkan backend does not support float16 "
+      "matmul-feature fallback\n"
+      "device=vulkan;feature=matmul;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=Vulkan backend does not support bfloat16 "
+      "matmul-feature fallback\n"
+      "device=cpu;feature=convolution;op=<any>;dtype=float16;action="
+      "force_cpu_fallback;error=CPU backend forces float16 convolution "
+      "fallback\n"
+      "device=cpu;feature=convolution;op=<any>;dtype=bfloat16;action="
+      "force_cpu_fallback;error=CPU backend forces bfloat16 convolution "
+      "fallback\n"
+      "device=cuda;feature=convolution;op=<any>;dtype=float16;action="
+      "force_cpu_fallback;error=CUDA backend forces float16 convolution "
+      "fallback\n"
+      "device=vulkan;feature=convolution;op=<any>;dtype=float16;action="
+      "force_cpu_fallback;error=Vulkan backend forces float16 convolution "
+      "fallback\n"
+      "device=cuda;feature=pooling;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=CUDA backend does not support bfloat16 "
+      "pooling-feature fallback\n"
+      "device=vulkan;feature=pooling;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=Vulkan backend does not support bfloat16 "
+      "pooling-feature fallback\n"
+      "device=cuda;feature=loss;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=CUDA backend does not support bfloat16 "
+      "loss-feature fallback\n"
+      "device=vulkan;feature=loss;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=Vulkan backend does not support bfloat16 "
+      "loss-feature fallback\n"
+      "device=cuda;feature=reduction;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=CUDA backend does not support bfloat16 "
+      "reduction-feature fallback\n"
+      "device=vulkan;feature=reduction;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=Vulkan backend does not support bfloat16 "
+      "reduction-feature fallback\n"
+      "device=cuda;feature=softmax;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=CUDA backend does not support bfloat16 "
+      "softmax-feature fallback\n"
+      "device=vulkan;feature=softmax;op=<any>;dtype=bfloat16;action="
+      "deny_cpu_fallback;error=Vulkan backend does not support bfloat16 "
+      "softmax-feature fallback\n"
+      "device=unknown;feature=softmax;op=<any>;dtype=<any>;action="
+      "deny_cpu_fallback;error=UNKNOWN softmax feature fallback denied\n"
+      "device=unknown;feature=softmax;op=<any>;dtype=float32;action="
+      "deny_cpu_fallback;error=UNKNOWN softmax float32 fallback denied\n"
+      "device=unknown;feature=softmax;op=Softmax;dtype=float32;action="
+      "deny_cpu_fallback;error=UNKNOWN softmax op-specific float32 fallback "
+      "denied\n";
+  EXPECT_EQ(ops::dispatch_policy_snapshot(), expected);
+}
+
+TEST(BackendManagerTest, DispatchDecisionDebugDumpHasSingleDiagnosticLine) {
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const ScopedEnvVar dump_env("MUNET_DISPATCH_DECISION_DUMP", "1");
+  const ScopedDebugOverride debug(true);
+  const Device unknown{DeviceType::UNKNOWN, 0};
+  Tensor x({2, 2}, unknown, DataType::Float32);
+  x.fill_(1.0f);
+
+  const std::string line = ops::dispatch_decision_debug_dump(ops::OpId::Softmax, x);
+  EXPECT_NE(line.find("dispatch_decision"), std::string::npos);
+  EXPECT_NE(line.find("op=Softmax"), std::string::npos);
+  EXPECT_NE(line.find("backend=partial_matmul"), std::string::npos);
+  EXPECT_NE(line.find("result=error"), std::string::npos);
+  EXPECT_NE(line.find("UNKNOWN softmax op-specific float32 fallback denied"),
+            std::string::npos);
+}
+
+TEST(BackendManagerTest, LayerNormDispatchDecisionIsUsedForCpuFallbackPath) {
+  const Device cpu{DeviceType::CPU, 0};
+  Tensor x({2, 4}, cpu, DataType::Float32);
+  x.fill_(1.0f);
+  const std::string line = ops::dispatch_decision_debug_dump(ops::OpId::LayerNorm, x);
+  EXPECT_NE(line.find("dispatch_decision"), std::string::npos);
+  EXPECT_NE(line.find("op=LayerNorm"), std::string::npos);
+  EXPECT_NE(line.find("result=cpu_fallback"), std::string::npos);
+}
+
+TEST(BackendManagerTest, SumToShapeDispatchDecisionUsesCentralPolicyPath) {
+  const Device cpu{DeviceType::CPU, 0};
+  Tensor x({2, 4}, cpu, DataType::Float32);
+  x.fill_(1.0f);
+  const std::string line = ops::dispatch_decision_debug_dump(ops::OpId::SumToShape, x);
+  EXPECT_NE(line.find("dispatch_decision"), std::string::npos);
+  EXPECT_NE(line.find("op=SumToShape"), std::string::npos);
+  EXPECT_NE(line.find("result=backend"), std::string::npos);
+}
+
+TEST(BackendManagerTest,
+     DispatchRuleSpecificityPrefersOpAndDTypeOverFeatureRule) {
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device unknown{DeviceType::UNKNOWN, 0};
+  Tensor x({2, 2}, unknown, DataType::Float32);
+  x.fill_(1.0f);
+
+  try {
+    (void)x.softmax(-1);
+    FAIL() << "Expected softmax fallback deny rule to throw";
+  } catch (const std::runtime_error &err) {
+    const std::string message = err.what();
+    EXPECT_NE(message.find("UNKNOWN softmax op-specific float32 fallback denied"),
+              std::string::npos);
+  }
+}
+
+TEST(BackendManagerTest,
+     DispatchRuleSpecificityFallsBackToFeatureRuleWhenDTypeDoesNotMatch) {
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device unknown{DeviceType::UNKNOWN, 0};
+  Tensor x({2, 2}, unknown, DataType::Float16);
+  x.fill_(1.0f);
+
+  try {
+    (void)x.softmax(-1);
+    FAIL() << "Expected softmax fallback deny rule to throw";
+  } catch (const std::runtime_error &err) {
+    const std::string message = err.what();
+    EXPECT_NE(message.find("UNKNOWN softmax feature fallback denied"),
+              std::string::npos);
+  }
+}
+
+TEST(BackendManagerTest,
+     DispatchDenyFallbackErrorIncludesBackendAndDeviceContext) {
+  BackendManager::register_backend(DeviceType::UNKNOWN, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+
+  const Device unknown{DeviceType::UNKNOWN, 0};
+  Tensor x({2, 2}, unknown, DataType::Float32);
+  x.fill_(1.0f);
+
+  try {
+    (void)x.softmax(-1);
+    FAIL() << "Expected softmax fallback deny rule to throw";
+  } catch (const std::runtime_error &err) {
+    const std::string message = err.what();
+    EXPECT_NE(message.find("UNKNOWN softmax op-specific float32 fallback denied"),
+              std::string::npos);
+    EXPECT_NE(message.find("for backend 'partial_matmul'"), std::string::npos);
+    EXPECT_NE(message.find("on device 'unknown:0'"), std::string::npos);
+  }
+}
+
+TEST(BackendManagerTest, CudaMatmulBFloat16FallbackDeniedWhenCudaAvailable) {
+  const Device cuda{DeviceType::CUDA, 0};
+  try {
+    (void)Tensor({1}, cuda, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "CUDA backend unavailable in this environment";
+  }
+
+  Tensor a32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);
+  Tensor b32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);
+  a32.fill_(1.0f);
+  b32.fill_(1.0f);
+
+  Tensor a = a32.to(cuda).to(DataType::BFloat16);
+  Tensor b = b32.to(cuda).to(DataType::BFloat16);
+
+  try {
+    (void)a.matmul(b);
+    FAIL() << "Expected CUDA bfloat16 matmul fallback deny rule to throw";
+  } catch (const std::runtime_error &err) {
+    const std::string message = err.what();
+    EXPECT_NE(
+        message.find("CUDA backend does not support bfloat16 matmul-feature "
+                     "fallback"),
+        std::string::npos);
+  }
 }
 
 TEST(BackendManagerTest, ProfilingCapturesAllocatorAndSynchronizationMarkers) {
@@ -1014,6 +1304,22 @@ TEST(BackendManagerTest, CpuAllReduceAggregatesAcrossParticipants) {
   EXPECT_FLOAT_EQ(ap[1], 6.0f);
   EXPECT_FLOAT_EQ(bp[0], 4.0f);
   EXPECT_FLOAT_EQ(bp[1], 6.0f);
+}
+
+TEST(BackendManagerTest, AllReduceTimesOutWhenParticipantsNeverArrive) {
+  ScopedEnvVar world_size("MUNET_ALLREDUCE_WORLD_SIZE", "2");
+  ScopedEnvVar timeout_ms("MUNET_ALLREDUCE_TIMEOUT_MS", "50");
+  ScopedEnvVar group("MUNET_ALLREDUCE_GROUP", "timeout_guard_cpu");
+
+  Tensor a({2}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  float *pa = static_cast<float *>(a.data());
+  pa[0] = 1.0f;
+  pa[1] = 2.0f;
+
+  EXPECT_THROW(
+      BackendManager::get(Device{DeviceType::CPU, 0})
+          ->all_reduce(*a.impl_->storage, 2),
+      std::runtime_error);
 }
 
 TEST(BackendManagerTest,

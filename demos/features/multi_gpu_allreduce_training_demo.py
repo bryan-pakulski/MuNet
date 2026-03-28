@@ -53,8 +53,7 @@ def allreduce_gradients(param_replicas):
 def make_model_replicas(devices):
     w_cpu = munet.Tensor((4, 1), device=CPU, dtype=munet.DataType.Float32, requires_grad=True)
     w_cpu.uniform_(-0.2, 0.2)
-    b_cpu = munet.Tensor((1,), device=CPU, dtype=munet.DataType.Float32, requires_grad=True)
-    b_cpu.fill_(0.0)
+    b_cpu = munet.zeros((1,), device=CPU, dtype=munet.DataType.Float32, requires_grad=True)
 
     ws = [w_cpu.to(dev) for dev in devices]
     bs = [b_cpu.to(dev) for dev in devices]
@@ -83,7 +82,7 @@ def main():
     os.environ["MUNET_ALLREDUCE_GROUP"] = "python_demo_multigpu"
 
     devices = devices[:2]
-    print("Using devices:", [d.to_string() for d in devices])
+    print("Using devices:", [str(d) for d in devices])
 
     ws, bs = make_model_replicas(devices)
 

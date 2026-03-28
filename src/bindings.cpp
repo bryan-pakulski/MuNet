@@ -225,7 +225,10 @@ PYBIND11_MODULE(munet, m) {
       .def(py::init<DeviceType, int>(),
            py::arg_v("type", DeviceType::CPU, "munet.DeviceType.CPU"),
            py::arg("index") = 0, "Initializes a new Device.")
+      .def("to_string", &Device::to_string,
+           "Returns a stable device string like 'cpu:0' or 'cuda:1'.")
       .def("__repr__", &Device::to_string)
+      .def("__str__", &Device::to_string)
       .def_readwrite("type", &Device::type, "The type of the device.")
       .def_readwrite("index", &Device::index, "The index of the device.");
 
