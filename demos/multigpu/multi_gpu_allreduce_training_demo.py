@@ -14,6 +14,8 @@ Run:
 from __future__ import annotations
 
 import argparse
+import os
+import threading
 import numpy as np
 
 import munet
@@ -48,18 +50,29 @@ def detect_accelerators(max_index: int = 4):
 
 
 def allreduce_gradients(param_replicas):
-    # Host-staged all-reduce emulation:
-    # 1) copy per-device grads to CPU
-    # 2) sum + average on CPU
-    # 3) broadcast averaged grad back to each replica device
-    cpu_grads = [p.grad.detach().to(CPU) for p in param_replicas]
-    reduced = cpu_grads[0]
-    for g in cpu_grads[1:]:
-        reduced = reduced + g
-    reduced = reduced * (1.0 / float(len(param_replicas)))
+    errors = []
 
+    def _run_all_reduce(param):
+        try:
+            param.grad.all_reduce()
+        except Exception as exc:  # noqa: BLE001 - demo path, bubble up cleanly
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=_run_all_reduce, args=(p,)) for p in param_replicas
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    if errors:
+        raise RuntimeError(f"all_reduce failed: {errors[0]}")
+
+    # Convert all-reduce sum to average for optimizer step parity.
+    scale = 1.0 / float(len(param_replicas))
     for p in param_replicas:
-        p.grad.replace_(reduced.to(p.device))
+        p.grad.replace_(p.grad * scale)
 
 
 def make_model_replicas(devices):
@@ -89,8 +102,12 @@ def main():
         print("Need at least two healthy accelerator devices (CUDA/Vulkan).")
         return
 
-    # This demo performs host-staged gradient reduction directly in Python.
-    # (No backend all-reduce rendezvous setup required.)
+    # Configure backend all-reduce rendezvous for this run. Explicitly set these
+    # here so stale shell-level values do not cause participant-count mismatches.
+    os.environ["MUNET_ALLREDUCE_WORLD_SIZE"] = str(len(devices))
+    os.environ["MUNET_ALLREDUCE_MODE"] = "host_fallback"
+    os.environ["MUNET_ALLREDUCE_GROUP"] = "python_demo_multigpu"
+    os.environ["MUNET_ALLREDUCE_TIMEOUT_MS"] = "30000"
 
     devices = devices[:2]
     print("Using devices:", [str(d) for d in devices])

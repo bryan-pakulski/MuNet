@@ -135,9 +135,15 @@ Suggested workflow:
 
 ## 5) Multi-device all-reduce issues (host fallback mode)
 
-The multigpu Python demo uses host-staged gradient reduction directly in
-Python (copy grads to CPU, average, copy back), so it does **not** depend on
-backend all-reduce rendezvous environment variables.
+For backend all-reduce host fallback, ensure rendezvous env knobs are set for
+the current run:
+
+```bash
+MUNET_ALLREDUCE_MODE=host_fallback
+MUNET_ALLREDUCE_WORLD_SIZE=<num_devices>
+MUNET_ALLREDUCE_GROUP=<stable_group_name>
+MUNET_ALLREDUCE_TIMEOUT_MS=30000
+```
 
 If gradients diverge between replicas:
 
