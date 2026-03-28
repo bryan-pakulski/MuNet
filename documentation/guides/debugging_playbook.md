@@ -145,6 +145,8 @@ If gradients diverge between replicas:
 1. Verify all replicas call `grad.all_reduce()` every step.
 2. Verify gradients are averaged after all-reduce sum.
 3. Print per-replica max drift after each update.
+4. Use a **homogeneous device group** for this demo/runtime path (e.g. two CUDA
+   devices or two Vulkan devices), not mixed CUDA+Vulkan.
 
 ---
 
@@ -197,4 +199,3 @@ Please include:
 3. Whether `CUDA_LAUNCH_BLOCKING=1` changes the failing line.
 4. Output of fallback telemetry snapshot (if relevant).
 5. GPU/driver/runtime details (`nvidia-smi`, CUDA version, visible devices).
-

@@ -36,10 +36,25 @@ def detect_accelerators(max_index: int = 4):
                 w = munet.ones((2, 1), device=dev, requires_grad=True)
                 y = x @ w
                 y.sum().backward()
+                # Force sync/error surfacing now so bad devices don't get
+                # accepted and fail later at unrelated call sites.
+                _ = y.to(CPU)
             except RuntimeError:
                 continue
             devices.append(dev)
     return devices
+
+
+def choose_homogeneous_pair(devices):
+    by_type = {}
+    for dev in devices:
+        by_type.setdefault(dev.type, []).append(dev)
+
+    for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+        same_type = by_type.get(dev_type, [])
+        if len(same_type) >= 2:
+            return same_type[:2]
+    return []
 
 
 def allreduce_gradients(param_replicas):
@@ -79,8 +94,9 @@ def main():
     args = ap.parse_args()
 
     devices = detect_accelerators()
+    devices = choose_homogeneous_pair(devices)
     if len(devices) < 2:
-        print("Need at least two accelerator devices (CUDA/Vulkan).")
+        print("Need at least two healthy accelerators of the same type (CUDA or Vulkan).")
         return
 
     # Match the all-reduce runtime knobs used by native backend tests.
@@ -88,7 +104,6 @@ def main():
     os.environ["MUNET_ALLREDUCE_MODE"] = "host_fallback"
     os.environ["MUNET_ALLREDUCE_GROUP"] = "python_demo_multigpu"
 
-    devices = devices[:2]
     print("Using devices:", [str(d) for d in devices])
 
     ws, bs = make_model_replicas(devices)
