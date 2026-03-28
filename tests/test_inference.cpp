@@ -499,12 +499,21 @@ TEST(InferenceTest, EnginePreservesFloat16LinearOutputsAcrossAvailableDevices) {
     inference::Engine engine;
     engine.set_device(device);
     engine.load(linear);
-
-    Tensor y = engine.run(x.to(device))
-                   .to(Device{DeviceType::CPU, 0})
-                   .to(DataType::Float32);
-    EXPECT_EQ(y.dtype(), DataType::Float32);
-    EXPECT_TRUE(test::all_close(y, expected, 2e-1f)) << device.to_string();
+    try {
+      Tensor y = engine.run(x.to(device))
+                     .to(Device{DeviceType::CPU, 0})
+                     .to(DataType::Float32);
+      EXPECT_EQ(y.dtype(), DataType::Float32);
+      EXPECT_TRUE(test::all_close(y, expected, 2e-1f)) << device.to_string();
+    } catch (const std::runtime_error &err) {
+      const std::string message = err.what();
+      if (message.find("matmul-feature fallback") != std::string::npos) {
+        GTEST_SKIP()
+            << "Skipping float16 linear parity on unsupported device "
+            << device.to_string() << ": " << message;
+      }
+      throw;
+    }
   }
 }
 

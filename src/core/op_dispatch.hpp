@@ -3,6 +3,7 @@
 #include "backend.hpp"
 #include "tensor.hpp"
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -28,6 +29,7 @@ enum class OpId {
   LogSoftmax,
   Cat,
   Sum,
+  SumToShape,
   Mean,
   Reshape,
   Conv2D,
@@ -61,6 +63,8 @@ struct DispatchDecision {
 
 const OpMetadata &op_metadata(OpId id);
 DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor);
+std::string dispatch_policy_snapshot();
+std::string dispatch_decision_debug_dump(OpId id, const Tensor &tensor);
 void record_registered_trace(
     OpId id, Tensor &out, const std::vector<Tensor> &inputs,
     const std::unordered_map<std::string, std::vector<int>> &int_attrs = {},

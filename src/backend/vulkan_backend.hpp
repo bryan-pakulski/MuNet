@@ -1,5 +1,7 @@
 #pragma once
 #include "../backend.hpp"
+#include <functional>
+#include <memory>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -25,13 +27,6 @@ public:
   ~VulkanBackend() override;
 
   const char *name() const override { return "vulkan"; }
-  BackendFallbackPolicy
-  preferred_fallback_policy(BackendFeature feature, DataType dtype) const override {
-    if (feature == BackendFeature::Convolution && dtype == DataType::Float16) {
-      return BackendFallbackPolicy::CPUFallback;
-    }
-    return Backend::preferred_fallback_policy(feature, dtype);
-  }
 
   BackendAllocationTransferCapability *
   allocation_transfer_capability() override {
@@ -195,8 +190,19 @@ public:
                      const Strides &strides, size_t offset) override;
 
 private:
+  struct VulkanRuntimeState {
+    int current_frame = 0;
+    int current_batch_size = 0;
+    bool is_recording = false;
+  };
+  std::unique_ptr<VulkanRuntimeState> runtime_;
+
   void dispatch_kernel(VkPipeline pipeline, const std::vector<void *> &buffers,
                        void *pc, size_t pcSize, int x, int y, int z);
+  void reset_runtime_state();
+  void ensure_recording();
+  void flush_batch();
+  void run_immediate_command(std::function<void(VkCommandBuffer)> func);
 
   VkPipeline adamStepPipeline;
 
