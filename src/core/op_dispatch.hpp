@@ -61,10 +61,17 @@ struct DispatchDecision {
   BackendSupport backend_support;
 };
 
+struct FallbackTelemetrySnapshot {
+  uint64_t accelerator_cpu_fallback_total = 0;
+  std::unordered_map<std::string, uint64_t> accelerator_cpu_fallback_counters;
+};
+
 const OpMetadata &op_metadata(OpId id);
 DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor);
 std::string dispatch_policy_snapshot();
 std::string dispatch_decision_debug_dump(OpId id, const Tensor &tensor);
+FallbackTelemetrySnapshot fallback_telemetry_snapshot();
+void reset_fallback_telemetry();
 void record_registered_trace(
     OpId id, Tensor &out, const std::vector<Tensor> &inputs,
     const std::unordered_map<std::string, std::vector<int>> &int_attrs = {},

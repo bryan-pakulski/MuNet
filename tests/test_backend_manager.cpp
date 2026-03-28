@@ -102,6 +102,14 @@ bool backend_available(DeviceType type) {
   }
 }
 
+void restore_cuda_unavailable_factory_for_tests() {
+  BackendManager::registry().clear_cache(DeviceType::CUDA);
+  BackendManager::register_backend(DeviceType::CUDA, [](Device) {
+    throw std::runtime_error("CUDA backend not compiled");
+    return std::shared_ptr<Backend>{};
+  });
+}
+
 class PartialMatmulBackend : public Backend,
                              public BackendAllocationTransferCapability,
                              public BackendBlasCapability {
@@ -1238,6 +1246,59 @@ TEST(BackendManagerTest, ProfilingCapturesDirectionalTransferMarkers) {
   EXPECT_NE(snapshot.stats.find("transfer.cpu_copy"), snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("transfer.dtype_convert"),
             snapshot.stats.end());
+}
+
+TEST(BackendManagerTest,
+     AcceleratorCpuFallbackTelemetryTracksUnexpectedFallbacks) {
+  BackendManager::registry().clear_cache(DeviceType::CUDA);
+  BackendManager::register_backend(DeviceType::CUDA, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+  ops::reset_fallback_telemetry();
+
+  const Device cuda{DeviceType::CUDA, 0};
+  Tensor a({2}, cuda, DataType::Float32);
+  Tensor b({2}, cuda, DataType::Float32);
+  a.fill_(1.0f);
+  b.fill_(2.0f);
+
+  const auto decision = ops::resolve_dispatch(ops::OpId::Add, a);
+  EXPECT_TRUE(decision.use_cpu_fallback);
+
+  const auto snapshot = ops::fallback_telemetry_snapshot();
+  EXPECT_GE(snapshot.accelerator_cpu_fallback_total, 1u);
+  bool saw_add = false;
+  for (const auto &entry : snapshot.accelerator_cpu_fallback_counters) {
+    if (entry.first.find("op=Add") != std::string::npos) {
+      saw_add = true;
+      EXPECT_GE(entry.second, 1u);
+    }
+  }
+  EXPECT_TRUE(saw_add);
+  restore_cuda_unavailable_factory_for_tests();
+}
+
+TEST(BackendManagerTest,
+     AcceleratorCpuFallbackFailFastEnvVarTurnsFallbackIntoError) {
+  BackendManager::registry().clear_cache(DeviceType::CUDA);
+  BackendManager::register_backend(DeviceType::CUDA, [](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+  ops::reset_fallback_telemetry();
+  const ScopedEnvVar fail_fast("MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK", "1");
+
+  const Device cuda{DeviceType::CUDA, 0};
+  Tensor a({2}, cuda, DataType::Float32);
+  Tensor b({2}, cuda, DataType::Float32);
+  a.fill_(1.0f);
+  b.fill_(2.0f);
+
+  EXPECT_THROW((void)ops::resolve_dispatch(ops::OpId::Add, a),
+               std::runtime_error);
+
+  const auto snapshot = ops::fallback_telemetry_snapshot();
+  EXPECT_GE(snapshot.accelerator_cpu_fallback_total, 1u);
+  restore_cuda_unavailable_factory_for_tests();
 }
 
 TEST(BackendManagerTest, TraceContextCorrelatesTransferDispatchAndLogs) {
