@@ -102,14 +102,15 @@ def main():
         print("Need at least two healthy accelerator devices (CUDA/Vulkan).")
         return
 
-    # Configure backend all-reduce rendezvous for this run. Explicitly set these
-    # here so stale shell-level values do not cause participant-count mismatches.
+    devices = devices[:2]
+    # Configure backend all-reduce rendezvous for selected participants only.
+    # This must use the sliced device list size (not total discovered devices),
+    # otherwise rendezvous waits for non-participating devices and times out.
     os.environ["MUNET_ALLREDUCE_WORLD_SIZE"] = str(len(devices))
     os.environ["MUNET_ALLREDUCE_MODE"] = "host_fallback"
     os.environ["MUNET_ALLREDUCE_GROUP"] = "python_demo_multigpu"
     os.environ["MUNET_ALLREDUCE_TIMEOUT_MS"] = "30000"
 
-    devices = devices[:2]
     print("Using devices:", [str(d) for d in devices])
 
     ws, bs = make_model_replicas(devices)

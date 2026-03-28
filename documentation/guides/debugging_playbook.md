@@ -145,6 +145,9 @@ MUNET_ALLREDUCE_GROUP=<stable_group_name>
 MUNET_ALLREDUCE_TIMEOUT_MS=30000
 ```
 
+Important: `MUNET_ALLREDUCE_WORLD_SIZE` must match the number of **active
+participants** in the current run (not total discovered devices).
+
 If gradients diverge between replicas:
 
 1. Verify all replicas participate in the reduction each step.
