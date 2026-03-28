@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import os
 import threading
+import time
 import numpy as np
 
 import munet
@@ -89,20 +90,37 @@ def make_model_replicas(devices):
     return ws, bs
 
 
+def max_tensor_drift(tensors):
+    if len(tensors) < 2:
+        return 0.0
+    base = np.array(tensors[0].detach().to(CPU), copy=False)
+    max_drift = 0.0
+    for t in tensors[1:]:
+        other = np.array(t.detach().to(CPU), copy=False)
+        max_drift = max(max_drift, float(np.max(np.abs(base - other))))
+    return max_drift
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--lr", type=float, default=0.05)
+    ap.add_argument("--num-devices", type=int, default=2,
+                    help="Number of accelerator replicas to train with.")
+    ap.add_argument("--samples", type=int, default=1024,
+                    help="Synthetic dataset size.")
+    ap.add_argument("--batch-size", type=int, default=256,
+                    help="Global batch size split across replicas each step.")
     ap.add_argument("--max-index", type=int, default=2,
                     help="Probe device indices in range [0, max_index).")
     args = ap.parse_args()
 
     devices = detect_accelerators(args.max_index)
-    if len(devices) < 2:
-        print("Need at least two healthy accelerator devices (CUDA/Vulkan).")
+    if len(devices) < max(2, args.num_devices):
+        print(f"Need at least {max(2, args.num_devices)} healthy accelerator devices (CUDA/Vulkan).")
         return
 
-    devices = devices[:2]
+    devices = devices[:args.num_devices]
     # Configure backend all-reduce rendezvous for selected participants only.
     # This must use the sliced device list size (not total discovered devices),
     # otherwise rendezvous waits for non-participating devices and times out.
@@ -115,28 +133,37 @@ def main():
 
     ws, bs = make_model_replicas(devices)
 
-    # Tiny synthetic regression dataset.
+    # Synthetic regression dataset.
     rng = np.random.default_rng(0)
-    x = rng.normal(size=(128, 4)).astype(np.float32)
+    x = rng.normal(size=(args.samples, 4)).astype(np.float32)
     true_w = np.array([[0.5], [-0.2], [0.7], [0.1]], dtype=np.float32)
     true_b = np.array([0.05], dtype=np.float32)
     y = x @ true_w + true_b
 
+    per_replica = max(1, args.batch_size // len(devices))
+    wall_start = time.perf_counter()
+
     for step in range(args.steps):
-        # shard batch across replicas
-        shard = len(x) // len(devices)
+        # sample one global batch and shard it across replicas
+        starts = rng.integers(0, max(1, len(x) - per_replica), size=len(devices))
         losses = []
 
         for rank, dev in enumerate(devices):
-            xs = munet.from_numpy(x[rank * shard : (rank + 1) * shard]).to(dev)
-            ys = munet.from_numpy(y[rank * shard : (rank + 1) * shard]).to(dev)
+            start = int(starts[rank])
+            end = start + per_replica
+            xs = munet.from_numpy(x[start:end]).to(dev)
+            ys = munet.from_numpy(y[start:end]).to(dev)
             pred = (xs @ ws[rank]) + bs[rank]
             loss = pred.mse_loss(ys)
             loss.backward()
             losses.append(float(loss.detach().to(CPU).item()))
 
+        grad_drift_pre_w = max_tensor_drift([w.grad for w in ws])
+        grad_drift_pre_b = max_tensor_drift([b.grad for b in bs])
         allreduce_gradients(ws)
         allreduce_gradients(bs)
+        grad_drift_post_w = max_tensor_drift([w.grad for w in ws])
+        grad_drift_post_b = max_tensor_drift([b.grad for b in bs])
 
         for w in ws:
             w.step(args.lr)
@@ -148,7 +175,25 @@ def main():
         w1 = np.array(ws[1].detach().to(CPU), copy=False)
         drift = np.abs(w0 - w1).max()
         if step % 5 == 0 or step == args.steps - 1:
-            print(f"step={step:03d} mean_loss={np.mean(losses):.6f} max_param_drift={drift:.6e}")
+            losses_str = ", ".join(f"{v:.4f}" for v in losses)
+            print(
+                f"step={step:03d} "
+                f"losses=[{losses_str}] mean_loss={np.mean(losses):.6f} "
+                f"grad_drift_pre(w/b)=({grad_drift_pre_w:.3e}/{grad_drift_pre_b:.3e}) "
+                f"grad_drift_post(w/b)=({grad_drift_post_w:.3e}/{grad_drift_post_b:.3e}) "
+                f"max_param_drift={drift:.3e}"
+            )
+
+    elapsed = time.perf_counter() - wall_start
+    learned_w = np.array(ws[0].detach().to(CPU), copy=False)
+    learned_b = np.array(bs[0].detach().to(CPU), copy=False)
+    print(
+        f"done: devices={len(devices)} steps={args.steps} "
+        f"samples/step={per_replica * len(devices)} elapsed_s={elapsed:.2f}\n"
+        f"  learned_w={learned_w.reshape(-1)}\n"
+        f"  learned_b={learned_b.reshape(-1)}\n"
+        f"  true_w={true_w.reshape(-1)} true_b={true_b.reshape(-1)}"
+    )
 
 
 if __name__ == "__main__":
