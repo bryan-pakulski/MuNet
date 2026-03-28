@@ -208,3 +208,17 @@ Please include:
 3. Whether `CUDA_LAUNCH_BLOCKING=1` changes the failing line.
 4. Output of fallback telemetry snapshot (if relevant).
 5. GPU/driver/runtime details (`nvidia-smi`, CUDA version, visible devices).
+
+---
+
+## 9) Offload plan troubleshooting (Phase 1)
+
+If using `model.offload(device, layers=[...])`:
+
+1. Verify layer paths exist via `model.named_modules()`.
+2. Verify plan with `model.offload_plan()`.
+3. If you hit unknown-layer errors, paths must match module names exactly
+   (e.g. `0`, `1`, `encoder.block0`, etc.).
+4. For boundary-transfer debugging, run with:
+   - `MUNET_DISPATCH_DECISION_DUMP=1`
+   - optional `MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK=1`

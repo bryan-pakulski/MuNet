@@ -89,6 +89,7 @@ Module management:
 - `parameters()`, `named_parameters(prefix="")`, `named_modules(prefix="")`
 - `train(mode=True)`, `eval()`, `is_training`
 - `to(device)`, `to(dtype)`, `to_options(options)`
+- `offload(device, layers=[...])`, `clear_offload()`, `offload_plan()`
 - `zero_grad()`
 
 ## `munet.optim` API

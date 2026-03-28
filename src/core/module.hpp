@@ -181,6 +181,25 @@ public:
     }
   }
 
+  void offload(Device device, const std::vector<std::string> &layers) {
+    Module *root = root_module();
+    auto mods = root->named_modules("");
+    for (const auto &layer : layers) {
+      auto it = mods.find(layer);
+      if (it == mods.end() || !it->second) {
+        throw std::runtime_error("offload: unknown layer path '" + layer + "'");
+      }
+      it->second->to(device);
+      root->offload_plan_[layer] = device;
+    }
+  }
+
+  void clear_offload() { root_module()->offload_plan_.clear(); }
+
+  std::map<std::string, Device> offload_plan() const {
+    return root_module_const()->offload_plan_;
+  }
+
   void zero_grad() {
     for (auto &p : parameters()) {
       p.zero_grad();
@@ -223,6 +242,15 @@ public:
 protected:
   virtual Tensor forward_impl(Tensor x) = 0;
 
+  Tensor enforce_offload_boundary(const std::string &child_name,
+                                  Tensor x) const {
+    const auto expected = lookup_offload_device_for_child(child_name);
+    if (expected.has_value() && x.impl_ && x.device() != expected.value()) {
+      return x.to(expected.value());
+    }
+    return x;
+  }
+
   std::string module_profile_label() const {
     const std::string path = module_path();
     return path.empty() ? "module.root.forward" : "module." + path + ".forward";
@@ -241,6 +269,37 @@ protected:
       return parent_path;
     }
     return parent_path + "." + registered_name_;
+  }
+
+  std::optional<Device>
+  lookup_offload_device_for_child(const std::string &child_name) const {
+    const Module *root = root_module_const();
+    std::string full = module_path();
+    if (!full.empty()) {
+      full += ".";
+    }
+    full += child_name;
+    auto it = root->offload_plan_.find(full);
+    if (it == root->offload_plan_.end()) {
+      return std::nullopt;
+    }
+    return it->second;
+  }
+
+  Module *root_module() {
+    Module *m = this;
+    while (m->parent_) {
+      m = m->parent_;
+    }
+    return m;
+  }
+
+  const Module *root_module_const() const {
+    const Module *m = this;
+    while (m->parent_) {
+      m = m->parent_;
+    }
+    return m;
   }
 
   DataType resolve_buffer_dtype(const std::string &name,
@@ -267,6 +326,7 @@ protected:
   std::map<std::string, Tensor *> buffers_;
   std::map<std::string, BufferRegistration> buffer_registrations_;
   std::map<std::string, std::shared_ptr<Module>> modules_;
+  std::map<std::string, Device> offload_plan_;
   Module *parent_ = nullptr;
   std::string registered_name_;
 };

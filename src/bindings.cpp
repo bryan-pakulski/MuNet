@@ -711,6 +711,19 @@ PYBIND11_MODULE(munet, m) {
              return self;
            }, py::arg("options"),
            "Converts all parameters and buffers using explicit tensor options. Returns self.")
+      .def(
+          "offload",
+          [](nn::Module &self, Device device, const std::vector<std::string> &layers)
+              -> nn::Module & {
+            self.offload(device, layers);
+            return self;
+          },
+          py::arg("device"), py::arg("layers"),
+          "Assigns listed module paths to a device and moves their params/buffers.")
+      .def("clear_offload", &nn::Module::clear_offload,
+           "Clears current model offload placement plan.")
+      .def("offload_plan", &nn::Module::offload_plan,
+           "Returns current module-path -> device placement mapping.")
       .def("zero_grad", &nn::Module::zero_grad,
            "Clears the gradients of all optimized parameters.")
       .def("__call__", &nn::Module::forward)

@@ -33,10 +33,10 @@ scope to practical examples.
 ## MultiGPU
 
 - `multigpu/multi_gpu_allreduce_training_demo.py`
+- `multigpu/model_offload_manual_demo.py`
 - `multigpu/gpt3_multi_gpu_demo.py`
 
 ## Transformers
 
 - `transformers/tiny_llm.py`
 - `transformers/decoder_block_demo.py`
-

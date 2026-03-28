@@ -16,7 +16,9 @@ public:
   }
 
   Tensor forward_impl(Tensor x) override {
-    for (auto &m : ordered_modules_) {
+    for (size_t i = 0; i < ordered_modules_.size(); ++i) {
+      x = enforce_offload_boundary(std::to_string(i), std::move(x));
+      auto &m = ordered_modules_[i];
       x = m->forward(x);
     }
     return x;
