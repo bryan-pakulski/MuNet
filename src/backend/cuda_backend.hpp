@@ -1,5 +1,8 @@
 #pragma once
 #include "../backend.hpp"
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 namespace munet {
 
@@ -17,8 +20,12 @@ class CUDABackend : public Backend,
 private:
   void *start_event_; // Using void* to avoid nvcc requirement in header
   void *stop_event_;
+  void *cublas_handle_ = nullptr; // cublasHandle_t (opaque)
   int device_index_ = 0;
   double last_kernel_us_ = 0.0;
+  std::unordered_map<size_t, std::vector<void *>> free_blocks_;
+  std::unordered_map<void *, size_t> alloc_sizes_;
+  std::mutex allocator_mutex_;
 
 public:
   CUDABackend(int device_index);
