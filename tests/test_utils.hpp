@@ -1,27 +1,43 @@
 #pragma once
 #include "tensor.hpp"
+#include <cmath>
 #include <vector>
 
 namespace munet {
 namespace test {
 
+inline bool accelerator_health_check(const Device &device) {
+  try {
+    Tensor a({1}, device, DataType::Float32);
+    Tensor b({1}, device, DataType::Float32);
+    a.fill_(2.0f);
+    b.fill_(3.0f);
+    Tensor out = a + b; // real backend op
+    out.impl_->backend().synchronize();
+    Tensor out_cpu = out.to({DeviceType::CPU, 0}); // copy back
+    const float v = static_cast<const float *>(out_cpu.data())[0];
+    return std::abs(v - 5.0f) <= 1e-4f;
+  } catch (...) {
+    return false;
+  }
+}
+
 inline std::vector<Device> get_available_devices() {
   std::vector<Device> devices = {{DeviceType::CPU, 0}};
 #ifdef MUNET_USE_CUDA
-  try {
-    // Basic probe to check if a device exists
+  {
     Device d{DeviceType::CUDA, 0};
-    Tensor t({1}, d);
-    devices.push_back(d);
-  } catch (...) {
+    if (accelerator_health_check(d)) {
+      devices.push_back(d);
+    }
   }
 #endif
 #ifdef MUNET_USE_VULKAN
-  try {
+  {
     Device d{DeviceType::VULKAN, 0};
-    Tensor t({1}, d);
-    devices.push_back(d);
-  } catch (...) {
+    if (accelerator_health_check(d)) {
+      devices.push_back(d);
+    }
   }
 #endif
   return devices;

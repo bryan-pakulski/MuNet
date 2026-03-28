@@ -4,6 +4,7 @@
 #include "core/op_dispatch.hpp"
 #include "core/util/profiler.hpp"
 #include "tensor.hpp"
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -81,9 +82,22 @@ bool backend_available(DeviceType type) {
     return true;
   }
   try {
-    (void)BackendManager::get(Device{type, 0});
+    Device d{type, 0};
+    Tensor a({1}, d, DataType::Float32);
+    Tensor b({1}, d, DataType::Float32);
+    a.fill_(2.0f);
+    b.fill_(3.0f);
+    Tensor out = a + b;
+    out.impl_->backend().synchronize();
+    Tensor out_cpu = out.to({DeviceType::CPU, 0});
+    const float value = static_cast<const float *>(out_cpu.data())[0];
+    if (std::abs(value - 5.0f) > 1e-4f) {
+      return false;
+    }
     return true;
   } catch (const std::runtime_error &) {
+    return false;
+  } catch (...) {
     return false;
   }
 }
