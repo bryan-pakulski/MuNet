@@ -8,7 +8,7 @@ This demo:
 4) Applies synchronized optimizer steps so replicas stay in sync.
 
 Run:
-    python demos/features/multi_gpu_allreduce_training_demo.py --steps 20
+    python demos/multigpu/multi_gpu_allreduce_training_demo.py --steps 20
 """
 
 from __future__ import annotations

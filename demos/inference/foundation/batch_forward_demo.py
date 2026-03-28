@@ -2,7 +2,7 @@ import os
 import sys
 import numpy as np
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../../build"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../../build"))
 import munet
 
 

@@ -141,4 +141,4 @@ Module management:
 The Python module injects serialization helpers and metadata constants (for
 example `save`, `load`, `load_weights`, `load_for_inference`,
 `serialization_format_info`) during module initialization. See
-`demos/inference/serialization_roundtrip_demo.py` for end-to-end usage.
+`demos/serialization/munet/serialization_roundtrip_demo.py` for end-to-end usage.

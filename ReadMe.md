@@ -8,7 +8,7 @@ with centralized op dispatch, backend capability querying, and explicit fallback
 
 - Core runtime (`munet_core`) is active and used by both training and inference surfaces.
 - Training APIs (`nn`, `optim`, losses, autograd) are available in C++ and Python.
-- Inference APIs and serialization flows are available (`munet_inference`, demos under `demos/inference/`).
+- Inference APIs and serialization flows are available (`munet_inference`, demos under `demos/inference/` and `demos/serialization/`).
 - Backend dispatch now includes:
   - capability-based support checks,
   - fallback reason accounting,
@@ -83,8 +83,11 @@ mkdocs serve
 
 ## Demos
 
-- LLM demos: `demos/llm/`
-- Vision demos: `demos/mnist/`, `demos/unet/`
-- Inference demos: `demos/inference/`
-- Feature demos: `demos/features/`
+See `demos/README.md` for the full categorized catalog:
 
+- `demos/visual/` (object/semantic/instance segmentation categories)
+- `demos/operators/`
+- `demos/serialization/`
+- `demos/inference/`
+- `demos/multigpu/`
+- `demos/transformers/`

@@ -8,8 +8,8 @@ import sys
 import os
 
 # Add paths
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'build'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'python_src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'build'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'python_src'))
 
 import numpy as np
 
