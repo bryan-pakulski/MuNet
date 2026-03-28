@@ -1,4 +1,5 @@
 #include "autograd/engine.hpp"
+#include "core/op_dispatch.hpp"
 #include "inference.hpp"
 #include "nn.hpp"
 #include "nn/module.hpp"
@@ -1059,6 +1060,24 @@ PYBIND11_MODULE(munet, m) {
       "reset_profiler", []() { Profiler::get().reset(); },
       "Clears all collected performance statistics and resets peak memory "
       "tracking.");
+  m.def(
+      "dispatch_policy_snapshot", &ops::dispatch_policy_snapshot,
+      "Returns the active dispatch fallback-rule matrix as a text snapshot.");
+  m.def(
+      "fallback_telemetry_snapshot",
+      []() {
+        const auto snapshot = ops::fallback_telemetry_snapshot();
+        py::dict out;
+        out["accelerator_cpu_fallback_total"] =
+            py::int_(snapshot.accelerator_cpu_fallback_total);
+        out["accelerator_cpu_fallback_counters"] =
+            py::cast(snapshot.accelerator_cpu_fallback_counters);
+        return out;
+      },
+      "Returns dispatch telemetry counters for accelerator->CPU fallbacks.");
+  m.def(
+      "reset_fallback_telemetry", &ops::reset_fallback_telemetry,
+      "Clears dispatch telemetry counters for accelerator->CPU fallbacks.");
 
   // ============================================================================
   // Python Injected Helpers
