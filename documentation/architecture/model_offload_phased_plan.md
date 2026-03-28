@@ -72,7 +72,7 @@ transfers, and diagnostics.
 - [x] Offload API is public and documented.
 - [x] Backward pass succeeds on cross-device boundaries.
 - [x] Numerical parity (within tolerance) vs single-device baseline on reference model.
-- [ ] No regression in existing unit/integration suites.
+- [x] No regression in existing unit/integration suites.
 - [ ] Demo runs successfully on supported device pairs.
 
 ### Phase 1 exit criteria tracking (as of 2026-03-28)
@@ -81,10 +81,7 @@ transfers, and diagnostics.
   - Mixed-device backward + inference parity tests are present in
     `tests/test_offload_phase1.py`.
 - **Left to confirm before declaring Phase 1 fully complete**
-  1. **No-regression confirmation from full suite execution**
-     - Ensure the full C++ and Python unit/integration suites run in CI and pass.
-     - Python coverage now includes all `tests/*.py` via `make py-test`.
-  2. **Demo validation on supported device pairs**
+  1. **Demo validation on supported device pairs**
      - Run `demos/multigpu/model_offload_manual_demo.py` on at least one supported
        accelerator pair configuration and capture smoke-test evidence.
 
