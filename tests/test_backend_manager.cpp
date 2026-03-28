@@ -1,5 +1,8 @@
 #include "backend.hpp"
 #include "backend/cpu_backend.hpp"
+#ifdef MUNET_USE_CUDA
+#include "backend/cuda_backend.hpp"
+#endif
 #include "core/all_reduce_runtime.hpp"
 #include "core/op_dispatch.hpp"
 #include "core/util/profiler.hpp"
@@ -104,11 +107,27 @@ bool backend_available(DeviceType type) {
 
 void restore_cuda_unavailable_factory_for_tests() {
   BackendManager::registry().clear_cache(DeviceType::CUDA);
+#ifdef MUNET_USE_CUDA
+  BackendManager::register_backend(DeviceType::CUDA, [](Device device) {
+    return std::make_shared<CUDABackend>(device.index);
+  });
+#else
   BackendManager::register_backend(DeviceType::CUDA, [](Device) {
     throw std::runtime_error("CUDA backend not compiled");
     return std::shared_ptr<Backend>{};
   });
+#endif
 }
+
+class ScopedCudaBackendOverride {
+public:
+  explicit ScopedCudaBackendOverride(BackendManager::BackendFactory factory) {
+    BackendManager::registry().clear_cache(DeviceType::CUDA);
+    BackendManager::register_backend(DeviceType::CUDA, std::move(factory));
+  }
+
+  ~ScopedCudaBackendOverride() { restore_cuda_unavailable_factory_for_tests(); }
+};
 
 class PartialMatmulBackend : public Backend,
                              public BackendAllocationTransferCapability,
@@ -1250,8 +1269,7 @@ TEST(BackendManagerTest, ProfilingCapturesDirectionalTransferMarkers) {
 
 TEST(BackendManagerTest,
      AcceleratorCpuFallbackTelemetryTracksUnexpectedFallbacks) {
-  BackendManager::registry().clear_cache(DeviceType::CUDA);
-  BackendManager::register_backend(DeviceType::CUDA, [](Device device) {
+  const ScopedCudaBackendOverride scoped_cuda_override([](Device device) {
     return std::make_shared<PartialMatmulBackend>(device.index);
   });
   ops::reset_fallback_telemetry();
@@ -1275,13 +1293,11 @@ TEST(BackendManagerTest,
     }
   }
   EXPECT_TRUE(saw_add);
-  restore_cuda_unavailable_factory_for_tests();
 }
 
 TEST(BackendManagerTest,
      AcceleratorCpuFallbackFailFastEnvVarTurnsFallbackIntoError) {
-  BackendManager::registry().clear_cache(DeviceType::CUDA);
-  BackendManager::register_backend(DeviceType::CUDA, [](Device device) {
+  const ScopedCudaBackendOverride scoped_cuda_override([](Device device) {
     return std::make_shared<PartialMatmulBackend>(device.index);
   });
   ops::reset_fallback_telemetry();
@@ -1298,7 +1314,6 @@ TEST(BackendManagerTest,
 
   const auto snapshot = ops::fallback_telemetry_snapshot();
   EXPECT_GE(snapshot.accelerator_cpu_fallback_total, 1u);
-  restore_cuda_unavailable_factory_for_tests();
 }
 
 TEST(BackendManagerTest, TraceContextCorrelatesTransferDispatchAndLogs) {
