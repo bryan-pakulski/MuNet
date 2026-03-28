@@ -30,7 +30,12 @@ def detect_accelerators(max_index: int = 4):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
-                _ = munet.ones((1,), device=dev)
+                # Probe with a real forward+backward op; allocation-only checks
+                # can pass on devices that later fail during autograd kernels.
+                x = munet.ones((2, 2), device=dev, requires_grad=True)
+                w = munet.ones((2, 1), device=dev, requires_grad=True)
+                y = x @ w
+                y.sum().backward()
             except RuntimeError:
                 continue
             devices.append(dev)
@@ -51,12 +56,14 @@ def allreduce_gradients(param_replicas):
 
 
 def make_model_replicas(devices):
-    w_cpu = munet.Tensor((4, 1), device=CPU, dtype=munet.DataType.Float32, requires_grad=True)
+    w_cpu = munet.Tensor((4, 1), device=CPU, dtype=munet.DataType.Float32, requires_grad=False)
     w_cpu.uniform_(-0.2, 0.2)
-    b_cpu = munet.zeros((1,), device=CPU, dtype=munet.DataType.Float32, requires_grad=True)
+    b_cpu = munet.zeros((1,), device=CPU, dtype=munet.DataType.Float32, requires_grad=False)
 
-    ws = [w_cpu.to(dev) for dev in devices]
-    bs = [b_cpu.to(dev) for dev in devices]
+    # Important: detach after `.to(dev)` so each replica is a leaf tensor on the
+    # target device. Otherwise backward tries to traverse cross-device copy nodes.
+    ws = [w_cpu.to(dev).detach() for dev in devices]
+    bs = [b_cpu.to(dev).detach() for dev in devices]
 
     for w in ws:
         w.requires_grad = True
@@ -102,7 +109,7 @@ def main():
             xs = munet.from_numpy(x[rank * shard : (rank + 1) * shard]).to(dev)
             ys = munet.from_numpy(y[rank * shard : (rank + 1) * shard]).to(dev)
             pred = (xs @ ws[rank]) + bs[rank]
-            loss = munet.mse_loss(pred, ys)
+            loss = pred.mse_loss(ys)
             loss.backward()
             losses.append(float(np.array(loss.to(CPU), copy=False)))
 
