@@ -467,6 +467,8 @@ PYBIND11_MODULE(munet, m) {
            })
       .def("__matmul__",
            [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
+      .def("matmul", &Tensor::matmul, py::arg("other"),
+           "Matrix multiply with another tensor. Equivalent to `a @ b`.")
       .def("sum", &Tensor::sum,
            "Returns the sum of all elements in the tensor.")
       .def("mean", &Tensor::mean, py::arg("dim") = -1,
@@ -584,6 +586,8 @@ PYBIND11_MODULE(munet, m) {
   // ============================================================================
   // Factory Functions
   // ============================================================================
+  m.def("matmul", &ops::matmul, py::arg("a"), py::arg("b"),
+        "Matrix multiply two tensors. Mirrors `torch.matmul(a, b)`.");
   m.def("cat", &ops::cat, py::arg("tensors"), py::arg("dim") = 1,
         "Concatenates a sequence of tensors along the specified dimension.");
   m.def(

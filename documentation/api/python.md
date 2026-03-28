@@ -12,6 +12,7 @@ This guide summarizes the currently exposed Python surface in `munet`.
 - `munet.from_numpy(ndarray)`
 - `munet.copy_from_numpy(tensor, ndarray)`
 - `munet.cat(tensors, dim=1)`
+- `munet.matmul(a, b)`
 
 ### Capability + dispatch diagnostics
 
@@ -58,7 +59,7 @@ Related env flags:
 
 ### Math + NN ops
 
-- arithmetic: `+`, `-`, `*`, `/`, `@`
+- arithmetic: `+`, `-`, `*`, `/`, `@`, `matmul(other)`
 - reductions: `sum()`, `mean(dim=-1, keepdim=False)`
 - unary/activations: `relu`, `sigmoid`, `exp`, `log`, `sqrt`, `rsqrt`, `sin`,
   `cos`, `softmax`, `log_softmax`
