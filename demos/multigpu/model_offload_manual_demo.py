@@ -107,7 +107,12 @@ def main():
     # Offload early layers to d0 and later layers to d1.
     model.offload(d0, layers=["0", "1"])
     model.offload(d1, layers=["2", "3", "4"])
-    print("offload_plan:", model.offload_plan())
+    plan = model.offload_plan()
+    print("offload_plan (layer -> device):", plan)
+    by_device = {}
+    for layer_name, device in plan.items():
+        by_device.setdefault(str(device), []).append(layer_name)
+    print("offload_plan summary (device -> layers):", by_device)
 
     rng = np.random.default_rng(0)
     x = rng.normal(size=(256, 4)).astype(np.float32)
