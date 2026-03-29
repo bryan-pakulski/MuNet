@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Phase 3 auto-offload strategy comparison demo."""
+"""Phase 3 benchmark demo comparing manual vs auto-offload strategies."""
 
 from __future__ import annotations
 
 import argparse
 import numpy as np
+import time
 
 import munet
 
@@ -34,14 +35,28 @@ def make_model():
     )
 
 
+def _benchmark_forward(model, sample, iters: int = 40):
+    start = time.perf_counter()
+    for _ in range(iters):
+        _ = model(sample)
+    elapsed_s = time.perf_counter() - start
+    return (elapsed_s * 1000.0) / float(iters)
+
+
 def run_strategy(name: str, devices, sample):
     model = make_model()
-    model.auto_offload(devices, strategy=name, sample_input=sample)
+    if name == "manual":
+        # Naive baseline split: first half on CPU, second half on accelerator.
+        model.offload(CPU, ["0", "1"])
+        model.offload(devices[1], ["2", "3", "4"])
+    else:
+        model.auto_offload(devices, strategy=name, sample_input=sample)
     explained = model.offload_plan(explain=True)
+    avg_ms = _benchmark_forward(model, sample)
     out = model(sample).detach().to(CPU)
     print(
         f"[{name}] plan={explained['plan']} rationale={explained['rationale']} "
-        f"mean_out={float(np.array(out, copy=False).mean()):.6f}"
+        f"avg_ms={avg_ms:.4f} mean_out={float(np.array(out, copy=False).mean()):.6f}"
     )
 
 
@@ -57,9 +72,9 @@ def main():
 
     devices = [CPU, accel]
     sample = munet.from_numpy(np.random.randn(8, 4).astype(np.float32))
+    run_strategy("manual", devices, sample)
     run_strategy("balanced", devices, sample)
     run_strategy("memory-first", devices, sample)
-    run_strategy("transfer-minimized", devices, sample)
 
 
 if __name__ == "__main__":

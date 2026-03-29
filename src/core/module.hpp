@@ -5,11 +5,15 @@
 #include "util/profiler.hpp"
 #include "util/timer.hpp"
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -212,7 +216,11 @@ public:
     }
   }
 
-  void clear_offload() { root_module()->offload_plan_.clear(); }
+  void clear_offload() {
+    Module *root = root_module();
+    root->offload_plan_.clear();
+    root->offload_plan_rationale_.clear();
+  }
 
   std::map<std::string, Device> offload_plan() const {
     return root_module_const()->offload_plan_;
@@ -222,9 +230,35 @@ public:
     return root_module_const()->offload_plan_rationale_;
   }
 
-  std::map<std::string, Device>
-  auto_offload(const std::vector<Device> &devices, const std::string &strategy,
-               const Tensor &sample_input) {
+  std::map<std::string, std::string> freeze_offload_plan() const {
+    std::map<std::string, std::string> frozen;
+    for (const auto &[layer, device] : root_module_const()->offload_plan_) {
+      frozen[layer] = device.to_string();
+    }
+    return frozen;
+  }
+
+  void apply_offload_plan(const std::map<std::string, std::string> &plan) {
+    Module *root = root_module();
+    root->clear_offload();
+    std::vector<std::string> sorted_layers;
+    for (const auto &[layer, _] : plan) {
+      sorted_layers.push_back(layer);
+    }
+    std::sort(sorted_layers.begin(), sorted_layers.end());
+    for (const auto &layer : sorted_layers) {
+      const std::string &device_spec = plan.at(layer);
+      root->offload(parse_device_string(device_spec), {layer});
+      root->offload_plan_rationale_[layer] =
+          "source=manual-frozen,device=" + device_spec;
+    }
+    root->planner_last_strategy_ = "manual-frozen";
+  }
+
+  std::map<std::string, Device> auto_offload(
+      const std::vector<Device> &devices, const std::string &strategy,
+      const Tensor &sample_input,
+      const std::map<std::string, size_t> &memory_budgets_bytes = {}) {
     if (devices.empty()) {
       throw std::runtime_error("auto_offload: devices list must not be empty");
     }
@@ -267,7 +301,6 @@ public:
     }
 
     root->clear_offload();
-    root->offload_plan_rationale_.clear();
 
     std::vector<double> device_scores(devices.size(), 0.0);
     std::vector<size_t> device_param_bytes(devices.size(), 0);
@@ -306,36 +339,69 @@ public:
       }
 
       size_t chosen = candidates.front();
-      if (strategy == "transfer-minimized" && previous_device_index.has_value()) {
-        if (std::find(candidates.begin(), candidates.end(),
-                      previous_device_index.value()) != candidates.end()) {
-          chosen = previous_device_index.value();
+      double chosen_score = std::numeric_limits<double>::infinity();
+      size_t chosen_transfer = 0;
+      size_t chosen_projected_mem = 0;
+      size_t chosen_compute = 0;
+
+      for (size_t idx : candidates) {
+        const size_t projected_mem = device_param_bytes[idx] + param_bytes;
+        size_t budget = std::numeric_limits<size_t>::max();
+        auto budget_it = memory_budgets_bytes.find(devices[idx].to_string());
+        if (budget_it != memory_budgets_bytes.end()) {
+          budget = budget_it->second;
         }
-      } else if (strategy == "memory-first") {
-        size_t best = candidates.front();
-        for (size_t idx : candidates) {
-          if (device_param_bytes[idx] < device_param_bytes[best]) {
-            best = idx;
-          }
+        if (projected_mem > budget) {
+          continue;
         }
-        chosen = best;
-      } else {
-        // balanced
-        size_t best = candidates.front();
-        for (size_t idx : candidates) {
-          if (device_scores[idx] < device_scores[best]) {
-            best = idx;
-          }
+
+        const bool boundary_transfer =
+            previous_device_index.has_value() && previous_device_index.value() != idx;
+        const size_t transfer_cost = boundary_transfer ? activation_bytes : 0;
+        const size_t compute_cost = param_bytes + (activation_bytes / 2);
+
+        double score = 0.0;
+        if (strategy == "memory-first") {
+          score = static_cast<double>(projected_mem) +
+                  static_cast<double>(transfer_cost) * 0.10;
+        } else if (strategy == "transfer-minimized") {
+          score = static_cast<double>(transfer_cost) * 10.0 +
+                  static_cast<double>(projected_mem) * 0.05 +
+                  static_cast<double>(device_scores[idx]) * 0.01;
+        } else {
+          // balanced
+          score = device_scores[idx] + static_cast<double>(compute_cost) +
+                  static_cast<double>(transfer_cost) * 1.5;
         }
-        chosen = best;
+
+        if (score < chosen_score) {
+          chosen = idx;
+          chosen_score = score;
+          chosen_transfer = transfer_cost;
+          chosen_projected_mem = projected_mem;
+          chosen_compute = compute_cost;
+        }
+      }
+
+      if (!std::isfinite(chosen_score)) {
+        throw std::runtime_error("auto_offload: layer '" + layer +
+                                 "' cannot satisfy device memory budgets");
       }
 
       root->offload(devices[chosen], {layer});
-      root->offload_plan_rationale_[layer] =
-          "strategy=" + strategy + ",param_bytes=" +
-          std::to_string(param_bytes) + ",activation_bytes=" +
-          std::to_string(activation_bytes);
-      device_scores[chosen] += static_cast<double>(param_bytes + activation_bytes);
+      std::ostringstream rationale;
+      rationale << "strategy=" << strategy
+                << ",compute_cost=" << chosen_compute
+                << ",param_bytes=" << param_bytes
+                << ",activation_bytes=" << activation_bytes
+                << ",transfer_cost=" << chosen_transfer
+                << ",projected_mem_bytes=" << chosen_projected_mem;
+      auto budget_it = memory_budgets_bytes.find(devices[chosen].to_string());
+      if (budget_it != memory_budgets_bytes.end()) {
+        rationale << ",budget_bytes=" << budget_it->second;
+      }
+      root->offload_plan_rationale_[layer] = rationale.str();
+      device_scores[chosen] += static_cast<double>(chosen_compute + chosen_transfer);
       device_param_bytes[chosen] += param_bytes;
       previous_device_index = chosen;
       activation_bytes = std::max<size_t>(activation_bytes, param_bytes);
@@ -570,6 +636,38 @@ protected:
     return requested_dtype;
   }
 
+  static Device parse_device_string(const std::string &device_spec) {
+    const auto pos = device_spec.find(':');
+    if (pos == std::string::npos) {
+      throw std::runtime_error("invalid device spec '" + device_spec +
+                               "' (expected '<type>:<index>')");
+    }
+    const std::string type_str = device_spec.substr(0, pos);
+    const std::string idx_str = device_spec.substr(pos + 1);
+    if (idx_str.empty()) {
+      throw std::runtime_error("invalid device spec '" + device_spec +
+                               "' (missing index)");
+    }
+    for (char c : idx_str) {
+      if (!std::isdigit(static_cast<unsigned char>(c))) {
+        throw std::runtime_error("invalid device spec '" + device_spec +
+                                 "' (index is not numeric)");
+      }
+    }
+    DeviceType type = DeviceType::UNKNOWN;
+    if (type_str == "cpu") {
+      type = DeviceType::CPU;
+    } else if (type_str == "cuda") {
+      type = DeviceType::CUDA;
+    } else if (type_str == "vulkan") {
+      type = DeviceType::VULKAN;
+    } else {
+      throw std::runtime_error("invalid device spec '" + device_spec +
+                               "' (unknown type)");
+    }
+    return Device{type, std::stoi(idx_str)};
+  }
+
   bool training_ = true;
   TensorOptions default_options_;
   std::map<std::string, Tensor *> parameters_;
@@ -578,7 +676,7 @@ protected:
   std::map<std::string, std::shared_ptr<Module>> modules_;
   std::map<std::string, Device> offload_plan_;
   std::map<std::string, std::string> offload_plan_rationale_;
-  std::string planner_last_strategy_;
+  std::string planner_last_strategy_ = "manual";
   OffloadTransferTelemetry offload_telemetry_;
   bool offload_warnings_enabled_ = true;
   size_t offload_warning_threshold_bytes_ = 64 * 1024;

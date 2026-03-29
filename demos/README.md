@@ -35,6 +35,7 @@ scope to practical examples.
 - `multigpu/multi_gpu_allreduce_training_demo.py`
 - `multigpu/model_offload_manual_demo.py`
 - `multigpu/auto_offload_strategy_compare_demo.py`
+- `multigpu/offload_plan_export_import_demo.py`
 - `multigpu/gpt3_multi_gpu_demo.py`
 
 ## Transformers

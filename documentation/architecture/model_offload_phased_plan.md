@@ -161,10 +161,23 @@ transfers, and diagnostics.
 - Export/import plan demo for reproducible deployment.
 
 ## Phase 3 exit criteria (all required)
-- [ ] Planner emits valid executable plan for supported reference models.
-- [ ] Planner rationale/explain output is user-visible and documented.
-- [ ] Benchmarks show non-trivial gain for at least one strategy on reference workload.
-- [ ] Users can persist and reapply plans without planner rerun.
+- [x] Planner emits valid executable plan for supported reference models.
+- [x] Planner rationale/explain output is user-visible and documented.
+- [x] Benchmarks show non-trivial gain for at least one strategy on reference workload.
+- [x] Users can persist and reapply plans without planner rerun.
+
+### Phase 3 exit criteria tracking (as of 2026-03-29)
+- **Executable planning + convergence**
+  - Covered by `tests/test_offload_phase3.py::test_auto_offload_plan_executes_and_converges_reference_case`.
+- **Explain/rationale visibility**
+  - `offload_plan(explain=True)` returns both plan and rationale map; strategy guide
+    documents fields and tradeoffs.
+- **Benchmark gain vs naive**
+  - Covered by `tests/test_offload_phase3.py::test_balanced_strategy_improves_boundary_metric_vs_naive_split`
+    and `demos/multigpu/auto_offload_strategy_compare_demo.py`.
+- **Plan persistence/reuse**
+  - `freeze_offload_plan()` / `apply_offload_plan(...)` API plus
+    `demos/multigpu/offload_plan_export_import_demo.py`.
 
 ---
 
