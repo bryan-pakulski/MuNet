@@ -1301,6 +1301,7 @@ SERIALIZATION_DEVICE_POLICY = "caller_specified"
 SERIALIZATION_DTYPE_POLICY = "per_tensor"
 SERIALIZATION_RECOMMENDED_LOADER = "load_for_inference"
 SERIALIZATION_COMPILE_CONTRACT_POLICY = "external"
+SERIALIZATION_HYBRID_FORMAT_TAG = "munet_hybrid_v1"
 SERIALIZATION_FORBIDDEN_TRAINING_KEY_TOKENS = (
     "optim",
     "optimizer",
@@ -1507,6 +1508,137 @@ def _iter_named_tensors(module):
         for name, tensor in _direct_named_tensors(submodule):
             yield f"{prefix}.{name}", tensor
 
+def _maybe_source_for_class(cls):
+    import inspect
+    import textwrap
+    try:
+        src = inspect.getsource(cls)
+        if isinstance(src, str) and src.strip():
+            return textwrap.dedent(src)
+        return None
+    except Exception:
+        return None
+
+def _extract_tensors_and_shell(obj, path=""):
+    import pickle
+    import munet
+
+    tensors = {}
+    counter = [0]
+
+    def extract(value, value_path):
+        if isinstance(value, munet.Tensor):
+            name = f"__tensor_{counter[0]}__"
+            counter[0] += 1
+            tensors[name] = _tensor_to_numpy(value)
+            return {"__tensor_ref__": name, "__path__": value_path}
+
+        if isinstance(value, dict):
+            return {k: extract(v, f"{value_path}.{k}" if value_path else str(k)) for k, v in value.items()}
+
+        if isinstance(value, (list, tuple)):
+            seq = [extract(v, f"{value_path}[{i}]" if value_path else str(i)) for i, v in enumerate(value)]
+            return tuple(seq) if isinstance(value, tuple) else seq
+
+        if hasattr(value, "__dict__") and not isinstance(value, (type, type(lambda: None))):
+            cls = type(value)
+            shell = {
+                "__class_module__": cls.__module__,
+                "__class_qualname__": cls.__qualname__,
+                "__class_name__": cls.__name__,
+            }
+            class_source = _maybe_source_for_class(cls)
+            if class_source is not None:
+                shell["__class_source__"] = class_source
+            for k, v in value.__dict__.items():
+                shell[k] = extract(v, f"{value_path}.{k}" if value_path else k)
+            return shell
+
+        if isinstance(value, (int, float, str, bool, type(None))):
+            return value
+
+        try:
+            pickle.dumps(value)
+            return value
+        except Exception:
+            return repr(value)
+
+    return tensors, extract(obj, path)
+
+def _resolve_class_from_shell(class_module, class_qualname, class_source=None):
+    import importlib
+    import types
+
+    try:
+        module = importlib.import_module(class_module)
+        cls = module
+        for part in class_qualname.split("."):
+            cls = getattr(cls, part)
+        return cls
+    except Exception:
+        pass
+
+    if class_source is not None:
+        dynamic_module_name = f"__munet_dynamic_{class_module.replace('.', '_')}__"
+        dynamic_module = types.ModuleType(dynamic_module_name)
+        namespace = dynamic_module.__dict__
+        namespace["munet"] = __import__("munet")
+        exec(class_source, namespace, namespace)
+        cls = dynamic_module
+        try:
+            for part in class_qualname.split("."):
+                cls = getattr(cls, part)
+            return cls
+        except AttributeError:
+            leaf_name = class_qualname.split(".")[-1]
+            if hasattr(dynamic_module, leaf_name):
+                return getattr(dynamic_module, leaf_name)
+            raise
+
+    raise RuntimeError(
+        f"Failed to resolve class {class_module}.{class_qualname}. "
+        "No importable definition or embedded class source is available."
+    )
+
+def _rebuild_from_shell(shell, tensors, device=None):
+    import munet
+
+    def rebuild(value):
+        if isinstance(value, dict):
+            if "__tensor_ref__" in value:
+                tensor_name = value["__tensor_ref__"]
+                if tensor_name not in tensors:
+                    raise ValueError(f"Missing tensor payload for {tensor_name}")
+                t = munet.from_numpy(tensors[tensor_name])
+                if device is not None:
+                    t = t.to(device)
+                return t
+
+            if "__class_module__" in value and "__class_qualname__" in value:
+                cls = _resolve_class_from_shell(
+                    value["__class_module__"],
+                    value["__class_qualname__"],
+                    value.get("__class_source__"),
+                )
+                try:
+                    instance = cls()
+                except Exception:
+                    instance = cls.__new__(cls)
+                for k, v in value.items():
+                    if k not in ("__class_module__", "__class_qualname__", "__class_name__", "__class_source__"):
+                        setattr(instance, k, rebuild(v))
+                return instance
+
+            return {k: rebuild(v) for k, v in value.items()}
+
+        if isinstance(value, list):
+            return [rebuild(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(rebuild(v) for v in value)
+        return value
+
+    return rebuild(shell)
+
 def _get_config(m):
     """Get config for built-in modules."""
     name = type(m).__name__
@@ -1558,6 +1690,7 @@ def save(module, filename):
     import numpy as np
     import json
     import munet
+    import pickle
 
     def get_config_with_custom(m):
         """Get config, handling custom modules."""
@@ -1600,6 +1733,9 @@ def save(module, filename):
                 'module': cls.__module__,
                 'qualname': cls.__qualname__,
             }
+            source = _maybe_source_for_class(cls)
+            if source is not None:
+                config['source'] = source
             # Store submodule configs
             if hasattr(m, 'named_modules'):
                 submodule_configs = {}
@@ -1611,6 +1747,11 @@ def save(module, filename):
             return config
 
     config = get_config_with_custom(module)
+    use_hybrid_shell = config.get('type') == '__custom__'
+    shell_tensors = {}
+    shell = None
+    if use_hybrid_shell:
+        shell_tensors, shell = _extract_tensors_and_shell(module)
     
     # Collect all tensors
     state = {}
@@ -1632,6 +1773,11 @@ def save(module, filename):
     state['__recommended_loader__'] = np.array(SERIALIZATION_RECOMMENDED_LOADER)
     state['__compile_contract_policy__'] = np.array(SERIALIZATION_COMPILE_CONTRACT_POLICY)
     state['__tensor_names__'] = np.array(json.dumps(tensor_names))
+    if use_hybrid_shell:
+        state['__format__'] = np.array(SERIALIZATION_HYBRID_FORMAT_TAG)
+        state['__shell__'] = np.frombuffer(pickle.dumps(shell, protocol=pickle.HIGHEST_PROTOCOL), dtype=np.uint8)
+        for name, arr in shell_tensors.items():
+            state[name] = arr
     np.savez(filename, **state)
 
 def _normalize_loaded_module_for_inference(module, device=None):
@@ -1640,7 +1786,7 @@ def _normalize_loaded_module_for_inference(module, device=None):
     module.eval()
     return module
 
-def load(arg, filename=None):
+def load(arg, filename=None, device=None):
     """
     Loads a previously saved module state.
 
@@ -1652,6 +1798,7 @@ def load(arg, filename=None):
     import json
     import munet
     import importlib
+    import pickle
 
     def build_module(cfg):
         t = cfg['type']
@@ -1696,6 +1843,7 @@ def load(arg, filename=None):
             # Reconstruct custom module by importing the class and restoring state
             module_path = cfg.get('module', '')
             class_qualname = cfg.get('qualname', '')
+            class_source = cfg.get('source')
             if not module_path or not class_qualname:
                 raise ValueError(
                     f"Custom module saved without class reference. "
@@ -1708,30 +1856,32 @@ def load(arg, filename=None):
                 for part in parts:
                     cls = getattr(cls, part)
             except (ImportError, AttributeError) as e:
+                if class_source is None:
+                    raise ValueError(
+                        f"Could not reconstruct custom module '{class_qualname}' from module '{module_path}': {e}. "
+                        f"Use load(existing_model, filename) to load weights into an existing model."
+                    )
+                import types
+                dynamic_module_name = f"__munet_dynamic_{module_path.replace('.', '_')}__"
+                dynamic_module = types.ModuleType(dynamic_module_name)
+                namespace = dynamic_module.__dict__
+                namespace["munet"] = munet
+                exec(class_source, namespace, namespace)
+                leaf_name = class_qualname.split('.')[-1]
+                if hasattr(dynamic_module, leaf_name):
+                    cls = getattr(dynamic_module, leaf_name)
+                else:
+                    raise ValueError(
+                        f"Custom module source fallback did not define class '{leaf_name}'. "
+                        f"Use load(existing_model, filename) to load weights into an existing model."
+                    )
+            try:
+                return cls()
+            except Exception as ctor_err:
                 raise ValueError(
-                    f"Could not reconstruct custom module '{class_qualname}' from module '{module_path}': {e}. "
-                    f"Use load(existing_model, filename) to load weights into an existing model."
+                    f"Custom module '{class_qualname}' must be default-constructible for full reconstruction: {ctor_err}. "
+                    f"Use load(existing_model, filename) for weights-only restore."
                 )
-            # Get submodule configs if present
-            submodule_configs = cfg.get('submodules', {})
-            # Create instance and restore attributes
-            instance = cls.__new__(cls)
-            # Initialize basic nn.Module attributes
-            if hasattr(instance, '_parameters'):
-                instance._parameters = {}
-            if hasattr(instance, '_buffers'):
-                instance._buffers = {}
-            if hasattr(instance, '_modules'):
-                instance._modules = {}
-            if hasattr(instance, '_training'):
-                instance._training = True
-            if hasattr(instance, '_options'):
-                instance._options = munet.TensorOptions()
-            # Recursively build and attach submodules
-            for sub_name, sub_cfg in submodule_configs.items():
-                sub_module = build_module(sub_cfg)
-                setattr(instance, sub_name, sub_module)
-            return instance
         else:
             raise ValueError(f"Unsupported saved module type: {t}")
 
@@ -1746,6 +1896,14 @@ def load(arg, filename=None):
         with np.load(arg, allow_pickle=True) as state:
             _validate_serialization_metadata(state)
             if '__config__' not in state:
+                if '__shell__' in state:
+                    shell = pickle.loads(state['__shell__'].tobytes())
+                    shell_tensors = {
+                        name: state[name]
+                        for name in state.files
+                        if name.startswith('__tensor_') and name.endswith('__')
+                    }
+                    return _rebuild_from_shell(shell, shell_tensors, device=device)
                 raise ValueError("File does not contain architecture config. Use `load(module, filename)` for weights-only restore.")
 
             config = json.loads(str(state['__config__']))
@@ -1777,7 +1935,7 @@ def load_for_inference(arg, filename=None, device=None):
                 f"Expected {SERIALIZATION_DEFAULT_LOAD_MODE!r}."
             )
 
-    module = munet.load(arg, filename) if filename is not None else munet.load(arg)
+    module = munet.load(arg, filename, device=device) if filename is not None else munet.load(arg, device=device)
     return _normalize_loaded_module_for_inference(module, device)
 
 def load_weights(module, filename):

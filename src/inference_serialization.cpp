@@ -841,6 +841,11 @@ build_module_from_config(const JsonValue &config_value) {
         required_field(config, "normalized_shape").as_int(),
         static_cast<float>(required_field(config, "eps").as_number()), options);
   }
+  if (type == "RMSNorm") {
+    return std::make_shared<nn::RMSNorm>(
+        required_field(config, "normalized_shape").as_int(),
+        static_cast<float>(required_field(config, "eps").as_number()), options);
+  }
   if (type == "MultiHeadAttention") {
     return std::make_shared<nn::MultiHeadAttention>(
         required_field(config, "embed_dim").as_int(),

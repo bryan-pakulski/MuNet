@@ -5,6 +5,7 @@
 1. **Full model reconstruction**
    - Save with `munet.save(model, "model.npz")`
    - Load with `munet.load("model.npz")`
+   - For Python models, MuNet embeds a structural shell + class source fallback so artifacts can be restored even when the original class symbol is not already defined in user code.
 
 2. **Weights-only restore**
    - `munet.load(existing_model, "model.npz")`
@@ -35,6 +36,7 @@ MuNet writes explicit deploy-oriented serialization metadata alongside the tenso
 - `__recommended_loader__ = "load_for_inference"`
 - `__compile_contract_policy__ = "external"`
 - `__tensor_names__ = [...]`
+- `__format__ = "munet_hybrid_v1"` for custom Python-module artifacts that embed shell/source fallback.
 
 Use `munet.serialization_format_info()` to inspect the supported format contract in the current build, and `munet.serialization_metadata(path)` to inspect a saved artifact before loading it.
 
@@ -48,6 +50,7 @@ Use `munet.serialization_format_info()` to inspect the supported format contract
 ## Deploy behavior
 
 - `munet.save(...)` produces a **deploy artifact**, not a training checkpoint.
+- Artifacts can still carry enough model structure for training/inference round-trips (`munet.load(...)`) while remaining lean runtime payloads (`munet.load_for_inference(...)` / C++ inference loaders).
 - Deploy artifacts are validated as **runtime-only** payloads: architecture config, tensor payload, and deploy metadata are allowed; training/checkpoint payload keys are rejected.
 - Python `munet.load_for_inference(...)` / `munet.inference.load_serialized(...)` and C++ `munet::inference::load_serialized(...)` normalize the loaded module for deployment by:
   - validating the deploy manifest

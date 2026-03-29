@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import unittest
 import tempfile
 import subprocess
@@ -694,6 +695,61 @@ class TestBindings(unittest.TestCase):
             y_src = np.array(src.forward(x).detach(), copy=False)
             y_dst = np.array(dst.forward(x).detach(), copy=False)
             self.assertTrue(np.allclose(y_src, y_dst, atol=1e-6))
+
+    def test_model_serialization_custom_class_rebuild_without_redefinition(self):
+        class TinyGraphNet(munet.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.in_proj = munet.nn.Linear(4, 8)
+                self.out_proj = munet.nn.Linear(8, 2)
+
+            def forward(self, x):
+                h = self.in_proj(x)
+                h = h.relu()
+                return self.out_proj(h)
+
+        model = TinyGraphNet()
+        x = munet.Tensor([2, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array(
+            [[0.2, -0.1, 0.5, 0.7], [1.0, -0.3, 0.4, -0.8]], dtype=np.float32
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "custom_graph_roundtrip.npz")
+            munet.save(model, path)
+
+            del TinyGraphNet
+            loaded = munet.load(path)
+
+            y_ref = np.array(model.forward(x).detach(), copy=False)
+            y_loaded = np.array(loaded.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y_ref, y_loaded, atol=1e-6))
+
+            loss = loaded.forward(x).sum()
+            loaded.zero_grad()
+            loss.backward()
+            self.assertTrue(loaded.named_parameters()["in_proj.weight"].has_grad())
+
+    def test_model_serialization_custom_class_writes_hybrid_payload(self):
+        class TinyHybridNet(munet.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc = munet.nn.Linear(3, 3)
+
+            def forward(self, x):
+                return self.fc(x).relu()
+
+        model = TinyHybridNet()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "custom_hybrid_payload.npz")
+            munet.save(model, path)
+
+            with np.load(path, allow_pickle=True) as state:
+                self.assertIn("__format__", state.files)
+                self.assertEqual(str(state["__format__"]), "munet_hybrid_v1")
+                self.assertIn("__shell__", state.files)
+                cfg = json.loads(str(state["__config__"]))
+                self.assertEqual(cfg["type"], "__custom__")
 
     def test_tensor_factories_and_numpy_roundtrip_preserve_dtype(self):
         half = munet.ones([2, 2], dtype=munet.DataType.Float16)

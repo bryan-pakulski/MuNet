@@ -5,6 +5,7 @@
 #include "test_utils.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -932,6 +933,39 @@ TEST(InferenceTest, LoadSerializedNormalizesModuleForInferenceEval) {
   const auto *y_ptr = static_cast<const float *>(y.data());
   for (size_t i = 0; i < y.size(); ++i) {
     EXPECT_FLOAT_EQ(y_ptr[i], 1.0f);
+  }
+
+  std::remove(path.string().c_str());
+}
+
+TEST(InferenceTest, LoadSerializedSupportsRMSNormConfig) {
+  Tensor weight({4}, Device{DeviceType::CPU, 0}, DataType::Float32, false);
+  auto *w = static_cast<float *>(weight.data());
+  w[0] = 1.0f;
+  w[1] = 1.0f;
+  w[2] = 1.0f;
+  w[3] = 1.0f;
+
+  const std::string config =
+      R"({"type":"RMSNorm","normalized_shape":4,"eps":1e-5,"dtype":"float32"})";
+  const auto path =
+      write_npz_artifact("munet_cpp_load_serialized_rmsnorm", config,
+                         {{"weight", weight}});
+
+  auto module = inference::load_serialized(path.string());
+  ASSERT_TRUE(module);
+
+  Tensor x({1, 4}, Device{DeviceType::CPU, 0}, DataType::Float32, false);
+  auto *x_ptr = static_cast<float *>(x.data());
+  x_ptr[0] = 1.0f;
+  x_ptr[1] = -2.0f;
+  x_ptr[2] = 3.0f;
+  x_ptr[3] = -4.0f;
+
+  Tensor y = module->forward(x).to(Device{DeviceType::CPU, 0});
+  const auto *y_ptr = static_cast<const float *>(y.data());
+  for (size_t i = 0; i < y.size(); ++i) {
+    EXPECT_TRUE(std::isfinite(y_ptr[i]));
   }
 
   std::remove(path.string().c_str());
