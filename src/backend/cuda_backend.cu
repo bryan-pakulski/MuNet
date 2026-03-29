@@ -897,7 +897,9 @@ void CUDABackend::copy(const void *src, void *dst, size_t bytes, Device src_dev,
         "cuda copy: expected at least one CUDA endpoint for CUDA backend copy");
   }
   if (src_is_cuda && dst_is_cuda) {
-    cudaEventRecord((cudaEvent_t)start_event_);
+    // NOTE: start_event_/stop_event_ are created on this backend's
+    // device_index_. Cross-device copies may switch active CUDA device, so
+    // recording those events here can fail with invalid resource handle.
     if (src_dev.index == dst_dev.index) {
       cudaSetDevice(src_dev.index);
       CUDA_CHECK(cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToDevice));
@@ -925,7 +927,6 @@ void CUDABackend::copy(const void *src, void *dst, size_t bytes, Device src_dev,
                               cudaMemcpyHostToDevice));
       }
     }
-    cudaEventRecord((cudaEvent_t)stop_event_);
     return;
   }
 
