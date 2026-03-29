@@ -663,6 +663,21 @@ PYBIND11_MODULE(munet, m) {
       "Copies data from a NumPy array into the given CPU tensor.");
 
   py::class_<core::Module, std::shared_ptr<core::Module>>(m, "_CoreModule");
+  py::class_<core::OffloadValidationReport>(m, "OffloadValidationReport")
+      .def_readonly("valid", &core::OffloadValidationReport::valid)
+      .def_readonly("errors", &core::OffloadValidationReport::errors)
+      .def_readonly("warnings", &core::OffloadValidationReport::warnings)
+      .def_readonly("estimated_boundaries",
+                    &core::OffloadValidationReport::estimated_boundaries)
+      .def_readonly("estimated_ping_pong_boundaries",
+                    &core::OffloadValidationReport::estimated_ping_pong_boundaries);
+  py::class_<core::OffloadTransferTelemetry>(m, "OffloadTransferTelemetry")
+      .def_readonly("boundary_transfer_count",
+                    &core::OffloadTransferTelemetry::boundary_transfer_count)
+      .def_readonly("boundary_transfer_bytes",
+                    &core::OffloadTransferTelemetry::boundary_transfer_bytes)
+      .def_readonly("direction_counts",
+                    &core::OffloadTransferTelemetry::direction_counts);
 
   // ============================================================================
   // Neural Network Layers (munet.nn)
@@ -724,6 +739,20 @@ PYBIND11_MODULE(munet, m) {
            "Clears current model offload placement plan.")
       .def("offload_plan", &nn::Module::offload_plan,
            "Returns current module-path -> device placement mapping.")
+      .def("validate_offload_plan", &nn::Module::validate_offload_plan,
+           py::arg("sample_input"),
+           "Validates current offload plan and returns a typed report.")
+      .def("set_offload_warnings", &nn::Module::set_offload_warnings,
+           py::arg("enabled") = true,
+           "Enables/disables runtime offload transfer warnings.")
+      .def("set_offload_warning_threshold_bytes",
+           &nn::Module::set_offload_warning_threshold_bytes,
+           py::arg("threshold_bytes"),
+           "Sets warning threshold for small offload transfers.")
+      .def("offload_telemetry_snapshot", &nn::Module::offload_telemetry_snapshot,
+           "Returns runtime offload transfer telemetry snapshot.")
+      .def("reset_offload_telemetry", &nn::Module::reset_offload_telemetry,
+           "Resets runtime offload transfer telemetry.")
       .def("zero_grad", &nn::Module::zero_grad,
            "Clears the gradients of all optimized parameters.")
       .def("__call__", &nn::Module::forward)

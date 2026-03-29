@@ -222,3 +222,23 @@ If using `model.offload(device, layers=[...])`:
 4. For boundary-transfer debugging, run with:
    - `MUNET_DISPATCH_DECISION_DUMP=1`
    - optional `MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK=1`
+
+## 10) Offload plan validation and transfer hotspots (Phase 2)
+
+For plan validation and transfer-cost insight:
+
+1. Run plan checks with a representative sample:
+   - `report = model.validate_offload_plan(sample_input)`
+   - inspect: `report.valid`, `report.errors`, `report.warnings`
+2. Inspect boundary estimates:
+   - `report.estimated_boundaries`
+   - `report.estimated_ping_pong_boundaries`
+3. Track runtime transfer telemetry:
+   - `model.reset_offload_telemetry()`
+   - run one/more forwards
+   - `snap = model.offload_telemetry_snapshot()`
+   - inspect: `snap.boundary_transfer_count`, `snap.boundary_transfer_bytes`,
+     `snap.direction_counts`
+4. Tune warnings:
+   - `model.set_offload_warnings(True/False)`
+   - `model.set_offload_warning_threshold_bytes(...)`

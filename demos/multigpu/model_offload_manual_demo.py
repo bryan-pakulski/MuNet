@@ -113,6 +113,18 @@ def main():
     for layer_name, device in plan.items():
         by_device.setdefault(str(device), []).append(layer_name)
     print("offload_plan summary (device -> layers):", by_device)
+    sample_validate = munet.from_numpy(np.random.randn(2, 4).astype(np.float32))
+    report = model.validate_offload_plan(sample_validate)
+    print(
+        "validate_offload_plan:",
+        {
+            "valid": report.valid,
+            "errors": report.errors,
+            "warnings": report.warnings,
+            "estimated_boundaries": report.estimated_boundaries,
+            "estimated_ping_pong_boundaries": report.estimated_ping_pong_boundaries,
+        },
+    )
 
     rng = np.random.default_rng(0)
     x = rng.normal(size=(256, 4)).astype(np.float32)
