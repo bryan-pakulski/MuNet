@@ -19,7 +19,15 @@ model.apply_offload_plan(frozen)
 
 `offload_plan(explain=True)` returns:
 - `plan`: layer-path -> device
-- `rationale`: layer-path -> planner rationale string
+- `rationale`: layer-path -> structured rationale object:
+  - `source`
+  - `strategy`
+  - `compute_cost`
+  - `param_bytes`
+  - `activation_bytes`
+  - `transfer_cost`
+  - `projected_mem_bytes`
+  - `budget_bytes` (nullable)
 
 ## Strategies
 

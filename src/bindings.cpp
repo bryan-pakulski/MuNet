@@ -749,7 +749,24 @@ PYBIND11_MODULE(munet, m) {
             }
             py::dict d;
             d["plan"] = py::cast(self.offload_plan());
-            d["rationale"] = py::cast(self.offload_plan_rationale());
+            py::dict rationale;
+            for (const auto &[layer, r] : self.offload_plan_rationale_typed()) {
+              py::dict entry;
+              entry["source"] = py::cast(r.source);
+              entry["strategy"] = py::cast(r.strategy);
+              entry["compute_cost"] = py::cast(r.compute_cost);
+              entry["param_bytes"] = py::cast(r.param_bytes);
+              entry["activation_bytes"] = py::cast(r.activation_bytes);
+              entry["transfer_cost"] = py::cast(r.transfer_cost);
+              entry["projected_mem_bytes"] = py::cast(r.projected_mem_bytes);
+              if (r.budget_bytes.has_value()) {
+                entry["budget_bytes"] = py::cast(r.budget_bytes.value());
+              } else {
+                entry["budget_bytes"] = py::none();
+              }
+              rationale[py::str(layer)] = std::move(entry);
+            }
+            d["rationale"] = std::move(rationale);
             return std::move(d);
           },
           py::arg("explain") = false,

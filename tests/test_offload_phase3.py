@@ -98,6 +98,12 @@ def test_auto_offload_explain_and_execution_smoke():
     assert "rationale" in explain
     assert isinstance(explain["plan"], dict)
     assert isinstance(explain["rationale"], dict)
+    if explain["rationale"]:
+        first = next(iter(explain["rationale"].values()))
+        assert isinstance(first, dict)
+        assert "strategy" in first
+        assert "compute_cost" in first
+        assert "transfer_cost" in first
 
     y = model(x)
     assert y.shape == [8, 1]

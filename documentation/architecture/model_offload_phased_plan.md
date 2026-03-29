@@ -179,6 +179,12 @@ transfers, and diagnostics.
   - `freeze_offload_plan()` / `apply_offload_plan(...)` API plus
     `demos/multigpu/offload_plan_export_import_demo.py`.
 
+### Post-Phase 3 follow-up architecture items
+- Persistence compatibility contract and schema versioning plan:
+  `documentation/architecture/offload_planner_followups.md`.
+- Broader operator capability modeling beyond current conservative checks:
+  `documentation/architecture/offload_planner_followups.md`.
+
 ---
 
 ## Cross-phase quality gates

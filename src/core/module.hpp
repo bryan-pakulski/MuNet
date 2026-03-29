@@ -51,6 +51,17 @@ struct OffloadTransferTelemetry {
   std::map<std::string, size_t> direction_counts;
 };
 
+struct OffloadPlannerRationale {
+  std::string strategy = "manual";
+  size_t compute_cost = 0;
+  size_t param_bytes = 0;
+  size_t activation_bytes = 0;
+  size_t transfer_cost = 0;
+  size_t projected_mem_bytes = 0;
+  std::optional<size_t> budget_bytes;
+  std::string source = "planner";
+};
+
 class Module {
 public:
   explicit Module(TensorOptions default_options = TensorOptions{})
@@ -227,6 +238,16 @@ public:
   }
 
   std::map<std::string, std::string> offload_plan_rationale() const {
+    std::map<std::string, std::string> out;
+    const Module *root = root_module_const();
+    for (const auto &[layer, rationale] : root->offload_plan_rationale_) {
+      out[layer] = serialize_rationale(rationale);
+    }
+    return out;
+  }
+
+  std::map<std::string, OffloadPlannerRationale> offload_plan_rationale_typed()
+      const {
     return root_module_const()->offload_plan_rationale_;
   }
 
@@ -249,8 +270,10 @@ public:
     for (const auto &layer : sorted_layers) {
       const std::string &device_spec = plan.at(layer);
       root->offload(parse_device_string(device_spec), {layer});
-      root->offload_plan_rationale_[layer] =
-          "source=manual-frozen,device=" + device_spec;
+      OffloadPlannerRationale rationale;
+      rationale.strategy = "manual-frozen";
+      rationale.source = "manual-frozen";
+      root->offload_plan_rationale_[layer] = rationale;
     }
     root->planner_last_strategy_ = "manual-frozen";
   }
@@ -389,18 +412,19 @@ public:
       }
 
       root->offload(devices[chosen], {layer});
-      std::ostringstream rationale;
-      rationale << "strategy=" << strategy
-                << ",compute_cost=" << chosen_compute
-                << ",param_bytes=" << param_bytes
-                << ",activation_bytes=" << activation_bytes
-                << ",transfer_cost=" << chosen_transfer
-                << ",projected_mem_bytes=" << chosen_projected_mem;
+      OffloadPlannerRationale rationale;
+      rationale.strategy = strategy;
+      rationale.compute_cost = chosen_compute;
+      rationale.param_bytes = param_bytes;
+      rationale.activation_bytes = activation_bytes;
+      rationale.transfer_cost = chosen_transfer;
+      rationale.projected_mem_bytes = chosen_projected_mem;
+      rationale.source = "planner";
       auto budget_it = memory_budgets_bytes.find(devices[chosen].to_string());
       if (budget_it != memory_budgets_bytes.end()) {
-        rationale << ",budget_bytes=" << budget_it->second;
+        rationale.budget_bytes = budget_it->second;
       }
-      root->offload_plan_rationale_[layer] = rationale.str();
+      root->offload_plan_rationale_[layer] = rationale;
       device_scores[chosen] += static_cast<double>(chosen_compute + chosen_transfer);
       device_param_bytes[chosen] += param_bytes;
       previous_device_index = chosen;
@@ -668,6 +692,20 @@ protected:
     return Device{type, std::stoi(idx_str)};
   }
 
+  static std::string serialize_rationale(const OffloadPlannerRationale &r) {
+    std::ostringstream out;
+    out << "source=" << r.source << ",strategy=" << r.strategy
+        << ",compute_cost=" << r.compute_cost
+        << ",param_bytes=" << r.param_bytes
+        << ",activation_bytes=" << r.activation_bytes
+        << ",transfer_cost=" << r.transfer_cost
+        << ",projected_mem_bytes=" << r.projected_mem_bytes;
+    if (r.budget_bytes.has_value()) {
+      out << ",budget_bytes=" << r.budget_bytes.value();
+    }
+    return out.str();
+  }
+
   bool training_ = true;
   TensorOptions default_options_;
   std::map<std::string, Tensor *> parameters_;
@@ -675,7 +713,7 @@ protected:
   std::map<std::string, BufferRegistration> buffer_registrations_;
   std::map<std::string, std::shared_ptr<Module>> modules_;
   std::map<std::string, Device> offload_plan_;
-  std::map<std::string, std::string> offload_plan_rationale_;
+  std::map<std::string, OffloadPlannerRationale> offload_plan_rationale_;
   std::string planner_last_strategy_ = "manual";
   OffloadTransferTelemetry offload_telemetry_;
   bool offload_warnings_enabled_ = true;

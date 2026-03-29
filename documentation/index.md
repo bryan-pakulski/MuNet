@@ -33,6 +33,7 @@ Welcome to MuNet docs. This documentation is structured for interactive/searchab
 - [Inference Runtime Phase 5 Validation and Rollout](architecture/inference_phase5_validation_rollout.md)
 - [Backends](architecture/backends.md)
 - [Model Offload Phased Plan](architecture/model_offload_phased_plan.md)
+- [Offload Planner Follow-ups](architecture/offload_planner_followups.md)
 - [Architecture Decision Log](architecture/decision_log.md)
 - [Dtype-Sensitive Inventory](architecture/dtype_sensitive_inventory.md)
 - [Refactor Roadmap](architecture/refactor_roadmap.md)
