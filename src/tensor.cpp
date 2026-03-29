@@ -151,11 +151,16 @@ Tensor Tensor::to(Device dev) const {
 
   const bool src_non_cpu = device().type != DeviceType::CPU;
   const bool dst_non_cpu = dev.type != DeviceType::CPU;
-  const bool cross_backend_non_cpu = src_non_cpu && dst_non_cpu && device().type != dev.type;
+  const bool cross_backend_non_cpu =
+      src_non_cpu && dst_non_cpu && device().type != dev.type;
+  const bool cross_vulkan_device_non_cpu =
+      src_non_cpu && dst_non_cpu && device().type == DeviceType::VULKAN &&
+      dev.type == DeviceType::VULKAN && device().index != dev.index;
 
-  if (cross_backend_non_cpu) {
+  if (cross_backend_non_cpu || cross_vulkan_device_non_cpu) {
     // Route heterogeneous accelerator transfers through CPU staging to avoid
-    // backend-specific direct-copy assumptions (e.g. CUDA<->Vulkan).
+    // backend-specific direct-copy assumptions (e.g. CUDA<->Vulkan) and
+    // multi-device Vulkan buffer ownership constraints.
     Tensor cpu_stage(shape(), Device{DeviceType::CPU, 0}, dtype(), false);
 
     if (device().type == DeviceType::CUDA) {
