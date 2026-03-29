@@ -120,10 +120,10 @@ transfers, and diagnostics.
   - Extend manual offload demo to show validator output and warning examples.
 
 ## Phase 2 exit criteria (all required)
-- [ ] Validation report is stable, typed, and documented.
-- [ ] Transfer warning thresholds configurable and documented.
-- [ ] At least one CI job asserts validator behavior on known bad plans.
-- [ ] Demo includes both valid and intentionally bad plan walkthroughs.
+- [x] Validation report is stable, typed, and documented.
+- [x] Transfer warning thresholds configurable and documented.
+- [x] At least one CI job asserts validator behavior on known bad plans.
+- [x] Demo includes both valid and intentionally bad plan walkthroughs.
 
 ---
 

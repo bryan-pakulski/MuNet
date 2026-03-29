@@ -126,6 +126,27 @@ def main():
         },
     )
 
+    # Intentionally bad plan walkthrough (Phase 2): float16 linear on CPU.
+    bad_opts = munet.TensorOptions()
+    bad_opts.dtype = munet.DataType.Float16
+    bad_model = munet.nn.Sequential(
+        munet.nn.Linear(4, 8, options=bad_opts),
+        munet.nn.ReLU(),
+        munet.nn.Linear(8, 1, options=bad_opts),
+    )
+    bad_model.offload(CPU, layers=["0", "2"])
+    bad_report = bad_model.validate_offload_plan(
+        munet.from_numpy(np.random.randn(2, 4).astype(np.float16))
+    )
+    print(
+        "validate_offload_plan (intentional bad plan):",
+        {
+            "valid": bad_report.valid,
+            "errors": bad_report.errors,
+            "warnings": bad_report.warnings,
+        },
+    )
+
     rng = np.random.default_rng(0)
     x = rng.normal(size=(256, 4)).astype(np.float32)
     true_w = np.array([[0.3], [-0.1], [0.5], [0.2]], dtype=np.float32)
