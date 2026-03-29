@@ -13,7 +13,6 @@
 #include <memory>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -235,15 +234,6 @@ public:
 
   std::map<std::string, Device> offload_plan() const {
     return root_module_const()->offload_plan_;
-  }
-
-  std::map<std::string, std::string> offload_plan_rationale() const {
-    std::map<std::string, std::string> out;
-    const Module *root = root_module_const();
-    for (const auto &[layer, rationale] : root->offload_plan_rationale_) {
-      out[layer] = serialize_rationale(rationale);
-    }
-    return out;
   }
 
   std::map<std::string, OffloadPlannerRationale> offload_plan_rationale_typed()
@@ -690,20 +680,6 @@ protected:
                                "' (unknown type)");
     }
     return Device{type, std::stoi(idx_str)};
-  }
-
-  static std::string serialize_rationale(const OffloadPlannerRationale &r) {
-    std::ostringstream out;
-    out << "source=" << r.source << ",strategy=" << r.strategy
-        << ",compute_cost=" << r.compute_cost
-        << ",param_bytes=" << r.param_bytes
-        << ",activation_bytes=" << r.activation_bytes
-        << ",transfer_cost=" << r.transfer_cost
-        << ",projected_mem_bytes=" << r.projected_mem_bytes;
-    if (r.budget_bytes.has_value()) {
-      out << ",budget_bytes=" << r.budget_bytes.value();
-    }
-    return out.str();
   }
 
   bool training_ = true;
