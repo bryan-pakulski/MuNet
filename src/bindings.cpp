@@ -1,4 +1,5 @@
 #include "autograd/engine.hpp"
+#include "core/op_dispatch.hpp"
 #include "inference.hpp"
 #include "nn.hpp"
 #include "nn/module.hpp"
@@ -12,6 +13,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace py = pybind11;
 using namespace munet;
@@ -169,6 +171,48 @@ Tensor tensor_getitem(const Tensor &t, py::object key) {
     }
     return result;
   }
+}
+
+ops::OpId parse_op_id_name(const std::string &name) {
+  static const std::unordered_map<std::string, ops::OpId> kNameToOp = {
+      {"add", ops::OpId::Add},
+      {"sub", ops::OpId::Sub},
+      {"mul", ops::OpId::Mul},
+      {"div", ops::OpId::Div},
+      {"masked_fill", ops::OpId::MaskedFill},
+      {"matmul", ops::OpId::Matmul},
+      {"relu", ops::OpId::Relu},
+      {"sigmoid", ops::OpId::Sigmoid},
+      {"exp", ops::OpId::Exp},
+      {"log", ops::OpId::Log},
+      {"sqrt", ops::OpId::Sqrt},
+      {"rsqrt", ops::OpId::Rsqrt},
+      {"sin", ops::OpId::Sin},
+      {"cos", ops::OpId::Cos},
+      {"softmax", ops::OpId::Softmax},
+      {"log_softmax", ops::OpId::LogSoftmax},
+      {"cat", ops::OpId::Cat},
+      {"sum", ops::OpId::Sum},
+      {"sum_to_shape", ops::OpId::SumToShape},
+      {"mean", ops::OpId::Mean},
+      {"reshape", ops::OpId::Reshape},
+      {"conv2d", ops::OpId::Conv2D},
+      {"max_pool2d", ops::OpId::MaxPool2D},
+      {"upsample2d", ops::OpId::Upsample2D},
+      {"batch_norm", ops::OpId::BatchNorm},
+      {"layer_norm", ops::OpId::LayerNorm},
+      {"mse_loss", ops::OpId::MSELoss},
+      {"cross_entropy", ops::OpId::CrossEntropy},
+      {"transpose", ops::OpId::Transpose},
+      {"narrow", ops::OpId::Narrow},
+      {"zeros", ops::OpId::Zeros},
+  };
+  auto it = kNameToOp.find(name);
+  if (it == kNameToOp.end()) {
+    throw std::runtime_error("Unknown op name for dispatch debug dump: " +
+                             name);
+  }
+  return it->second;
 }
 
 } // namespace
@@ -423,6 +467,8 @@ PYBIND11_MODULE(munet, m) {
            })
       .def("__matmul__",
            [](const Tensor &a, const Tensor &b) { return a.matmul(b); })
+      .def("matmul", &Tensor::matmul, py::arg("other"),
+           "Matrix multiply with another tensor. Equivalent to `a @ b`.")
       .def("sum", &Tensor::sum,
            "Returns the sum of all elements in the tensor.")
       .def("mean", &Tensor::mean, py::arg("dim") = -1,
@@ -540,6 +586,8 @@ PYBIND11_MODULE(munet, m) {
   // ============================================================================
   // Factory Functions
   // ============================================================================
+  m.def("matmul", &ops::matmul, py::arg("a"), py::arg("b"),
+        "Matrix multiply two tensors. Mirrors `torch.matmul(a, b)`.");
   m.def("cat", &ops::cat, py::arg("tensors"), py::arg("dim") = 1,
         "Concatenates a sequence of tensors along the specified dimension.");
   m.def(
@@ -615,6 +663,21 @@ PYBIND11_MODULE(munet, m) {
       "Copies data from a NumPy array into the given CPU tensor.");
 
   py::class_<core::Module, std::shared_ptr<core::Module>>(m, "_CoreModule");
+  py::class_<core::OffloadValidationReport>(m, "OffloadValidationReport")
+      .def_readonly("valid", &core::OffloadValidationReport::valid)
+      .def_readonly("errors", &core::OffloadValidationReport::errors)
+      .def_readonly("warnings", &core::OffloadValidationReport::warnings)
+      .def_readonly("estimated_boundaries",
+                    &core::OffloadValidationReport::estimated_boundaries)
+      .def_readonly("estimated_ping_pong_boundaries",
+                    &core::OffloadValidationReport::estimated_ping_pong_boundaries);
+  py::class_<core::OffloadTransferTelemetry>(m, "OffloadTransferTelemetry")
+      .def_readonly("boundary_transfer_count",
+                    &core::OffloadTransferTelemetry::boundary_transfer_count)
+      .def_readonly("boundary_transfer_bytes",
+                    &core::OffloadTransferTelemetry::boundary_transfer_bytes)
+      .def_readonly("direction_counts",
+                    &core::OffloadTransferTelemetry::direction_counts);
 
   // ============================================================================
   // Neural Network Layers (munet.nn)
@@ -663,6 +726,69 @@ PYBIND11_MODULE(munet, m) {
              return self;
            }, py::arg("options"),
            "Converts all parameters and buffers using explicit tensor options. Returns self.")
+      .def(
+          "offload",
+          [](nn::Module &self, Device device, const std::vector<std::string> &layers)
+              -> nn::Module & {
+            self.offload(device, layers);
+            return self;
+          },
+          py::arg("device"), py::arg("layers"),
+          "Assigns listed module paths to a device and moves their params/buffers.")
+      .def("clear_offload", &nn::Module::clear_offload,
+           "Clears current model offload placement plan.")
+      .def("freeze_offload_plan", &nn::Module::freeze_offload_plan,
+           "Returns a persistable layer-path -> device-string plan.")
+      .def("apply_offload_plan", &nn::Module::apply_offload_plan, py::arg("plan"),
+           "Applies a previously frozen layer-path -> device-string plan.")
+      .def(
+          "offload_plan",
+          [](nn::Module &self, bool explain) -> py::object {
+            if (!explain) {
+              return py::cast(self.offload_plan());
+            }
+            py::dict d;
+            d["plan"] = py::cast(self.offload_plan());
+            py::dict rationale;
+            for (const auto &[layer, r] : self.offload_plan_rationale_typed()) {
+              py::dict entry;
+              entry["source"] = py::cast(r.source);
+              entry["strategy"] = py::cast(r.strategy);
+              entry["compute_cost"] = py::cast(r.compute_cost);
+              entry["param_bytes"] = py::cast(r.param_bytes);
+              entry["activation_bytes"] = py::cast(r.activation_bytes);
+              entry["transfer_cost"] = py::cast(r.transfer_cost);
+              entry["projected_mem_bytes"] = py::cast(r.projected_mem_bytes);
+              if (r.budget_bytes.has_value()) {
+                entry["budget_bytes"] = py::cast(r.budget_bytes.value());
+              } else {
+                entry["budget_bytes"] = py::none();
+              }
+              rationale[py::str(layer)] = std::move(entry);
+            }
+            d["rationale"] = std::move(rationale);
+            return std::move(d);
+          },
+          py::arg("explain") = false,
+          "Returns current module-path -> device placement mapping. If explain=True, returns planner rationale.")
+      .def("auto_offload", &nn::Module::auto_offload, py::arg("devices"),
+           py::arg("strategy") = "balanced", py::arg("sample_input"),
+           py::arg("memory_budgets_bytes") = std::map<std::string, size_t>{},
+           "Automatically generates and applies an offload plan.")
+      .def("validate_offload_plan", &nn::Module::validate_offload_plan,
+           py::arg("sample_input"),
+           "Validates current offload plan and returns a typed report.")
+      .def("set_offload_warnings", &nn::Module::set_offload_warnings,
+           py::arg("enabled") = true,
+           "Enables/disables runtime offload transfer warnings.")
+      .def("set_offload_warning_threshold_bytes",
+           &nn::Module::set_offload_warning_threshold_bytes,
+           py::arg("threshold_bytes"),
+           "Sets warning threshold for small offload transfers.")
+      .def("offload_telemetry_snapshot", &nn::Module::offload_telemetry_snapshot,
+           "Returns runtime offload transfer telemetry snapshot.")
+      .def("reset_offload_telemetry", &nn::Module::reset_offload_telemetry,
+           "Resets runtime offload transfer telemetry.")
       .def("zero_grad", &nn::Module::zero_grad,
            "Clears the gradients of all optimized parameters.")
       .def("__call__", &nn::Module::forward)
@@ -1059,6 +1185,33 @@ PYBIND11_MODULE(munet, m) {
       "reset_profiler", []() { Profiler::get().reset(); },
       "Clears all collected performance statistics and resets peak memory "
       "tracking.");
+  m.def(
+      "dispatch_policy_snapshot", &ops::dispatch_policy_snapshot,
+      "Returns the active dispatch fallback-rule matrix as a text snapshot.");
+  m.def(
+      "fallback_telemetry_snapshot",
+      []() {
+        const auto snapshot = ops::fallback_telemetry_snapshot();
+        py::dict out;
+        out["accelerator_cpu_fallback_total"] =
+            py::int_(snapshot.accelerator_cpu_fallback_total);
+        out["accelerator_cpu_fallback_counters"] =
+            py::cast(snapshot.accelerator_cpu_fallback_counters);
+        return out;
+      },
+      "Returns dispatch telemetry counters for accelerator->CPU fallbacks.");
+  m.def(
+      "reset_fallback_telemetry", &ops::reset_fallback_telemetry,
+      "Clears dispatch telemetry counters for accelerator->CPU fallbacks.");
+  m.def(
+      "dispatch_decision_debug_dump",
+      [](const std::string &op_name, const Tensor &tensor) {
+        return ops::dispatch_decision_debug_dump(parse_op_id_name(op_name),
+                                                 tensor);
+      },
+      py::arg("op_name"), py::arg("tensor"),
+      "Returns a structured dispatch-decision line for the provided op name "
+      "and tensor context.");
 
   // ============================================================================
   // Python Injected Helpers

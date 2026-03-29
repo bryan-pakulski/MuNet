@@ -2,7 +2,7 @@
 
 See runnable demo:
 
-- `demos/inference/e2e_train_save_load_infer.py`
+- `demos/inference/foundation/e2e_train_save_load_infer.py`
 
 ## Workflow
 

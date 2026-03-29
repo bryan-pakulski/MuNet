@@ -1,7 +1,12 @@
 #pragma once
 #include "../backend.hpp"
+#include <atomic>
+#include <array>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -194,15 +199,85 @@ private:
     int current_frame = 0;
     int current_batch_size = 0;
     bool is_recording = false;
+
+    std::array<VkDescriptorPool, 2> descriptor_pools{VK_NULL_HANDLE,
+                                                     VK_NULL_HANDLE};
+    std::array<std::vector<VkDescriptorSet>, 2> frame_descriptor_sets;
+    std::array<uint32_t, 2> descriptor_set_cursor{0, 0};
+    std::array<VkCommandBuffer, 2> command_buffers{VK_NULL_HANDLE,
+                                                   VK_NULL_HANDLE};
+    std::array<VkFence, 2> in_flight_fences{VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::array<VkQueryPool, 2> query_pools{VK_NULL_HANDLE, VK_NULL_HANDLE};
+
+    std::unordered_map<size_t, std::vector<uint64_t>> free_pool;
+    std::unordered_map<uint64_t, size_t> allocation_sizes;
+    std::unordered_map<uint64_t, VkDeviceMemory> allocation_memory;
+    std::array<std::vector<uint64_t>, 2> deferred_frees;
+
+    VkBuffer staging_buffer = VK_NULL_HANDLE;
+    VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+    size_t staging_offset = 0;
+    size_t staging_size = 0;
+    void *staging_mapped = nullptr;
+    VkCommandBuffer immediate_cmd_buffer = VK_NULL_HANDLE;
   };
   std::unique_ptr<VulkanRuntimeState> runtime_;
 
   void dispatch_kernel(VkPipeline pipeline, const std::vector<void *> &buffers,
                        void *pc, size_t pcSize, int x, int y, int z);
   void reset_runtime_state();
+  void allocate_frame_descriptor_sets(int frame);
   void ensure_recording();
   void flush_batch();
   void run_immediate_command(std::function<void(VkCommandBuffer)> func);
+  uint32_t find_memory_type(uint32_t type_filter,
+                            VkMemoryPropertyFlags properties) const;
+  void create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                     VkMemoryPropertyFlags properties, VkBuffer &buffer,
+                     VkDeviceMemory &buffer_memory) const;
+  std::vector<uint32_t> compile_shader(const std::string &name,
+                                       const std::string &source) const;
+
+  VkInstance instance_ = VK_NULL_HANDLE;
+  VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
+  VkDevice device_ = VK_NULL_HANDLE;
+  VkQueue compute_queue_ = VK_NULL_HANDLE;
+  uint32_t queue_family_index_ = UINT32_MAX;
+  VkCommandPool command_pool_ = VK_NULL_HANDLE;
+  VkDescriptorSetLayout descriptor_set_layout_ = VK_NULL_HANDLE;
+  VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
+  float timestamp_period_ = 1.0f;
+  bool runtime_ready_ = false;
+  mutable std::mutex lifecycle_mutex_;
+  mutable std::atomic<uint64_t> shader_compile_counter_{0};
+
+  VkPipeline addPipeline = VK_NULL_HANDLE;
+  VkPipeline mulPipeline = VK_NULL_HANDLE;
+  VkPipeline subPipeline = VK_NULL_HANDLE;
+  VkPipeline divPipeline = VK_NULL_HANDLE;
+  VkPipeline addBCPipeline = VK_NULL_HANDLE;
+  VkPipeline mulBCPipeline = VK_NULL_HANDLE;
+  VkPipeline subBCPipeline = VK_NULL_HANDLE;
+  VkPipeline divBCPipeline = VK_NULL_HANDLE;
+  VkPipeline sumToShapePipeline = VK_NULL_HANDLE;
+  VkPipeline reluPipeline = VK_NULL_HANDLE;
+  VkPipeline reluBackwardPipeline = VK_NULL_HANDLE;
+  VkPipeline updatePipeline = VK_NULL_HANDLE;
+  VkPipeline sigmoidPipeline = VK_NULL_HANDLE;
+  VkPipeline sigmoidBackwardPipeline = VK_NULL_HANDLE;
+  VkPipeline expPipeline = VK_NULL_HANDLE;
+  VkPipeline logPipeline = VK_NULL_HANDLE;
+  VkPipeline sqrtPipeline = VK_NULL_HANDLE;
+  VkPipeline softmaxPipeline = VK_NULL_HANDLE;
+  VkPipeline softmaxBackwardPipeline = VK_NULL_HANDLE;
+  VkPipeline mseLossPipeline = VK_NULL_HANDLE;
+  VkPipeline mseLossBackwardPipeline = VK_NULL_HANDLE;
+  VkPipeline crossEntropyPipeline = VK_NULL_HANDLE;
+  VkPipeline crossEntropyBackwardPipeline = VK_NULL_HANDLE;
+  VkPipeline rsqrtPipeline = VK_NULL_HANDLE;
+  VkPipeline sinPipeline = VK_NULL_HANDLE;
+  VkPipeline cosPipeline = VK_NULL_HANDLE;
+  VkPipeline meanLastDimPipeline = VK_NULL_HANDLE;
 
   VkPipeline adamStepPipeline;
 

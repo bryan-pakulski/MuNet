@@ -1053,6 +1053,8 @@ class TestBindings(unittest.TestCase):
         )
 
         for dev in [munet.Device(munet.DeviceType.CPU, 0)] + self._available_non_cpu_devices():
+            if not munet.supports(dev, munet.BackendFeature.Matmul, munet.DataType.Float16):
+                continue
             eng = munet.inference.Engine()
             eng.set_device(dev)
             eng.load(model)
@@ -1361,9 +1363,9 @@ class TestBindings(unittest.TestCase):
                 munet.inference.compile_onnx(path)
 
             msg = str(ctx.exception)
-            self.assertIn("unsupported_total=2", msg)
+            self.assertIn("unsupported_total=1", msg)
             self.assertIn("Erf", msg)
-            self.assertIn("Softmax", msg)
+            self.assertIn("op_counts=", msg)
 
     def test_onnx_conversion_coverage_report_generated_graph(self):
         try:

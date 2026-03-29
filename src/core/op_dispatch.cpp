@@ -5,6 +5,7 @@
 
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -23,8 +24,32 @@ enum class DispatchFallbackReason {
 
 struct DispatchFallbackRule;
 
+struct FallbackTelemetryState {
+  std::mutex mutex;
+  uint64_t accelerator_cpu_fallback_total = 0;
+  std::unordered_map<std::string, uint64_t> accelerator_cpu_fallback_counters;
+};
+
+FallbackTelemetryState &fallback_telemetry_state() {
+  static FallbackTelemetryState state;
+  return state;
+}
+
+bool is_accelerator_device(DeviceType type) {
+  return type == DeviceType::CUDA || type == DeviceType::VULKAN;
+}
+
 bool is_dispatch_decision_dump_enabled() {
   const char *env = std::getenv("MUNET_DISPATCH_DECISION_DUMP");
+  if (!env) {
+    return false;
+  }
+  return std::string(env) == "1" || std::string(env) == "true" ||
+         std::string(env) == "TRUE";
+}
+
+bool is_fallback_fail_fast_enabled() {
+  const char *env = std::getenv("MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK");
   if (!env) {
     return false;
   }
@@ -328,6 +353,43 @@ void maybe_log_dispatch_decision(const std::string &line) {
   MUNET_INFO << line << std::endl;
 }
 
+void record_accelerator_fallback_telemetry(const OpMetadata &meta,
+                                           const Tensor &tensor,
+                                           const char *reason) {
+  if (!is_accelerator_device(tensor.device().type)) {
+    return;
+  }
+  const std::string key =
+      std::string("device=") + tensor.device().to_string() +
+      ";backend=" + tensor.impl_->backend().name() + ";op=" + meta.name +
+      ";dtype=" + dtype_name(tensor.dtype()) + ";reason=" + reason;
+
+  auto &state = fallback_telemetry_state();
+  uint64_t total = 0;
+  uint64_t key_count = 0;
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    total = ++state.accelerator_cpu_fallback_total;
+    key_count = ++state.accelerator_cpu_fallback_counters[key];
+  }
+  MUNET_WARNING << "accelerator_cpu_fallback total=" << total
+                << " key_count=" << key_count << " " << key << std::endl;
+}
+
+void maybe_fail_fast_on_accelerator_fallback(const OpMetadata &meta,
+                                             const Tensor &tensor,
+                                             const char *reason) {
+  if (!is_accelerator_device(tensor.device().type) ||
+      !is_fallback_fail_fast_enabled()) {
+    return;
+  }
+  throw std::runtime_error(
+      std::string("Fail-fast: accelerator tensor fell back to CPU unexpectedly; op=") +
+      meta.name + " device=" + tensor.device().to_string() +
+      " backend=" + tensor.impl_->backend().name() + " reason=" + reason +
+      ". Disable by unsetting MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK.");
+}
+
 const std::vector<DispatchFallbackRule> &dispatch_fallback_rules() {
   // Phase 5 policy matrix:
   // Prefer feature-level rules per backend, with op-level exceptions only when
@@ -615,6 +677,10 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   // Stage 1: metadata validation.
   record_dispatch_stage("metadata_validation", meta, tensor, timer.get());
   if (auto stage1 = stage_metadata_validation(meta, tensor, timer.get())) {
+    if (stage1->use_cpu_fallback) {
+      record_accelerator_fallback_telemetry(meta, tensor, "metadata");
+      maybe_fail_fast_on_accelerator_fallback(meta, tensor, "metadata");
+    }
     return *stage1;
   }
 
@@ -639,12 +705,33 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
     maybe_log_dispatch_decision(dispatch_decision_detail_line(
         meta, tensor, "policy_engine_evaluation", "cpu_fallback",
         queried_feature, &policy.support, policy.matched_rule, reason));
+    record_accelerator_fallback_telemetry(
+        meta, tensor, dispatch_fallback_reason_name(reason));
+    maybe_fail_fast_on_accelerator_fallback(
+        meta, tensor, dispatch_fallback_reason_name(reason));
     return {meta, false, true, policy.support};
   }
 
   // Stage 4: final decision/error.
   record_dispatch_stage("final_decision_error", meta, tensor, timer.get());
   stage_final_decision_error(meta, tensor, queried_feature, policy, timer.get());
+}
+
+FallbackTelemetrySnapshot fallback_telemetry_snapshot() {
+  auto &state = fallback_telemetry_state();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  FallbackTelemetrySnapshot snapshot;
+  snapshot.accelerator_cpu_fallback_total = state.accelerator_cpu_fallback_total;
+  snapshot.accelerator_cpu_fallback_counters =
+      state.accelerator_cpu_fallback_counters;
+  return snapshot;
+}
+
+void reset_fallback_telemetry() {
+  auto &state = fallback_telemetry_state();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  state.accelerator_cpu_fallback_total = 0;
+  state.accelerator_cpu_fallback_counters.clear();
 }
 
 std::string dispatch_policy_snapshot() {

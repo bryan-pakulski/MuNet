@@ -19,7 +19,11 @@ def _detect_accelerators(max_index: int = 4):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
-                _ = munet.ones((1,), device=dev)
+                a = munet.ones((1,), device=dev, dtype=munet.DataType.Float32)
+                b = munet.ones((1,), device=dev, dtype=munet.DataType.Float32)
+                c = a + b
+                if float(c.to(CPU).item()) != 2.0:
+                    raise RuntimeError("accelerator probe produced unexpected value")
             except RuntimeError:
                 continue
             devices.append(dev)
@@ -27,11 +31,21 @@ def _detect_accelerators(max_index: int = 4):
 
 
 def _allreduce_grads_via_runtime(param_replicas):
-    threads = [threading.Thread(target=lambda p=p: p.grad.all_reduce()) for p in param_replicas]
+    errors = []
+
+    def _target(param):
+        try:
+            param.grad.all_reduce()
+        except Exception as exc:  # pragma: no cover - environment dependent
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_target, args=(p,)) for p in param_replicas]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
+    if errors:
+        raise RuntimeError(f"all_reduce failed: {errors[0]}")
 
     # Runtime all_reduce computes SUM; convert to mean for SGD parity.
     scale = 1.0 / float(len(param_replicas))
@@ -39,82 +53,126 @@ def _allreduce_grads_via_runtime(param_replicas):
         p.grad.replace_(p.grad * scale)
 
 
-def _build_replicated_linear(accelerators):
-    w_cpu = munet.Tensor((4, 1), device=CPU, dtype=munet.DataType.Float32, requires_grad=True)
-    w_cpu.uniform_(-0.2, 0.2)
-    b_cpu = munet.Tensor((1,), device=CPU, dtype=munet.DataType.Float32, requires_grad=True)
-    b_cpu.fill_(0.0)
-
-    # Create one model replica per accelerator.
-    w_replicas = [w_cpu.to(dev) for dev in accelerators]
-    b_replicas = [b_cpu.to(dev) for dev in accelerators]
-
-    # Ensure autograd tracking on replicas.
-    for w in w_replicas:
-        w.requires_grad = True
-    for b in b_replicas:
-        b.requires_grad = True
-
-    return w_replicas, b_replicas
+def _require_devices(device_specs):
+    available = _detect_accelerators(max_index=4)
+    available_set = {(d.type, d.index) for d in available}
+    wanted = []
+    for dev_type, index in device_specs:
+        if (dev_type, index) not in available_set:
+            pytest.skip(
+                f"Required device {dev_type.name}:{index} unavailable for scenario"
+            )
+        wanted.append(munet.Device(dev_type, index))
+    return wanted
 
 
-def test_multigpu_data_parallel_gradient_allreduce_like_training_step():
-    accelerators = _detect_accelerators()
-    if len(accelerators) < 2:
-        pytest.skip("Need at least two accelerator devices (CUDA/Vulkan) for multi-device all-reduce training test")
+def _build_replicated_mlp(accelerators):
+    rng = np.random.default_rng(7)
+    w1_np = rng.normal(0.0, 0.15, size=(4, 8)).astype(np.float32)
+    b1_np = np.zeros((8,), dtype=np.float32)
+    w2_np = rng.normal(0.0, 0.15, size=(8, 1)).astype(np.float32)
+    b2_np = np.zeros((1,), dtype=np.float32)
 
-    # Set all-reduce env knobs for parity with runtime expectations used by C++ paths.
+    def _replica(arr, dev):
+        t = munet.from_numpy(arr).to(dev).detach()
+        t.requires_grad = True
+        return t
+
+    w1 = [_replica(w1_np, dev) for dev in accelerators]
+    b1 = [_replica(b1_np, dev) for dev in accelerators]
+    w2 = [_replica(w2_np, dev) for dev in accelerators]
+    b2 = [_replica(b2_np, dev) for dev in accelerators]
+    return w1, b1, w2, b2
+
+
+def _forward_mlp(x, w1, b1, w2, b2):
+    h = (x.matmul(w1) + b1).relu()
+    return h.matmul(w2) + b2
+
+
+def _assert_tensors_synced_across_replicas(tensors, rtol=1e-4, atol=1e-5):
+    base = np.array(tensors[0].detach().to(CPU), copy=False)
+    for t in tensors[1:]:
+        other = np.array(t.detach().to(CPU), copy=False)
+        np.testing.assert_allclose(base, other, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize(
+    "scenario_name,device_specs",
+    [
+        pytest.param(
+            "cuda0_vulkan1",
+            [(munet.DeviceType.CUDA, 0), (munet.DeviceType.VULKAN, 1)],
+            id="cuda0_vulkan1",
+        ),
+        pytest.param(
+            "vulkan0_vulkan1",
+            [(munet.DeviceType.VULKAN, 0), (munet.DeviceType.VULKAN, 1)],
+            id="vulkan0_vulkan1",
+        ),
+    ],
+)
+def test_multigpu_e2e_complex_training_scenarios(scenario_name, device_specs):
+    accelerators = _require_devices(device_specs)
+    assert len(accelerators) == 2
+
+    # Set all-reduce env knobs to match active participants in this scenario.
     os.environ["MUNET_ALLREDUCE_WORLD_SIZE"] = str(len(accelerators))
     os.environ["MUNET_ALLREDUCE_MODE"] = "host_fallback"
-    os.environ["MUNET_ALLREDUCE_GROUP"] = "pytest_multigpu_demo"
+    os.environ["MUNET_ALLREDUCE_GROUP"] = f"pytest_multigpu_{scenario_name}"
+    os.environ["MUNET_ALLREDUCE_TIMEOUT_MS"] = "30000"
 
-    w_replicas, b_replicas = _build_replicated_linear(accelerators)
+    w1, b1, w2, b2 = _build_replicated_mlp(accelerators)
 
-    # Same batch split over replicas.
-    x_np = np.array(
-        [[1.0, 0.5, -0.2, 0.3],
-         [0.2, -1.0, 0.5, 0.7],
-         [0.3, 0.8, -0.5, 0.4],
-         [0.9, -0.1, 0.2, -0.6]],
-        dtype=np.float32,
-    )
-    y_np = np.array([[0.5], [0.1], [0.7], [0.3]], dtype=np.float32)
+    rng = np.random.default_rng(42)
+    x_np = rng.normal(size=(64, 4)).astype(np.float32)
+    true_w = np.array([[0.4], [-0.3], [0.2], [0.6]], dtype=np.float32)
+    true_b = np.array([0.15], dtype=np.float32)
+    y_np = x_np @ true_w + true_b
 
-    losses = []
-    for rank, dev in enumerate(accelerators[:2]):
-        xs = munet.from_numpy(x_np[rank * 2 : (rank + 1) * 2]).to(dev)
-        ys = munet.from_numpy(y_np[rank * 2 : (rank + 1) * 2]).to(dev)
-        preds = xs.matmul(w_replicas[rank]) + b_replicas[rank]
-        loss = munet.mse_loss(preds, ys)
-        loss.backward()
-        losses.append(loss)
+    lr = 0.03
+    steps = 4
+    first_mean_loss = None
+    last_mean_loss = None
+    shard = len(x_np) // len(accelerators)
 
-    _allreduce_grads_via_runtime([w_replicas[0], w_replicas[1]])
-    _allreduce_grads_via_runtime([b_replicas[0], b_replicas[1]])
+    for _ in range(steps):
+        losses = []
+        for rank, dev in enumerate(accelerators):
+            xs = munet.from_numpy(x_np[rank * shard:(rank + 1) * shard]).to(dev)
+            ys = munet.from_numpy(y_np[rank * shard:(rank + 1) * shard]).to(dev)
+            pred = _forward_mlp(xs, w1[rank], b1[rank], w2[rank], b2[rank])
+            loss = pred.mse_loss(ys)
+            loss.backward()
+            losses.append(float(loss.detach().to(CPU).item()))
 
-    # After all-reduce average, gradients should be equal across replicas.
-    w0g = np.array(w_replicas[0].grad.to(CPU), copy=False)
-    w1g = np.array(w_replicas[1].grad.to(CPU), copy=False)
-    b0g = np.array(b_replicas[0].grad.to(CPU), copy=False)
-    b1g = np.array(b_replicas[1].grad.to(CPU), copy=False)
+        _allreduce_grads_via_runtime(w1)
+        _allreduce_grads_via_runtime(b1)
+        _allreduce_grads_via_runtime(w2)
+        _allreduce_grads_via_runtime(b2)
 
-    np.testing.assert_allclose(w0g, w1g, rtol=1e-4, atol=1e-5)
-    np.testing.assert_allclose(b0g, b1g, rtol=1e-4, atol=1e-5)
+        # Brutal invariants: gradients and params should remain synchronized.
+        _assert_tensors_synced_across_replicas([t.grad for t in w1])
+        _assert_tensors_synced_across_replicas([t.grad for t in b1])
+        _assert_tensors_synced_across_replicas([t.grad for t in w2])
+        _assert_tensors_synced_across_replicas([t.grad for t in b2])
 
-    # Apply one synchronized step and confirm params stay in sync.
-    lr = 0.05
-    for w in w_replicas[:2]:
-        w.step(lr)
-    for b in b_replicas[:2]:
-        b.step(lr)
+        for group in (w1, b1, w2, b2):
+            for t in group:
+                t.step(lr)
 
-    w0 = np.array(w_replicas[0].to(CPU), copy=False)
-    w1 = np.array(w_replicas[1].to(CPU), copy=False)
-    b0 = np.array(b_replicas[0].to(CPU), copy=False)
-    b1 = np.array(b_replicas[1].to(CPU), copy=False)
+        _assert_tensors_synced_across_replicas(w1)
+        _assert_tensors_synced_across_replicas(b1)
+        _assert_tensors_synced_across_replicas(w2)
+        _assert_tensors_synced_across_replicas(b2)
 
-    np.testing.assert_allclose(w0, w1, rtol=1e-4, atol=1e-5)
-    np.testing.assert_allclose(b0, b1, rtol=1e-4, atol=1e-5)
+        mean_loss = float(np.mean(losses))
+        if first_mean_loss is None:
+            first_mean_loss = mean_loss
+        last_mean_loss = mean_loss
+
+    assert first_mean_loss is not None and last_mean_loss is not None
+    assert last_mean_loss <= first_mean_loss * 1.25
 
 
 def test_python_all_reduce_binding_cpu_smoke():

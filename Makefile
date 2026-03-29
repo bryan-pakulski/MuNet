@@ -10,6 +10,7 @@ BUILD_DEBUG := $(BUILD_ROOT)/debug
 BUILD_RELEASE := $(BUILD_ROOT)/release
 BUILD_ASAN := $(BUILD_ROOT)/asan
 BUILD_GPU := $(BUILD_ROOT)/gpu-debug
+PYTEST ?= pytest
 
 .DEFAULT_GOAL := help
 
@@ -114,7 +115,8 @@ perf-test: build-release
 	MUNET_RUN_PERF_TESTS=1 ./$(BUILD_RELEASE)/munet_tests --gtest_filter=PerformanceTest.*
 
 py-test: build-debug
-	cd tests && python3 test_python.py && python3 test_pytorch_interop.py
+	PYTHONPATH="$(abspath python_src):$(abspath $(BUILD_DEBUG)):$$PYTHONPATH" \
+	$(PYTEST) -q tests
 
 dtype-coverage-report: build-debug
 	./$(BUILD_DEBUG)/munet_dtype_coverage_report > ./$(BUILD_DEBUG)/dtype_coverage_report.csv

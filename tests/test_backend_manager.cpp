@@ -1,9 +1,13 @@
 #include "backend.hpp"
 #include "backend/cpu_backend.hpp"
+#ifdef MUNET_USE_CUDA
+#include "backend/cuda_backend.hpp"
+#endif
 #include "core/all_reduce_runtime.hpp"
 #include "core/op_dispatch.hpp"
 #include "core/util/profiler.hpp"
 #include "tensor.hpp"
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -81,12 +85,49 @@ bool backend_available(DeviceType type) {
     return true;
   }
   try {
-    (void)BackendManager::get(Device{type, 0});
+    Device d{type, 0};
+    Tensor a({1}, d, DataType::Float32);
+    Tensor b({1}, d, DataType::Float32);
+    a.fill_(2.0f);
+    b.fill_(3.0f);
+    Tensor out = a + b;
+    out.impl_->backend().synchronize();
+    Tensor out_cpu = out.to({DeviceType::CPU, 0});
+    const float value = static_cast<const float *>(out_cpu.data())[0];
+    if (std::abs(value - 5.0f) > 1e-4f) {
+      return false;
+    }
     return true;
   } catch (const std::runtime_error &) {
     return false;
+  } catch (...) {
+    return false;
   }
 }
+
+void restore_cuda_unavailable_factory_for_tests() {
+  BackendManager::registry().clear_cache(DeviceType::CUDA);
+#ifdef MUNET_USE_CUDA
+  BackendManager::register_backend(DeviceType::CUDA, [](Device device) {
+    return std::make_shared<CUDABackend>(device.index);
+  });
+#else
+  BackendManager::register_backend(DeviceType::CUDA, [](Device) {
+    throw std::runtime_error("CUDA backend not compiled");
+    return std::shared_ptr<Backend>{};
+  });
+#endif
+}
+
+class ScopedCudaBackendOverride {
+public:
+  explicit ScopedCudaBackendOverride(BackendManager::BackendFactory factory) {
+    BackendManager::registry().clear_cache(DeviceType::CUDA);
+    BackendManager::register_backend(DeviceType::CUDA, std::move(factory));
+  }
+
+  ~ScopedCudaBackendOverride() { restore_cuda_unavailable_factory_for_tests(); }
+};
 
 class PartialMatmulBackend : public Backend,
                              public BackendAllocationTransferCapability,
@@ -1224,6 +1265,55 @@ TEST(BackendManagerTest, ProfilingCapturesDirectionalTransferMarkers) {
   EXPECT_NE(snapshot.stats.find("transfer.cpu_copy"), snapshot.stats.end());
   EXPECT_NE(snapshot.stats.find("transfer.dtype_convert"),
             snapshot.stats.end());
+}
+
+TEST(BackendManagerTest,
+     AcceleratorCpuFallbackTelemetryTracksUnexpectedFallbacks) {
+  const ScopedCudaBackendOverride scoped_cuda_override([](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+  ops::reset_fallback_telemetry();
+
+  const Device cuda{DeviceType::CUDA, 0};
+  Tensor a({2}, cuda, DataType::Float32);
+  Tensor b({2}, cuda, DataType::Float32);
+  a.fill_(1.0f);
+  b.fill_(2.0f);
+
+  const auto decision = ops::resolve_dispatch(ops::OpId::Add, a);
+  EXPECT_TRUE(decision.use_cpu_fallback);
+
+  const auto snapshot = ops::fallback_telemetry_snapshot();
+  EXPECT_GE(snapshot.accelerator_cpu_fallback_total, 1u);
+  bool saw_add = false;
+  for (const auto &entry : snapshot.accelerator_cpu_fallback_counters) {
+    if (entry.first.find("op=Add") != std::string::npos) {
+      saw_add = true;
+      EXPECT_GE(entry.second, 1u);
+    }
+  }
+  EXPECT_TRUE(saw_add);
+}
+
+TEST(BackendManagerTest,
+     AcceleratorCpuFallbackFailFastEnvVarTurnsFallbackIntoError) {
+  const ScopedCudaBackendOverride scoped_cuda_override([](Device device) {
+    return std::make_shared<PartialMatmulBackend>(device.index);
+  });
+  ops::reset_fallback_telemetry();
+  const ScopedEnvVar fail_fast("MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK", "1");
+
+  const Device cuda{DeviceType::CUDA, 0};
+  Tensor a({2}, cuda, DataType::Float32);
+  Tensor b({2}, cuda, DataType::Float32);
+  a.fill_(1.0f);
+  b.fill_(2.0f);
+
+  EXPECT_THROW((void)ops::resolve_dispatch(ops::OpId::Add, a),
+               std::runtime_error);
+
+  const auto snapshot = ops::fallback_telemetry_snapshot();
+  EXPECT_GE(snapshot.accelerator_cpu_fallback_total, 1u);
 }
 
 TEST(BackendManagerTest, TraceContextCorrelatesTransferDispatchAndLogs) {

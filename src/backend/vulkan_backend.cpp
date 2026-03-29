@@ -4,16 +4,23 @@
 #include "cpu_backend.hpp"
 #include "storage.hpp"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
+#include <unistd.h>
 
 // --- Error Handling Macro ---
 #define VK_CHECK(call)                                                         \
@@ -32,53 +39,6 @@ namespace munet {
 static const int MAX_FRAMES_IN_FLIGHT = 2;
 static const int BATCH_SIZE_LIMIT = 2048; // Flush after this many ops
 static const int MAX_DESCRIPTORS_PER_FRAME = 2048;
-
-// --- Global Vulkan State ---
-static VkInstance instance;
-static VkPhysicalDevice physicalDevice;
-static VkDevice device;
-static VkQueue computeQueue;
-static uint32_t queueFamilyIndex = UINT32_MAX;
-static VkCommandPool commandPool;
-static VkDescriptorSetLayout descriptorSetLayout;
-
-// Per-Frame Resources
-static VkDescriptorPool descriptorPools[MAX_FRAMES_IN_FLIGHT];
-static std::vector<VkDescriptorSet> frameDescriptorSets[MAX_FRAMES_IN_FLIGHT];
-static uint32_t descriptorSetCursor[MAX_FRAMES_IN_FLIGHT] = {0};
-static VkCommandBuffer commandBuffers[MAX_FRAMES_IN_FLIGHT];
-static VkFence inFlightFences[MAX_FRAMES_IN_FLIGHT];
-static VkQueryPool queryPools[MAX_FRAMES_IN_FLIGHT];
-
-static float timestampPeriod = 1.0f;
-static bool vulkan_runtime_ready = false;
-
-// --- Allocator State ---
-static std::unordered_map<size_t, std::vector<uint64_t>> free_pool;
-static std::unordered_map<uint64_t, size_t> allocation_sizes;
-static std::unordered_map<uint64_t, VkDeviceMemory> allocation_memory;
-static std::vector<uint64_t> deferred_frees[MAX_FRAMES_IN_FLIGHT];
-
-// --- Persistent Staging Buffers ---
-static VkBuffer stagingBuffer = VK_NULL_HANDLE;
-static VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
-static size_t stagingOffset = 0;
-static size_t stagingSize = 0;
-static void *stagingMapped = nullptr;
-static VkCommandBuffer immediateCmdBuffer = VK_NULL_HANDLE;
-
-static VkPipelineLayout pipelineLayout;
-static VkPipeline addPipeline, mulPipeline, subPipeline, divPipeline,
-    matmulPipeline, batchedMatmulPipeline;
-static VkPipeline addBCPipeline, mulBCPipeline, subBCPipeline, divBCPipeline,
-    sumToShapePipeline;
-static VkPipeline reluPipeline, reluBackwardPipeline, updatePipeline;
-static VkPipeline sigmoidPipeline, sigmoidBackwardPipeline;
-static VkPipeline expPipeline, logPipeline, sqrtPipeline;
-static VkPipeline softmaxPipeline, softmaxBackwardPipeline;
-static VkPipeline mseLossPipeline, mseLossBackwardPipeline;
-static VkPipeline crossEntropyPipeline, crossEntropyBackwardPipeline;
-static VkPipeline rsqrtPipeline, sinPipeline, cosPipeline, meanLastDimPipeline;
 
 // --- Helpers ---
 static inline std::chrono::high_resolution_clock::time_point profile_now() {
@@ -119,10 +79,10 @@ static size_t round_up_alloc_size(size_t bytes) {
   return p;
 }
 
-static uint32_t findMemoryType(uint32_t typeFilter,
-                               VkMemoryPropertyFlags properties) {
+uint32_t VulkanBackend::find_memory_type(
+    uint32_t typeFilter, VkMemoryPropertyFlags properties) const {
   VkPhysicalDeviceMemoryProperties memProperties;
-  vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+  vkGetPhysicalDeviceMemoryProperties(physical_device_, &memProperties);
   for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
     if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags &
                                     properties) == properties) {
@@ -132,33 +92,52 @@ static uint32_t findMemoryType(uint32_t typeFilter,
   throw std::runtime_error("Failed to find suitable Vulkan memory type!");
 }
 
-static void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
-                         VkMemoryPropertyFlags properties, VkBuffer &buffer,
-                         VkDeviceMemory &bufferMemory) {
+void VulkanBackend::create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                                  VkMemoryPropertyFlags properties,
+                                  VkBuffer &buffer,
+                                  VkDeviceMemory &bufferMemory) const {
   VkBufferCreateInfo bufferInfo{};
   bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   bufferInfo.size = size;
   bufferInfo.usage = usage;
   bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  VK_CHECK(vkCreateBuffer(device, &bufferInfo, nullptr, &buffer));
+  VK_CHECK(vkCreateBuffer(device_, &bufferInfo, nullptr, &buffer));
 
   VkMemoryRequirements memReqs;
-  vkGetBufferMemoryRequirements(device, buffer, &memReqs);
+  vkGetBufferMemoryRequirements(device_, buffer, &memReqs);
 
   VkMemoryAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   allocInfo.allocationSize = memReqs.size;
   allocInfo.memoryTypeIndex =
-      findMemoryType(memReqs.memoryTypeBits, properties);
+      find_memory_type(memReqs.memoryTypeBits, properties);
 
-  VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory));
-  VK_CHECK(vkBindBufferMemory(device, buffer, bufferMemory, 0));
+  VK_CHECK(vkAllocateMemory(device_, &allocInfo, nullptr, &bufferMemory));
+  VK_CHECK(vkBindBufferMemory(device_, buffer, bufferMemory, 0));
 }
 
-static std::vector<uint32_t> compileShader(const std::string &name,
-                                           const std::string &source) {
-  std::string compPath = "/tmp/" + name + ".comp";
-  std::string spvPath = "/tmp/" + name + ".spv";
+std::vector<uint32_t>
+VulkanBackend::compile_shader(const std::string &name,
+                              const std::string &source) const {
+  const uint64_t serial = shader_compile_counter_.fetch_add(1);
+  const auto tid_hash =
+      std::hash<std::thread::id>{}(std::this_thread::get_id());
+  std::ostringstream base_name;
+  base_name << "munet_vk_" << name << "_" << getpid() << "_" << tid_hash << "_"
+            << serial;
+  const std::string base =
+      (std::filesystem::temp_directory_path() / base_name.str()).string();
+  const std::string compPath = base + ".comp";
+  const std::string spvPath = base + ".spv";
+  struct TempFileCleanup {
+    std::string comp_path;
+    std::string spv_path;
+    ~TempFileCleanup() {
+      std::remove(comp_path.c_str());
+      std::remove(spv_path.c_str());
+    }
+  } cleanup{compPath, spvPath};
+
   std::ofstream out(compPath);
   out << source;
   out.close();
@@ -174,45 +153,49 @@ static std::vector<uint32_t> compileShader(const std::string &name,
   return buffer;
 }
 
-static void allocate_frame_descriptor_sets(int frame) {
+void VulkanBackend::allocate_frame_descriptor_sets(int frame) {
   std::vector<VkDescriptorSetLayout> layouts(MAX_DESCRIPTORS_PER_FRAME,
-                                             descriptorSetLayout);
-  frameDescriptorSets[frame].resize(MAX_DESCRIPTORS_PER_FRAME);
+                                             descriptor_set_layout_);
+  runtime_->frame_descriptor_sets[frame].resize(MAX_DESCRIPTORS_PER_FRAME);
 
   VkDescriptorSetAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-  allocInfo.descriptorPool = descriptorPools[frame];
+  allocInfo.descriptorPool = runtime_->descriptor_pools[frame];
   allocInfo.descriptorSetCount = MAX_DESCRIPTORS_PER_FRAME;
   allocInfo.pSetLayouts = layouts.data();
 
-  VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo,
-                                    frameDescriptorSets[frame].data()));
-  descriptorSetCursor[frame] = 0;
+  VK_CHECK(vkAllocateDescriptorSets(device_, &allocInfo,
+                                    runtime_->frame_descriptor_sets[frame].data()));
+  runtime_->descriptor_set_cursor[frame] = 0;
 }
 
 void VulkanBackend::reset_runtime_state() {
   runtime_->current_frame = 0;
   runtime_->current_batch_size = 0;
   runtime_->is_recording = false;
-  queueFamilyIndex = UINT32_MAX;
+  runtime_->immediate_cmd_buffer = VK_NULL_HANDLE;
+  queue_family_index_ = UINT32_MAX;
 
-  free_pool.clear();
-  allocation_sizes.clear();
-  allocation_memory.clear();
+  runtime_->free_pool.clear();
+  runtime_->allocation_sizes.clear();
+  runtime_->allocation_memory.clear();
   for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-    frameDescriptorSets[i].clear();
-    descriptorSetCursor[i] = 0;
-    deferred_frees[i].clear();
+    runtime_->frame_descriptor_sets[i].clear();
+    runtime_->descriptor_set_cursor[i] = 0;
+    runtime_->deferred_frees[i].clear();
   }
 
-  stagingOffset = 0;
-  stagingSize = 0;
-  stagingMapped = nullptr;
+  runtime_->staging_offset = 0;
+  runtime_->staging_size = 0;
+  runtime_->staging_mapped = nullptr;
+  runtime_->staging_buffer = VK_NULL_HANDLE;
+  runtime_->staging_memory = VK_NULL_HANDLE;
 }
 
 VulkanBackend::VulkanBackend(int device_index)
     : device_index_(device_index),
       runtime_(std::make_unique<VulkanRuntimeState>()) {
+  std::lock_guard<std::mutex> lock(lifecycle_mutex_);
   reset_runtime_state();
 
   VkApplicationInfo appInfo{};
@@ -221,16 +204,16 @@ VulkanBackend::VulkanBackend(int device_index)
   VkInstanceCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   createInfo.pApplicationInfo = &appInfo;
-  VK_CHECK(vkCreateInstance(&createInfo, nullptr, &instance));
+  VK_CHECK(vkCreateInstance(&createInfo, nullptr, &instance_));
 
   uint32_t deviceCount = 0;
-  vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+  vkEnumeratePhysicalDevices(instance_, &deviceCount, nullptr);
   if (deviceCount == 0) {
     throw std::runtime_error("No Vulkan physical devices found.");
   }
 
   std::vector<VkPhysicalDevice> devices(deviceCount);
-  vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+  vkEnumeratePhysicalDevices(instance_, &deviceCount, devices.data());
 
   if (device_index_ < 0 || device_index_ >= static_cast<int>(deviceCount)) {
     throw std::runtime_error("Requested Vulkan device index out of range: " +
@@ -238,48 +221,48 @@ VulkanBackend::VulkanBackend(int device_index)
                              std::to_string(deviceCount) + ")");
   }
 
-  physicalDevice = devices[static_cast<size_t>(device_index_)];
+  physical_device_ = devices[static_cast<size_t>(device_index_)];
 
   VkPhysicalDeviceProperties props;
-  vkGetPhysicalDeviceProperties(physicalDevice, &props);
-  timestampPeriod = props.limits.timestampPeriod;
+  vkGetPhysicalDeviceProperties(physical_device_, &props);
+  timestamp_period_ = props.limits.timestampPeriod;
   MUNET_INFO << "Vulkan backend using device index " << device_index_ << " ("
              << props.deviceName << ")" << std::endl;
 
   uint32_t queueFamilyCount = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
+  vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queueFamilyCount,
                                            nullptr);
   std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
+  vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queueFamilyCount,
                                            queueFamilies.data());
   for (uint32_t i = 0; i < queueFamilies.size(); i++) {
     if (queueFamilies[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
-      queueFamilyIndex = i;
+      queue_family_index_ = i;
       break;
     }
   }
-  if (queueFamilyIndex == UINT32_MAX) {
+  if (queue_family_index_ == UINT32_MAX) {
     throw std::runtime_error("No Vulkan compute queue family found.");
   }
 
   float queuePriority = 1.0f;
   VkDeviceQueueCreateInfo queueCreateInfo{};
   queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-  queueCreateInfo.queueFamilyIndex = queueFamilyIndex;
+  queueCreateInfo.queueFamilyIndex = queue_family_index_;
   queueCreateInfo.queueCount = 1;
   queueCreateInfo.pQueuePriorities = &queuePriority;
   VkDeviceCreateInfo deviceCreateInfo{};
   deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
   deviceCreateInfo.queueCreateInfoCount = 1;
-  VK_CHECK(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device));
-  vkGetDeviceQueue(device, queueFamilyIndex, 0, &computeQueue);
+  VK_CHECK(vkCreateDevice(physical_device_, &deviceCreateInfo, nullptr, &device_));
+  vkGetDeviceQueue(device_, queue_family_index_, 0, &compute_queue_);
 
   VkCommandPoolCreateInfo poolInfo{};
   poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  poolInfo.queueFamilyIndex = queueFamilyIndex;
+  poolInfo.queueFamilyIndex = queue_family_index_;
   poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  VK_CHECK(vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool));
+  VK_CHECK(vkCreateCommandPool(device_, &poolInfo, nullptr, &command_pool_));
 
   // Layouts: Bindings 0 through 7
   VkDescriptorSetLayoutBinding bindings[8] = {};
@@ -293,33 +276,34 @@ VulkanBackend::VulkanBackend(int device_index)
   layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
   layoutInfo.bindingCount = 8;
   layoutInfo.pBindings = bindings;
-  VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
-                                       &descriptorSetLayout));
+  VK_CHECK(vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
+                                       &descriptor_set_layout_));
 
   VkPushConstantRange pushRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, 128};
   VkPipelineLayoutCreateInfo pLayoutInfo{};
   pLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   pLayoutInfo.setLayoutCount = 1;
-  pLayoutInfo.pSetLayouts = &descriptorSetLayout;
+  pLayoutInfo.pSetLayouts = &descriptor_set_layout_;
   pLayoutInfo.pushConstantRangeCount = 1;
   pLayoutInfo.pPushConstantRanges = &pushRange;
   VK_CHECK(
-      vkCreatePipelineLayout(device, &pLayoutInfo, nullptr, &pipelineLayout));
+      vkCreatePipelineLayout(device_, &pLayoutInfo, nullptr, &pipeline_layout_));
 
   // Allocate immediate command buffer for fast copies
   VkCommandBufferAllocateInfo immAlloc{};
   immAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  immAlloc.commandPool = commandPool;
+  immAlloc.commandPool = command_pool_;
   immAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   immAlloc.commandBufferCount = 1;
-  VK_CHECK(vkAllocateCommandBuffers(device, &immAlloc, &immediateCmdBuffer));
+  VK_CHECK(vkAllocateCommandBuffers(device_, &immAlloc, &runtime_->immediate_cmd_buffer));
 
   VkCommandBufferAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  allocInfo.commandPool = commandPool;
+  allocInfo.commandPool = command_pool_;
   allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   allocInfo.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
-  VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, commandBuffers));
+  VK_CHECK(vkAllocateCommandBuffers(device_, &allocInfo,
+                                    runtime_->command_buffers.data()));
 
   VkFenceCreateInfo fenceInfo{};
   fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -331,10 +315,10 @@ VulkanBackend::VulkanBackend(int device_index)
   queryPoolInfo.queryCount = 2; // Index 0 (Start), Index 1 (End)
 
   for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-    VK_CHECK(vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]));
+    VK_CHECK(vkCreateFence(device_, &fenceInfo, nullptr, &runtime_->in_flight_fences[i]));
     // Create query pools for profiling
     VK_CHECK(
-        vkCreateQueryPool(device, &queryPoolInfo, nullptr, &queryPools[i]));
+        vkCreateQueryPool(device_, &queryPoolInfo, nullptr, &runtime_->query_pools[i]));
     // Create one descriptor pool per frame
     // We have 8 bindings per set. So poolSize should be roughly 8x maxSets
     VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -344,32 +328,32 @@ VulkanBackend::VulkanBackend(int device_index)
     descPoolInfo.poolSizeCount = 1;
     descPoolInfo.pPoolSizes = &poolSize;
     descPoolInfo.maxSets = MAX_DESCRIPTORS_PER_FRAME;
-    VK_CHECK(vkCreateDescriptorPool(device, &descPoolInfo, nullptr,
-                                    &descriptorPools[i]));
+    VK_CHECK(vkCreateDescriptorPool(device_, &descPoolInfo, nullptr,
+                                    &runtime_->descriptor_pools[i]));
     allocate_frame_descriptor_sets(i);
   }
 
   // Load Kernels
   auto createComputePipeline = [&](const std::string &name,
                                    const std::string &glsl) {
-    std::vector<uint32_t> code = compileShader(name, glsl);
+    std::vector<uint32_t> code = compile_shader(name, glsl);
     VkShaderModuleCreateInfo smInfo{};
     smInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     smInfo.codeSize = code.size() * 4;
     smInfo.pCode = code.data();
     VkShaderModule sm;
-    VK_CHECK(vkCreateShaderModule(device, &smInfo, nullptr, &sm));
+    VK_CHECK(vkCreateShaderModule(device_, &smInfo, nullptr, &sm));
     VkComputePipelineCreateInfo compInfo{};
     compInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    compInfo.layout = pipelineLayout;
+    compInfo.layout = pipeline_layout_;
     compInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     compInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     compInfo.stage.module = sm;
     compInfo.stage.pName = "main";
     VkPipeline pipeline;
-    VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &compInfo,
+    VK_CHECK(vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &compInfo,
                                       nullptr, &pipeline));
-    vkDestroyShaderModule(device, sm, nullptr);
+    vkDestroyShaderModule(device_, sm, nullptr);
     return pipeline;
   };
 
@@ -2026,137 +2010,138 @@ void main() {
           dst[idx] = src[src_off];
       }
   )");
-  vulkan_runtime_ready = true;
+  runtime_ready_ = true;
 }
 
 VulkanBackend::~VulkanBackend() {
+  std::lock_guard<std::mutex> lock(lifecycle_mutex_);
   const bool can_destroy_runtime =
-      vulkan_runtime_ready && device != VK_NULL_HANDLE;
-  vulkan_runtime_ready = false;
+      runtime_ready_ && device_ != VK_NULL_HANDLE;
+  runtime_ready_ = false;
   if (can_destroy_runtime) {
-    vkDeviceWaitIdle(device); // Full stop
+    vkDeviceWaitIdle(device_); // Full stop
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-      vkDestroyFence(device, inFlightFences[i], nullptr);
-      vkDestroyDescriptorPool(device, descriptorPools[i], nullptr);
-      vkDestroyQueryPool(device, queryPools[i], nullptr);
+      vkDestroyFence(device_, runtime_->in_flight_fences[i], nullptr);
+      vkDestroyDescriptorPool(device_, runtime_->descriptor_pools[i], nullptr);
+      vkDestroyQueryPool(device_, runtime_->query_pools[i], nullptr);
     }
-    for (auto &pair : allocation_memory) {
-      vkDestroyBuffer(device, (VkBuffer)pair.first, nullptr);
-      vkFreeMemory(device, pair.second, nullptr);
+    for (auto &pair : runtime_->allocation_memory) {
+      vkDestroyBuffer(device_, (VkBuffer)pair.first, nullptr);
+      vkFreeMemory(device_, pair.second, nullptr);
     }
-    if (stagingBuffer) {
-      if (stagingMapped) {
-        vkUnmapMemory(device, stagingMemory);
+    if (runtime_->staging_buffer) {
+      if (runtime_->staging_mapped) {
+        vkUnmapMemory(device_, runtime_->staging_memory);
       }
-      vkDestroyBuffer(device, stagingBuffer, nullptr);
-      vkFreeMemory(device, stagingMemory, nullptr);
+      vkDestroyBuffer(device_, runtime_->staging_buffer, nullptr);
+      vkFreeMemory(device_, runtime_->staging_memory, nullptr);
     }
-    vkDestroyPipeline(device, adamStepPipeline, nullptr);
+    vkDestroyPipeline(device_, adamStepPipeline, nullptr);
 
-    vkDestroyPipeline(device, conv2dPipeline, nullptr);
-    vkDestroyPipeline(device, conv2dBackInputPipeline, nullptr);
-    vkDestroyPipeline(device, conv2dBackWeightPipeline, nullptr);
-    vkDestroyPipeline(device, conv2dBackBiasPipeline, nullptr);
+    vkDestroyPipeline(device_, conv2dPipeline, nullptr);
+    vkDestroyPipeline(device_, conv2dBackInputPipeline, nullptr);
+    vkDestroyPipeline(device_, conv2dBackWeightPipeline, nullptr);
+    vkDestroyPipeline(device_, conv2dBackBiasPipeline, nullptr);
 
-    vkDestroyPipeline(device, maxPoolPipeline, nullptr);
-    vkDestroyPipeline(device, maxPoolBackPipeline, nullptr);
+    vkDestroyPipeline(device_, maxPoolPipeline, nullptr);
+    vkDestroyPipeline(device_, maxPoolBackPipeline, nullptr);
 
-    vkDestroyPipeline(device, concatPipeline, nullptr);
-    vkDestroyPipeline(device, broadcastRowPipeline, nullptr);
+    vkDestroyPipeline(device_, concatPipeline, nullptr);
+    vkDestroyPipeline(device_, broadcastRowPipeline, nullptr);
 
-    vkDestroyPipeline(device, upsamplePipeline, nullptr);
-    vkDestroyPipeline(device, upsampleBackPipeline, nullptr);
+    vkDestroyPipeline(device_, upsamplePipeline, nullptr);
+    vkDestroyPipeline(device_, upsampleBackPipeline, nullptr);
 
-    vkDestroyPipeline(device, uniformPipeline, nullptr);
-    vkDestroyPipeline(device, sumPipeline, nullptr);
-    vkDestroyPipeline(device, toContiguousPipeline, nullptr);
+    vkDestroyPipeline(device_, uniformPipeline, nullptr);
+    vkDestroyPipeline(device_, sumPipeline, nullptr);
+    vkDestroyPipeline(device_, toContiguousPipeline, nullptr);
 
-    vkDestroyPipeline(device, bnCollectPipeline, nullptr);
-    vkDestroyPipeline(device, bnUpdatePipeline, nullptr);
-    vkDestroyPipeline(device, bnNormalizePipeline, nullptr);
-    vkDestroyPipeline(device, bnBackReducePipeline, nullptr);
-    vkDestroyPipeline(device, bnBackDxPipeline, nullptr);
+    vkDestroyPipeline(device_, bnCollectPipeline, nullptr);
+    vkDestroyPipeline(device_, bnUpdatePipeline, nullptr);
+    vkDestroyPipeline(device_, bnNormalizePipeline, nullptr);
+    vkDestroyPipeline(device_, bnBackReducePipeline, nullptr);
+    vkDestroyPipeline(device_, bnBackDxPipeline, nullptr);
 
-    vkDestroyPipeline(device, addPipeline, nullptr);
-    vkDestroyPipeline(device, mulPipeline, nullptr);
-    vkDestroyPipeline(device, subPipeline, nullptr);
-    vkDestroyPipeline(device, divPipeline, nullptr);
+    vkDestroyPipeline(device_, addPipeline, nullptr);
+    vkDestroyPipeline(device_, mulPipeline, nullptr);
+    vkDestroyPipeline(device_, subPipeline, nullptr);
+    vkDestroyPipeline(device_, divPipeline, nullptr);
 
-    vkDestroyPipeline(device, addBCPipeline, nullptr);
-    vkDestroyPipeline(device, mulBCPipeline, nullptr);
-    vkDestroyPipeline(device, subBCPipeline, nullptr);
-    vkDestroyPipeline(device, divBCPipeline, nullptr);
-    vkDestroyPipeline(device, sumToShapePipeline, nullptr);
+    vkDestroyPipeline(device_, addBCPipeline, nullptr);
+    vkDestroyPipeline(device_, mulBCPipeline, nullptr);
+    vkDestroyPipeline(device_, subBCPipeline, nullptr);
+    vkDestroyPipeline(device_, divBCPipeline, nullptr);
+    vkDestroyPipeline(device_, sumToShapePipeline, nullptr);
 
-    vkDestroyPipeline(device, rsqrtPipeline, nullptr);
-    vkDestroyPipeline(device, sinPipeline, nullptr);
-    vkDestroyPipeline(device, cosPipeline, nullptr);
-    vkDestroyPipeline(device, meanLastDimPipeline, nullptr);
+    vkDestroyPipeline(device_, rsqrtPipeline, nullptr);
+    vkDestroyPipeline(device_, sinPipeline, nullptr);
+    vkDestroyPipeline(device_, cosPipeline, nullptr);
+    vkDestroyPipeline(device_, meanLastDimPipeline, nullptr);
 
-    vkDestroyPipeline(device, updatePipeline, nullptr);
+    vkDestroyPipeline(device_, updatePipeline, nullptr);
 
-    vkDestroyPipeline(device, reluPipeline, nullptr);
-    vkDestroyPipeline(device, reluBackwardPipeline, nullptr);
-    vkDestroyPipeline(device, sigmoidPipeline, nullptr);
-    vkDestroyPipeline(device, sigmoidBackwardPipeline, nullptr);
+    vkDestroyPipeline(device_, reluPipeline, nullptr);
+    vkDestroyPipeline(device_, reluBackwardPipeline, nullptr);
+    vkDestroyPipeline(device_, sigmoidPipeline, nullptr);
+    vkDestroyPipeline(device_, sigmoidBackwardPipeline, nullptr);
 
-    vkDestroyPipeline(device, softmaxPipeline, nullptr);
-    vkDestroyPipeline(device, softmaxBackwardPipeline, nullptr);
-    vkDestroyPipeline(device, mseLossPipeline, nullptr);
-    vkDestroyPipeline(device, mseLossBackwardPipeline, nullptr);
-    vkDestroyPipeline(device, crossEntropyPipeline, nullptr);
-    vkDestroyPipeline(device, crossEntropyBackwardPipeline, nullptr);
+    vkDestroyPipeline(device_, softmaxPipeline, nullptr);
+    vkDestroyPipeline(device_, softmaxBackwardPipeline, nullptr);
+    vkDestroyPipeline(device_, mseLossPipeline, nullptr);
+    vkDestroyPipeline(device_, mseLossBackwardPipeline, nullptr);
+    vkDestroyPipeline(device_, crossEntropyPipeline, nullptr);
+    vkDestroyPipeline(device_, crossEntropyBackwardPipeline, nullptr);
 
-    vkDestroyPipeline(device, matmulPipeline, nullptr);
-    vkDestroyPipeline(device, batchedMatmulPipeline, nullptr);
+    vkDestroyPipeline(device_, matmulPipeline, nullptr);
+    vkDestroyPipeline(device_, batchedMatmulPipeline, nullptr);
 
-    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-    vkDestroyCommandPool(device, commandPool, nullptr);
-    vkDestroyDevice(device, nullptr);
+    vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
+    vkDestroyDescriptorSetLayout(device_, descriptor_set_layout_, nullptr);
+    vkDestroyCommandPool(device_, command_pool_, nullptr);
+    vkDestroyDevice(device_, nullptr);
   }
-  if (instance != VK_NULL_HANDLE) {
-    vkDestroyInstance(instance, nullptr);
+  if (instance_ != VK_NULL_HANDLE) {
+    vkDestroyInstance(instance_, nullptr);
   }
 
-  instance = VK_NULL_HANDLE;
-  physicalDevice = VK_NULL_HANDLE;
-  device = VK_NULL_HANDLE;
-  computeQueue = VK_NULL_HANDLE;
-  commandPool = VK_NULL_HANDLE;
-  descriptorSetLayout = VK_NULL_HANDLE;
-  immediateCmdBuffer = VK_NULL_HANDLE;
-  pipelineLayout = VK_NULL_HANDLE;
+  instance_ = VK_NULL_HANDLE;
+  physical_device_ = VK_NULL_HANDLE;
+  device_ = VK_NULL_HANDLE;
+  compute_queue_ = VK_NULL_HANDLE;
+  command_pool_ = VK_NULL_HANDLE;
+  descriptor_set_layout_ = VK_NULL_HANDLE;
+  runtime_->immediate_cmd_buffer = VK_NULL_HANDLE;
+  pipeline_layout_ = VK_NULL_HANDLE;
   for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-    descriptorPools[i] = VK_NULL_HANDLE;
-    commandBuffers[i] = VK_NULL_HANDLE;
-    inFlightFences[i] = VK_NULL_HANDLE;
-    queryPools[i] = VK_NULL_HANDLE;
+    runtime_->descriptor_pools[i] = VK_NULL_HANDLE;
+    runtime_->command_buffers[i] = VK_NULL_HANDLE;
+    runtime_->in_flight_fences[i] = VK_NULL_HANDLE;
+    runtime_->query_pools[i] = VK_NULL_HANDLE;
   }
-  stagingBuffer = VK_NULL_HANDLE;
-  stagingMemory = VK_NULL_HANDLE;
+  runtime_->staging_buffer = VK_NULL_HANDLE;
+  runtime_->staging_memory = VK_NULL_HANDLE;
   reset_runtime_state();
 }
 
 void *VulkanBackend::allocate(size_t bytes) {
   auto alloc_start = profile_now();
   size_t aligned_size = round_up_alloc_size(bytes);
-  if (!free_pool[aligned_size].empty()) {
-    uint64_t handle = free_pool[aligned_size].back();
-    free_pool[aligned_size].pop_back();
+  if (!runtime_->free_pool[aligned_size].empty()) {
+    uint64_t handle = runtime_->free_pool[aligned_size].back();
+    runtime_->free_pool[aligned_size].pop_back();
     profile_backend_event("allocator", "reuse_hit", alloc_start, aligned_size);
     return (void *)handle;
   }
   VkBuffer buffer;
   VkDeviceMemory memory;
-  createBuffer(aligned_size,
+  create_buffer(aligned_size,
                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
   uint64_t handle = (uint64_t)buffer;
-  allocation_memory[handle] = memory;
-  allocation_sizes[handle] = aligned_size;
+  runtime_->allocation_memory[handle] = memory;
+  runtime_->allocation_sizes[handle] = aligned_size;
   profile_backend_event("allocator", "reuse_miss", alloc_start, aligned_size);
   profile_backend_event("allocator", "pool_growth", alloc_start, aligned_size);
   if (aligned_size >= 16 * 1024 * 1024) {
@@ -2172,10 +2157,10 @@ void VulkanBackend::deallocate(void *ptr) {
     return;
   auto free_start = profile_now();
   uint64_t handle = (uint64_t)ptr;
-  deferred_frees[runtime_->current_frame].push_back(handle);
+  runtime_->deferred_frees[runtime_->current_frame].push_back(handle);
   profile_backend_event(
       "allocator", "deallocate", free_start,
-      allocation_sizes.count(handle) ? allocation_sizes[handle] : 0);
+      runtime_->allocation_sizes.count(handle) ? runtime_->allocation_sizes[handle] : 0);
 }
 
 // --- Batch Management ---
@@ -2185,7 +2170,7 @@ void VulkanBackend::flush_batch() {
     return;
 
   auto flush_start = profile_now();
-  VkCommandBuffer cmd = commandBuffers[runtime_->current_frame];
+  VkCommandBuffer cmd = runtime_->command_buffers[runtime_->current_frame];
 
   VK_CHECK(vkEndCommandBuffer(cmd));
 
@@ -2193,8 +2178,8 @@ void VulkanBackend::flush_batch() {
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &cmd;
-  VK_CHECK(vkQueueSubmit(computeQueue, 1, &submitInfo,
-                         inFlightFences[runtime_->current_frame]));
+  VK_CHECK(vkQueueSubmit(compute_queue_, 1, &submitInfo,
+                         runtime_->in_flight_fences[runtime_->current_frame]));
 
   profile_cpu_event("vulkan.flush_batch", flush_start);
 
@@ -2213,7 +2198,7 @@ void VulkanBackend::ensure_recording() {
 
   // Wait for the NEXT frame slot to be free (Fence Wait)
   auto wait_start = profile_now();
-  VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[runtime_->current_frame],
+  VK_CHECK(vkWaitForFences(device_, 1, &runtime_->in_flight_fences[runtime_->current_frame],
                            VK_TRUE,
                            UINT64_MAX));
   profile_cpu_event("vulkan.wait_for_fence", wait_start);
@@ -2222,13 +2207,13 @@ void VulkanBackend::ensure_recording() {
   // Process deferred frees safely now that the GPU is done with this frame
   auto deferred_flush_start = profile_now();
   size_t deferred_flush_bytes = 0;
-  for (uint64_t handle : deferred_frees[runtime_->current_frame]) {
-    if (allocation_sizes.count(handle)) {
-      deferred_flush_bytes += allocation_sizes[handle];
-      free_pool[allocation_sizes[handle]].push_back(handle);
+  for (uint64_t handle : runtime_->deferred_frees[runtime_->current_frame]) {
+    if (runtime_->allocation_sizes.count(handle)) {
+      deferred_flush_bytes += runtime_->allocation_sizes[handle];
+      runtime_->free_pool[runtime_->allocation_sizes[handle]].push_back(handle);
     }
   }
-  deferred_frees[runtime_->current_frame].clear();
+  runtime_->deferred_frees[runtime_->current_frame].clear();
   profile_backend_event("allocator", "deferred_free_flush",
                         deferred_flush_start, deferred_flush_bytes);
 
@@ -2237,16 +2222,16 @@ void VulkanBackend::ensure_recording() {
   // Since we wait on the frame fence above, the GPU is done with this frame's
   // descriptors and it is safe to reuse them by just rewinding the cursor.
   auto descriptor_reuse_start = profile_now();
-  descriptorSetCursor[runtime_->current_frame] = 0;
+  runtime_->descriptor_set_cursor[runtime_->current_frame] = 0;
   profile_cpu_event("vulkan.descriptor_set_reuse", descriptor_reuse_start);
   profile_backend_event("queue_starvation", "descriptor_reuse",
                         descriptor_reuse_start);
 
   VK_CHECK(
-      vkResetFences(device, 1, &inFlightFences[runtime_->current_frame]));
+      vkResetFences(device_, 1, &runtime_->in_flight_fences[runtime_->current_frame]));
 
   // Start Recording
-  VkCommandBuffer cmd = commandBuffers[runtime_->current_frame];
+  VkCommandBuffer cmd = runtime_->command_buffers[runtime_->current_frame];
   VK_CHECK(vkResetCommandBuffer(cmd, 0));
 
   VkCommandBufferBeginInfo beginInfo{};
@@ -2254,7 +2239,7 @@ void VulkanBackend::ensure_recording() {
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
   if (is_profile_enabled()) {
-    vkCmdResetQueryPool(cmd, queryPools[runtime_->current_frame], 0, 2);
+    vkCmdResetQueryPool(cmd, runtime_->query_pools[runtime_->current_frame], 0, 2);
   }
   runtime_->is_recording = true;
 
@@ -2268,24 +2253,24 @@ void VulkanBackend::run_immediate_command(
     flush_batch(); // Flush pending work first
 
   auto pre_idle_start = profile_now();
-  VK_CHECK(vkQueueWaitIdle(computeQueue));
+  VK_CHECK(vkQueueWaitIdle(compute_queue_));
   profile_cpu_event("vulkan.immediate_wait_idle.pre", pre_idle_start);
 
-  VK_CHECK(vkResetCommandBuffer(immediateCmdBuffer, 0));
+  VK_CHECK(vkResetCommandBuffer(runtime_->immediate_cmd_buffer, 0));
   VkCommandBufferBeginInfo beginInfo{};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  VK_CHECK(vkBeginCommandBuffer(immediateCmdBuffer, &beginInfo));
-  func(immediateCmdBuffer);
-  VK_CHECK(vkEndCommandBuffer(immediateCmdBuffer));
+  VK_CHECK(vkBeginCommandBuffer(runtime_->immediate_cmd_buffer, &beginInfo));
+  func(runtime_->immediate_cmd_buffer);
+  VK_CHECK(vkEndCommandBuffer(runtime_->immediate_cmd_buffer));
   VkSubmitInfo submitInfo{};
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &immediateCmdBuffer;
-  VK_CHECK(vkQueueSubmit(computeQueue, 1, &submitInfo, VK_NULL_HANDLE));
+  submitInfo.pCommandBuffers = &runtime_->immediate_cmd_buffer;
+  VK_CHECK(vkQueueSubmit(compute_queue_, 1, &submitInfo, VK_NULL_HANDLE));
 
   auto post_idle_start = profile_now();
-  VK_CHECK(vkQueueWaitIdle(computeQueue));
+  VK_CHECK(vkQueueWaitIdle(compute_queue_));
   profile_cpu_event("vulkan.immediate_wait_idle.post", post_idle_start);
   profile_cpu_event("vulkan.immediate_total", total_start);
 }
@@ -2295,7 +2280,7 @@ void VulkanBackend::memset(void *ptr, int value, size_t bytes) {
     return;
 
   ensure_recording();
-  vkCmdFillBuffer(commandBuffers[runtime_->current_frame], (VkBuffer)(uint64_t)ptr, 0,
+  vkCmdFillBuffer(runtime_->command_buffers[runtime_->current_frame], (VkBuffer)(uint64_t)ptr, 0,
                   bytes, value);
 
   VkMemoryBarrier mb{};
@@ -2303,7 +2288,7 @@ void VulkanBackend::memset(void *ptr, int value, size_t bytes) {
   mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
   mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
   vkCmdPipelineBarrier(
-      commandBuffers[runtime_->current_frame], VK_PIPELINE_STAGE_TRANSFER_BIT,
+      runtime_->command_buffers[runtime_->current_frame], VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
 
   runtime_->current_batch_size++;
@@ -2337,14 +2322,14 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     ensure_recording();
     VkBufferCopy copyRegion{};
     copyRegion.size = bytes;
-    vkCmdCopyBuffer(commandBuffers[runtime_->current_frame], (VkBuffer)(uint64_t)src,
+    vkCmdCopyBuffer(runtime_->command_buffers[runtime_->current_frame], (VkBuffer)(uint64_t)src,
                     (VkBuffer)(uint64_t)dst, 1, &copyRegion);
 
     VkMemoryBarrier mb{};
     mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(commandBuffers[runtime_->current_frame],
+    vkCmdPipelineBarrier(runtime_->command_buffers[runtime_->current_frame],
                          VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0,
                          nullptr, 0, nullptr);
@@ -2357,45 +2342,46 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
 
   auto get_staging = [&](size_t req_bytes, size_t &offset) {
     size_t aligned = (req_bytes + 255) & ~255;
-    if (!stagingBuffer || stagingOffset + aligned > stagingSize) {
+    if (!runtime_->staging_buffer || runtime_->staging_offset + aligned > runtime_->staging_size) {
       if (runtime_->is_recording)
         flush_batch();
       auto staging_wait_start = profile_now();
-      VK_CHECK(vkWaitForFences(device, MAX_FRAMES_IN_FLIGHT, inFlightFences,
+      VK_CHECK(vkWaitForFences(device_, MAX_FRAMES_IN_FLIGHT,
+                               runtime_->in_flight_fences.data(),
                                VK_TRUE, UINT64_MAX));
       profile_cpu_event("vulkan.staging_wait_fences", staging_wait_start);
       profile_backend_event("queue_wait", "staging_reuse", staging_wait_start);
-      stagingOffset = 0; // Safe because queue is idle
-      if (stagingSize < aligned) {
+      runtime_->staging_offset = 0; // Safe because queue is idle
+      if (runtime_->staging_size < aligned) {
         auto growth_start = profile_now();
-        if (stagingBuffer) {
-          vkUnmapMemory(device, stagingMemory);
-          vkDestroyBuffer(device, stagingBuffer, nullptr);
-          vkFreeMemory(device, stagingMemory, nullptr);
+        if (runtime_->staging_buffer) {
+          vkUnmapMemory(device_, runtime_->staging_memory);
+          vkDestroyBuffer(device_, runtime_->staging_buffer, nullptr);
+          vkFreeMemory(device_, runtime_->staging_memory, nullptr);
         }
-        stagingSize =
+        runtime_->staging_size =
             aligned * 2 < 16 * 1024 * 1024 ? 16 * 1024 * 1024 : aligned * 2;
-        createBuffer(stagingSize,
+        create_buffer(runtime_->staging_size,
                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                     stagingBuffer, stagingMemory);
-        VK_CHECK(vkMapMemory(device, stagingMemory, 0, stagingSize, 0,
-                             &stagingMapped));
+                     runtime_->staging_buffer, runtime_->staging_memory);
+        VK_CHECK(vkMapMemory(device_, runtime_->staging_memory, 0, runtime_->staging_size, 0,
+                             &runtime_->staging_mapped));
         profile_backend_event("allocator", "pool_growth", growth_start,
-                              stagingSize);
+                              runtime_->staging_size);
       }
     }
-    offset = stagingOffset;
-    stagingOffset += aligned;
+    offset = runtime_->staging_offset;
+    runtime_->staging_offset += aligned;
   };
 
   if (src_dev.type == DeviceType::CPU && dst_dev.type == DeviceType::VULKAN) {
     size_t offset = 0;
     get_staging(bytes, offset);
     auto h2d_memcpy_start = profile_now();
-    std::memcpy((char *)stagingMapped + offset, src, bytes);
+    std::memcpy((char *)runtime_->staging_mapped + offset, src, bytes);
     profile_cpu_event("vulkan.copy_h2d_memcpy", h2d_memcpy_start, bytes);
 
     ensure_recording();
@@ -2403,14 +2389,14 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     copyRegion.srcOffset = offset;
     copyRegion.dstOffset = 0;
     copyRegion.size = bytes;
-    vkCmdCopyBuffer(commandBuffers[runtime_->current_frame], stagingBuffer,
+    vkCmdCopyBuffer(runtime_->command_buffers[runtime_->current_frame], runtime_->staging_buffer,
                     (VkBuffer)(uint64_t)dst, 1, &copyRegion);
 
     VkMemoryBarrier mb{};
     mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(commandBuffers[runtime_->current_frame],
+    vkCmdPipelineBarrier(runtime_->command_buffers[runtime_->current_frame],
                          VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0,
                          nullptr, 0, nullptr);
@@ -2429,28 +2415,28 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(
-        commandBuffers[runtime_->current_frame], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        runtime_->command_buffers[runtime_->current_frame], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
 
     VkBufferCopy copyRegion{};
     copyRegion.srcOffset = 0;
     copyRegion.dstOffset = offset;
     copyRegion.size = bytes;
-    vkCmdCopyBuffer(commandBuffers[runtime_->current_frame], (VkBuffer)(uint64_t)src,
-                    stagingBuffer, 1, &copyRegion);
+    vkCmdCopyBuffer(runtime_->command_buffers[runtime_->current_frame], (VkBuffer)(uint64_t)src,
+                    runtime_->staging_buffer, 1, &copyRegion);
     runtime_->current_batch_size++;
     flush_batch();
     auto d2h_wait_start = profile_now();
     int submitted_frame =
         (runtime_->current_frame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
-    VK_CHECK(vkWaitForFences(device, 1, &inFlightFences[submitted_frame],
+    VK_CHECK(vkWaitForFences(device_, 1, &runtime_->in_flight_fences[submitted_frame],
                              VK_TRUE, UINT64_MAX));
     profile_cpu_event("vulkan.copy_d2h_wait_fence", d2h_wait_start, bytes);
     profile_backend_event("sync", "readback_wait", d2h_wait_start, bytes);
     auto d2h_memcpy_start = profile_now();
-    std::memcpy(dst, (char *)stagingMapped + offset, bytes);
+    std::memcpy(dst, (char *)runtime_->staging_mapped + offset, bytes);
     profile_cpu_event("vulkan.copy_d2h_memcpy", d2h_memcpy_start, bytes);
-    stagingOffset =
+    runtime_->staging_offset =
         0; // Free entire staging buffer since we just forced a full wait
   } else {
     throw std::runtime_error(
@@ -2463,7 +2449,8 @@ void VulkanBackend::synchronize() {
     flush_batch();
 
   auto sync_wait_start = profile_now();
-  VK_CHECK(vkWaitForFences(device, MAX_FRAMES_IN_FLIGHT, inFlightFences,
+  VK_CHECK(vkWaitForFences(device_, MAX_FRAMES_IN_FLIGHT,
+                           runtime_->in_flight_fences.data(),
                            VK_TRUE, UINT64_MAX));
   profile_cpu_event("vulkan.synchronize_wait_fences", sync_wait_start);
   profile_backend_event("sync", "explicit", sync_wait_start);
@@ -2478,13 +2465,13 @@ void VulkanBackend::synchronize() {
 
     auto query_start = profile_now();
     VkResult res = vkGetQueryPoolResults(
-        device, queryPools[frameToQuery], 0, 2, sizeof(uint64_t) * 2, results,
+        device_, runtime_->query_pools[frameToQuery], 0, 2, sizeof(uint64_t) * 2, results,
         sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
     profile_cpu_event("vulkan.query_results", query_start);
     profile_backend_event("sync", "implicit_timing", query_start);
 
     if (res == VK_SUCCESS) {
-      double nanoseconds = (double)(results[1] - results[0]) * timestampPeriod;
+      double nanoseconds = (double)(results[1] - results[0]) * timestamp_period_;
       last_kernel_us_ = nanoseconds / 1000.0;
     } else {
       last_kernel_us_ = 0.0;
@@ -2502,10 +2489,10 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                                     int z) {
   auto encode_start = profile_now();
   ensure_recording();
-  VkCommandBuffer cmd = commandBuffers[runtime_->current_frame];
+  VkCommandBuffer cmd = runtime_->command_buffers[runtime_->current_frame];
 
-  if (descriptorSetCursor[runtime_->current_frame] >=
-      frameDescriptorSets[runtime_->current_frame].size()) {
+  if (runtime_->descriptor_set_cursor[runtime_->current_frame] >=
+      runtime_->frame_descriptor_sets[runtime_->current_frame].size()) {
     auto starvation_start = profile_now();
     flush_batch();
     ensure_recording();
@@ -2514,7 +2501,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   }
 
   VkDescriptorSet ds =
-      frameDescriptorSets[runtime_->current_frame][descriptorSetCursor[runtime_->current_frame]++];
+      runtime_->frame_descriptor_sets[runtime_->current_frame][runtime_->descriptor_set_cursor[runtime_->current_frame]++];
 
   // Update only the bindings used by this kernel to lower CPU overhead.
   const uint32_t write_count = static_cast<uint32_t>(
@@ -2537,7 +2524,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
     writes[i].pBufferInfo = &bInfos[i];
   }
   auto descriptor_update_start = profile_now();
-  vkUpdateDescriptorSets(device, write_count, writes, 0, nullptr);
+  vkUpdateDescriptorSets(device_, write_count, writes, 0, nullptr);
   profile_cpu_event("vulkan.update_descriptors", descriptor_update_start);
 
   VkMemoryBarrier memoryBarrier{};
@@ -2550,19 +2537,19 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                        &memoryBarrier, 0, nullptr, 0, nullptr);
 
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout,
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_,
                           0, 1, &ds, 0, nullptr);
-  vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+  vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                      pcSize, pc);
 
   if (is_profile_enabled()) {
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        queryPools[runtime_->current_frame], 0);
+                        runtime_->query_pools[runtime_->current_frame], 0);
   }
   vkCmdDispatch(cmd, x, y, z);
   if (is_profile_enabled()) {
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                        queryPools[runtime_->current_frame], 1);
+                        runtime_->query_pools[runtime_->current_frame], 1);
   }
 
   runtime_->current_batch_size++;

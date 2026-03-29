@@ -32,10 +32,6 @@
 
 namespace munet {
 
-static std::unordered_map<size_t, std::vector<void *>> free_blocks;
-static std::unordered_map<void *, size_t> alloc_sizes;
-static cublasHandle_t cublas_handle_ = nullptr;
-
 namespace {
 
 constexpr size_t kLargeAllocationSlowPathBytes = 16 * 1024 * 1024;
@@ -68,14 +64,21 @@ CUDABackend::CUDABackend(int device_index) : device_index_(device_index) {
   }
 
   CUDA_CHECK(cudaSetDevice(device_index_));
-  if (!cublas_handle_)
-    CUBLAS_CHECK(cublasCreate(&cublas_handle_));
+  if (!cublas_handle_) {
+    cublasHandle_t handle = nullptr;
+    CUBLAS_CHECK(cublasCreate(&handle));
+    cublas_handle_ = reinterpret_cast<void *>(handle);
+  }
   CUDA_CHECK(cudaEventCreate((cudaEvent_t *)&start_event_));
   CUDA_CHECK(cudaEventCreate((cudaEvent_t *)&stop_event_));
 }
 
 CUDABackend::~CUDABackend() {
   cudaSetDevice(device_index_);
+  if (cublas_handle_) {
+    cublasDestroy(reinterpret_cast<cublasHandle_t>(cublas_handle_));
+    cublas_handle_ = nullptr;
+  }
   cudaEventDestroy((cudaEvent_t)start_event_);
   cudaEventDestroy((cudaEvent_t)stop_event_);
 }
@@ -838,17 +841,18 @@ __global__ void to_contiguous_kernel(const float *src, float *dst,
 
 void *CUDABackend::allocate(size_t bytes) {
   cudaSetDevice(device_index_);
+  std::lock_guard<std::mutex> lock(allocator_mutex_);
   cudaEventRecord((cudaEvent_t)start_event_);
   auto alloc_start = profile_now();
-  if (!free_blocks[bytes].empty()) {
-    void *ptr = free_blocks[bytes].back();
-    free_blocks[bytes].pop_back();
+  if (!free_blocks_[bytes].empty()) {
+    void *ptr = free_blocks_[bytes].back();
+    free_blocks_[bytes].pop_back();
     record_cuda_profile_event("allocator", "reuse_hit", alloc_start, bytes);
     return ptr;
   }
   void *ptr;
   CUDA_CHECK(cudaMalloc(&ptr, bytes));
-  alloc_sizes[ptr] = bytes;
+  alloc_sizes_[ptr] = bytes;
   cudaEventRecord((cudaEvent_t)stop_event_);
   record_cuda_profile_event("allocator", "reuse_miss", alloc_start, bytes);
   record_cuda_profile_event("allocator", "pool_growth", alloc_start, bytes);
@@ -861,16 +865,17 @@ void *CUDABackend::allocate(size_t bytes) {
 
 void CUDABackend::deallocate(void *ptr) {
   cudaSetDevice(device_index_);
+  std::lock_guard<std::mutex> lock(allocator_mutex_);
   cudaEventRecord((cudaEvent_t)start_event_);
   auto free_start = profile_now();
-  if (alloc_sizes.count(ptr)) {
-    free_blocks[alloc_sizes[ptr]].push_back(ptr);
+  if (alloc_sizes_.count(ptr)) {
+    free_blocks_[alloc_sizes_[ptr]].push_back(ptr);
   } else {
     CUDA_CHECK(cudaFree(ptr));
   }
   cudaEventRecord((cudaEvent_t)stop_event_);
   record_cuda_profile_event("allocator", "deallocate", free_start,
-                            alloc_sizes.count(ptr) ? alloc_sizes[ptr] : 0);
+                            alloc_sizes_.count(ptr) ? alloc_sizes_[ptr] : 0);
 }
 
 void CUDABackend::memset(void *ptr, int value, size_t bytes) {
@@ -891,11 +896,46 @@ void CUDABackend::copy(const void *src, void *dst, size_t bytes, Device src_dev,
     throw std::runtime_error(
         "cuda copy: expected at least one CUDA endpoint for CUDA backend copy");
   }
+  if (src_is_cuda && dst_is_cuda) {
+    // NOTE: start_event_/stop_event_ are created on this backend's
+    // device_index_. Cross-device copies may switch active CUDA device, so
+    // recording those events here can fail with invalid resource handle.
+    if (src_dev.index == dst_dev.index) {
+      cudaSetDevice(src_dev.index);
+      CUDA_CHECK(cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToDevice));
+    } else {
+      int peer_access = 0;
+      cudaSetDevice(dst_dev.index);
+      CUDA_CHECK(cudaDeviceCanAccessPeer(&peer_access, dst_dev.index,
+                                         src_dev.index));
+      if (peer_access) {
+        // Best-effort: ignore "already enabled" on repeated calls.
+        cudaError_t enable_err = cudaDeviceEnablePeerAccess(src_dev.index, 0);
+        if (enable_err != cudaSuccess &&
+            enable_err != cudaErrorPeerAccessAlreadyEnabled) {
+          CUDA_CHECK(enable_err);
+        }
+        CUDA_CHECK(cudaMemcpyPeer(dst, dst_dev.index, src, src_dev.index,
+                                  bytes));
+      } else {
+        std::vector<unsigned char> host_stage(bytes);
+        cudaSetDevice(src_dev.index);
+        CUDA_CHECK(cudaMemcpy(host_stage.data(), src, bytes,
+                              cudaMemcpyDeviceToHost));
+        cudaSetDevice(dst_dev.index);
+        CUDA_CHECK(cudaMemcpy(dst, host_stage.data(), bytes,
+                              cudaMemcpyHostToDevice));
+      }
+    }
+    return;
+  }
+
   if ((src_is_cuda && src_dev.index != device_index_) ||
       (dst_is_cuda && dst_dev.index != device_index_)) {
     throw std::runtime_error(
         "cuda copy: device index mismatch for active CUDABackend instance");
   }
+
   cudaSetDevice(device_index_);
   cudaEventRecord((cudaEvent_t)start_event_);
   cudaMemcpyKind kind = cudaMemcpyDefault;
@@ -1083,7 +1123,8 @@ void CUDABackend::matmul(const Storage &a, const Storage &b, Storage &out,
 
   cudaEventRecord((cudaEvent_t)start_event_);
   cublasStatus_t status =
-      cublasSgemm(cublas_handle_, cuTransA, cuTransB, N, M, K, &alpha,
+      cublasSgemm(reinterpret_cast<cublasHandle_t>(cublas_handle_), cuTransA,
+                  cuTransB, N, M, K, &alpha,
                   (const float *)b.data(), lda, (const float *)a.data(), ldb,
                   &beta, (float *)out.data(), ldc);
 
@@ -1113,7 +1154,8 @@ void CUDABackend::batched_matmul(const Storage &a, const Storage &b,
 
   cudaEventRecord((cudaEvent_t)start_event_);
   cublasStatus_t status = cublasSgemmStridedBatched(
-      cublas_handle_, cuTransA, cuTransB, N, M, K, &alpha,
+      reinterpret_cast<cublasHandle_t>(cublas_handle_), cuTransA, cuTransB, N,
+      M, K, &alpha,
       (const float *)b.data(), lda, strideB, (const float *)a.data(), ldb,
       strideA, &beta, (float *)out.data(), ldc, strideC, batch_size);
 
