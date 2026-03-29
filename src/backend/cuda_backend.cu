@@ -896,11 +896,45 @@ void CUDABackend::copy(const void *src, void *dst, size_t bytes, Device src_dev,
     throw std::runtime_error(
         "cuda copy: expected at least one CUDA endpoint for CUDA backend copy");
   }
+  if (src_is_cuda && dst_is_cuda) {
+    cudaEventRecord((cudaEvent_t)start_event_);
+    if (src_dev.index == dst_dev.index) {
+      cudaSetDevice(src_dev.index);
+      CUDA_CHECK(cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToDevice));
+    } else {
+      int peer_access = 0;
+      cudaSetDevice(dst_dev.index);
+      CUDA_CHECK(cudaDeviceCanAccessPeer(&peer_access, dst_dev.index,
+                                         src_dev.index));
+      if (peer_access) {
+        // Best-effort: ignore "already enabled" on repeated calls.
+        cudaError_t enable_err = cudaDeviceEnablePeerAccess(src_dev.index, 0);
+        if (enable_err != cudaSuccess &&
+            enable_err != cudaErrorPeerAccessAlreadyEnabled) {
+          CUDA_CHECK(enable_err);
+        }
+        CUDA_CHECK(cudaMemcpyPeer(dst, dst_dev.index, src, src_dev.index,
+                                  bytes));
+      } else {
+        std::vector<unsigned char> host_stage(bytes);
+        cudaSetDevice(src_dev.index);
+        CUDA_CHECK(cudaMemcpy(host_stage.data(), src, bytes,
+                              cudaMemcpyDeviceToHost));
+        cudaSetDevice(dst_dev.index);
+        CUDA_CHECK(cudaMemcpy(dst, host_stage.data(), bytes,
+                              cudaMemcpyHostToDevice));
+      }
+    }
+    cudaEventRecord((cudaEvent_t)stop_event_);
+    return;
+  }
+
   if ((src_is_cuda && src_dev.index != device_index_) ||
       (dst_is_cuda && dst_dev.index != device_index_)) {
     throw std::runtime_error(
         "cuda copy: device index mismatch for active CUDABackend instance");
   }
+
   cudaSetDevice(device_index_);
   cudaEventRecord((cudaEvent_t)start_event_);
   cudaMemcpyKind kind = cudaMemcpyDefault;
