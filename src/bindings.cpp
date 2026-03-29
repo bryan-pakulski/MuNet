@@ -737,8 +737,22 @@ PYBIND11_MODULE(munet, m) {
           "Assigns listed module paths to a device and moves their params/buffers.")
       .def("clear_offload", &nn::Module::clear_offload,
            "Clears current model offload placement plan.")
-      .def("offload_plan", &nn::Module::offload_plan,
-           "Returns current module-path -> device placement mapping.")
+      .def(
+          "offload_plan",
+          [](nn::Module &self, bool explain) -> py::object {
+            if (!explain) {
+              return py::cast(self.offload_plan());
+            }
+            py::dict d;
+            d["plan"] = py::cast(self.offload_plan());
+            d["rationale"] = py::cast(self.offload_plan_rationale());
+            return std::move(d);
+          },
+          py::arg("explain") = false,
+          "Returns current module-path -> device placement mapping. If explain=True, returns planner rationale.")
+      .def("auto_offload", &nn::Module::auto_offload, py::arg("devices"),
+           py::arg("strategy") = "balanced", py::arg("sample_input"),
+           "Automatically generates and applies an offload plan.")
       .def("validate_offload_plan", &nn::Module::validate_offload_plan,
            py::arg("sample_input"),
            "Validates current offload plan and returns a typed report.")

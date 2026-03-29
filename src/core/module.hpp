@@ -218,6 +218,132 @@ public:
     return root_module_const()->offload_plan_;
   }
 
+  std::map<std::string, std::string> offload_plan_rationale() const {
+    return root_module_const()->offload_plan_rationale_;
+  }
+
+  std::map<std::string, Device>
+  auto_offload(const std::vector<Device> &devices, const std::string &strategy,
+               const Tensor &sample_input) {
+    if (devices.empty()) {
+      throw std::runtime_error("auto_offload: devices list must not be empty");
+    }
+    if (strategy != "balanced" && strategy != "memory-first" &&
+        strategy != "transfer-minimized") {
+      throw std::runtime_error("auto_offload: unsupported strategy '" +
+                               strategy + "'");
+    }
+
+    Module *root = root_module();
+    auto mods = root->named_modules("");
+    std::vector<std::string> layers;
+    for (const auto &[name, m] : mods) {
+      if (!m) {
+        continue;
+      }
+      bool numeric = !name.empty();
+      for (char c : name) {
+        if (c < '0' || c > '9') {
+          numeric = false;
+          break;
+        }
+      }
+      if (numeric) {
+        layers.push_back(name);
+      }
+    }
+    std::sort(layers.begin(), layers.end(),
+              [](const std::string &a, const std::string &b) {
+                return std::stoi(a) < std::stoi(b);
+              });
+    if (layers.empty()) {
+      for (const auto &[name, _] : mods) {
+        layers.push_back(name);
+      }
+      std::sort(layers.begin(), layers.end());
+    }
+    if (layers.empty()) {
+      throw std::runtime_error("auto_offload: no layers found");
+    }
+
+    root->clear_offload();
+    root->offload_plan_rationale_.clear();
+
+    std::vector<double> device_scores(devices.size(), 0.0);
+    std::vector<size_t> device_param_bytes(devices.size(), 0);
+    std::optional<size_t> previous_device_index;
+    size_t activation_bytes = sample_input.bytes();
+
+    for (const auto &layer : layers) {
+      auto it = mods.find(layer);
+      if (it == mods.end() || !it->second) {
+        continue;
+      }
+
+      size_t param_bytes = 0;
+      DataType dominant_dtype = DataType::Float32;
+      auto params = it->second->named_parameters("");
+      for (const auto &[_, t] : params) {
+        param_bytes += t.bytes();
+        dominant_dtype = t.dtype();
+      }
+      if (param_bytes == 0) {
+        param_bytes = activation_bytes;
+      }
+
+      std::vector<size_t> candidates;
+      for (size_t i = 0; i < devices.size(); ++i) {
+        bool supported =
+            BackendManager::get(devices[i])->supports(BackendFeature::Matmul,
+                                                      dominant_dtype);
+        if (supported) {
+          candidates.push_back(i);
+        }
+      }
+      if (candidates.empty()) {
+        throw std::runtime_error("auto_offload: no candidate device supports layer '" +
+                                 layer + "'");
+      }
+
+      size_t chosen = candidates.front();
+      if (strategy == "transfer-minimized" && previous_device_index.has_value()) {
+        if (std::find(candidates.begin(), candidates.end(),
+                      previous_device_index.value()) != candidates.end()) {
+          chosen = previous_device_index.value();
+        }
+      } else if (strategy == "memory-first") {
+        size_t best = candidates.front();
+        for (size_t idx : candidates) {
+          if (device_param_bytes[idx] < device_param_bytes[best]) {
+            best = idx;
+          }
+        }
+        chosen = best;
+      } else {
+        // balanced
+        size_t best = candidates.front();
+        for (size_t idx : candidates) {
+          if (device_scores[idx] < device_scores[best]) {
+            best = idx;
+          }
+        }
+        chosen = best;
+      }
+
+      root->offload(devices[chosen], {layer});
+      root->offload_plan_rationale_[layer] =
+          "strategy=" + strategy + ",param_bytes=" +
+          std::to_string(param_bytes) + ",activation_bytes=" +
+          std::to_string(activation_bytes);
+      device_scores[chosen] += static_cast<double>(param_bytes + activation_bytes);
+      device_param_bytes[chosen] += param_bytes;
+      previous_device_index = chosen;
+      activation_bytes = std::max<size_t>(activation_bytes, param_bytes);
+    }
+    root->planner_last_strategy_ = strategy;
+    return root->offload_plan_;
+  }
+
   OffloadValidationReport validate_offload_plan(const Tensor &sample_input) const {
     const Module *root = root_module_const();
     OffloadValidationReport report;
@@ -451,6 +577,8 @@ protected:
   std::map<std::string, BufferRegistration> buffer_registrations_;
   std::map<std::string, std::shared_ptr<Module>> modules_;
   std::map<std::string, Device> offload_plan_;
+  std::map<std::string, std::string> offload_plan_rationale_;
+  std::string planner_last_strategy_;
   OffloadTransferTelemetry offload_telemetry_;
   bool offload_warnings_enabled_ = true;
   size_t offload_warning_threshold_bytes_ = 64 * 1024;

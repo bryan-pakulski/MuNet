@@ -19,6 +19,7 @@ Welcome to MuNet docs. This documentation is structured for interactive/searchab
 - [Common Design Patterns](guides/design_patterns.md)
 - [Training Precision & AMP Flows](guides/training_precision.md)
 - [Debugging Playbook](guides/debugging_playbook.md)
+- [Offload Planner Strategy Guide](guides/offload_planner_strategy_guide.md)
 - [E2E Tutorial](tutorials/e2e_workflow.md)
 
 ## Existing architecture and perf docs

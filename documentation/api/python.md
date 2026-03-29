@@ -90,6 +90,8 @@ Module management:
 - `train(mode=True)`, `eval()`, `is_training`
 - `to(device)`, `to(dtype)`, `to_options(options)`
 - `offload(device, layers=[...])`, `clear_offload()`, `offload_plan()`
+- `auto_offload(devices, strategy="balanced", sample_input=...)`
+- `offload_plan(explain=True)` includes planner rationale payload.
 - `validate_offload_plan(sample_input) -> OffloadValidationReport`
 - `set_offload_warnings(enabled=True)`
 - `set_offload_warning_threshold_bytes(threshold_bytes)`
