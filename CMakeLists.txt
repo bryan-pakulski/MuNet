@@ -11,6 +11,8 @@ include(FetchContent)
 
 option(MUNET_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(MUNET_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(MUNET_BUILD_TESTS "Build C++ test targets" ON)
+option(MUNET_BUILD_TOOLS "Build CLI/report tools" ON)
 
 # --- Dependencies ---
 FetchContent_Declare(
@@ -20,13 +22,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(pybind11)
 
-FetchContent_Declare(
-    googletest
-    GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.14.0
-)
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
+if(MUNET_BUILD_TESTS)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.14.0
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+endif()
 
 # --- Check for CUDA ---
 include(CheckLanguage)
@@ -192,60 +196,80 @@ add_custom_command(TARGET munet POST_BUILD
             ${CMAKE_SOURCE_DIR}/build/python_src/onnx_integration.py
 )
 
+# Install extension + helper assets for pip/wheel installs.
+install(TARGETS munet
+    LIBRARY DESTINATION .
+    RUNTIME DESTINATION .
+    ARCHIVE DESTINATION .
+)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
+    DESTINATION python_src
+)
+
 # --- Unit Tests ---
-enable_testing()
+if(MUNET_BUILD_TESTS)
+    enable_testing()
 
-add_executable(munet_tests
-    tests/unified_tests.cpp
-    tests/test_tensor.cpp
-    tests/test_autograd.cpp
-    tests/test_spatial.cpp
-    tests/test_loss.cpp
-    tests/test_models.cpp
-    tests/test_ops.cpp
-    tests/test_optim.cpp
-    tests/test_nn.cpp
-    tests/test_inference.cpp
-    tests/test_backend_manager.cpp
-    tests/test_performance.cpp
-)
-target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_main munet_build_flags)
+    add_executable(munet_tests
+        tests/unified_tests.cpp
+        tests/test_tensor.cpp
+        tests/test_autograd.cpp
+        tests/test_spatial.cpp
+        tests/test_loss.cpp
+        tests/test_models.cpp
+        tests/test_ops.cpp
+        tests/test_optim.cpp
+        tests/test_nn.cpp
+        tests/test_inference.cpp
+        tests/test_backend_manager.cpp
+        tests/test_performance.cpp
+    )
+    target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_main munet_build_flags)
+endif()
 
-add_executable(munet_inference_baseline tools/inference_baseline.cpp)
-target_link_libraries(munet_inference_baseline PRIVATE munet_inference munet_build_flags)
+if(MUNET_BUILD_TOOLS)
+    add_executable(munet_inference_baseline tools/inference_baseline.cpp)
+    target_link_libraries(munet_inference_baseline PRIVATE munet_inference munet_build_flags)
 
-add_test(
-    NAME munet_inference_baseline_cpu_smoke
-    COMMAND munet_inference_baseline
-            --device cpu
-            --dtype float32
-            --batch 4
-            --input-dim 16
-            --hidden-dim 32
-            --output-dim 8
-            --warmup-runs 0
-            --single-run-iters 1
-            --batch-run-inputs 2
-            --batch-run-iters 1
-            --prepared-input-cache-entries 0
-            --prepared-input-cache-max-bytes 0
-)
+    if(MUNET_BUILD_TESTS)
+        add_test(
+            NAME munet_inference_baseline_cpu_smoke
+            COMMAND munet_inference_baseline
+                    --device cpu
+                    --dtype float32
+                    --batch 4
+                    --input-dim 16
+                    --hidden-dim 32
+                    --output-dim 8
+                    --warmup-runs 0
+                    --single-run-iters 1
+                    --batch-run-inputs 2
+                    --batch-run-iters 1
+                    --prepared-input-cache-entries 0
+                    --prepared-input-cache-max-bytes 0
+        )
+    endif()
 
-add_executable(munet_inference_boundary_check tools/inference_boundary_check.cpp)
-target_link_libraries(munet_inference_boundary_check PRIVATE munet_inference munet_build_flags)
-add_test(NAME munet_inference_boundary_check COMMAND munet_inference_boundary_check)
+    add_executable(munet_inference_boundary_check tools/inference_boundary_check.cpp)
+    target_link_libraries(munet_inference_boundary_check PRIVATE munet_inference munet_build_flags)
+    if(MUNET_BUILD_TESTS)
+        add_test(NAME munet_inference_boundary_check COMMAND munet_inference_boundary_check)
+    endif()
 
-add_executable(munet_dtype_coverage_report tools/dtype_coverage_report.cpp)
-target_link_libraries(munet_dtype_coverage_report PRIVATE munet_training munet_inference munet_build_flags)
+    add_executable(munet_dtype_coverage_report tools/dtype_coverage_report.cpp)
+    target_link_libraries(munet_dtype_coverage_report PRIVATE munet_training munet_inference munet_build_flags)
 
-add_executable(munet_runtime_execution_coverage_report tools/runtime_execution_coverage_report.cpp)
-target_link_libraries(munet_runtime_execution_coverage_report PRIVATE munet_training munet_inference munet_build_flags)
+    add_executable(munet_runtime_execution_coverage_report tools/runtime_execution_coverage_report.cpp)
+    target_link_libraries(munet_runtime_execution_coverage_report PRIVATE munet_training munet_inference munet_build_flags)
+endif()
 
-include(GoogleTest)
-gtest_add_tests(
-    TARGET munet_tests
-    TEST_PREFIX munet_
-    TEST_LIST munet_tests
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests
-    TEST_SUFFIX .cpp
-)
+if(MUNET_BUILD_TESTS)
+    include(GoogleTest)
+    gtest_add_tests(
+        TARGET munet_tests
+        TEST_PREFIX munet_
+        TEST_LIST munet_tests
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        TEST_SUFFIX .cpp
+    )
+endif()

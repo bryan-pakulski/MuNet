@@ -16,6 +16,29 @@
 namespace munet {
 namespace {
 
+bool backend_probe_ok(DeviceType type, const char *backend_name,
+                      BackendRegistry::BackendFactory factory) {
+  try {
+    auto backend = factory(Device{type, 0});
+    if (backend) {
+      backend->synchronize();
+    }
+    return true;
+  } catch (const std::exception &e) {
+    MUNET_WARNING << backend_name
+                  << " backend compiled but unavailable at runtime; disabling "
+                     "acceleration for this backend. Reason: "
+                  << e.what() << std::endl;
+    return false;
+  } catch (...) {
+    MUNET_WARNING << backend_name
+                  << " backend compiled but unavailable at runtime; disabling "
+                     "acceleration for this backend due to unknown error."
+                  << std::endl;
+    return false;
+  }
+}
+
 void register_default_backends(BackendRegistry &registry) {
   static std::once_flag once;
   std::call_once(once, [&registry]() {
@@ -23,15 +46,21 @@ void register_default_backends(BackendRegistry &registry) {
         DeviceType::CPU, [](Device) { return std::make_shared<CPUBackend>(); });
 
 #ifdef MUNET_USE_CUDA
-    registry.register_backend(DeviceType::CUDA, [](Device device) {
+    BackendRegistry::BackendFactory cuda_factory = [](Device device) {
       return std::make_shared<CUDABackend>(device.index);
-    });
+    };
+    if (backend_probe_ok(DeviceType::CUDA, "CUDA", cuda_factory)) {
+      registry.register_backend(DeviceType::CUDA, std::move(cuda_factory));
+    }
 #endif
 
 #ifdef MUNET_USE_VULKAN
-    registry.register_backend(DeviceType::VULKAN, [](Device device) {
+    BackendRegistry::BackendFactory vulkan_factory = [](Device device) {
       return std::make_shared<VulkanBackend>(device.index);
-    });
+    };
+    if (backend_probe_ok(DeviceType::VULKAN, "Vulkan", vulkan_factory)) {
+      registry.register_backend(DeviceType::VULKAN, std::move(vulkan_factory));
+    }
 #endif
 
     registry.set_decorator([](std::shared_ptr<Backend> backend) {

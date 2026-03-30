@@ -11,6 +11,7 @@ BUILD_RELEASE := $(BUILD_ROOT)/release
 BUILD_ASAN := $(BUILD_ROOT)/asan
 BUILD_GPU := $(BUILD_ROOT)/gpu-debug
 PYTEST ?= pytest
+PYPI_PACKAGE ?= munet-nn
 
 .DEFAULT_GOAL := help
 
@@ -18,7 +19,7 @@ PYTEST ?= pytest
 	build build-debug build-release build-asan build-gpu \
 	configure-debug configure-release configure-asan configure-gpu \
 	unit-test test-debug test-release test-asan ctest-debug ctest-release ctest-asan \
-	mem-test gpu-mem-test perf-test py-test \
+	mem-test gpu-mem-test perf-test py-test pip-dev pip-release \
 	dtype-coverage-report \
 	format doc clean clean-debug clean-release clean-asan clean-gpu \
 	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-gpu \
@@ -42,6 +43,8 @@ help:
 	@echo "  gpu-mem-test     Run compute-sanitizer memcheck"
 	@echo "  perf-test        Run performance tests from release build"
 	@echo "  py-test          Run python tests"
+	@echo "  pip-dev          Install latest package from TestPyPI"
+	@echo "  pip-release      Install latest package from PyPI"
 	@echo "  dtype-coverage-report  Generate backend/dtype/op dispatch coverage CSV"
 	@echo "  format           Format code"
 	@echo "  doc              Build docs"
@@ -114,9 +117,15 @@ gpu-mem-test: build-gpu
 perf-test: build-release
 	MUNET_RUN_PERF_TESTS=1 ./$(BUILD_RELEASE)/munet_tests --gtest_filter=PerformanceTest.*
 
-py-test: build-debug
-	PYTHONPATH="$(abspath python_src):$(abspath $(BUILD_DEBUG)):$$PYTHONPATH" \
+py-test:
+	python -m pip install -e .
 	$(PYTEST) -q tests
+
+pip-dev:
+	python -m pip install --upgrade --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ $(PYPI_PACKAGE)
+
+pip-release:
+	python -m pip install --upgrade $(PYPI_PACKAGE)
 
 dtype-coverage-report: build-debug
 	./$(BUILD_DEBUG)/munet_dtype_coverage_report > ./$(BUILD_DEBUG)/dtype_coverage_report.csv

@@ -1,10 +1,7 @@
-import sys
 import os
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../../../build"))
 import munet
 import numpy as np
-import os
 import matplotlib.pyplot as plt
 import argparse
 
@@ -185,5 +182,5 @@ for epoch in range(50):
         x_test, y_test = generate_shapes(5)
         visualize_results(model, x_test, y_test, epoch + 1, device)
 
-munet.save(model, "unet_complex.npz")
+munet.save_checkpoint(model, "unet_complex.npz")
 print("Model saved.")

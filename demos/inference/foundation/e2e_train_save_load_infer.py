@@ -1,9 +1,7 @@
 import os
-import sys
 import tempfile
 import numpy as np
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../../../build"))
 import munet
 
 
@@ -49,7 +47,7 @@ def main():
 
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "trained_model.npz")
-        munet.save(model, path)
+        munet.save_deploy(model, path)
         restored = munet.load_for_inference(path)
 
         engine = munet.inference.Engine()

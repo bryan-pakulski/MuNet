@@ -5,11 +5,6 @@ This script demonstrates how to export a PyTorch model to MuNet format.
 """
 
 import sys
-import os
-
-# Add paths
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'build'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'python_src'))
 
 import numpy as np
 
@@ -27,7 +22,7 @@ try:
     MUNET_AVAILABLE = True
 except ImportError:
     MUNET_AVAILABLE = False
-    print("MuNet not available. Build MuNet first with 'make build-release'")
+    print("MuNet not available. Install it with 'python -m pip install munet-nn'")
 
 from pytorch_interop import (
     pytorch_to_munet,

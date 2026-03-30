@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import unittest
 import tempfile
 import subprocess
@@ -75,6 +76,26 @@ class TestBindings(unittest.TestCase):
         # MSE Backward Check
         expected_grad = np.array([0.0, 0.5, 0.0, 0.5], dtype=np.float32)
         self.assertTrue(np.allclose(grad, expected_grad, atol=1e-6))
+
+    def test_available_accelerators_and_devices_introspection(self):
+        accelerators = munet.available_accelerators()
+        self.assertIsInstance(accelerators, list)
+        self.assertGreaterEqual(len(accelerators), 3)
+
+        by_name = {entry["name"]: entry for entry in accelerators}
+        self.assertIn("cpu", by_name)
+        self.assertIn("cuda", by_name)
+        self.assertIn("vulkan", by_name)
+
+        cpu_entry = by_name["cpu"]
+        self.assertTrue(cpu_entry["available"])
+        self.assertGreaterEqual(len(cpu_entry["devices"]), 1)
+        self.assertEqual(cpu_entry["devices"][0].type, munet.DeviceType.CPU)
+
+        devices = munet.available_devices()
+        self.assertIsInstance(devices, list)
+        self.assertGreaterEqual(len(devices), 1)
+        self.assertEqual(devices[0].type, munet.DeviceType.CPU)
 
     def test_cross_entropy_loss(self):
         logits_np = np.array([[2.0, 1.0, 0.1], [0.1, 1.0, 2.0]], dtype=np.float32)
@@ -661,9 +682,9 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "full_model.npz")
-            munet.save(model, path)
+            munet.save_checkpoint(model, path)
 
-            loaded = munet.load(path)
+            loaded = munet.load_checkpoint(path, trusted=False)
             y_ref = np.array(model.forward(x).detach(), copy=False)
             y_loaded = np.array(loaded.forward(x).detach(), copy=False)
             self.assertTrue(np.allclose(y_ref, y_loaded, atol=1e-6))
@@ -688,12 +709,124 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "weights_only.npz")
-            munet.save(src, path)
-            munet.load(dst, path)
+            munet.save_checkpoint(src, path)
+            munet.load_weights_checkpoint(dst, path)
 
             y_src = np.array(src.forward(x).detach(), copy=False)
             y_dst = np.array(dst.forward(x).detach(), copy=False)
             self.assertTrue(np.allclose(y_src, y_dst, atol=1e-6))
+
+    def test_model_serialization_custom_class_rebuild_without_redefinition(self):
+        class TinyGraphNet(munet.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.in_proj = munet.nn.Linear(4, 8)
+                self.out_proj = munet.nn.Linear(8, 2)
+
+            def forward(self, x):
+                h = self.in_proj(x)
+                h = h.relu()
+                return self.out_proj(h)
+
+        model = TinyGraphNet()
+        x = munet.Tensor([2, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array(
+            [[0.2, -0.1, 0.5, 0.7], [1.0, -0.3, 0.4, -0.8]], dtype=np.float32
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "custom_graph_roundtrip.npz")
+            munet.save_checkpoint(model, path)
+
+            del TinyGraphNet
+            loaded = munet.load_checkpoint(path, trusted=True)
+
+            y_ref = np.array(model.forward(x).detach(), copy=False)
+            y_loaded = np.array(loaded.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y_ref, y_loaded, atol=1e-6))
+
+            loss = loaded.forward(x).sum()
+            loaded.zero_grad()
+            loss.backward()
+            self.assertTrue(loaded.named_parameters()["in_proj.weight"].has_grad())
+
+    def test_model_serialization_custom_class_writes_hybrid_payload(self):
+        class TinyHybridNet(munet.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc = munet.nn.Linear(3, 3)
+
+            def forward(self, x):
+                return self.fc(x).relu()
+
+        model = TinyHybridNet()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "custom_hybrid_payload.npz")
+            munet.save_checkpoint(model, path)
+
+            with np.load(path, allow_pickle=True) as state:
+                self.assertIn("__format__", state.files)
+                self.assertEqual(str(state["__format__"]), "munet_hybrid_v1")
+                self.assertIn("__shell__", state.files)
+                cfg = json.loads(str(state["__config__"]))
+                self.assertEqual(cfg["type"], "__custom__")
+
+    def test_model_serialization_checkpoint_builtin_has_no_hybrid_shell(self):
+        model = _sequential([
+            munet.nn.Linear(4, 4),
+            munet.nn.ReLU(),
+        ])
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "builtin_checkpoint.npz")
+            munet.save_checkpoint(model, path)
+            with np.load(path, allow_pickle=True) as state:
+                self.assertNotIn("__shell__", state.files)
+                self.assertNotIn("__format__", state.files)
+                metadata = munet.serialization_metadata(path)
+                self.assertEqual(metadata["artifact_kind"], "training_checkpoint")
+
+    def test_model_serialization_custom_class_non_default_ctor_requires_weights_only(self):
+        class NonDefaultCtorNet(munet.nn.Module):
+            def __init__(self, hidden):
+                super().__init__()
+                self.fc1 = munet.nn.Linear(4, hidden)
+                self.fc2 = munet.nn.Linear(hidden, 2)
+
+            def forward(self, x):
+                return self.fc2(self.fc1(x).relu())
+
+        src = NonDefaultCtorNet(8)
+        dst = NonDefaultCtorNet(8)
+        x = munet.Tensor([1, 4], requires_grad=False)
+        np.array(x, copy=False)[:] = np.array([[0.1, 0.2, -0.3, 0.4]], dtype=np.float32)
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "non_default_ctor_checkpoint.npz")
+            munet.save_checkpoint(src, path)
+
+            with self.assertRaises(ValueError):
+                munet.load_checkpoint(path, trusted=True)
+
+            munet.load_weights_checkpoint(dst, path)
+            y_src = np.array(src.forward(x).detach(), copy=False)
+            y_dst = np.array(dst.forward(x).detach(), copy=False)
+            self.assertTrue(np.allclose(y_src, y_dst, atol=1e-6))
+
+    def test_model_serialization_checkpoint_untrusted_source_execution_blocked(self):
+        class TinyUnsafeNet(munet.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc = munet.nn.Linear(4, 2)
+
+            def forward(self, x):
+                return self.fc(x)
+
+        model = TinyUnsafeNet()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "unsafe_checkpoint.npz")
+            munet.save_checkpoint(model, path)
+            with self.assertRaises(ValueError):
+                munet.load_checkpoint(path, trusted=False)
 
     def test_tensor_factories_and_numpy_roundtrip_preserve_dtype(self):
         half = munet.ones([2, 2], dtype=munet.DataType.Float16)
@@ -731,8 +864,8 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "dtype_model.npz")
-            munet.save(model, path)
-            loaded = munet.load(path)
+            munet.save_checkpoint(model, path)
+            loaded = munet.load_checkpoint(path, trusted=False)
 
             named = loaded.named_parameters()
             self.assertEqual(named["0.weight"].dtype, munet.DataType.Float16)
@@ -777,7 +910,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "metadata_model.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
             metadata = munet.serialization_metadata(path)
             self.assertEqual(metadata["format_name"], "munet_model")
             self.assertEqual(metadata["format_revision"], 1)
@@ -794,6 +927,10 @@ class TestBindings(unittest.TestCase):
             self.assertIn("0.weight", metadata["tensor_names"])
             self.assertTrue(metadata["has_config"])
 
+    def test_legacy_save_load_apis_removed(self):
+        self.assertFalse(hasattr(munet, "save"))
+        self.assertFalse(hasattr(munet, "load"))
+
     def test_model_serialization_rejects_unsupported_revision(self):
         model = _sequential([
             munet.nn.Linear(4, 4),
@@ -802,7 +939,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "bad_revision_model.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
 
             with np.load(path, allow_pickle=True) as state:
                 mutated = {key: state[key] for key in state.files}
@@ -810,7 +947,39 @@ class TestBindings(unittest.TestCase):
             np.savez(path, **mutated)
 
             with self.assertRaises(ValueError):
-                munet.load(path)
+                munet.load_deploy(path)
+
+    def test_checkpoint_serialization_rejects_unsupported_revision(self):
+        model = _sequential([
+            munet.nn.Linear(4, 4),
+            munet.nn.ReLU(),
+        ])
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "bad_checkpoint_revision_model.npz")
+            munet.save_checkpoint(model, path)
+
+            with np.load(path, allow_pickle=True) as state:
+                mutated = {key: state[key] for key in state.files}
+            mutated["__format_revision__"] = np.array(4242)
+            np.savez(path, **mutated)
+
+            with self.assertRaises(ValueError):
+                munet.load_checkpoint(path)
+
+    def test_save_deploy_rejects_custom_module(self):
+        class TinyCustomDeployNet(munet.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc = munet.nn.Linear(4, 2)
+
+            def forward(self, x):
+                return self.fc(x)
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "deploy_custom.npz")
+            with self.assertRaises(ValueError):
+                munet.save_deploy(TinyCustomDeployNet(), path)
 
     def test_model_serialization_rejects_training_payload_keys(self):
         model = _sequential([
@@ -820,7 +989,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "bad_training_payload.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
 
             with np.load(path, allow_pickle=True) as state:
                 mutated = {key: state[key] for key in state.files}
@@ -840,7 +1009,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "deploy_dropout.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
 
             restored = munet.load_for_inference(path)
             y = np.array(restored.forward(x).detach(), copy=False)
@@ -856,7 +1025,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "deploy_alias.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
 
             restored = munet.inference.load_serialized(
                 path,
@@ -878,7 +1047,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "deploy_weights_only.npz")
-            munet.save(src, path)
+            munet.save_deploy(src, path)
             munet.load_weights_for_inference(dst, path)
             y = np.array(dst.forward(x).detach(), copy=False)
             self.assertTrue(np.allclose(y, np.ones((2, 2), dtype=np.float32)))
@@ -901,8 +1070,8 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "non_cpu_dtype_model.npz")
-            munet.save(model, path)
-            loaded = munet.load(path)
+            munet.save_checkpoint(model, path)
+            loaded = munet.load_checkpoint(path, trusted=False)
 
             y_ref = np.array(model.forward(x).detach().to(munet.Device(munet.DeviceType.CPU, 0)), copy=False)
             y_loaded = np.array(
@@ -1027,7 +1196,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "e2e_model.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
             restored = munet.load_for_inference(path)
 
             eng = munet.inference.Engine()

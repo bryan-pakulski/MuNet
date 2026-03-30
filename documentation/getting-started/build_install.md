@@ -1,6 +1,22 @@
 # Build & Install
 
-## Local build
+## Install with pip (recommended)
+
+### Development (editable)
+
+```bash
+python -m pip install -e .
+```
+
+### Wheel build + local install
+
+```bash
+python -m pip install build
+python -m build --wheel
+python -m pip install dist/munet-*.whl
+```
+
+## Local CMake build (without pip packaging)
 
 ```bash
 make build-release
