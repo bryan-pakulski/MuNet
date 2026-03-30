@@ -1773,7 +1773,7 @@ def _build_module_from_config(cfg, *, trusted=False):
         class_qualname = cfg.get('qualname', '')
         class_source = cfg.get('source')
         if not module_path or not class_qualname:
-            raise ValueError("Custom module saved without class reference. Use load_weights(...) for restore into an existing model.")
+            raise ValueError("Custom module saved without class reference. Use load_weights_checkpoint(...) for restore into an existing model.")
         try:
             mod = importlib.import_module(module_path)
             cls = mod
@@ -1783,12 +1783,12 @@ def _build_module_from_config(cfg, *, trusted=False):
             if not trusted:
                 raise ValueError(
                     f"Untrusted custom artifact cannot execute embedded source for '{class_qualname}'. "
-                    "Re-run with trusted=True or use load_weights(...) into an existing model."
+                    "Re-run with trusted=True or use load_weights_checkpoint(...) into an existing model."
                 ) from e
             if class_source is None:
                 raise ValueError(
                     f"Could not reconstruct custom module '{class_qualname}' from module '{module_path}': {e}. "
-                    "Use load_weights(...) with an in-code model definition."
+                    "Use load_weights_checkpoint(...) with an in-code model definition."
                 ) from e
             import types
             dynamic_module = types.ModuleType(f"__munet_dynamic_{module_path.replace('.', '_')}__")
@@ -1804,7 +1804,7 @@ def _build_module_from_config(cfg, *, trusted=False):
         except Exception as ctor_err:
             raise ValueError(
                 f"Custom module '{class_qualname}' must be default-constructible for full reconstruction: {ctor_err}. "
-                "Use load_weights(...) for restore into existing model."
+                "Use load_weights_checkpoint(...) for restore into existing model."
             )
     else:
         raise ValueError(f"Unsupported saved module type: {t}")
@@ -1869,10 +1869,6 @@ def save_checkpoint(module, filename):
     """Save training checkpoint artifact with optional hybrid class/source payload for custom classes."""
     _save_artifact(module, filename, artifact_kind=SERIALIZATION_CHECKPOINT_ARTIFACT_KIND)
 
-def save(module, filename):
-    """Backward-compatible alias for deploy artifact saving."""
-    return save_deploy(module, filename)
-
 def _validate_checkpoint_metadata(state):
     metadata = _serialization_metadata_from_state(state)
     if metadata["format_name"] != SERIALIZATION_FORMAT_NAME:
@@ -1914,7 +1910,7 @@ def load_checkpoint(arg, filename=None, device=None, trusted=False):
                         if name.startswith('__tensor_') and name.endswith('__')
                     }
                     return _rebuild_from_shell(shell, shell_tensors, device=device)
-                raise ValueError("File does not contain architecture config. Use load_weights(...) for weights-only restore.")
+                raise ValueError("File does not contain architecture config. Use load_weights_checkpoint(...) for weights-only restore.")
             config = json.loads(str(state['__config__']))
             module = _build_module_from_config(config, trusted=trusted)
             return _apply_state(module, state)
@@ -1947,22 +1943,22 @@ def load_deploy(arg, filename=None, device=None):
             _validate_serialization_metadata(state)
             return _apply_state(module, state)
 
-def load(arg, filename=None, device=None, trusted=True):
-    """Backward-compatible alias for checkpoint loading."""
-    return load_checkpoint(arg, filename, device=device, trusted=trusted)
-
 def load_for_inference(arg, filename=None, device=None):
     """Load a deploy artifact and normalize the result for inference execution."""
     module = load_deploy(arg, filename, device=device) if filename is not None else load_deploy(arg, device=device)
     return _normalize_loaded_module_for_inference(module, device)
 
-def load_weights(module, filename):
-    """Alias for checkpoint/deploy weights-only restore."""
+def load_weights_checkpoint(module, filename):
+    """Checkpoint weights-only restore into existing architecture."""
     return load_checkpoint(module, filename)
+
+def load_weights_deploy(module, filename):
+    """Deploy weights-only restore into existing architecture."""
+    return load_deploy(module, filename)
 
 def load_weights_for_inference(module, filename, device=None):
     """Deploy weights-only restore + eval normalization."""
-    load_deploy(module, filename)
+    load_weights_deploy(module, filename)
     return _normalize_loaded_module_for_inference(module, device)
 
 def _load_python_helper(filename):

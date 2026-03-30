@@ -25,14 +25,14 @@ def main():
 
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "model_full.npz")
-        munet.save(model, path)
+        munet.save_checkpoint(model, path)
 
         # Full reconstruction from file (no original class definition required for supported built-ins).
-        restored = munet.load(path)
+        restored = munet.load_checkpoint(path, trusted=False)
 
         # Weights-only restore into an existing definition.
         target = make_model()
-        munet.load_weights(target, path)
+        munet.load_weights_checkpoint(target, path)
 
         with munet.no_grad():
             y0 = np.array(model.forward(x).detach(), copy=False)

@@ -138,7 +138,7 @@ Phase 5 keeps these suites documented even when the current validation environme
 
 ## Migration notes
 
-- **Deploy loading:** use `munet.load_for_inference(...)` or `munet.inference.load_serialized(...)` for deployment code; plain `munet.load(...)` remains the generic reconstruction path.
+- **Deploy loading:** use `munet.load_for_inference(...)` or `munet.inference.load_serialized(...)` for deployment code; use `munet.load_checkpoint(...)` for training/checkpoint reconstruction.
 - **Deploy artifacts:** serialized `.npz` artifacts are now validated as **runtime-only** payloads, and training/checkpoint-style keys are rejected during deploy loading.
 - **ONNX packaging:** only native-sequential ONNX conversions should be promoted as deploy artifacts (`compile_onnx(..., output_path="model.npz")`); graph-runtime ONNX results remain development tooling.
 - **Performance tests:** GPU comparison tests are now skipped cleanly unless both CUDA and Vulkan are available and `MUNET_RUN_PERF_TESTS=1` is set, which keeps CPU-only CI green without hiding the accelerator benchmark suite.

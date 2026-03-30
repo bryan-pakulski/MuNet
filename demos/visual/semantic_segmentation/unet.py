@@ -185,5 +185,5 @@ for epoch in range(50):
         x_test, y_test = generate_shapes(5)
         visualize_results(model, x_test, y_test, epoch + 1, device)
 
-munet.save(model, "unet_complex.npz")
+munet.save_checkpoint(model, "unet_complex.npz")
 print("Model saved.")

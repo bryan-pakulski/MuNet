@@ -662,9 +662,9 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "full_model.npz")
-            munet.save(model, path)
+            munet.save_checkpoint(model, path)
 
-            loaded = munet.load(path)
+            loaded = munet.load_checkpoint(path, trusted=False)
             y_ref = np.array(model.forward(x).detach(), copy=False)
             y_loaded = np.array(loaded.forward(x).detach(), copy=False)
             self.assertTrue(np.allclose(y_ref, y_loaded, atol=1e-6))
@@ -689,8 +689,8 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "weights_only.npz")
-            munet.save(src, path)
-            munet.load(dst, path)
+            munet.save_checkpoint(src, path)
+            munet.load_weights_checkpoint(dst, path)
 
             y_src = np.array(src.forward(x).detach(), copy=False)
             y_dst = np.array(dst.forward(x).detach(), copy=False)
@@ -787,7 +787,7 @@ class TestBindings(unittest.TestCase):
             with self.assertRaises(ValueError):
                 munet.load_checkpoint(path, trusted=True)
 
-            munet.load_weights(dst, path)
+            munet.load_weights_checkpoint(dst, path)
             y_src = np.array(src.forward(x).detach(), copy=False)
             y_dst = np.array(dst.forward(x).detach(), copy=False)
             self.assertTrue(np.allclose(y_src, y_dst, atol=1e-6))
@@ -844,8 +844,8 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "dtype_model.npz")
-            munet.save(model, path)
-            loaded = munet.load(path)
+            munet.save_checkpoint(model, path)
+            loaded = munet.load_checkpoint(path, trusted=False)
 
             named = loaded.named_parameters()
             self.assertEqual(named["0.weight"].dtype, munet.DataType.Float16)
@@ -890,7 +890,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "metadata_model.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
             metadata = munet.serialization_metadata(path)
             self.assertEqual(metadata["format_name"], "munet_model")
             self.assertEqual(metadata["format_revision"], 1)
@@ -907,6 +907,10 @@ class TestBindings(unittest.TestCase):
             self.assertIn("0.weight", metadata["tensor_names"])
             self.assertTrue(metadata["has_config"])
 
+    def test_legacy_save_load_apis_removed(self):
+        self.assertFalse(hasattr(munet, "save"))
+        self.assertFalse(hasattr(munet, "load"))
+
     def test_model_serialization_rejects_unsupported_revision(self):
         model = _sequential([
             munet.nn.Linear(4, 4),
@@ -915,7 +919,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "bad_revision_model.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
 
             with np.load(path, allow_pickle=True) as state:
                 mutated = {key: state[key] for key in state.files}
@@ -923,7 +927,7 @@ class TestBindings(unittest.TestCase):
             np.savez(path, **mutated)
 
             with self.assertRaises(ValueError):
-                munet.load(path)
+                munet.load_deploy(path)
 
     def test_checkpoint_serialization_rejects_unsupported_revision(self):
         model = _sequential([
@@ -965,7 +969,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "bad_training_payload.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
 
             with np.load(path, allow_pickle=True) as state:
                 mutated = {key: state[key] for key in state.files}
@@ -985,7 +989,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "deploy_dropout.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
 
             restored = munet.load_for_inference(path)
             y = np.array(restored.forward(x).detach(), copy=False)
@@ -1001,7 +1005,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "deploy_alias.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
 
             restored = munet.inference.load_serialized(
                 path,
@@ -1023,7 +1027,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "deploy_weights_only.npz")
-            munet.save(src, path)
+            munet.save_deploy(src, path)
             munet.load_weights_for_inference(dst, path)
             y = np.array(dst.forward(x).detach(), copy=False)
             self.assertTrue(np.allclose(y, np.ones((2, 2), dtype=np.float32)))
@@ -1046,8 +1050,8 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "non_cpu_dtype_model.npz")
-            munet.save(model, path)
-            loaded = munet.load(path)
+            munet.save_checkpoint(model, path)
+            loaded = munet.load_checkpoint(path, trusted=False)
 
             y_ref = np.array(model.forward(x).detach().to(munet.Device(munet.DeviceType.CPU, 0)), copy=False)
             y_loaded = np.array(
@@ -1172,7 +1176,7 @@ class TestBindings(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "e2e_model.npz")
-            munet.save(model, path)
+            munet.save_deploy(model, path)
             restored = munet.load_for_inference(path)
 
             eng = munet.inference.Engine()

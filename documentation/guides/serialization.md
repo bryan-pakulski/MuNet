@@ -6,7 +6,6 @@ MuNet now has two explicit artifact APIs:
 
 1. **Deploy artifact** (runtime-only, lean)
    - Save: `munet.save_deploy(model, "model.npz")`
-   - Backward alias: `munet.save(...)`
    - Load (Python): `munet.load_deploy(...)` or `munet.load_for_inference(...)`
    - Load (C++): `munet::inference::load_serialized(...)`
    - Contract goal: minimal runtime structure + tensor state for inference.
@@ -14,7 +13,6 @@ MuNet now has two explicit artifact APIs:
 2. **Checkpoint artifact** (training/inference round-trip)
    - Save: `munet.save_checkpoint(model, "checkpoint.npz")`
    - Load: `munet.load_checkpoint(...)`
-   - Backward alias: `munet.load(...)`
    - Contract goal: support model reconstruction (including custom Python classes), weights restore, and continued training.
 
 ## 2) Metadata contract
@@ -56,7 +54,7 @@ Custom-checkpoint hybrid payload marker:
 |---|---|---|---|
 | Python full load (`load_deploy`) | Deploy | ✅ | Built-in module configs only; strict runtime metadata validation. |
 | Python full load (`load_checkpoint`) | Checkpoint | ✅ | Supports built-ins and custom classes (custom fallback depends on trust policy). |
-| Python weights-only (`load_weights`) | Deploy / Checkpoint | ✅ | Existing in-code model definition required. |
+| Python weights-only (`load_weights_deploy` / `load_weights_checkpoint`) | Deploy / Checkpoint | ✅ | Existing in-code model definition required. |
 | Python inference normalize (`load_for_inference`) | Deploy | ✅ | Enforces eval mode and optional device move. |
 | C++ `inference::load_serialized` | Deploy | ✅ | Strict deploy contract. |
 | C++ `inference::load_serialized` on checkpoint/custom | Checkpoint/custom | ❌ | Rejected by design (wrong artifact kind / unsupported custom type). |
@@ -81,4 +79,4 @@ Use `trusted=True` only for artifacts from trusted producers.
 
 - Use `save_deploy` + `load_for_inference` for production runtime artifacts.
 - Use `save_checkpoint` + `load_checkpoint` for training workflows, custom classes, and iterative experimentation.
-- Use `load_weights` when architecture remains in code and only tensor state should be restored.
+- Use `load_weights_deploy`/`load_weights_checkpoint` when architecture remains in code and only tensor state should be restored.

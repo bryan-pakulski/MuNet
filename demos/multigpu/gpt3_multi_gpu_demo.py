@@ -248,7 +248,7 @@ def train(args):
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
         model_path = os.path.join(args.output_dir, "model.bin")
-        munet.save(model, model_path)
+        munet.save_checkpoint(model, model_path)
         print(f"Saved model to {model_path}")
 
 
