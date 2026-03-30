@@ -30,6 +30,11 @@ jobs:
           CIBW_BUILD: cp310-* cp311-* cp312-*
           CIBW_SKIP: "*-musllinux_*"
           CIBW_ARCHS_LINUX: x86_64
+          # Custom manylinux image must include CUDA toolkit + Vulkan SDK/loader.
+          CIBW_MANYLINUX_X86_64_IMAGE: ghcr.io/bryan-pakulski/manylinux_2_28_x86_64_cuda_vulkan:latest
+          CIBW_BEFORE_ALL_LINUX: |
+            nvcc --version
+            vulkaninfo --summary || true
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4

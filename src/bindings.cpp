@@ -15,6 +15,14 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#ifdef MUNET_USE_CUDA
+#include <cuda_runtime_api.h>
+#endif
+
+#ifdef MUNET_USE_VULKAN
+#include <vulkan/vulkan.h>
+#endif
+
 namespace py = pybind11;
 using namespace munet;
 
@@ -105,6 +113,53 @@ Tensor make_constant_tensor(Shape shape, Device device, DataType dtype,
   Tensor tensor(shape, device, dtype, requires_grad);
   tensor.fill_(value);
   return tensor;
+}
+
+py::dict accelerator_probe_dict(DeviceType type, const std::string &name,
+                                bool compiled,
+                                const std::string &version = "") {
+  py::dict out;
+  out["name"] = py::cast(name);
+  out["type"] = py::cast(type);
+  out["compiled"] = py::cast(compiled);
+  out["version"] = py::cast(version);
+
+  py::list devices;
+  std::string detail;
+  bool available = false;
+  if (compiled) {
+    constexpr int kMaxProbeDevices = 32;
+    for (int index = 0; index < kMaxProbeDevices; ++index) {
+      try {
+        Device candidate{type, index};
+        auto backend = BackendManager::get(candidate);
+        backend->synchronize();
+        devices.append(py::cast(candidate));
+        available = true;
+      } catch (const std::exception &e) {
+        if (index == 0) {
+          detail = e.what();
+        }
+        break;
+      } catch (...) {
+        if (index == 0) {
+          detail = "Unknown runtime probe failure.";
+        }
+        break;
+      }
+    }
+
+    if (!available && detail.empty()) {
+      detail = "No runtime devices detected.";
+    }
+  } else {
+    detail = "Backend not compiled into this build.";
+  }
+
+  out["available"] = py::cast(available);
+  out["devices"] = std::move(devices);
+  out["detail"] = py::cast(detail);
+  return out;
 }
 
 // Helper to apply a single index/slice to a tensor
@@ -598,6 +653,98 @@ PYBIND11_MODULE(munet, m) {
       py::arg("device"), py::arg("feature"), py::arg("dtype"),
       "Returns whether the selected backend advertises native support for a "
       "feature/dtype combination.");
+
+  m.def(
+      "available_accelerators",
+      []() {
+        py::list out;
+
+        py::dict cpu;
+        cpu["name"] = py::cast(std::string("cpu"));
+        cpu["type"] = py::cast(DeviceType::CPU);
+        cpu["compiled"] = py::cast(true);
+        cpu["available"] = py::cast(true);
+        cpu["version"] = py::cast(std::string(""));
+        py::list cpu_devices;
+        cpu_devices.append(py::cast(Device{DeviceType::CPU, 0}));
+        cpu["devices"] = std::move(cpu_devices);
+        cpu["detail"] = py::cast(std::string("Always available."));
+        out.append(std::move(cpu));
+
+#ifdef MUNET_USE_CUDA
+        int runtime_version = 0;
+        int driver_version = 0;
+        std::string cuda_version = "";
+        if (cudaRuntimeGetVersion(&runtime_version) == cudaSuccess) {
+          cuda_version +=
+              "runtime=" + std::to_string(runtime_version / 1000) + "." +
+              std::to_string((runtime_version % 1000) / 10);
+        }
+        if (cudaDriverGetVersion(&driver_version) == cudaSuccess) {
+          if (!cuda_version.empty()) {
+            cuda_version += ", ";
+          }
+          cuda_version +=
+              "driver=" + std::to_string(driver_version / 1000) + "." +
+              std::to_string((driver_version % 1000) / 10);
+        }
+        out.append(accelerator_probe_dict(DeviceType::CUDA, "cuda", true,
+                                          cuda_version));
+#else
+        out.append(accelerator_probe_dict(DeviceType::CUDA, "cuda", false));
+#endif
+
+#ifdef MUNET_USE_VULKAN
+        uint32_t vk_header_version_complete = VK_HEADER_VERSION_COMPLETE;
+        std::string vk_version =
+            std::to_string(VK_API_VERSION_MAJOR(vk_header_version_complete)) +
+            "." +
+            std::to_string(VK_API_VERSION_MINOR(vk_header_version_complete)) +
+            "." +
+            std::to_string(VK_API_VERSION_PATCH(vk_header_version_complete));
+        out.append(accelerator_probe_dict(DeviceType::VULKAN, "vulkan", true,
+                                          vk_version));
+#else
+        out.append(accelerator_probe_dict(DeviceType::VULKAN, "vulkan", false));
+#endif
+        return out;
+      },
+      "Returns runtime accelerator availability and detected device indices.");
+
+  m.def(
+      "available_devices",
+      []() {
+        py::list devices;
+        devices.append(py::cast(Device{DeviceType::CPU, 0}));
+
+#ifdef MUNET_USE_CUDA
+        for (int index = 0; index < 32; ++index) {
+          try {
+            Device d{DeviceType::CUDA, index};
+            auto backend = BackendManager::get(d);
+            backend->synchronize();
+            devices.append(py::cast(d));
+          } catch (...) {
+            break;
+          }
+        }
+#endif
+
+#ifdef MUNET_USE_VULKAN
+        for (int index = 0; index < 32; ++index) {
+          try {
+            Device d{DeviceType::VULKAN, index};
+            auto backend = BackendManager::get(d);
+            backend->synchronize();
+            devices.append(py::cast(d));
+          } catch (...) {
+            break;
+          }
+        }
+#endif
+        return devices;
+      },
+      "Returns concrete available devices (CPU plus detected accelerator devices).");
 
   m.def(
       "zeros",

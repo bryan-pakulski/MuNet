@@ -77,6 +77,26 @@ class TestBindings(unittest.TestCase):
         expected_grad = np.array([0.0, 0.5, 0.0, 0.5], dtype=np.float32)
         self.assertTrue(np.allclose(grad, expected_grad, atol=1e-6))
 
+    def test_available_accelerators_and_devices_introspection(self):
+        accelerators = munet.available_accelerators()
+        self.assertIsInstance(accelerators, list)
+        self.assertGreaterEqual(len(accelerators), 3)
+
+        by_name = {entry["name"]: entry for entry in accelerators}
+        self.assertIn("cpu", by_name)
+        self.assertIn("cuda", by_name)
+        self.assertIn("vulkan", by_name)
+
+        cpu_entry = by_name["cpu"]
+        self.assertTrue(cpu_entry["available"])
+        self.assertGreaterEqual(len(cpu_entry["devices"]), 1)
+        self.assertEqual(cpu_entry["devices"][0].type, munet.DeviceType.CPU)
+
+        devices = munet.available_devices()
+        self.assertIsInstance(devices, list)
+        self.assertGreaterEqual(len(devices), 1)
+        self.assertEqual(devices[0].type, munet.DeviceType.CPU)
+
     def test_cross_entropy_loss(self):
         logits_np = np.array([[2.0, 1.0, 0.1], [0.1, 1.0, 2.0]], dtype=np.float32)
 
