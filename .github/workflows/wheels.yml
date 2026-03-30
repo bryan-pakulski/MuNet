@@ -37,11 +37,20 @@ jobs:
           CIBW_MANYLINUX_X86_64_IMAGE: sameli/manylinux_2_28_x86_64_cuda_12.3
           CIBW_BEFORE_ALL_LINUX: |
             set -euxo pipefail
-            dnf -y install vulkan-devel vulkan-tools glslang shaderc
+
+            # Required Vulkan dev/runtime bits for CMake find_package(Vulkan)
+            dnf -y install vulkan-devel vulkan-tools
+
             # Ensure canonical CUDA symlink exists for downstream tooling.
             if [ -d /usr/local/cuda-12.3 ] && [ ! -e /usr/local/cuda ]; then
               ln -s /usr/local/cuda-12.3 /usr/local/cuda
             fi
+
+            # Optional GLSL compiler tooling (names vary by repo/image)
+            dnf -y install glslang-tools || true
+            dnf -y install shaderc-devel || true
+            dnf -y install shaderc || true
+
             vulkaninfo --summary || true
             glslc --version || true
             nvcc --version
