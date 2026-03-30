@@ -1,6 +1,6 @@
 import os
 
-import munet
+import munet_nn as munet
 import numpy as np
 import matplotlib.pyplot as plt
 import argparse

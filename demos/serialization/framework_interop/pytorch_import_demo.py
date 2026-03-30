@@ -9,7 +9,7 @@ import sys
 import numpy as np
 
 try:
-    import munet
+    import munet_nn as munet
 except ImportError:
     print("MuNet not available. Install it with 'python -m pip install munet-nn'")
     sys.exit(1)

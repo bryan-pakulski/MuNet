@@ -123,7 +123,7 @@ There is no runtime fallback path in conversion.
 You can inspect a downloaded ONNX model without compiling it natively:
 
 ```python
-import munet
+import munet_nn as munet
 report = munet.inference.onnx_conversion_coverage_report("yolov5n.onnx")
 print(report["unique_ops"])
 print("unsupported:", report["coverage"]["unsupported"])
@@ -135,7 +135,7 @@ print("runtime role:", report["runtime_role"])
 To fetch the reference model used by tests/utilities:
 
 ```python
-import munet
+import munet_nn as munet
 munet.inference.download_yolov5n_onnx("/tmp/yolov5n.onnx")
 ```
 

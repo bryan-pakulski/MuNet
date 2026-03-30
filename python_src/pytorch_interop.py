@@ -26,7 +26,7 @@ except ImportError:
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'build'))
 
 try:
-    import munet
+    import munet_nn as munet
     MUNET_AVAILABLE = True
 except ImportError:
     MUNET_AVAILABLE = False

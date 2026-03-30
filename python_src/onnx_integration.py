@@ -23,7 +23,7 @@ class ONNXEngine:
 
     def __init__(self, model_path, device=None, providers=None):
         import numpy as np
-        import munet
+        import munet_nn as munet
 
         try:
             import onnxruntime as ort
@@ -363,7 +363,7 @@ _NATIVE_SEQUENTIAL_PASS_THROUGH_OPS = {"Identity"}
 
 def _try_compile_onnx_native_sequential_module(model, debug=False):
     import numpy as np
-    import munet
+    import munet_nn as munet
     import onnx
     from onnx import numpy_helper
 
@@ -759,7 +759,7 @@ class _ONNXGraphModule:
 
 def _compile_onnx_graph_module(model_path):
     import numpy as np
-    import munet
+    import munet_nn as munet
     import onnx
     model = onnx.load(model_path)
     return _ONNXGraphModule(model, munet, np)
@@ -871,7 +871,7 @@ def compile_onnx(model_path, output_path=None, debug=False):
     No fallback execution/runtime path is used.
     """
     import onnx
-    import munet
+    import munet_nn as munet
 
     model = onnx.load(model_path)
     fail_info = _collect_conversion_failures(model.graph)

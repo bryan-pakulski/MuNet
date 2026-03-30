@@ -3,7 +3,7 @@ import pytest
 np = pytest.importorskip("numpy")
 
 try:
-    import munet
+    import munet_nn as munet
 except Exception as exc:  # pragma: no cover - environment-dependent import
     pytest.skip(f"munet import unavailable: {exc}", allow_module_level=True)
 

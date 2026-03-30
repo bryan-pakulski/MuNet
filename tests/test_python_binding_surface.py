@@ -1,7 +1,7 @@
 import pytest
 
 try:
-    import munet
+    import munet_nn as munet
 except Exception as exc:  # pragma: no cover
     pytest.skip(f"munet import unavailable: {exc}", allow_module_level=True)
 

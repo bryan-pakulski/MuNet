@@ -18,7 +18,7 @@ except ImportError:
     sys.exit(1)
 
 try:
-    import munet
+    import munet_nn as munet
     MUNET_AVAILABLE = True
 except ImportError:
     MUNET_AVAILABLE = False

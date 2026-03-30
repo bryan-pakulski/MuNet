@@ -1,6 +1,6 @@
 import numpy as np
 
-import munet
+import munet_nn as munet
 
 
 class TinyLLM(munet.nn.Module):

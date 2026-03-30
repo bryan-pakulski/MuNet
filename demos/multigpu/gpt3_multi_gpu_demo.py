@@ -15,7 +15,7 @@ import argparse
 import os
 import numpy as np
 
-import munet
+import munet_nn as munet
 from munet import nn
 
 

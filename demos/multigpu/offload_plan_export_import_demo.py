@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import numpy as np
 
-import munet
+import munet_nn as munet
 
 CPU = munet.Device(munet.DeviceType.CPU, 0)
 

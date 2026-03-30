@@ -17,7 +17,7 @@ for build_dir in (
         sys.path.insert(0, build_dir)
 
 try:
-    import munet
+    import munet_nn as munet
 except ImportError:
     subprocess.run(["make", "build-debug", "-j4"], cwd=repo_root, check=True)
     for build_dir in (
@@ -27,7 +27,7 @@ except ImportError:
     ):
         if os.path.isdir(build_dir):
             sys.path.insert(0, build_dir)
-    import munet
+    import munet_nn as munet
 
 
 def test_munet_demo_smoke_forward_shape_and_finiteness():

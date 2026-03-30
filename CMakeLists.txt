@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(MuNet LANGUAGES CXX)
+project(MuNet_NN LANGUAGES CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -167,29 +167,29 @@ if(MUNET_INFERENCE_REJECTS_TRAINING_HEADERS)
 endif()
 
 # --- Python Bindings ---
-pybind11_add_module(munet src/bindings.cpp)
-target_link_libraries(munet PRIVATE munet_training munet_build_flags)
-target_compile_definitions(munet PRIVATE MUNET_PY_HELPER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/python_src")
+pybind11_add_module(munet_nn src/bindings.cpp)
+target_link_libraries(munet_nn PRIVATE munet_training munet_build_flags)
+target_compile_definitions(munet_nn PRIVATE MUNET_PY_HELPER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/python_src")
 
 # Copy helper python file beside the built module in each config build dir
-add_custom_command(TARGET munet POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:munet>/python_src
+add_custom_command(TARGET munet_nn POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:munet_nn>/python_src
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
-            $<TARGET_FILE_DIR:munet>/python_src/onnx_integration.py
+            $<TARGET_FILE_DIR:munet_nn>/python_src/onnx_integration.py
 )
 
 # Copy the produced extension module into top-level build/
-# This gives you build/munet*.so regardless of which split build dir built it.
-add_custom_command(TARGET munet POST_BUILD
+# This gives you build/munet_nn*.so regardless of which split build dir built it.
+add_custom_command(TARGET munet_nn POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/build
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:munet>
+            $<TARGET_FILE:munet_nn>
             ${CMAKE_SOURCE_DIR}/build/
 )
 
 # Optional: also copy helper python file to top-level build/python_src
-add_custom_command(TARGET munet POST_BUILD
+add_custom_command(TARGET munet_nn POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/build/python_src
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
@@ -197,7 +197,7 @@ add_custom_command(TARGET munet POST_BUILD
 )
 
 # Install extension + helper assets for pip/wheel installs.
-install(TARGETS munet
+install(TARGETS munet_nn
     LIBRARY DESTINATION .
     RUNTIME DESTINATION .
     ARCHIVE DESTINATION .

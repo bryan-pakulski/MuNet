@@ -19,7 +19,7 @@ import threading
 import time
 import numpy as np
 
-import munet
+import munet_nn as munet
 
 
 CPU = munet.Device(munet.DeviceType.CPU, 0)

@@ -40,7 +40,7 @@ for build_dir in (
         sys.path.insert(0, build_dir)
 
 try:
-    import munet
+    import munet_nn as munet
 except ImportError:
     subprocess.run(["make", "build-debug", "-j4"], cwd=repo_root, check=True)
     for build_dir in (
@@ -50,8 +50,9 @@ except ImportError:
     ):
         if os.path.isdir(build_dir):
             sys.path.insert(0, build_dir)
-    import munet
-from munet import nn as munet_nn
+    import munet_nn as munet
+
+from munet_nn import nn as nn
 from pytorch_interop import PyTorchInterop
 
 
@@ -67,7 +68,7 @@ class TestPyTorchInteropBasic:
     def test_save_linear_weights(self):
         """Test saving MuNet Linear weights to PyTorch format."""
         # Create MuNet Linear layer
-        munet_linear = munet_nn.Linear(10, 5)
+        munet_linear = nn.Linear(10, 5)
         
         # Initialize with known weights
         weight_data = np.random.randn(5, 10).astype(np.float32)
@@ -93,7 +94,7 @@ class TestPyTorchInteropBasic:
         torch_linear.bias.data = torch.randn(5)
         
         # Create MuNet Linear layer
-        munet_linear = munet_nn.Linear(10, 5)
+        munet_linear = nn.Linear(10, 5)
         
         # Load weights
         interop = PyTorchInterop()
@@ -127,7 +128,7 @@ class TestPyTorchInteropRoundTrip:
         
         # Convert to MuNet
         interop = PyTorchInterop()
-        munet_model = munet_nn.Linear(20, 10)
+        munet_model = nn.Linear(20, 10)
         interop.load_weights(munet_model, {
             'weight': original_weight,
             'bias': original_bias
@@ -149,7 +150,7 @@ class TestPyTorchInteropRoundTrip:
         
         # Convert to MuNet
         interop = PyTorchInterop()
-        munet_conv = munet_nn.Conv2d(3, 16, kernel_size=3, padding=1)
+        munet_conv = nn.Conv2d(3, 16, kernel_size=3, padding=1)
         interop.load_weights(munet_conv, {
             'weight': original_weight,
             'bias': original_bias
@@ -180,10 +181,10 @@ class TestPyTorchInteropRoundTrip:
         }
         
         # Create MuNet equivalent
-        munet_model = munet_nn.Sequential(
-            munet_nn.Linear(10, 20),
-            munet_nn.ReLU(),
-            munet_nn.Linear(20, 10)
+        munet_model = nn.Sequential(
+            nn.Linear(10, 20),
+            nn.ReLU(),
+            nn.Linear(20, 10)
         )
         
         # Load weights
@@ -206,7 +207,7 @@ class TestPyTorchInteropFileIO:
     
     def test_save_to_file(self):
         """Test saving MuNet weights to PyTorch .pt file."""
-        munet_linear = munet_nn.Linear(10, 5)
+        munet_linear = nn.Linear(10, 5)
         weight_data = np.random.randn(5, 10).astype(np.float32)
         bias_data = np.random.randn(5).astype(np.float32)
         munet_linear.weight.copy_from_numpy(weight_data.T.copy())
@@ -247,7 +248,7 @@ class TestPyTorchInteropFileIO:
             }, temp_path)
             
             # Load into MuNet
-            munet_linear = munet_nn.Linear(10, 5)
+            munet_linear = nn.Linear(10, 5)
             interop = PyTorchInterop()
             interop.load_from_file(munet_linear, temp_path)
             
@@ -273,7 +274,7 @@ class TestPyTorchInteropBatchNorm:
         torch_bn.running_mean = torch.randn(10)
         torch_bn.running_var = torch.abs(torch.randn(10)) + 0.1
         
-        munet_bn = munet_nn.BatchNorm2d(10)
+        munet_bn = nn.BatchNorm2d(10)
         
         interop = PyTorchInterop()
         interop.load_weights(munet_bn, {
@@ -303,7 +304,7 @@ class TestPyTorchInteropInference:
         torch_linear.eval()
         
         # Create MuNet model and load weights
-        munet_linear = munet_nn.Linear(10, 5)
+        munet_linear = nn.Linear(10, 5)
         interop = PyTorchInterop()
         interop.load_weights(munet_linear, {
             'weight': torch_linear.weight.detach().numpy(),
@@ -329,7 +330,7 @@ class TestPyTorchInteropInference:
         torch_conv.eval()
         
         # Create MuNet Conv2d
-        munet_conv = munet_nn.Conv2d(3, 8, kernel_size=3, padding=1)
+        munet_conv = nn.Conv2d(3, 8, kernel_size=3, padding=1)
         interop = PyTorchInterop()
         interop.load_weights(munet_conv, {
             'weight': torch_conv.weight.detach().numpy(),

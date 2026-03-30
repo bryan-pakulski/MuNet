@@ -281,7 +281,7 @@ public:
   }
 };
 
-PYBIND11_MODULE(munet, m) {
+PYBIND11_MODULE(munet_nn, m) {
   m.doc() = "MuNet: C++ Machine Learning Framework";
 
   // ============================================================================
@@ -1373,26 +1373,26 @@ PYBIND11_MODULE(munet, m) {
 class no_grad:
     """Context-manager that disables gradient calculation."""
     def __enter__(self):
-        import munet
+        import munet_nn as munet
         self.prev = munet.GradMode.is_enabled()
         munet.GradMode.set_enabled(False)
     def __exit__(self, exc_type, exc_val, exc_tb):
-        import munet
+        import munet_nn as munet
         munet.GradMode.set_enabled(self.prev)
 
 class enable_grad:
     """Context-manager that enables gradient calculation."""
     def __enter__(self):
-        import munet
+        import munet_nn as munet
         self.prev = munet.GradMode.is_enabled()
         munet.GradMode.set_enabled(True)
     def __exit__(self, exc_type, exc_val, exc_tb):
-        import munet
+        import munet_nn as munet
         munet.GradMode.set_enabled(self.prev)
 
 def _tensor_to_numpy(t):
     import numpy as np
-    import munet
+    import munet_nn as munet
 
     cpu = munet.Device(munet.DeviceType.CPU, 0)
     td = t.detach()
@@ -1402,7 +1402,7 @@ def _tensor_to_numpy(t):
 
 def _copy_numpy_into_tensor(t, arr):
     import numpy as np
-    import munet
+    import munet_nn as munet
 
     req = bool(t.requires_grad)
     target = t.device
@@ -1673,7 +1673,7 @@ def _maybe_source_for_class(cls):
 
 def _extract_tensors_and_shell(obj, path=""):
     import pickle
-    import munet
+    import munet_nn as munet
 
     tensors = {}
     counter = [0]
@@ -1753,7 +1753,7 @@ def _resolve_class_from_shell(class_module, class_qualname, class_source=None):
     )
 
 def _rebuild_from_shell(shell, tensors, device=None):
-    import munet
+    import munet_nn as munet
 
     def rebuild(value):
         if isinstance(value, dict):
@@ -1875,7 +1875,7 @@ def _get_config_with_custom(module, allow_custom, include_source):
 
 def _build_module_from_config(cfg, *, trusted=False):
     import importlib
-    import munet
+    import munet_nn as munet
 
     t = cfg['type']
     opts = _tensor_options_for_dtype(cfg.get('dtype', 'float32'))

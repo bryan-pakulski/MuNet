@@ -24,14 +24,14 @@ for candidate in candidate_build_dirs:
         sys.path.insert(0, candidate)
 
 try:
-    import munet
+    import munet_nn as munet
 except ImportError as e:
     print("\n[INFO] munet import failed; attempting local build for tests...\n")
     subprocess.run(["make", "build-debug", "-j4"], cwd=repo_root, check=True)
     for candidate in candidate_build_dirs:
         if candidate not in sys.path and os.path.isdir(candidate):
             sys.path.insert(0, candidate)
-    import munet
+    import munet_nn as munet
 
 
 def _sequential(layers):

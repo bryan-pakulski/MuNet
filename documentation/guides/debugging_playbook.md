@@ -15,7 +15,7 @@ cmake --build build/debug -j
 For Python runs, prefer the just-built module:
 
 ```bash
-PYTHONPATH=build/debug python -c "import munet; print('ok')"
+PYTHONPATH=build/debug python -c "import munet_nn as munet; print('ok')"
 ```
 
 ---
@@ -45,7 +45,7 @@ Confirm:
 
 ```bash
 PYTHONPATH=build/debug python - <<'PY'
-import munet
+import munet_nn as munet
 print(hasattr(munet, "matmul"))
 x = munet.ones((2,2)); y = munet.ones((2,2))
 print((x @ y).shape, x.matmul(y).shape, munet.matmul(x, y).shape)
@@ -192,7 +192,7 @@ cmake --build build/debug -j
 
 # Python binding sanity
 PYTHONPATH=build/debug python - <<'PY'
-import munet
+import munet_nn as munet
 print("matmul:", hasattr(munet, "matmul"))
 PY
 ```

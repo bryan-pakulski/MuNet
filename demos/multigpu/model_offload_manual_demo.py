@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import numpy as np
 
-import munet
+import munet_nn as munet
 
 
 CPU = munet.Device(munet.DeviceType.CPU, 0)
