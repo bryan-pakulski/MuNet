@@ -971,6 +971,22 @@ TEST(InferenceTest, LoadSerializedSupportsRMSNormConfig) {
   std::remove(path.string().c_str());
 }
 
+TEST(InferenceTest, LoadSerializedRejectsCustomPythonConfigArtifacts) {
+  const std::string config =
+      R"({"type":"__custom__","module":"demo","qualname":"DemoNet"})";
+  const auto path =
+      write_npz_artifact("munet_cpp_reject_custom_python_config", config, {});
+
+  EXPECT_THROW(
+      {
+        auto module = inference::load_serialized(path.string());
+        (void)module;
+      },
+      std::runtime_error);
+
+  std::remove(path.string().c_str());
+}
+
 TEST(InferenceTest, EngineLoadCanAcceptSerializedArtifactPath) {
   Tensor weight({2, 2}, Device{DeviceType::CPU, 0}, DataType::Float32, false);
   Tensor bias({2}, Device{DeviceType::CPU, 0}, DataType::Float32, false);

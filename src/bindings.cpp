@@ -1302,6 +1302,11 @@ SERIALIZATION_DTYPE_POLICY = "per_tensor"
 SERIALIZATION_RECOMMENDED_LOADER = "load_for_inference"
 SERIALIZATION_COMPILE_CONTRACT_POLICY = "external"
 SERIALIZATION_HYBRID_FORMAT_TAG = "munet_hybrid_v1"
+SERIALIZATION_CHECKPOINT_ARTIFACT_KIND = "training_checkpoint"
+SERIALIZATION_CHECKPOINT_ARTIFACT_SCOPE = "training+inference"
+SERIALIZATION_CHECKPOINT_DEFAULT_LOAD_MODE = "train"
+SERIALIZATION_CHECKPOINT_RECOMMENDED_LOADER = "load_checkpoint"
+SERIALIZATION_CHECKPOINT_COMPILE_CONTRACT_POLICY = "dynamic"
 SERIALIZATION_FORBIDDEN_TRAINING_KEY_TOKENS = (
     "optim",
     "optimizer",
@@ -1675,110 +1680,210 @@ def _get_config(m):
         # For custom modules, return a marker that indicates we need to use hybrid format
         return None
 
-def save(module, filename):
-    """
-    Saves a module architecture + parameters/buffers to a compressed .npz file.
+def _get_config_with_custom(module, allow_custom, include_source):
+    name = type(module).__name__
+    if name == 'Sequential':
+        return {'type': name, 'layers': [_get_config_with_custom(child, allow_custom, include_source) for child in module]}
+    elif name == 'Linear':
+        has_bias = hasattr(module, 'bias') and getattr(module, 'bias') is not None and getattr(module, 'bias').numel() > 0
+        return {'type': name, 'in_features': module.weight.shape[0], 'out_features': module.weight.shape[1], 'bias': has_bias, 'dtype': _tensor_dtype_name(module.weight)}
+    elif name == 'Conv2d':
+        return {'type': name, 'in_channels': module.weight.shape[1], 'out_channels': module.weight.shape[0], 'kernel_size': module.weight.shape[2], 'stride': module.stride, 'padding': module.padding, 'dtype': _tensor_dtype_name(module.weight)}
+    elif name == 'MaxPool2d':
+        return {'type': name, 'kernel_size': module.kernel_size, 'stride': module.stride, 'padding': module.padding}
+    elif name == 'BatchNorm2d':
+        return {'type': name, 'num_features': module.weight.shape[0], 'eps': module.eps, 'momentum': module.momentum, 'dtype': _tensor_dtype_name(module.weight)}
+    elif name == 'Upsample':
+        return {'type': name, 'scale_factor': module.scale_factor}
+    elif name == 'GlobalAvgPool2d':
+        return {'type': name}
+    elif name in ('ReLU', 'Sigmoid', 'Tanh', 'GELU', 'Flatten'):
+        return {'type': name}
+    elif name == 'LeakyReLU':
+        return {'type': name, 'negative_slope': module.negative_slope}
+    elif name == 'Dropout':
+        return {'type': name, 'p': module.p}
+    elif name == 'Embedding':
+        return {'type': name, 'num_embeddings': module.num_embeddings, 'embedding_dim': module.embedding_dim, 'dtype': _tensor_dtype_name(module.weight)}
+    elif name == 'LayerNorm':
+        return {'type': name, 'normalized_shape': module.normalized_shape, 'eps': module.eps, 'dtype': _tensor_dtype_name(module.weight)}
+    elif name == 'RMSNorm':
+        return {'type': name, 'normalized_shape': module.normalized_shape, 'eps': module.eps, 'dtype': _tensor_dtype_name(module.weight)}
+    elif name == 'MultiHeadAttention':
+        return {'type': name, 'embed_dim': module.embed_dim, 'num_heads': module.num_heads, 'causal': bool(module.causal), 'dtype': _tensor_dtype_name(module.q_proj.weight)}
 
-    For built-in modules (Linear, Conv2d, etc.), saves full architecture config.
-    For custom modules, stores class reference for reconstruction.
+    if not allow_custom:
+        raise ValueError(
+            f"Custom module '{type(module).__qualname__}' is not supported in deploy artifacts. "
+            "Use save_checkpoint(...) for custom classes."
+        )
 
-    Usage:
-        save(model, 'model.npz')  # Save model
-        model = load('model.npz')  # Reconstruct model (for built-in types)
-        load(existing_model, 'model.npz')  # Load weights into existing model
-    """
-    import numpy as np
-    import json
+    cls = type(module)
+    cfg = {'type': '__custom__', 'module': cls.__module__, 'qualname': cls.__qualname__}
+    if include_source:
+        source = _maybe_source_for_class(cls)
+        if source is not None:
+            cfg['source'] = source
+    return cfg
+
+def _build_module_from_config(cfg, *, trusted=False):
+    import importlib
     import munet
+
+    t = cfg['type']
+    opts = _tensor_options_for_dtype(cfg.get('dtype', 'float32'))
+    if t == 'Sequential':
+        return munet.nn.Sequential(*[_build_module_from_config(c, trusted=trusted) for c in cfg['layers']])
+    elif t == 'Linear':
+        return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'], opts)
+    elif t == 'Conv2d':
+        return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'], opts)
+    elif t == 'MaxPool2d':
+        return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
+    elif t == 'BatchNorm2d':
+        return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'], opts)
+    elif t == 'Upsample':
+        return munet.nn.Upsample(cfg['scale_factor'])
+    elif t == 'GlobalAvgPool2d':
+        return munet.nn.GlobalAvgPool2d()
+    elif t == 'ReLU':
+        return munet.nn.ReLU()
+    elif t == 'Sigmoid':
+        return munet.nn.Sigmoid()
+    elif t == 'Tanh':
+        return munet.nn.Tanh()
+    elif t == 'GELU':
+        return munet.nn.GELU()
+    elif t == 'LeakyReLU':
+        return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
+    elif t == 'Dropout':
+        return munet.nn.Dropout(cfg.get('p', 0.5))
+    elif t == 'Embedding':
+        return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'], opts)
+    elif t == 'LayerNorm':
+        return munet.nn.LayerNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5), opts)
+    elif t == 'RMSNorm':
+        return munet.nn.RMSNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5), opts)
+    elif t == 'MultiHeadAttention':
+        return munet.nn.MultiHeadAttention(cfg['embed_dim'], cfg['num_heads'], cfg.get('causal', True), opts)
+    elif t == 'Flatten':
+        return munet.nn.Flatten()
+    elif t == '__custom__':
+        module_path = cfg.get('module', '')
+        class_qualname = cfg.get('qualname', '')
+        class_source = cfg.get('source')
+        if not module_path or not class_qualname:
+            raise ValueError("Custom module saved without class reference. Use load_weights(...) for restore into an existing model.")
+        try:
+            mod = importlib.import_module(module_path)
+            cls = mod
+            for part in class_qualname.split('.'):
+                cls = getattr(cls, part)
+        except (ImportError, AttributeError) as e:
+            if not trusted:
+                raise ValueError(
+                    f"Untrusted custom artifact cannot execute embedded source for '{class_qualname}'. "
+                    "Re-run with trusted=True or use load_weights(...) into an existing model."
+                ) from e
+            if class_source is None:
+                raise ValueError(
+                    f"Could not reconstruct custom module '{class_qualname}' from module '{module_path}': {e}. "
+                    "Use load_weights(...) with an in-code model definition."
+                ) from e
+            import types
+            dynamic_module = types.ModuleType(f"__munet_dynamic_{module_path.replace('.', '_')}__")
+            namespace = dynamic_module.__dict__
+            namespace["munet"] = munet
+            exec(class_source, namespace, namespace)
+            leaf_name = class_qualname.split('.')[-1]
+            if not hasattr(dynamic_module, leaf_name):
+                raise ValueError(f"Embedded source did not define class '{leaf_name}'.")
+            cls = getattr(dynamic_module, leaf_name)
+        try:
+            return cls()
+        except Exception as ctor_err:
+            raise ValueError(
+                f"Custom module '{class_qualname}' must be default-constructible for full reconstruction: {ctor_err}. "
+                "Use load_weights(...) for restore into existing model."
+            )
+    else:
+        raise ValueError(f"Unsupported saved module type: {t}")
+
+def _apply_state(module, state):
+    for name, p in _iter_named_tensors(module):
+        if name in state:
+            _copy_numpy_into_tensor(p, state[name])
+    return module
+
+def _save_artifact(module, filename, *, artifact_kind):
+    import json
+    import numpy as np
     import pickle
 
-    def get_config_with_custom(m):
-        """Get config, handling custom modules."""
-        name = type(m).__name__
-        # Built-in modules
-        if name == 'Sequential':
-            return {'type': name, 'layers': [get_config_with_custom(child) for child in m]}
-        elif name == 'Linear':
-            has_bias = hasattr(m, 'bias') and getattr(m, 'bias') is not None and getattr(m, 'bias').numel() > 0
-            return {'type': name, 'in_features': m.weight.shape[0], 'out_features': m.weight.shape[1], 'bias': has_bias, 'dtype': _tensor_dtype_name(m.weight)}
-        elif name == 'Conv2d':
-            return {'type': name, 'in_channels': m.weight.shape[1], 'out_channels': m.weight.shape[0], 'kernel_size': m.weight.shape[2], 'stride': m.stride, 'padding': m.padding, 'dtype': _tensor_dtype_name(m.weight)}
-        elif name == 'MaxPool2d':
-            return {'type': name, 'kernel_size': m.kernel_size, 'stride': m.stride, 'padding': m.padding}
-        elif name == 'BatchNorm2d':
-            return {'type': name, 'num_features': m.weight.shape[0], 'eps': m.eps, 'momentum': m.momentum, 'dtype': _tensor_dtype_name(m.weight)}
-        elif name == 'Upsample':
-            return {'type': name, 'scale_factor': m.scale_factor}
-        elif name == 'GlobalAvgPool2d':
-            return {'type': name}
-        elif name in ('ReLU', 'Sigmoid', 'Tanh', 'GELU', 'Flatten'):
-            return {'type': name}
-        elif name == 'LeakyReLU':
-            return {'type': name, 'negative_slope': m.negative_slope}
-        elif name == 'Dropout':
-            return {'type': name, 'p': m.p}
-        elif name == 'Embedding':
-            return {'type': name, 'num_embeddings': m.num_embeddings, 'embedding_dim': m.embedding_dim, 'dtype': _tensor_dtype_name(m.weight)}
-        elif name == 'LayerNorm':
-            return {'type': name, 'normalized_shape': m.normalized_shape, 'eps': m.eps, 'dtype': _tensor_dtype_name(m.weight)}
-        elif name == 'RMSNorm':
-            return {'type': name, 'normalized_shape': m.normalized_shape, 'eps': m.eps, 'dtype': _tensor_dtype_name(m.weight)}
-        elif name == 'MultiHeadAttention':
-            return {'type': name, 'embed_dim': m.embed_dim, 'num_heads': m.num_heads, 'causal': bool(m.causal), 'dtype': _tensor_dtype_name(m.q_proj.weight)}
-        else:
-            # Custom module - store class reference for reconstruction
-            cls = type(m)
-            config = {
-                'type': '__custom__',
-                'module': cls.__module__,
-                'qualname': cls.__qualname__,
-            }
-            source = _maybe_source_for_class(cls)
-            if source is not None:
-                config['source'] = source
-            # Store submodule configs
-            if hasattr(m, 'named_modules'):
-                submodule_configs = {}
-                for sub_name, submodule in m.named_modules().items():
-                    if sub_name:  # Skip self (empty string)
-                        submodule_configs[sub_name] = get_config_with_custom(submodule)
-                if submodule_configs:
-                    config['submodules'] = submodule_configs
-            return config
+    is_deploy = artifact_kind == SERIALIZATION_ARTIFACT_KIND
+    config = _get_config_with_custom(module, allow_custom=not is_deploy, include_source=not is_deploy)
+    use_hybrid_shell = (not is_deploy) and config.get('type') == '__custom__'
 
-    config = get_config_with_custom(module)
-    use_hybrid_shell = config.get('type') == '__custom__'
-    shell_tensors = {}
-    shell = None
-    if use_hybrid_shell:
-        shell_tensors, shell = _extract_tensors_and_shell(module)
-    
-    # Collect all tensors
     state = {}
     for name, tensor in _iter_named_tensors(module):
         state[name] = _tensor_to_numpy(tensor)
-
     tensor_names = sorted(state.keys())
+
     state['__config__'] = np.array(json.dumps(config))
     state['__format_name__'] = np.array(SERIALIZATION_FORMAT_NAME)
     state['__format_revision__'] = np.array(SERIALIZATION_FORMAT_REVISION)
     state['__format_version__'] = np.array(SERIALIZATION_LEGACY_TAG)
     state['__producer__'] = np.array('munet')
-    state['__artifact_kind__'] = np.array(SERIALIZATION_ARTIFACT_KIND)
-    state['__artifact_scope__'] = np.array(SERIALIZATION_ARTIFACT_SCOPE)
-    state['__default_load_mode__'] = np.array(SERIALIZATION_DEFAULT_LOAD_MODE)
-    state['__contains_training_state__'] = np.array(SERIALIZATION_CONTAINS_TRAINING_STATE)
+    state['__contains_training_state__'] = np.array(False)
     state['__device_policy__'] = np.array(SERIALIZATION_DEVICE_POLICY)
     state['__dtype_policy__'] = np.array(SERIALIZATION_DTYPE_POLICY)
-    state['__recommended_loader__'] = np.array(SERIALIZATION_RECOMMENDED_LOADER)
-    state['__compile_contract_policy__'] = np.array(SERIALIZATION_COMPILE_CONTRACT_POLICY)
     state['__tensor_names__'] = np.array(json.dumps(tensor_names))
+
+    if is_deploy:
+        state['__artifact_kind__'] = np.array(SERIALIZATION_ARTIFACT_KIND)
+        state['__artifact_scope__'] = np.array(SERIALIZATION_ARTIFACT_SCOPE)
+        state['__default_load_mode__'] = np.array(SERIALIZATION_DEFAULT_LOAD_MODE)
+        state['__recommended_loader__'] = np.array(SERIALIZATION_RECOMMENDED_LOADER)
+        state['__compile_contract_policy__'] = np.array(SERIALIZATION_COMPILE_CONTRACT_POLICY)
+    else:
+        state['__artifact_kind__'] = np.array(SERIALIZATION_CHECKPOINT_ARTIFACT_KIND)
+        state['__artifact_scope__'] = np.array(SERIALIZATION_CHECKPOINT_ARTIFACT_SCOPE)
+        state['__default_load_mode__'] = np.array(SERIALIZATION_CHECKPOINT_DEFAULT_LOAD_MODE)
+        state['__recommended_loader__'] = np.array(SERIALIZATION_CHECKPOINT_RECOMMENDED_LOADER)
+        state['__compile_contract_policy__'] = np.array(SERIALIZATION_CHECKPOINT_COMPILE_CONTRACT_POLICY)
+
     if use_hybrid_shell:
+        shell_tensors, shell = _extract_tensors_and_shell(module)
         state['__format__'] = np.array(SERIALIZATION_HYBRID_FORMAT_TAG)
         state['__shell__'] = np.frombuffer(pickle.dumps(shell, protocol=pickle.HIGHEST_PROTOCOL), dtype=np.uint8)
         for name, arr in shell_tensors.items():
             state[name] = arr
+
     np.savez(filename, **state)
+
+def save_deploy(module, filename):
+    """Save runtime/deploy artifact. Custom classes are not permitted."""
+    _save_artifact(module, filename, artifact_kind=SERIALIZATION_ARTIFACT_KIND)
+
+def save_checkpoint(module, filename):
+    """Save training checkpoint artifact with optional hybrid class/source payload for custom classes."""
+    _save_artifact(module, filename, artifact_kind=SERIALIZATION_CHECKPOINT_ARTIFACT_KIND)
+
+def save(module, filename):
+    """Backward-compatible alias for deploy artifact saving."""
+    return save_deploy(module, filename)
+
+def _validate_checkpoint_metadata(state):
+    metadata = _serialization_metadata_from_state(state)
+    if metadata["format_name"] != SERIALIZATION_FORMAT_NAME:
+        raise ValueError(f"Unsupported serialization format name: {metadata['format_name']!r}.")
+    if metadata["format_revision"] != SERIALIZATION_FORMAT_REVISION:
+        raise ValueError(f"Unsupported serialization format revision: {metadata['format_revision']!r}.")
+    if metadata["legacy_tag"] not in (None, SERIALIZATION_LEGACY_TAG):
+        raise ValueError(f"Unsupported legacy serialization tag: {metadata['legacy_tag']!r}.")
+    if metadata["artifact_kind"] not in (SERIALIZATION_CHECKPOINT_ARTIFACT_KIND, SERIALIZATION_ARTIFACT_KIND):
+        raise ValueError(f"Unsupported checkpoint artifact kind: {metadata['artifact_kind']!r}.")
+    return metadata
 
 def _normalize_loaded_module_for_inference(module, device=None):
     if device is not None:
@@ -1786,117 +1891,22 @@ def _normalize_loaded_module_for_inference(module, device=None):
     module.eval()
     return module
 
-def load(arg, filename=None, device=None):
+def load_checkpoint(arg, filename=None, device=None, trusted=False):
     """
-    Loads a previously saved module state.
-
-    Usage:
-      - load("model.npz") -> reconstruct full supported model from file.
-      - load(module, "model.npz") -> load weights/buffers into existing model.
+    Load checkpoint artifact.
+    trusted=False forbids executing embedded source fallback for custom classes.
     """
-    import numpy as np
     import json
-    import munet
-    import importlib
+    import numpy as np
     import pickle
 
-    def build_module(cfg):
-        t = cfg['type']
-        opts = _tensor_options_for_dtype(cfg.get('dtype', 'float32'))
-        if t == 'Sequential': 
-            return munet.nn.Sequential(*[build_module(c) for c in cfg['layers']])
-        elif t == 'Linear': 
-            return munet.nn.Linear(cfg['in_features'], cfg['out_features'], cfg['bias'], opts)
-        elif t == 'Conv2d': 
-            return munet.nn.Conv2d(cfg['in_channels'], cfg['out_channels'], cfg['kernel_size'], cfg['stride'], cfg['padding'], opts)
-        elif t == 'MaxPool2d': 
-            return munet.nn.MaxPool2d(cfg['kernel_size'], cfg['stride'], cfg['padding'])
-        elif t == 'BatchNorm2d': 
-            return munet.nn.BatchNorm2d(cfg['num_features'], cfg['eps'], cfg['momentum'], opts)
-        elif t == 'Upsample': 
-            return munet.nn.Upsample(cfg['scale_factor'])
-        elif t == 'GlobalAvgPool2d': 
-            return munet.nn.GlobalAvgPool2d()
-        elif t == 'ReLU': 
-            return munet.nn.ReLU()
-        elif t == 'Sigmoid': 
-            return munet.nn.Sigmoid()
-        elif t == 'Tanh': 
-            return munet.nn.Tanh()
-        elif t == 'GELU': 
-            return munet.nn.GELU()
-        elif t == 'LeakyReLU': 
-            return munet.nn.LeakyReLU(cfg.get('negative_slope', 0.01))
-        elif t == 'Dropout': 
-            return munet.nn.Dropout(cfg.get('p', 0.5))
-        elif t == 'Embedding': 
-            return munet.nn.Embedding(cfg['num_embeddings'], cfg['embedding_dim'], opts)
-        elif t == 'LayerNorm': 
-            return munet.nn.LayerNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5), opts)
-        elif t == 'RMSNorm': 
-            return munet.nn.RMSNorm(cfg['normalized_shape'], cfg.get('eps', 1e-5), opts)
-        elif t == 'MultiHeadAttention': 
-            return munet.nn.MultiHeadAttention(cfg['embed_dim'], cfg['num_heads'], cfg.get('causal', True), opts)
-        elif t == 'Flatten': 
-            return munet.nn.Flatten()
-        elif t == '__custom__':
-            # Reconstruct custom module by importing the class and restoring state
-            module_path = cfg.get('module', '')
-            class_qualname = cfg.get('qualname', '')
-            class_source = cfg.get('source')
-            if not module_path or not class_qualname:
-                raise ValueError(
-                    f"Custom module saved without class reference. "
-                    f"Use load(existing_model, filename) to load weights into an existing model."
-                )
-            try:
-                mod = importlib.import_module(module_path)
-                parts = class_qualname.split('.')
-                cls = mod
-                for part in parts:
-                    cls = getattr(cls, part)
-            except (ImportError, AttributeError) as e:
-                if class_source is None:
-                    raise ValueError(
-                        f"Could not reconstruct custom module '{class_qualname}' from module '{module_path}': {e}. "
-                        f"Use load(existing_model, filename) to load weights into an existing model."
-                    )
-                import types
-                dynamic_module_name = f"__munet_dynamic_{module_path.replace('.', '_')}__"
-                dynamic_module = types.ModuleType(dynamic_module_name)
-                namespace = dynamic_module.__dict__
-                namespace["munet"] = munet
-                exec(class_source, namespace, namespace)
-                leaf_name = class_qualname.split('.')[-1]
-                if hasattr(dynamic_module, leaf_name):
-                    cls = getattr(dynamic_module, leaf_name)
-                else:
-                    raise ValueError(
-                        f"Custom module source fallback did not define class '{leaf_name}'. "
-                        f"Use load(existing_model, filename) to load weights into an existing model."
-                    )
-            try:
-                return cls()
-            except Exception as ctor_err:
-                raise ValueError(
-                    f"Custom module '{class_qualname}' must be default-constructible for full reconstruction: {ctor_err}. "
-                    f"Use load(existing_model, filename) for weights-only restore."
-                )
-        else:
-            raise ValueError(f"Unsupported saved module type: {t}")
-
-    def apply_state(module, state):
-        for name, p in _iter_named_tensors(module):
-            if name in state:
-                _copy_numpy_into_tensor(p, state[name])
-        return module
-
     if filename is None:
-        # Load from file and reconstruct
         with np.load(arg, allow_pickle=True) as state:
-            _validate_serialization_metadata(state)
+            _validate_checkpoint_metadata(state)
             if '__config__' not in state:
                 if '__shell__' in state:
+                    if not trusted:
+                        raise ValueError("Checkpoint contains shell/source payload; trusted=True is required for shell reconstruction.")
                     shell = pickle.loads(state['__shell__'].tobytes())
                     shell_tensors = {
                         name: state[name]
@@ -1904,49 +1914,55 @@ def load(arg, filename=None, device=None):
                         if name.startswith('__tensor_') and name.endswith('__')
                     }
                     return _rebuild_from_shell(shell, shell_tensors, device=device)
-                raise ValueError("File does not contain architecture config. Use `load(module, filename)` for weights-only restore.")
-
+                raise ValueError("File does not contain architecture config. Use load_weights(...) for weights-only restore.")
             config = json.loads(str(state['__config__']))
-            module = build_module(config)
-            return apply_state(module, state)
+            module = _build_module_from_config(config, trusted=trusted)
+            return _apply_state(module, state)
     else:
-        # Load weights into existing module
+        module = arg
+        with np.load(filename, allow_pickle=True) as state:
+            _validate_checkpoint_metadata(state)
+            return _apply_state(module, state)
+
+def load_deploy(arg, filename=None, device=None):
+    """
+    Load deploy artifact only (strict runtime metadata).
+    """
+    import json
+    import numpy as np
+
+    if filename is None:
+        with np.load(arg, allow_pickle=True) as state:
+            _validate_serialization_metadata(state)
+            if '__config__' not in state:
+                raise ValueError("Deploy artifact missing __config__.")
+            config = json.loads(str(state['__config__']))
+            if config.get('type') == '__custom__':
+                raise ValueError("Deploy artifacts do not support custom class reconstruction. Use load_checkpoint(..., trusted=True).")
+            module = _build_module_from_config(config, trusted=False)
+            return _apply_state(module, state)
+    else:
         module = arg
         with np.load(filename, allow_pickle=True) as state:
             _validate_serialization_metadata(state)
-            return apply_state(module, state)
+            return _apply_state(module, state)
+
+def load(arg, filename=None, device=None, trusted=True):
+    """Backward-compatible alias for checkpoint loading."""
+    return load_checkpoint(arg, filename, device=device, trusted=trusted)
 
 def load_for_inference(arg, filename=None, device=None):
-    """Load a deploy artifact and normalize the result for inference execution.
-
-    Usage:
-      - load_for_inference("model.npz", device=None) -> reconstruct + eval-safe module.
-      - load_for_inference(module, "model.npz", device=None) -> apply state into existing module, move if requested, then eval().
-    """
-    import numpy as np
-    import munet
-
-    path = arg if filename is None else filename
-    with np.load(path, allow_pickle=True) as state:
-        metadata = _validate_serialization_metadata(state)
-        if metadata["default_load_mode"] != SERIALIZATION_DEFAULT_LOAD_MODE:
-            raise ValueError(
-                f"Unsupported deploy load mode: {metadata['default_load_mode']!r}. "
-                f"Expected {SERIALIZATION_DEFAULT_LOAD_MODE!r}."
-            )
-
-    module = munet.load(arg, filename, device=device) if filename is not None else munet.load(arg, device=device)
+    """Load a deploy artifact and normalize the result for inference execution."""
+    module = load_deploy(arg, filename, device=device) if filename is not None else load_deploy(arg, device=device)
     return _normalize_loaded_module_for_inference(module, device)
 
 def load_weights(module, filename):
-    """Alias for `load(module, filename)` to explicitly do weights-only restore."""
-    m = __import__("munet")
-    return m.load(module, filename)
+    """Alias for checkpoint/deploy weights-only restore."""
+    return load_checkpoint(module, filename)
 
 def load_weights_for_inference(module, filename, device=None):
-    """Weights-only restore that also normalizes the module for inference execution."""
-    m = __import__("munet")
-    m.load(module, filename)
+    """Deploy weights-only restore + eval normalization."""
+    load_deploy(module, filename)
     return _normalize_loaded_module_for_inference(module, device)
 
 def _load_python_helper(filename):
