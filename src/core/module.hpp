@@ -157,7 +157,7 @@ public:
   virtual void to(Device device) {
     default_options_.device = device;
     for (auto &[name, p] : parameters_) {
-      *p = p->to(device);
+      p->to_(device);
       if (p->requires_grad()) {
         p->set_requires_grad(true);
       }
@@ -167,7 +167,7 @@ public:
       buffer_options.device = device;
       buffer_options.dtype = resolve_buffer_dtype(name, default_options_.dtype);
       buffer_options.requires_grad = false;
-      *b = b->to(buffer_options);
+      b->to_(buffer_options.device);
     }
     for (auto &[name, m] : modules_) {
       m->to(device);
@@ -186,7 +186,7 @@ public:
       TensorOptions buffer_options = b->options();
       buffer_options.dtype = resolve_buffer_dtype(name, dtype);
       buffer_options.requires_grad = false;
-      *b = b->to(buffer_options);
+      *b = b->to(buffer_options.dtype);
     }
     for (auto &[name, m] : modules_) {
       m->to(dtype);

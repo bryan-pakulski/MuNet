@@ -420,6 +420,10 @@ PYBIND11_MODULE(munet_nn, m) {
            py::overload_cast<const TensorOptions &>(&Tensor::to, py::const_),
            py::arg("options"),
            "Converts the tensor using explicit tensor options.")
+      .def("to_",
+           [](Tensor &t, Device device) { t.to_(device); },
+           py::arg("device"),
+           "Moves the tensor to the specified device in-place, preserving shared_ptr identity.")
       .def(
           "copy_from_numpy",
           [](Tensor &t, py::array input) {
@@ -1721,10 +1725,16 @@ def _resolve_class_from_shell(class_module, class_qualname, class_source=None):
     import importlib
     import types
 
+    def is_valid_attr_part(part):
+        # Skip <locals> which appears in qualnames for classes defined inside functions
+        return part != "<locals>"
+
     try:
         module = importlib.import_module(class_module)
         cls = module
         for part in class_qualname.split("."):
+            if not is_valid_attr_part(part):
+                continue
             cls = getattr(cls, part)
         return cls
     except Exception:
@@ -1739,6 +1749,8 @@ def _resolve_class_from_shell(class_module, class_qualname, class_source=None):
         cls = dynamic_module
         try:
             for part in class_qualname.split("."):
+                if not is_valid_attr_part(part):
+                    continue
                 cls = getattr(cls, part)
             return cls
         except AttributeError:
@@ -1921,10 +1933,19 @@ def _build_module_from_config(cfg, *, trusted=False):
         class_source = cfg.get('source')
         if not module_path or not class_qualname:
             raise ValueError("Custom module saved without class reference. Use load_weights_checkpoint(...) for restore into an existing model.")
+        
+        # Handle <locals> in qualname (classes defined inside functions)
+        # e.g., "TestBindings.test_...<locals>.ClassName"
+        if '<locals>' in class_qualname:
+            # Extract just the class name after <locals>.
+            class_qualname = class_qualname.split('<locals>.')[-1]
+        
+        # Handle nested qualnames like "OuterClass.InnerClass"
+        qualname_parts = class_qualname.split('.')
         try:
             mod = importlib.import_module(module_path)
             cls = mod
-            for part in class_qualname.split('.'):
+            for part in qualname_parts:
                 cls = getattr(cls, part)
         except (ImportError, AttributeError) as e:
             if not trusted:
@@ -1940,7 +1961,7 @@ def _build_module_from_config(cfg, *, trusted=False):
             import types
             dynamic_module = types.ModuleType(f"__munet_dynamic_{module_path.replace('.', '_')}__")
             namespace = dynamic_module.__dict__
-            namespace["munet_nn"] = munet_nn
+            namespace["munet_nn"] = munet
             exec(class_source, namespace, namespace)
             leaf_name = class_qualname.split('.')[-1]
             if not hasattr(dynamic_module, leaf_name):

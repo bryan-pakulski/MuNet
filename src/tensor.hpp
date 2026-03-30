@@ -151,6 +151,8 @@ public:
   Tensor to(Device dev) const;
   Tensor to(DataType dtype) const;
   Tensor to(const TensorOptions &options) const;
+  // In-place device transfer - updates storage within existing TensorImpl
+  void to_(Device dev);
 
   static Tensor cat(const std::vector<Tensor> &inputs, int dim = 1);
   Tensor operator+(const Tensor &other) const;

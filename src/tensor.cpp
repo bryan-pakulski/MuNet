@@ -239,6 +239,13 @@ Tensor Tensor::to(Device dev) const {
   return out;
 }
 
+void Tensor::to_(Device dev) {
+  // In-place device transfer: preserve TensorImpl identity for optimizer references
+  Tensor moved = this->to(dev);
+  // Swap storage within the existing TensorImpl
+  impl_->storage = std::move(moved.impl_->storage);
+}
+
 Tensor Tensor::to(DataType target_dtype) const {
   if (dtype() == target_dtype)
     return *this;
