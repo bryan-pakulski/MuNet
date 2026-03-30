@@ -3,7 +3,7 @@ name: Wheels
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["v*", "dev*"]
   pull_request:
   workflow_dispatch:
 
@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -30,8 +30,6 @@ jobs:
           CIBW_BUILD: cp310-* cp311-* cp312-*
           CIBW_SKIP: "*-musllinux_*"
           CIBW_ARCHS_LINUX: x86_64
-          CIBW_ARCHS_MACOS: x86_64 arm64
-          CIBW_ARCHS_WINDOWS: AMD64
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
@@ -39,8 +37,32 @@ jobs:
           name: wheels-${{ matrix.os }}
           path: wheelhouse/*.whl
 
+  publish_testpypi:
+    name: Publish dev wheels to TestPyPI
+    needs: build_wheels
+    if: startsWith(github.ref, 'refs/tags/dev')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten wheel artifacts
+        run: |
+          mkdir -p wheelhouse
+          find dist -name "*.whl" -exec cp {} wheelhouse/ \;
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
   publish:
-    name: Publish to package index
+    name: Publish release wheels to PyPI
     needs: build_wheels
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
