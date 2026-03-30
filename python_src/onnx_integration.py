@@ -891,7 +891,7 @@ def compile_onnx(model_path, output_path=None, debug=False):
     if native_module is not None:
         native_module.eval()
         if output_path is not None:
-            munet.save(native_module, output_path)
+            munet.save_deploy(native_module, output_path)
         if debug:
             print(
                 f"[compile_onnx] success model={model_path} kind=native_sequential "

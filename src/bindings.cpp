@@ -756,7 +756,7 @@ PYBIND11_MODULE(munet_nn, m) {
       },
       py::arg("shape"), py::arg_v("device", py::none(), "None"),
       py::arg("requires_grad") = false,
-      py::arg_v("dtype", DataType::Float32, "munet.DataType.Float32"),
+      py::arg_v("dtype", DataType::Float32, "munet_nn.DataType.Float32"),
       "Creates a tensor of the specified shape filled with zeros.");
 
   m.def(
@@ -769,7 +769,7 @@ PYBIND11_MODULE(munet_nn, m) {
       },
       py::arg("shape"), py::arg_v("device", py::none(), "None"),
       py::arg("requires_grad") = false,
-      py::arg_v("dtype", DataType::Float32, "munet.DataType.Float32"),
+      py::arg_v("dtype", DataType::Float32, "munet_nn.DataType.Float32"),
       "Creates a tensor of the specified shape filled with ones.");
 
   m.def(
@@ -786,7 +786,7 @@ PYBIND11_MODULE(munet_nn, m) {
       },
       py::arg("shape"), py::arg_v("device", py::none(), "None"),
       py::arg("requires_grad") = false,
-      py::arg_v("dtype", DataType::Float32, "munet.DataType.Float32"),
+      py::arg_v("dtype", DataType::Float32, "munet_nn.DataType.Float32"),
       "Creates a tensor of the specified shape filled with random values from "
       "U[0, 1).");
 
@@ -1415,7 +1415,7 @@ def _copy_numpy_into_tensor(t, arr):
     t.requires_grad = req
 
 def _tensor_dtype_name(t):
-    m = __import__("munet")
+    m = __import__("munet_nn")
     return {m.DataType.Float32: "float32",
             m.DataType.Float16: "float16",
             m.DataType.BFloat16: "bfloat16",
@@ -1423,7 +1423,7 @@ def _tensor_dtype_name(t):
             m.DataType.Int8: "int8"}[t.dtype]
 
 def _dtype_from_name(name):
-    m = __import__("munet")
+    m = __import__("munet_nn")
     return {"float32": m.DataType.Float32,
             "float16": m.DataType.Float16,
             "bfloat16": m.DataType.BFloat16,
@@ -1431,7 +1431,7 @@ def _dtype_from_name(name):
             "int8": m.DataType.Int8}[name]
 
 def _tensor_options_for_dtype(dtype_name):
-    m = __import__("munet")
+    m = __import__("munet_nn")
     opts = m.TensorOptions()
     opts.dtype = _dtype_from_name(dtype_name)
     return opts
@@ -1734,7 +1734,7 @@ def _resolve_class_from_shell(class_module, class_qualname, class_source=None):
         dynamic_module_name = f"__munet_dynamic_{class_module.replace('.', '_')}__"
         dynamic_module = types.ModuleType(dynamic_module_name)
         namespace = dynamic_module.__dict__
-        namespace["munet"] = __import__("munet")
+        namespace["munet_nn"] = __import__("munet_nn")
         exec(class_source, namespace, namespace)
         cls = dynamic_module
         try:
@@ -1940,7 +1940,7 @@ def _build_module_from_config(cfg, *, trusted=False):
             import types
             dynamic_module = types.ModuleType(f"__munet_dynamic_{module_path.replace('.', '_')}__")
             namespace = dynamic_module.__dict__
-            namespace["munet"] = munet
+            namespace["munet_nn"] = munet_nn
             exec(class_source, namespace, namespace)
             leaf_name = class_qualname.split('.')[-1]
             if not hasattr(dynamic_module, leaf_name):
@@ -1980,7 +1980,7 @@ def _save_artifact(module, filename, *, artifact_kind):
     state['__format_name__'] = np.array(SERIALIZATION_FORMAT_NAME)
     state['__format_revision__'] = np.array(SERIALIZATION_FORMAT_REVISION)
     state['__format_version__'] = np.array(SERIALIZATION_LEGACY_TAG)
-    state['__producer__'] = np.array('munet')
+    state['__producer__'] = np.array('munet_nn')
     state['__contains_training_state__'] = np.array(False)
     state['__device_policy__'] = np.array(SERIALIZATION_DEVICE_POLICY)
     state['__dtype_policy__'] = np.array(SERIALIZATION_DTYPE_POLICY)

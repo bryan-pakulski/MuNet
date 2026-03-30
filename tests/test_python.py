@@ -12,7 +12,7 @@ except ImportError:
     import numpy as np
 
 # Dynamically add build output directories to sys.path so Python can find
-# munet*.so (CMake places it in build/debug by default).
+# munet_nn*.so (CMake places it in build/debug by default).
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 candidate_build_dirs = [
     os.path.join(repo_root, "build", "debug"),
@@ -26,13 +26,8 @@ for candidate in candidate_build_dirs:
 try:
     import munet_nn as munet
 except ImportError as e:
-    print("\n[INFO] munet import failed; attempting local build for tests...\n")
-    subprocess.run(["make", "build-debug", "-j4"], cwd=repo_root, check=True)
-    for candidate in candidate_build_dirs:
-        if candidate not in sys.path and os.path.isdir(candidate):
-            sys.path.insert(0, candidate)
-    import munet_nn as munet
-
+    print("\n[ERROR] munet import failed; attempting run local build for tests...\n")
+    sys.exit(1)
 
 def _sequential(layers):
     return munet.nn.Sequential(*layers)
@@ -1605,7 +1600,9 @@ class TestBindings(unittest.TestCase):
             model.ir_version = 7
             onnx.save(model, onnx_path)
 
-            module = munet.inference.compile_onnx(onnx_path, output_path=native_path)
+            from munet_nn import inference
+
+            module = inference.compile_onnx(onnx_path, output_path=native_path)
             restored = munet.load_for_inference(native_path)
 
             x_np = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
