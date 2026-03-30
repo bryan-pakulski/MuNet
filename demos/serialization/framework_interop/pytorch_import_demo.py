@@ -5,13 +5,14 @@ This script demonstrates how to load a MuNet model into PyTorch.
 """
 
 import sys
-import os
-
-# Add paths
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'build'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'python_src'))
 
 import numpy as np
+
+try:
+    import munet
+except ImportError:
+    print("MuNet not available. Install it with 'python -m pip install munet-nn'")
+    sys.exit(1)
 
 try:
     import torch

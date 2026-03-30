@@ -1,9 +1,7 @@
 import os
-import sys
 import tempfile
 import numpy as np
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../../../build"))
 import munet
 
 
