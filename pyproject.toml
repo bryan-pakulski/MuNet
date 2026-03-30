@@ -1,0 +1,40 @@
+[build-system]
+requires = [
+  "scikit-build-core>=0.10",
+  "pybind11>=2.11",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "munet"
+version = "0.1.0"
+description = "MuNet: lightweight C++ tensor/autograd framework with Python bindings"
+readme = "ReadMe.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "MuNet Contributors" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: C++",
+  "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/munet"
+Repository = "https://github.com/your-org/munet"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+cmake.version = ">=3.18"
+cmake.build-type = "Release"
+cmake.args = [
+  "-DMUNET_BUILD_TESTS=OFF",
+  "-DMUNET_BUILD_TOOLS=OFF",
+]
+wheel.packages = []
+
+[tool.cibuildwheel]
+build = "cp310-* cp311-* cp312-*"
+skip = "*-musllinux_*"
+build-verbosity = 1
+test-command = "python -c \"import munet; print(munet.__doc__ is not None)\""

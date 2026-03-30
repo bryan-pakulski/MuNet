@@ -40,6 +40,20 @@ with centralized op dispatch, backend capability querying, and explicit fallback
 - Optional: CUDA Toolkit (`nvcc`)
 - Optional: Vulkan SDK (`glslc` in `PATH`)
 
+### Python install (recommended)
+
+```bash
+python -m pip install -e .
+```
+
+Build a wheel for distribution:
+
+```bash
+python -m pip install build
+python -m build --wheel
+python -m pip install dist/munet-*.whl
+```
+
 ### Common commands
 
 ```bash

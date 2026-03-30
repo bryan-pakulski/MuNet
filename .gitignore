@@ -1,5 +1,7 @@
 artifacts/
 build/
+dist/
+*.egg-info/
 demo/
 .cache/
 *.npz

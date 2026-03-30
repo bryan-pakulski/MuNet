@@ -114,8 +114,8 @@ gpu-mem-test: build-gpu
 perf-test: build-release
 	MUNET_RUN_PERF_TESTS=1 ./$(BUILD_RELEASE)/munet_tests --gtest_filter=PerformanceTest.*
 
-py-test: build-debug
-	PYTHONPATH="$(abspath python_src):$(abspath $(BUILD_DEBUG)):$$PYTHONPATH" \
+py-test:
+	python -m pip install -e .
 	$(PYTEST) -q tests
 
 dtype-coverage-report: build-debug
