@@ -61,8 +61,9 @@ jobs:
             export PATH="${CUDA_HOME}/bin:${PATH}"
             export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
             export CUDACXX="${CUDA_HOME}/bin/nvcc"
-            export CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_CUDA_COMPILER=${CUDACXX} -DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/usr/lib64/libvulkan.so"
+            export CMAKE_ARGS="${CMAKE_ARGS:-} -DCMAKE_CUDA_COMPILER=${CUDACXX} -DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/usr/lib64/libvulkan.so"
             echo "Using CUDACXX=${CUDACXX}"
+            echo "CMAKE_ARGS=${CMAKE_ARGS}"
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
