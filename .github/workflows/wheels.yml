@@ -32,9 +32,20 @@ jobs:
           CIBW_BUILD: cp310-* cp311-* cp312-*
           CIBW_SKIP: "*-musllinux_*"
           CIBW_ARCHS_LINUX: x86_64
+
           # Public prebuilt manylinux image with CUDA toolchain included.
           # Note: cibuildwheel linux builds must run in a manylinux-compatible image.
           CIBW_MANYLINUX_X86_64_IMAGE: sameli/manylinux_2_28_x86_64_cuda_12.3
+
+          # These vars are injected into the actual wheel build environment.
+          CIBW_ENVIRONMENT_LINUX: >-
+            CUDA_HOME=/usr/local/cuda
+            CUDACXX=/usr/local/cuda/bin/nvcc
+            CMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
+            PATH=/usr/local/cuda/bin:$PATH
+            LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+            CMAKE_ARGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/lib64/libvulkan.so"
+
           CIBW_BEFORE_ALL_LINUX: |
             set -euxo pipefail
 
@@ -51,19 +62,9 @@ jobs:
             dnf -y install shaderc-devel || true
             dnf -y install shaderc || true
 
+            nvcc --version
             vulkaninfo --summary || true
             glslc --version || true
-            nvcc --version
-          CIBW_BEFORE_BUILD_LINUX: |
-            set -euxo pipefail
-            CUDA_ROOT="$(dirname "$(dirname "$(command -v nvcc)")")"
-            export CUDA_HOME="${CUDA_ROOT}"
-            export PATH="${CUDA_HOME}/bin:${PATH}"
-            export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
-            export CUDACXX="${CUDA_HOME}/bin/nvcc"
-            export CMAKE_ARGS="${CMAKE_ARGS:-} -DCMAKE_CUDA_COMPILER=${CUDACXX} -DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/usr/lib64/libvulkan.so"
-            echo "Using CUDACXX=${CUDACXX}"
-            echo "CMAKE_ARGS=${CMAKE_ARGS}"
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
