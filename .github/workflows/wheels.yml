@@ -37,18 +37,14 @@ jobs:
           # Note: cibuildwheel linux builds must run in a manylinux-compatible image.
           CIBW_MANYLINUX_X86_64_IMAGE: sameli/manylinux_2_28_x86_64_cuda_12.3
 
-          # These vars are injected into the actual wheel build environment.
+          # Build-time env injected into the actual wheel build process.
           CIBW_ENVIRONMENT_LINUX: >-
-            CC=/usr/bin/gcc
-            CXX=/usr/bin/g++
-            CUDAHOSTCXX=/usr/bin/g++
             CUDA_HOME=/usr/local/cuda
             CUDACXX=/usr/local/cuda/bin/nvcc
             CMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
-            CMAKE_CUDA_HOST_COMPILER=/usr/bin/g++
             PATH=/usr/local/cuda/bin:$PATH
             LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-            CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++ -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++ -DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/lib64/libvulkan.so"
+            CMAKE_ARGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DCMAKE_CUDA_FLAGS=--allow-unsupported-compiler -DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/lib64/libvulkan.so"
 
           CIBW_BEFORE_ALL_LINUX: |
             set -euxo pipefail
