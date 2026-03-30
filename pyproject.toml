@@ -6,7 +6,7 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "munet"
+name = "munet-nn"
 version = "0.1.0"
 description = "MuNet: lightweight C++ tensor/autograd framework with Python bindings"
 readme = "ReadMe.md"
@@ -20,8 +20,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/munet"
-Repository = "https://github.com/your-org/munet"
+Homepage = "https://github.com/bryan-pakulski/MuNet"
+Repository = "https://github.com/bryan-pakulski/MuNet"
+Source = "ssh://git@github.com/bryan-pakulski/MuNet.git"
 
 [tool.scikit-build]
 minimum-version = "0.10"
