@@ -25,47 +25,46 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.20.0
         env:
           CIBW_BUILD: cp310-* cp311-* cp312-*
           CIBW_SKIP: "*-musllinux_*"
           CIBW_ARCHS_LINUX: x86_64
-
-          # Public prebuilt manylinux image with CUDA toolchain included.
-          # Note: cibuildwheel linux builds must run in a manylinux-compatible image.
           CIBW_MANYLINUX_X86_64_IMAGE: sameli/manylinux_2_28_x86_64_cuda_12.3
-
-          # Build-time env injected into the actual wheel build process.
           CIBW_ENVIRONMENT_LINUX: >-
             CUDA_HOME=/usr/local/cuda
             CUDACXX=/usr/local/cuda/bin/nvcc
-            CMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
-            PATH=/usr/local/cuda/bin:$PATH
+            CC=/opt/rh/gcc-toolset-12/root/usr/bin/gcc
+            CXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++
+            CUDAHOSTCXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++
+            CMAKE_CUDA_HOST_COMPILER=/opt/rh/gcc-toolset-12/root/usr/bin/g++
+            PATH=/opt/rh/gcc-toolset-12/root/usr/bin:/usr/local/cuda/bin:$PATH
             LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-            CMAKE_ARGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DCMAKE_CUDA_FLAGS=--allow-unsupported-compiler -DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/lib64/libvulkan.so"
-
+            CMAKE_ARGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DCMAKE_CUDA_HOST_COMPILER=/opt/rh/gcc-toolset-12/root/usr/bin/g++ -DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/lib64/libvulkan.so"
           CIBW_BEFORE_ALL_LINUX: |
             set -euxo pipefail
 
-            # Required Vulkan dev/runtime bits for CMake find_package(Vulkan)
+            # Vulkan deps
             dnf -y install vulkan-devel vulkan-tools
 
-            # Ensure canonical CUDA symlink exists for downstream tooling.
+            # Install a CUDA-supported host toolchain (gcc 12)
+            dnf -y install gcc-toolset-12-gcc gcc-toolset-12-gcc-c++
+
+            # Ensure canonical CUDA symlink exists
             if [ -d /usr/local/cuda-12.3 ] && [ ! -e /usr/local/cuda ]; then
               ln -s /usr/local/cuda-12.3 /usr/local/cuda
             fi
 
-            # Optional GLSL compiler tooling (names vary by repo/image)
+            # Optional shader tools
             dnf -y install glslang-tools || true
             dnf -y install shaderc-devel || true
             dnf -y install shaderc || true
 
+            /opt/rh/gcc-toolset-12/root/usr/bin/g++ --version
             nvcc --version
             vulkaninfo --summary || true
             glslc --version || true
-
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
