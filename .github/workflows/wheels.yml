@@ -91,6 +91,27 @@ jobs:
           mkdir -p wheelhouse
           find dist -name "*.whl" -exec cp {} wheelhouse/ \;
 
+      - name: Check wheel file sizes
+        run: |
+          set -euxo pipefail
+          ls -lh wheelhouse/*.whl
+          python - <<'PY'
+          from pathlib import Path
+          limit = 100 * 1024 * 1024
+          too_large = []
+          for wheel in Path("wheelhouse").glob("*.whl"):
+            size = wheel.stat().st_size
+            print(f"{wheel.name}: {size / (1024 * 1024):.1f} MB")
+            if size > limit:
+              too_large.append((wheel.name, size))
+          if too_large:
+            names = ", ".join(name for name, _ in too_large)
+            raise SystemExit(
+              "Wheel exceeds TestPyPI/PyPI default 100 MB file limit: "
+              f"{names}. See https://docs.pypi.org/project-management/storage-limits/"
+            )
+          PY
+
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -117,6 +138,27 @@ jobs:
         run: |
           mkdir -p wheelhouse
           find dist -name "*.whl" -exec cp {} wheelhouse/ \;
+
+      - name: Check wheel file sizes
+        run: |
+          set -euxo pipefail
+          ls -lh wheelhouse/*.whl
+          python - <<'PY'
+          from pathlib import Path
+          limit = 100 * 1024 * 1024
+          too_large = []
+          for wheel in Path("wheelhouse").glob("*.whl"):
+            size = wheel.stat().st_size
+            print(f"{wheel.name}: {size / (1024 * 1024):.1f} MB")
+            if size > limit:
+              too_large.append((wheel.name, size))
+          if too_large:
+            names = ", ".join(name for name, _ in too_large)
+            raise SystemExit(
+              "Wheel exceeds TestPyPI/PyPI default 100 MB file limit: "
+              f"{names}. See https://docs.pypi.org/project-management/storage-limits/"
+            )
+          PY
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1

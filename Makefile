@@ -19,11 +19,11 @@ PYPI_PACKAGE ?= munet-nn
 	build build-debug build-release build-asan build-gpu \
 	configure-debug configure-release configure-asan configure-gpu \
 	unit-test test-debug test-release test-asan ctest-debug ctest-release ctest-asan \
-	mem-test gpu-mem-test perf-test py-test pip-dev pip-release \
+	mem-test gpu-mem-test perf-test py-test pip-dev pip-release wheel-local \
 	dtype-coverage-report \
 	format doc clean clean-debug clean-release clean-asan clean-gpu \
 	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-gpu \
-	docker-build
+	docker-build 
 
 help:
 	@echo "Targets:"
@@ -45,6 +45,7 @@ help:
 	@echo "  py-test          Run python tests"
 	@echo "  pip-dev          Install latest package from TestPyPI"
 	@echo "  pip-release      Install latest package from PyPI"
+	@echo "  wheel-local      Build a local Python wheel into ./dist"
 	@echo "  dtype-coverage-report  Generate backend/dtype/op dispatch coverage CSV"
 	@echo "  format           Format code"
 	@echo "  doc              Build docs"
@@ -126,6 +127,10 @@ pip-dev:
 
 pip-release:
 	python -m pip install --upgrade $(PYPI_PACKAGE)
+
+wheel-local:
+	python -m pip install --upgrade build
+	python -m build --wheel --outdir dist
 
 dtype-coverage-report: build-debug
 	./$(BUILD_DEBUG)/munet_dtype_coverage_report > ./$(BUILD_DEBUG)/dtype_coverage_report.csv
