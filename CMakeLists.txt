@@ -167,43 +167,14 @@ if(MUNET_INFERENCE_REJECTS_TRAINING_HEADERS)
 endif()
 
 # --- Python Bindings ---
-pybind11_add_module(munet_nn src/bindings.cpp)
-target_link_libraries(munet_nn PRIVATE munet_training munet_build_flags)
-target_compile_definitions(munet_nn PRIVATE MUNET_PY_HELPER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/python_src")
+pybind11_add_module(_core src/bindings.cpp)
+target_link_libraries(_core PRIVATE munet_training munet_build_flags)
 
-# Copy helper python file beside the built module in each config build dir
-add_custom_command(TARGET munet_nn POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:munet_nn>/python_src
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
-            $<TARGET_FILE_DIR:munet_nn>/python_src/onnx_integration.py
-)
-
-# Copy the produced extension module into top-level build/
-# This gives you build/munet_nn*.so regardless of which split build dir built it.
-add_custom_command(TARGET munet_nn POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/build
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:munet_nn>
-            ${CMAKE_SOURCE_DIR}/build/
-)
-
-# Optional: also copy helper python file to top-level build/python_src
-add_custom_command(TARGET munet_nn POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/build/python_src
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
-            ${CMAKE_SOURCE_DIR}/build/python_src/onnx_integration.py
-)
-
-# Install extension + helper assets for pip/wheel installs.
-install(TARGETS munet_nn
-    LIBRARY DESTINATION .
-    RUNTIME DESTINATION .
-    ARCHIVE DESTINATION .
-)
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
-    DESTINATION python_src
+# Install extension module into package path for pip/wheel installs.
+install(TARGETS _core
+    LIBRARY DESTINATION munet_nn
+    RUNTIME DESTINATION munet_nn
+    ARCHIVE DESTINATION munet_nn
 )
 
 # --- Unit Tests ---

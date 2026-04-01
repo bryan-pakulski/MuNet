@@ -281,7 +281,7 @@ public:
   }
 };
 
-PYBIND11_MODULE(munet_nn, m) {
+PYBIND11_MODULE(_core, m) {
   m.doc() = "MuNet: C++ Machine Learning Framework";
 
   // ============================================================================
@@ -1367,11 +1367,6 @@ PYBIND11_MODULE(munet_nn, m) {
   // ============================================================================
   // Python Injected Helpers
   // ============================================================================
-  m.attr("__munet_helper_source_dir__") = py::str(MUNET_PY_HELPER_SOURCE_DIR);
-  if (py::hasattr(m, "__file__")) {
-    m.attr("__munet_file__") = m.attr("__file__");
-  }
-
   py::exec(
       R"(
 class no_grad:
@@ -2129,41 +2124,13 @@ def load_weights_for_inference(module, filename, device=None):
     load_weights_deploy(module, filename)
     return _normalize_loaded_module_for_inference(module, device)
 
-def _load_python_helper(filename):
-    import pathlib
-    import sys
-
-    # Prefer compile-time source helper dir when available (dev builds).
-    helper_dir = globals().get("__munet_helper_source_dir__", None)
-    if helper_dir is not None:
-        helper_path = pathlib.Path(helper_dir) / filename
-        if helper_path.exists():
-            src = helper_path.read_text(encoding="utf-8")
-            exec(compile(src, str(helper_path), "exec"), globals(), globals())
-            return
-
-    # Avoid importing `munet` while module init is still running, which can
-    # recursively execute bindings init and trigger pybind duplicate type registration.
-    mod_file = globals().get("__munet_file__", None)
-    if mod_file is None:
-        mod = sys.modules.get(__name__)
-        mod_file = getattr(mod, "__file__", None) if mod is not None else None
-    if mod_file is None:
-        spec = globals().get("__spec__", None)
-        mod_file = getattr(spec, "origin", None)
-    if mod_file is not None:
-        helper_path = pathlib.Path(mod_file).resolve().parent / "python_src" / filename
-        if helper_path.exists():
-            src = helper_path.read_text(encoding="utf-8")
-            exec(compile(src, str(helper_path), "exec"), globals(), globals())
-            return
-
-    raise RuntimeError(
-        f"Required MuNet python helper '{filename}' could not be located. "
-        f"Searched source helper dir={helper_dir!r} and module-adjacent python_src."
-    )
-
-_load_python_helper("onnx_integration.py")
+from munet_nn._helpers.onnx_integration import *  # noqa: F401,F403
+from munet_nn._helpers.onnx_integration import register_inference_bindings as _register_onnx_helpers
+_register_onnx_helpers(
+    inference,
+    load_for_inference_fn=load_for_inference,
+    load_weights_for_inference_fn=load_weights_for_inference,
+)
 )",
       m.attr("__dict__"), m.attr("__dict__"));
 }

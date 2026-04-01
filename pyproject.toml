@@ -33,7 +33,7 @@ cmake.args = [
   "-DMUNET_BUILD_TESTS=OFF",
   "-DMUNET_BUILD_TOOLS=OFF",
 ]
-wheel.packages = []
+wheel.packages = ["python/munet_nn"]
 
 [tool.cibuildwheel]
 build = "cp310-* cp311-* cp312-*"
