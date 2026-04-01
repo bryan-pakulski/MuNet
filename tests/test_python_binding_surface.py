@@ -101,3 +101,42 @@ def test_backend_status_reports_abi_mismatch_for_incompatible_plugin(tmp_path, m
     badabi_entries = [e for e in entries if e.get("name") == "badabi"]
     assert badabi_entries, "Expected loader to discover badabi plugin"
     assert badabi_entries[0].get("reason_code") == "abi_mismatch"
+
+
+def test_backend_status_reports_valid_plugin_and_smoke_op(tmp_path, monkeypatch):
+    c_src = tmp_path / "plugin_ok.c"
+    so_path = tmp_path / "libmunet_backend_good.so"
+    c_src.write_text(
+        """
+        #include <stdint.h>
+        uint32_t munet_backend_plugin_abi_version(void) { return 1u; }
+        const char* munet_backend_plugin_name(void) { return "goodplugin"; }
+        const char* munet_backend_plugin_device_type(void) { return "cuda"; }
+        uint64_t munet_backend_plugin_capability_flags(void) { return 7u; }
+        const char* munet_backend_plugin_probe(void) { return 0; }
+        """
+    )
+
+    import shutil
+    import subprocess
+
+    cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    if cc is None:
+        pytest.skip("C compiler unavailable for plugin load test")
+
+    subprocess.check_call([cc, "-shared", "-fPIC", str(c_src), "-o", str(so_path)])
+    monkeypatch.setenv("MUNET_BACKEND_PLUGIN_PATH", str(tmp_path))
+
+    backends = set(munet.list_available_backends())
+    assert "goodplugin" in backends
+
+    status = munet.backend_status()
+    entries = status.get("statuses", [])
+    good_entries = [e for e in entries if e.get("name") == "goodplugin"]
+    assert good_entries and good_entries[0].get("reason_code") == "ok"
+
+    # Smoke op must still execute while plugin is active.
+    a = munet.ones([2, 2])
+    b = munet.ones([2, 2])
+    out = munet.matmul(a, b)
+    assert out.shape == [2, 2]

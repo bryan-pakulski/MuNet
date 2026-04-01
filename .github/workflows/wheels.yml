@@ -20,28 +20,24 @@ jobs:
           - os: ubuntu-latest
             cuda_major: "12"
             variant: "cu12-vk"
-            package_name: "munet-nn-cu12-vk"
             manylinux_image: "sameli/manylinux_2_28_x86_64_cuda_12.3"
             with_cuda: "true"
             with_vk: "true"
           - os: ubuntu-latest
             cuda_major: "13"
             variant: "cu13-vk"
-            package_name: "munet-nn-cu13-vk"
             manylinux_image: "pytorch/manylinux2_28-builder:cuda13.0-a2b77d7de21169739eec614c1fb151dd2391deba"
             with_cuda: "true"
             with_vk: "true"
           - os: ubuntu-latest
             cuda_major: ""
             variant: "vk"
-            package_name: "munet-nn-vk"
             manylinux_image: "quay.io/pypa/manylinux_2_28_x86_64"
             with_cuda: "false"
             with_vk: "true"
           - os: ubuntu-latest
             cuda_major: ""
             variant: "cpu"
-            package_name: "munet-nn"
             manylinux_image: "quay.io/pypa/manylinux_2_28_x86_64"
             with_cuda: "false"
             with_vk: "false"
@@ -53,12 +49,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Set package metadata for backend variant
-        run: |
-          set -euxo pipefail
-          sed -i "s/^name = \"munet-nn\"$/name = \"${{ matrix.package_name }}\"/" pyproject.toml
-          grep -nE "^(name|version)\\s*=" pyproject.toml
 
       - name: Build wheels (CUDA + Vulkan variants)
         if: matrix.with_cuda == 'true'

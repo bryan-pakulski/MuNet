@@ -180,3 +180,12 @@ This RFC satisfies the required Phase 0 approvals by defining:
 - stable plugin ABI versioning strategy (Section 3.3),
 - extras naming/mapping contract (Section 2.2),
 - fallback behavior + actionable error matrix (Section 4.3).
+
+
+## 8) Phase-3 distribution decision
+
+For Linux wheels, MuNet now builds a single `munet-nn` core wheel and installs optional plugin shared libraries under `munet_nn/plugins` when built.
+
+- Core import remains CPU-safe even if plugin runtime dependencies are missing.
+- Plugin binaries are runtime-probed and reported through `backend_status()` rather than being hard import requirements.
+- Extras (Phase 4) remain dependency bundles and do not select different wheel names.

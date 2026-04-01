@@ -5,6 +5,7 @@
 #include <dlfcn.h>
 #include <filesystem>
 #include <unordered_map>
+#include <vector>
 
 namespace munet::plugin {
 namespace {
@@ -14,6 +15,16 @@ using NameFn = const char *(*)();
 using DeviceFn = const char *(*)();
 using CapabilityFlagsFn = uint64_t (*)();
 using ProbeFn = const char *(*)();
+
+
+std::filesystem::path core_module_dir() {
+  Dl_info info;
+  if (dladdr(reinterpret_cast<void *>(&discover_backend_plugins), &info) == 0 ||
+      info.dli_fname == nullptr) {
+    return {};
+  }
+  return std::filesystem::path(info.dli_fname).parent_path();
+}
 
 std::vector<std::filesystem::path> plugin_search_paths() {
   std::vector<std::filesystem::path> paths;
@@ -38,6 +49,11 @@ std::vector<std::filesystem::path> plugin_search_paths() {
     if (std::strlen(env_dir) > 0) {
       paths.emplace_back(env_dir);
     }
+  }
+
+  const auto module_dir = core_module_dir();
+  if (!module_dir.empty()) {
+    paths.emplace_back(module_dir / "plugins");
   }
 
   paths.emplace_back(std::filesystem::current_path() / "plugins");
