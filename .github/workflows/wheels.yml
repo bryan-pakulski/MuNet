@@ -28,7 +28,7 @@ jobs:
             cuda_major: "13"
             variant: "cu13-vk"
             package_name: "munet-nn-cu13-vk"
-            manylinux_image: "sameli/manylinux_2_28_x86_64_cuda_13.0"
+            manylinux_image: "pytorch/manylinux2_28-builder:cuda13.0-a2b77d7de21169739eec614c1fb151dd2391deba"
             with_cuda: "true"
             with_vk: "true"
           - os: ubuntu-latest
