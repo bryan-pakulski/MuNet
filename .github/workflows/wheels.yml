@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euxo pipefail
           sed -i "s/^name = \"munet-nn\"$/name = \"${{ matrix.package_name }}\"/" pyproject.toml
-          rg -n "^(name|version)\\s*=" pyproject.toml
+          grep -nE "^(name|version)\\s*=" pyproject.toml
 
       - name: Build wheels (CUDA + Vulkan variants)
         if: matrix.with_cuda == 'true'
