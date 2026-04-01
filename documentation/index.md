@@ -32,6 +32,7 @@ Welcome to MuNet docs. This documentation is structured for interactive/searchab
 - [Inference Runtime Phase 3 Memory and Backend Policy](architecture/inference_phase3_memory_backend_policy.md)
 - [Inference Runtime Phase 5 Validation and Rollout](architecture/inference_phase5_validation_rollout.md)
 - [Backends](architecture/backends.md)
+- [Backend Plugin + Packaging RFC (Phase 0)](architecture/plugin_runtime_packaging_rfc.md)
 - [Model Offload Phased Plan](architecture/model_offload_phased_plan.md)
 - [Offload Planner Follow-ups](architecture/offload_planner_followups.md)
 - [Architecture Decision Log](architecture/decision_log.md)
