@@ -16,7 +16,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        include:
+          - os: ubuntu-latest
+            cuda_major: "12"
+            variant: "cu12-vk"
+            package_name: "munet-nn-cu12-vk"
+            manylinux_image: "sameli/manylinux_2_28_x86_64_cuda_12.3"
+            with_cuda: "true"
+            with_vk: "true"
+          - os: ubuntu-latest
+            cuda_major: "13"
+            variant: "cu13-vk"
+            package_name: "munet-nn-cu13-vk"
+            manylinux_image: "sameli/manylinux_2_28_x86_64_cuda_13.0"
+            with_cuda: "true"
+            with_vk: "true"
+          - os: ubuntu-latest
+            cuda_major: ""
+            variant: "vk"
+            package_name: "munet-nn-vk"
+            manylinux_image: "quay.io/pypa/manylinux_2_28_x86_64"
+            with_cuda: "false"
+            with_vk: "true"
+          - os: ubuntu-latest
+            cuda_major: ""
+            variant: "cpu"
+            package_name: "munet-nn"
+            manylinux_image: "quay.io/pypa/manylinux_2_28_x86_64"
+            with_cuda: "false"
+            with_vk: "false"
 
     steps:
       - uses: actions/checkout@v4
@@ -25,15 +53,40 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Build wheels
+
+      - name: Set package metadata for backend variant
+        run: |
+          set -euxo pipefail
+          sed -i "s/^name = \"munet-nn\"$/name = \"${{ matrix.package_name }}\"/" pyproject.toml
+          rg -n "^(name|version)\\s*=" pyproject.toml
+
+      - name: Build wheels (CUDA + Vulkan variants)
+        if: matrix.with_cuda == 'true'
         uses: pypa/cibuildwheel@v2.20.0
         env:
           CIBW_BUILD: cp310-* cp311-* cp312-*
           CIBW_SKIP: "*-musllinux_*"
           CIBW_ARCHS_LINUX: x86_64
-          CIBW_MANYLINUX_X86_64_IMAGE: sameli/manylinux_2_28_x86_64_cuda_12.3
+          CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux_image }}
+          # cibuildwheel runs auditwheel repair on Linux; that process can vendor
+          # linked shared libs into the wheel and massively increase wheel size.
+          # Exclude CUDA runtime/driver libs so they are expected from the host.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
+            auditwheel repair -w {dest_dir} {wheel}
+            --exclude libcuda.so.1
+            --exclude libcudart.so.12
+            --exclude libcudart.so.13
+            --exclude libnvrtc.so.12
+            --exclude libnvrtc.so.13
+            --exclude libnvJitLink.so.12
+            --exclude libnvJitLink.so.13
+            --exclude libcublas.so.12
+            --exclude libcublas.so.13
+            --exclude libcublasLt.so.12
+            --exclude libcublasLt.so.13
           CIBW_ENVIRONMENT_LINUX: >-
             CUDA_HOME=/usr/local/cuda
+            MUNET_CUDA_MAJOR=${{ matrix.cuda_major }}
             CUDACXX=/usr/local/cuda/bin/nvcc
             CC=/opt/rh/gcc-toolset-12/root/usr/bin/gcc
             CXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++
@@ -65,10 +118,38 @@ jobs:
             nvcc --version
             vulkaninfo --summary || true
             glslc --version || true
+
+      - name: Build wheels (Vulkan-only variant)
+        if: matrix.with_cuda == 'false' && matrix.with_vk == 'true'
+        uses: pypa/cibuildwheel@v2.20.0
+        env:
+          CIBW_BUILD: cp310-* cp311-* cp312-*
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux_image }}
+          CIBW_ENVIRONMENT_LINUX: >-
+            CMAKE_ARGS="-DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/lib64/libvulkan.so.1"
+          CIBW_BEFORE_ALL_LINUX: |
+            set -euxo pipefail
+            dnf -y install vulkan-devel vulkan-tools
+            dnf -y install glslang-tools || true
+            dnf -y install shaderc-devel || true
+            dnf -y install shaderc || true
+            vulkaninfo --summary || true
+            glslc --version || true
+
+      - name: Build wheels (CPU-only variant)
+        if: matrix.with_cuda == 'false' && matrix.with_vk == 'false'
+        uses: pypa/cibuildwheel@v2.20.0
+        env:
+          CIBW_BUILD: cp310-* cp311-* cp312-*
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux_image }}
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}
+          name: wheels-${{ matrix.os }}-${{ matrix.variant }}
           path: wheelhouse/*.whl
 
   publish_testpypi:
@@ -91,11 +172,34 @@ jobs:
           mkdir -p wheelhouse
           find dist -name "*.whl" -exec cp {} wheelhouse/ \;
 
+      - name: Check wheel file sizes
+        run: |
+          set -euxo pipefail
+          ls -lh wheelhouse/*.whl
+          python - <<'PY'
+          from pathlib import Path
+          limit = 100 * 1024 * 1024
+          too_large = []
+          for wheel in Path("wheelhouse").glob("*.whl"):
+            size = wheel.stat().st_size
+            print(f"{wheel.name}: {size / (1024 * 1024):.1f} MB")
+            if size > limit:
+              too_large.append((wheel.name, size))
+          if too_large:
+            names = ", ".join(name for name, _ in too_large)
+            raise SystemExit(
+              "Wheel exceeds TestPyPI/PyPI default 100 MB file limit: "
+              f"{names}. See https://docs.pypi.org/project-management/storage-limits/"
+            )
+          PY
+
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: wheelhouse/
           repository-url: https://test.pypi.org/legacy/
+          attestations: false
+          verbose: true
 
   publish:
     name: Publish release wheels to PyPI
@@ -117,7 +221,29 @@ jobs:
           mkdir -p wheelhouse
           find dist -name "*.whl" -exec cp {} wheelhouse/ \;
 
+      - name: Check wheel file sizes
+        run: |
+          set -euxo pipefail
+          ls -lh wheelhouse/*.whl
+          python - <<'PY'
+          from pathlib import Path
+          limit = 100 * 1024 * 1024
+          too_large = []
+          for wheel in Path("wheelhouse").glob("*.whl"):
+            size = wheel.stat().st_size
+            print(f"{wheel.name}: {size / (1024 * 1024):.1f} MB")
+            if size > limit:
+              too_large.append((wheel.name, size))
+          if too_large:
+            names = ", ".join(name for name, _ in too_large)
+            raise SystemExit(
+              "Wheel exceeds TestPyPI/PyPI default 100 MB file limit: "
+              f"{names}. See https://docs.pypi.org/project-management/storage-limits/"
+            )
+          PY
+
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: wheelhouse/
+          verbose: true
