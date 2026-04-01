@@ -779,6 +779,21 @@ private:
 
 BackendRegistry &default_backend_registry();
 
+
+struct BackendRuntimeStatus {
+  std::string name;
+  std::string source;
+  bool discovered = false;
+  bool loadable = false;
+  bool active = false;
+  std::string reason_code;
+  std::string detail;
+  std::string plugin_path;
+  uint32_t plugin_abi_version = 0;
+  uint32_t core_abi_version = 0;
+  uint64_t capability_flags = 0;
+};
+
 class BackendManager {
 public:
   using BackendFactory = BackendRegistry::BackendFactory;
@@ -786,6 +801,8 @@ public:
   static BackendRegistry &registry();
   static void register_backend(DeviceType type, BackendFactory factory);
   static std::shared_ptr<Backend> get(Device device);
+  static std::vector<std::string> list_available_backends();
+  static std::vector<BackendRuntimeStatus> backend_status();
 };
 
 } // namespace munet

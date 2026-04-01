@@ -1,5 +1,6 @@
 #include "backend/cpu_backend.hpp"
 #include "backend/debug_backend.hpp"
+#include "backend/plugin_loader.hpp"
 #include "core/backend.hpp"
 #include "core/util.hpp"
 
@@ -11,6 +12,7 @@
 #include "backend/vulkan_backend.hpp"
 #endif
 
+#include <algorithm>
 #include <mutex>
 
 namespace munet {
@@ -158,6 +160,118 @@ void BackendManager::register_backend(DeviceType type, BackendFactory factory) {
 
 std::shared_ptr<Backend> BackendManager::get(Device device) {
   return registry().get(device);
+}
+
+
+std::vector<std::string> BackendManager::list_available_backends() {
+  std::vector<std::string> out{"cpu"};
+
+#ifdef MUNET_USE_CUDA
+  if (backend_probe_ok(DeviceType::CUDA, "CUDA", [](Device device) {
+        return std::make_shared<CUDABackend>(device.index);
+      })) {
+    out.push_back("cuda");
+  }
+#endif
+
+#ifdef MUNET_USE_VULKAN
+  if (backend_probe_ok(DeviceType::VULKAN, "Vulkan", [](Device device) {
+        return std::make_shared<VulkanBackend>(device.index);
+      })) {
+    out.push_back("vulkan");
+  }
+#endif
+
+  for (const auto &plugin_status : plugin::discover_backend_plugins()) {
+    if (plugin_status.active) {
+      out.push_back(plugin_status.name);
+    }
+  }
+
+  std::sort(out.begin(), out.end());
+  out.erase(std::unique(out.begin(), out.end()), out.end());
+  return out;
+}
+
+std::vector<BackendRuntimeStatus> BackendManager::backend_status() {
+  std::vector<BackendRuntimeStatus> statuses;
+
+  BackendRuntimeStatus cpu;
+  cpu.name = "cpu";
+  cpu.source = "builtin";
+  cpu.discovered = true;
+  cpu.loadable = true;
+  cpu.active = true;
+  cpu.reason_code = "ok";
+  cpu.detail = "CPU backend is always available.";
+  statuses.push_back(std::move(cpu));
+
+  auto add_builtin_status = [&](const std::string &name, bool compiled,
+                                DeviceType type,
+                                BackendRegistry::BackendFactory factory) {
+    BackendRuntimeStatus status;
+    status.name = name;
+    status.source = "builtin";
+    status.discovered = compiled;
+    if (!compiled) {
+      status.reason_code = "not_compiled";
+      status.detail = "Backend not compiled into this build.";
+      statuses.push_back(std::move(status));
+      return;
+    }
+
+    try {
+      auto backend = factory(Device{type, 0});
+      backend->synchronize();
+      status.loadable = true;
+      status.active = true;
+      status.reason_code = "ok";
+      status.detail = "Backend compiled and runtime probe succeeded.";
+    } catch (const std::exception &e) {
+      status.reason_code = "runtime_dependency_missing";
+      status.detail = e.what();
+    } catch (...) {
+      status.reason_code = "runtime_dependency_missing";
+      status.detail = "Unknown runtime probe failure.";
+    }
+    statuses.push_back(std::move(status));
+  };
+
+#ifdef MUNET_USE_CUDA
+  add_builtin_status("cuda", true, DeviceType::CUDA,
+                     [](Device device) {
+                       return std::make_shared<CUDABackend>(device.index);
+                     });
+#else
+  add_builtin_status("cuda", false, DeviceType::CUDA, nullptr);
+#endif
+
+#ifdef MUNET_USE_VULKAN
+  add_builtin_status("vulkan", true, DeviceType::VULKAN,
+                     [](Device device) {
+                       return std::make_shared<VulkanBackend>(device.index);
+                     });
+#else
+  add_builtin_status("vulkan", false, DeviceType::VULKAN, nullptr);
+#endif
+
+  for (const auto &plugin_status : plugin::discover_backend_plugins()) {
+    BackendRuntimeStatus status;
+    status.name = plugin_status.name;
+    status.source = "plugin";
+    status.discovered = plugin_status.discovered;
+    status.loadable = plugin_status.loadable;
+    status.active = plugin_status.active;
+    status.reason_code = plugin_status.reason_code;
+    status.detail = plugin_status.detail;
+    status.plugin_path = plugin_status.path;
+    status.plugin_abi_version = plugin_status.plugin_abi_version;
+    status.core_abi_version = plugin::kBackendPluginAbiVersion;
+    status.capability_flags = plugin_status.capability_flags;
+    statuses.push_back(std::move(status));
+  }
+
+  return statuses;
 }
 
 } // namespace munet

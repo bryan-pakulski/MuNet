@@ -658,6 +658,54 @@ PYBIND11_MODULE(_core, m) {
       "Returns whether the selected backend advertises native support for a "
       "feature/dtype combination.");
 
+
+  m.def(
+      "list_available_backends",
+      []() {
+        py::list out;
+        for (const auto &name : BackendManager::list_available_backends()) {
+          out.append(py::cast(name));
+        }
+        return out;
+      },
+      "Returns active backend names, including CPU and loadable accelerators.");
+
+  m.def(
+      "backend_status",
+      []() {
+        py::dict out;
+        py::list statuses;
+        bool accelerator_loaded = false;
+        for (const auto &status : BackendManager::backend_status()) {
+          py::dict entry;
+          entry["name"] = py::cast(status.name);
+          entry["source"] = py::cast(status.source);
+          entry["discovered"] = py::cast(status.discovered);
+          entry["loadable"] = py::cast(status.loadable);
+          entry["active"] = py::cast(status.active);
+          entry["reason_code"] = py::cast(status.reason_code);
+          entry["detail"] = py::cast(status.detail);
+          entry["plugin_path"] = py::cast(status.plugin_path);
+          entry["plugin_abi_version"] = py::cast(status.plugin_abi_version);
+          entry["core_abi_version"] = py::cast(status.core_abi_version);
+          entry["capability_flags"] = py::cast(status.capability_flags);
+          statuses.append(std::move(entry));
+
+          if (status.name != "cpu" && status.active) {
+            accelerator_loaded = true;
+          }
+        }
+
+        out["statuses"] = std::move(statuses);
+        out["accelerator_loaded"] = py::cast(accelerator_loaded);
+        out["summary"] = py::cast(
+            accelerator_loaded
+                ? std::string("One or more accelerator backends are active.")
+                : std::string("No accelerators loaded; CPU backend active."));
+        return out;
+      },
+      "Returns backend diagnostics including plugin discovery and ABI status.");
+
   m.def(
       "available_accelerators",
       []() {

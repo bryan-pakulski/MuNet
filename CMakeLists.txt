@@ -39,6 +39,7 @@ check_language(CUDA)
 set(MUNET_SOURCES
     src/tensor.cpp
     src/backend/backend_manager.cpp
+    src/backend/plugin_loader.cpp
     src/core/op_dispatch.cpp
     src/core/ops/add.cpp
     src/core/ops/elementwise.cpp
