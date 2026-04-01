@@ -2124,13 +2124,6 @@ def load_weights_for_inference(module, filename, device=None):
     load_weights_deploy(module, filename)
     return _normalize_loaded_module_for_inference(module, device)
 
-from munet_nn._helpers.onnx_integration import *  # noqa: F401,F403
-from munet_nn._helpers.onnx_integration import register_inference_bindings as _register_onnx_helpers
-_register_onnx_helpers(
-    inference,
-    load_for_inference_fn=load_for_inference,
-    load_weights_for_inference_fn=load_weights_for_inference,
-)
 )",
       m.attr("__dict__"), m.attr("__dict__"));
 }
