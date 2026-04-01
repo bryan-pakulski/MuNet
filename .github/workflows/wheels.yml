@@ -198,7 +198,6 @@ jobs:
         with:
           packages-dir: wheelhouse/
           repository-url: https://test.pypi.org/legacy/
-          attestations: false
           verbose: true
 
   publish:

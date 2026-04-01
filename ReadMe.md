@@ -1,30 +1,30 @@
 # μNet
 
 μNet is a lightweight C++ tensor + autograd framework with Python bindings.
-It supports CPU execution out of the box and optional CUDA/Vulkan backends,
-with centralized op dispatch, backend capability querying, and explicit fallback policy.
+It supports CPU, CUDA and Vulkan backends. The goal of the project is to interop with existing frameworks (torch / onnx)
+and allow for mixed gpu training & inference.
+
+## Setup / Runtime requirements
+```bash
+pip install munet_nn
+```
+
+μNet has provisioning enabled for accelerated support detection, if CUDA / VULKAN libraries are installed on your host they will automatically be discovered.
 
 ## Current repository state
 
-- Core runtime (`munet_core`) is active and used by both training and inference surfaces.
+- Core runtime (`munet_core`) is used by both training and inference surfaces.
 - Training APIs (`nn`, `optim`, losses, autograd) are available in C++ and Python.
 - Inference APIs and serialization flows are available (`munet_inference`, demos under `demos/inference/` and `demos/serialization/`).
-- Backend dispatch now includes:
+- Backend dispatch which includes:
   - capability-based support checks,
   - fallback reason accounting,
   - accelerator→CPU fallback telemetry counters,
   - optional fail-fast mode for unexpected accelerator fallbacks.
 
-## Architecture highlights
+## ENV Vars
 
-- **Backend registration/caching:** `BackendManager` + `BackendRegistry`.
-- **Dispatch engine:** `src/core/op_dispatch.*` owns op metadata, policy checks, and fallback decisions.
-- **Backend capability API:** `Backend::query_support(feature, dtype[, shape])`.
-- **Vulkan backend state ownership:** mutable runtime/device state is backend-owned (not file-global mutable maps/pools).
-
-## Diagnostics & safety env vars
-
-- `MUNET_PROFILE=1` — profiler collection + summary.
+- `MUNET_PROFILE=1` — profiler collection + summary on process exit or manual flush.
 - `MUNET_DEBUG=1` — debug logging/checks.
 - `MUNET_LOG_LEVEL=0..3` — log verbosity.
 - `MUNET_DISPATCH_DECISION_DUMP=1` — emit dispatch decision lines.
@@ -40,39 +40,23 @@ with centralized op dispatch, backend capability querying, and explicit fallback
 - Optional: CUDA Toolkit (`nvcc`)
 - Optional: Vulkan SDK (`glslc` in `PATH`)
 
-### Python install (recommended)
+### Python publishing
+There are two PyPi streams for μNet. Publishing is done via release tags, `dev*` tags will push to the test stream and `v*` tags to production.
+
+#### Test stream
+- https://test.pypi.org/project/munet-nn/
+
+
+#### Prod stream
+- https://pypi.org/project/munet-nn/
+
+
+
+## Tests
 
 ```bash
-python -m pip install -e .
-```
-
-Build a wheel for distribution:
-
-```bash
-python -m pip install build
-python -m build --wheel
-python -m pip install dist/munet-*.whl
-```
-
-### Common commands
-
-```bash
-make build-debug
-make build-release
-```
-
-Or with raw CMake:
-
-```bash
-cmake -S . -B build
-cmake --build build -j
-```
-
-## Test
-
-```bash
-make unit-test      # debug gtest binary
-make py-test        # Python integration tests
+make unit-test      # debug gtest (C++)
+make py-test        # Python integration test suite
 make perf-test      # opt-in perf suite (sets MUNET_RUN_PERF_TESTS=1)
 ```
 
