@@ -142,9 +142,82 @@ jobs:
           name: wheels-${{ matrix.os }}-${{ matrix.variant }}
           path: wheelhouse/*.whl
 
+  validate_wheels:
+    name: Validate wheel artifacts
+    needs: build_wheels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+
+      - name: Flatten wheel artifacts
+        run: |
+          mkdir -p wheelhouse
+          find dist -name "*.whl" -exec cp {} wheelhouse/ \;
+
+      - name: Twine and metadata validation
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip twine
+          twine check wheelhouse/*.whl
+
+      - name: Assert wheel package tree
+        run: |
+          set -euxo pipefail
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          wheels = sorted(Path("wheelhouse").glob("*.whl"))
+          if not wheels:
+              raise SystemExit("No wheels found under wheelhouse/")
+
+          for wheel in wheels:
+              with zipfile.ZipFile(wheel) as zf:
+                  names = set(zf.namelist())
+              required = [
+                  "munet_nn/__init__.py",
+                  "munet_nn/_helpers/onnx_integration.py",
+              ]
+              for required_path in required:
+                  if required_path not in names:
+                      raise SystemExit(f"{wheel.name} missing required artifact: {required_path}")
+              if not any(name.startswith("munet_nn/_core") for name in names):
+                  raise SystemExit(f"{wheel.name} missing munet_nn/_core extension")
+          print("wheel package tree validation passed")
+          PY
+
+      - name: Dry-run clean-venv install smoke
+        run: |
+          set -euxo pipefail
+          python -m venv .venv-wheel-check
+          . .venv-wheel-check/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install --no-deps wheelhouse/*.whl
+          python - <<'PY'
+          import munet_nn as munet
+          import munet_nn._helpers.onnx_integration as onnx_helper
+
+          status = munet.backend_status()
+          backends = munet.list_available_backends()
+          assert isinstance(status, dict) and "statuses" in status
+          assert isinstance(backends, list)
+          print("import/helper/probe smoke passed", onnx_helper.__name__)
+          PY
+
   publish_testpypi:
     name: Publish dev wheels to TestPyPI
-    needs: build_wheels
+    needs: validate_wheels
     if: startsWith(github.ref, 'refs/tags/dev')
     runs-on: ubuntu-latest
     permissions:
@@ -192,7 +265,7 @@ jobs:
 
   publish:
     name: Publish release wheels to PyPI
-    needs: build_wheels
+    needs: validate_wheels
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

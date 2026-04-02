@@ -59,4 +59,4 @@ wheel.packages = ["python/munet_nn"]
 build = "cp310-* cp311-* cp312-*"
 skip = "*-musllinux_*"
 build-verbosity = 1
-test-command = "python -c \"import munet_nn as munet; print(munet.__doc__ is not None)\""
+test-command = "python -c \"import munet_nn as munet; import munet_nn._helpers.onnx_integration as _onnx; status = munet.backend_status(); assert isinstance(status, dict) and 'statuses' in status; assert isinstance(munet.list_available_backends(), list); print(munet.__doc__ is not None, _onnx.__name__)\""
