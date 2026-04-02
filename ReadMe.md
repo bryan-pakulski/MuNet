@@ -12,13 +12,13 @@ pip install munet_nn
 μNet has provisioning enabled for accelerated support detection, you can install the accelerated backends by specifying the appropriate feature targeting:
 
 vulkan:
-munet_nn["vk"]
+`munet_nn["vk"]`
 
 cuda 13:
-munet_nn["cu13_vk"]
+`munet_nn["cu13_vk"]`
 
 cuda 12:
-munet_nn["cu12_vk"]
+`munet_nn["cu12_vk"]`
 
 ## Current repository state
 
@@ -42,7 +42,6 @@ munet_nn["cu12_vk"]
 ## Build
 
 ### Requirements
-
 - CMake 3.10+
 - C++17 compiler
 - Python 3.10+
@@ -57,6 +56,8 @@ There are two PyPi streams for μNet. Publishing is done via release tags, `dev*
 
 #### Prod stream
 - https://pypi.org/project/munet-nn/
+
+When building a release ensure that the version in `pyproject.toml` matches the tag.
 
 ## Tests
 
