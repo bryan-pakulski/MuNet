@@ -203,7 +203,7 @@ jobs:
           python -m venv .venv-wheel-check
           . .venv-wheel-check/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install --no-deps wheelhouse/*.whl
+          python -m pip install --no-deps --no-index --find-links=wheelhouse munet-nn
           python - <<'PY'
           import munet_nn as munet
           import munet_nn._helpers.onnx_integration as onnx_helper
