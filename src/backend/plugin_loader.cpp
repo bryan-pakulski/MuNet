@@ -53,9 +53,11 @@ std::vector<std::filesystem::path> plugin_search_paths() {
 
   const auto module_dir = core_module_dir();
   if (!module_dir.empty()) {
+    paths.emplace_back(module_dir);
     paths.emplace_back(module_dir / "plugins");
   }
 
+  paths.emplace_back(std::filesystem::current_path());
   paths.emplace_back(std::filesystem::current_path() / "plugins");
   paths.emplace_back("/usr/local/lib/munet");
 
