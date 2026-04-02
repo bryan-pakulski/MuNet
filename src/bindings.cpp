@@ -281,7 +281,7 @@ public:
   }
 };
 
-PYBIND11_MODULE(munet_nn, m) {
+PYBIND11_MODULE(_core, m) {
   m.doc() = "MuNet: C++ Machine Learning Framework";
 
   // ============================================================================
@@ -657,6 +657,54 @@ PYBIND11_MODULE(munet_nn, m) {
       py::arg("device"), py::arg("feature"), py::arg("dtype"),
       "Returns whether the selected backend advertises native support for a "
       "feature/dtype combination.");
+
+
+  m.def(
+      "list_available_backends",
+      []() {
+        py::list out;
+        for (const auto &name : BackendManager::list_available_backends()) {
+          out.append(py::cast(name));
+        }
+        return out;
+      },
+      "Returns active backend names, including CPU and loadable accelerators.");
+
+  m.def(
+      "backend_status",
+      []() {
+        py::dict out;
+        py::list statuses;
+        bool accelerator_loaded = false;
+        for (const auto &status : BackendManager::backend_status()) {
+          py::dict entry;
+          entry["name"] = py::cast(status.name);
+          entry["source"] = py::cast(status.source);
+          entry["discovered"] = py::cast(status.discovered);
+          entry["loadable"] = py::cast(status.loadable);
+          entry["active"] = py::cast(status.active);
+          entry["reason_code"] = py::cast(status.reason_code);
+          entry["detail"] = py::cast(status.detail);
+          entry["plugin_path"] = py::cast(status.plugin_path);
+          entry["plugin_abi_version"] = py::cast(status.plugin_abi_version);
+          entry["core_abi_version"] = py::cast(status.core_abi_version);
+          entry["capability_flags"] = py::cast(status.capability_flags);
+          statuses.append(std::move(entry));
+
+          if (status.name != "cpu" && status.active) {
+            accelerator_loaded = true;
+          }
+        }
+
+        out["statuses"] = std::move(statuses);
+        out["accelerator_loaded"] = py::cast(accelerator_loaded);
+        out["summary"] = py::cast(
+            accelerator_loaded
+                ? std::string("One or more accelerator backends are active.")
+                : std::string("No accelerators loaded; CPU backend active."));
+        return out;
+      },
+      "Returns backend diagnostics including plugin discovery and ABI status.");
 
   m.def(
       "available_accelerators",
@@ -1367,11 +1415,6 @@ PYBIND11_MODULE(munet_nn, m) {
   // ============================================================================
   // Python Injected Helpers
   // ============================================================================
-  m.attr("__munet_helper_source_dir__") = py::str(MUNET_PY_HELPER_SOURCE_DIR);
-  if (py::hasattr(m, "__file__")) {
-    m.attr("__munet_file__") = m.attr("__file__");
-  }
-
   py::exec(
       R"(
 class no_grad:
@@ -1745,6 +1788,7 @@ def _resolve_class_from_shell(class_module, class_qualname, class_source=None):
         dynamic_module = types.ModuleType(dynamic_module_name)
         namespace = dynamic_module.__dict__
         namespace["munet_nn"] = __import__("munet_nn")
+        namespace["munet"] = namespace["munet_nn"]
         exec(class_source, namespace, namespace)
         cls = dynamic_module
         try:
@@ -1962,6 +2006,7 @@ def _build_module_from_config(cfg, *, trusted=False):
             dynamic_module = types.ModuleType(f"__munet_dynamic_{module_path.replace('.', '_')}__")
             namespace = dynamic_module.__dict__
             namespace["munet_nn"] = munet
+            namespace["munet"] = munet
             exec(class_source, namespace, namespace)
             leaf_name = class_qualname.split('.')[-1]
             if not hasattr(dynamic_module, leaf_name):
@@ -2129,41 +2174,6 @@ def load_weights_for_inference(module, filename, device=None):
     load_weights_deploy(module, filename)
     return _normalize_loaded_module_for_inference(module, device)
 
-def _load_python_helper(filename):
-    import pathlib
-    import sys
-
-    # Prefer compile-time source helper dir when available (dev builds).
-    helper_dir = globals().get("__munet_helper_source_dir__", None)
-    if helper_dir is not None:
-        helper_path = pathlib.Path(helper_dir) / filename
-        if helper_path.exists():
-            src = helper_path.read_text(encoding="utf-8")
-            exec(compile(src, str(helper_path), "exec"), globals(), globals())
-            return
-
-    # Avoid importing `munet` while module init is still running, which can
-    # recursively execute bindings init and trigger pybind duplicate type registration.
-    mod_file = globals().get("__munet_file__", None)
-    if mod_file is None:
-        mod = sys.modules.get(__name__)
-        mod_file = getattr(mod, "__file__", None) if mod is not None else None
-    if mod_file is None:
-        spec = globals().get("__spec__", None)
-        mod_file = getattr(spec, "origin", None)
-    if mod_file is not None:
-        helper_path = pathlib.Path(mod_file).resolve().parent / "python_src" / filename
-        if helper_path.exists():
-            src = helper_path.read_text(encoding="utf-8")
-            exec(compile(src, str(helper_path), "exec"), globals(), globals())
-            return
-
-    raise RuntimeError(
-        f"Required MuNet python helper '{filename}' could not be located. "
-        f"Searched source helper dir={helper_dir!r} and module-adjacent python_src."
-    )
-
-_load_python_helper("onnx_integration.py")
 )",
       m.attr("__dict__"), m.attr("__dict__"));
 }

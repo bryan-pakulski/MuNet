@@ -19,7 +19,7 @@ PYPI_PACKAGE ?= munet-nn
 	build build-debug build-release build-asan build-gpu \
 	configure-debug configure-release configure-asan configure-gpu \
 	unit-test test-debug test-release test-asan ctest-debug ctest-release ctest-asan \
-	mem-test gpu-mem-test perf-test py-test pip-dev pip-release wheel-local \
+	mem-test gpu-mem-test perf-test py-test pip-dev pip-release wheel-local wheel-local-strip wheel-local-size-check \
 	dtype-coverage-report \
 	format doc clean clean-debug clean-release clean-asan clean-gpu \
 	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-gpu \
@@ -43,6 +43,9 @@ help:
 	@echo "  gpu-mem-test     Run compute-sanitizer memcheck"
 	@echo "  perf-test        Run performance tests from release build"
 	@echo "  py-test          Run python tests"
+	@echo "  wheel-local      Build a local Python wheel into ./dist"
+	@echo "  wheel-local-strip  Strip native binaries inside the newest local wheel and repack"
+	@echo "  wheel-local-size-check  Fail if any local wheel exceeds 100 MB"
 	@echo "  pip-dev          Install latest package from TestPyPI"
 	@echo "  pip-release      Install latest package from PyPI"
 	@echo "  wheel-local      Build a local Python wheel into ./dist"
@@ -131,6 +134,25 @@ pip-release:
 wheel-local:
 	python -m pip install --upgrade build
 	python -m build --wheel --outdir dist
+
+wheel-local-strip: wheel-local
+	python -m pip install --upgrade wheel
+	@set -euo pipefail; \
+	WHEEL_PATH="$$(ls -1t dist/*.whl | head -n1)"; \
+	echo "Stripping $$WHEEL_PATH"; \
+	TMP_DIR="$$(mktemp -d)"; \
+	python -m wheel unpack "$$WHEEL_PATH" --dest "$$TMP_DIR"; \
+	UNPACKED_DIR="$$(find "$$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n1)"; \
+	find "$$UNPACKED_DIR" -type f \( -name '*.so' -o -name '*.so.*' \) -exec strip --strip-unneeded {} +; \
+	python -m wheel pack "$$UNPACKED_DIR" --dest-dir dist; \
+	rm -rf "$$TMP_DIR"
+
+wheel-local-size-check:
+	@python -c 'from pathlib import Path; limit=100*1024*1024; too_large=[]; \
+for wheel in sorted(Path("dist").glob("*.whl")): \
+ size=wheel.stat().st_size; print(f"{wheel.name}: {size/(1024*1024):.1f} MB"); \
+ too_large.append(wheel.name) if size>limit else None; \
+raise SystemExit("Wheel(s) exceed 100 MB: " + ", ".join(too_large)) if too_large else None'
 
 dtype-coverage-report: build-debug
 	./$(BUILD_DEBUG)/munet_dtype_coverage_report > ./$(BUILD_DEBUG)/dtype_coverage_report.csv

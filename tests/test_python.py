@@ -567,7 +567,7 @@ class TestBindings(unittest.TestCase):
         """Verify .numpy() safety checks for gradients and device."""
         # 1. Grad safety
         t = munet.ones([2, 2], requires_grad=True)
-        with self.assertRaisesRegex(RuntimeError, "Use .detach\(\).numpy\(\) instead"):
+        with self.assertRaisesRegex(RuntimeError, r"Use \.detach\(\)\.numpy\(\) instead"):
             t.numpy()
 
         # 2. Device safety
@@ -588,7 +588,7 @@ class TestBindings(unittest.TestCase):
                 return
             with self.assertRaisesRegex(
                 RuntimeError,
-                "Cannot convert GPU tensor to NumPy array directly. Call `.to\(Device\(DeviceType.CPU\)\)` first.",
+                r"Cannot convert GPU tensor to NumPy array directly. Call `\.to\(Device\(DeviceType\.CPU\)\)` first\.",
             ):
                 t_gpu.numpy()
 

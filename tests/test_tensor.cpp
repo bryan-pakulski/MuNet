@@ -195,8 +195,8 @@ TEST(TensorDTypeTest, VulkanMatmulRejectsUnsupportedFloat16WhenAvailable) {
   Device vk{DeviceType::VULKAN, 0};
   try {
     (void)Tensor({1}, vk, DataType::Float32);
-  } catch (const std::runtime_error &) {
-    GTEST_SKIP() << "Vulkan backend unavailable in this environment";
+  } catch (const std::runtime_error &e) {
+    GTEST_SKIP() << "Vulkan backend unavailable in this environment: " << e.what();
   }
 
   Tensor a32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);

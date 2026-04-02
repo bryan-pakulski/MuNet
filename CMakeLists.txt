@@ -13,6 +13,7 @@ option(MUNET_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(MUNET_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(MUNET_BUILD_TESTS "Build C++ test targets" ON)
 option(MUNET_BUILD_TOOLS "Build CLI/report tools" ON)
+option(MUNET_BUILD_RUNTIME_PLUGINS "Build runtime backend plugin shared libraries" ON)
 
 # --- Dependencies ---
 FetchContent_Declare(
@@ -39,6 +40,7 @@ check_language(CUDA)
 set(MUNET_SOURCES
     src/tensor.cpp
     src/backend/backend_manager.cpp
+    src/backend/plugin_loader.cpp
     src/core/op_dispatch.cpp
     src/core/ops/add.cpp
     src/core/ops/elementwise.cpp
@@ -167,44 +169,45 @@ if(MUNET_INFERENCE_REJECTS_TRAINING_HEADERS)
 endif()
 
 # --- Python Bindings ---
-pybind11_add_module(munet_nn src/bindings.cpp)
-target_link_libraries(munet_nn PRIVATE munet_training munet_build_flags)
-target_compile_definitions(munet_nn PRIVATE MUNET_PY_HELPER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/python_src")
+pybind11_add_module(_core src/bindings.cpp)
+target_link_libraries(_core PRIVATE munet_training munet_build_flags)
 
-# Copy helper python file beside the built module in each config build dir
-add_custom_command(TARGET munet_nn POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:munet_nn>/python_src
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
-            $<TARGET_FILE_DIR:munet_nn>/python_src/onnx_integration.py
+# Install extension module into package path for pip/wheel installs.
+install(TARGETS _core
+    LIBRARY DESTINATION munet_nn
+    RUNTIME DESTINATION munet_nn
+    ARCHIVE DESTINATION munet_nn
 )
 
-# Copy the produced extension module into top-level build/
-# This gives you build/munet_nn*.so regardless of which split build dir built it.
-add_custom_command(TARGET munet_nn POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/build
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:munet_nn>
-            ${CMAKE_SOURCE_DIR}/build/
-)
 
-# Optional: also copy helper python file to top-level build/python_src
-add_custom_command(TARGET munet_nn POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/build/python_src
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
-            ${CMAKE_SOURCE_DIR}/build/python_src/onnx_integration.py
-)
+if(MUNET_BUILD_RUNTIME_PLUGINS)
+    add_library(munet_backend_vk SHARED src/backend/plugins/plugin_vk.cpp)
+    target_include_directories(munet_backend_vk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    set_target_properties(munet_backend_vk PROPERTIES OUTPUT_NAME "munet_backend_vk")
+    install(TARGETS munet_backend_vk
+        LIBRARY DESTINATION munet_nn/plugins
+        RUNTIME DESTINATION munet_nn/plugins
+        ARCHIVE DESTINATION munet_nn/plugins
+    )
 
-# Install extension + helper assets for pip/wheel installs.
-install(TARGETS munet_nn
-    LIBRARY DESTINATION .
-    RUNTIME DESTINATION .
-    ARCHIVE DESTINATION .
-)
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/python_src/onnx_integration.py
-    DESTINATION python_src
-)
+    add_library(munet_backend_cu12 SHARED src/backend/plugins/plugin_cu12.cpp)
+    target_include_directories(munet_backend_cu12 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    set_target_properties(munet_backend_cu12 PROPERTIES OUTPUT_NAME "munet_backend_cu12")
+    install(TARGETS munet_backend_cu12
+        LIBRARY DESTINATION munet_nn/plugins
+        RUNTIME DESTINATION munet_nn/plugins
+        ARCHIVE DESTINATION munet_nn/plugins
+    )
+
+    add_library(munet_backend_cu13 SHARED src/backend/plugins/plugin_cu13.cpp)
+    target_include_directories(munet_backend_cu13 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    set_target_properties(munet_backend_cu13 PROPERTIES OUTPUT_NAME "munet_backend_cu13")
+    install(TARGETS munet_backend_cu13
+        LIBRARY DESTINATION munet_nn/plugins
+        RUNTIME DESTINATION munet_nn/plugins
+        ARCHIVE DESTINATION munet_nn/plugins
+    )
+endif()
 
 # --- Unit Tests ---
 if(MUNET_BUILD_TESTS)

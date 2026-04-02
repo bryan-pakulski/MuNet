@@ -16,7 +16,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        include:
+          - os: ubuntu-latest
+            cuda_major: "12"
+            variant: "cu12-vk"
+            manylinux_image: "sameli/manylinux_2_28_x86_64_cuda_12.3"
+            with_cuda: "true"
+            with_vk: "true"
+          - os: ubuntu-latest
+            cuda_major: "13"
+            variant: "cu13-vk"
+            manylinux_image: "pytorch/manylinux2_28-builder:cuda13.0-a2b77d7de21169739eec614c1fb151dd2391deba"
+            with_cuda: "true"
+            with_vk: "true"
+          - os: ubuntu-latest
+            cuda_major: ""
+            variant: "vk"
+            manylinux_image: "quay.io/pypa/manylinux_2_28_x86_64"
+            with_cuda: "false"
+            with_vk: "true"
+          - os: ubuntu-latest
+            cuda_major: ""
+            variant: "cpu"
+            manylinux_image: "quay.io/pypa/manylinux_2_28_x86_64"
+            with_cuda: "false"
+            with_vk: "false"
 
     steps:
       - uses: actions/checkout@v4
@@ -25,15 +49,34 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Build wheels
+
+      - name: Build wheels (CUDA + Vulkan variants)
+        if: matrix.with_cuda == 'true'
         uses: pypa/cibuildwheel@v2.20.0
         env:
           CIBW_BUILD: cp310-* cp311-* cp312-*
           CIBW_SKIP: "*-musllinux_*"
           CIBW_ARCHS_LINUX: x86_64
-          CIBW_MANYLINUX_X86_64_IMAGE: sameli/manylinux_2_28_x86_64_cuda_12.3
+          CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux_image }}
+          # cibuildwheel runs auditwheel repair on Linux; that process can vendor
+          # linked shared libs into the wheel and massively increase wheel size.
+          # Exclude CUDA runtime/driver libs so they are expected from the host.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
+            auditwheel repair -w {dest_dir} {wheel}
+            --exclude libcuda.so.1
+            --exclude libcudart.so.12
+            --exclude libcudart.so.13
+            --exclude libnvrtc.so.12
+            --exclude libnvrtc.so.13
+            --exclude libnvJitLink.so.12
+            --exclude libnvJitLink.so.13
+            --exclude libcublas.so.12
+            --exclude libcublas.so.13
+            --exclude libcublasLt.so.12
+            --exclude libcublasLt.so.13
           CIBW_ENVIRONMENT_LINUX: >-
             CUDA_HOME=/usr/local/cuda
+            MUNET_CUDA_MAJOR=${{ matrix.cuda_major }}
             CUDACXX=/usr/local/cuda/bin/nvcc
             CC=/opt/rh/gcc-toolset-12/root/usr/bin/gcc
             CXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++
@@ -65,15 +108,116 @@ jobs:
             nvcc --version
             vulkaninfo --summary || true
             glslc --version || true
+
+      - name: Build wheels (Vulkan-only variant)
+        if: matrix.with_cuda == 'false' && matrix.with_vk == 'true'
+        uses: pypa/cibuildwheel@v2.20.0
+        env:
+          CIBW_BUILD: cp310-* cp311-* cp312-*
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux_image }}
+          CIBW_ENVIRONMENT_LINUX: >-
+            CMAKE_ARGS="-DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/lib64/libvulkan.so.1"
+          CIBW_BEFORE_ALL_LINUX: |
+            set -euxo pipefail
+            dnf -y install vulkan-devel vulkan-tools
+            dnf -y install glslang-tools || true
+            dnf -y install shaderc-devel || true
+            dnf -y install shaderc || true
+            vulkaninfo --summary || true
+            glslc --version || true
+
+      - name: Build wheels (CPU-only variant)
+        if: matrix.with_cuda == 'false' && matrix.with_vk == 'false'
+        uses: pypa/cibuildwheel@v2.20.0
+        env:
+          CIBW_BUILD: cp310-* cp311-* cp312-*
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux_image }}
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}
+          name: wheels-${{ matrix.os }}-${{ matrix.variant }}
           path: wheelhouse/*.whl
+
+  validate_wheels:
+    name: Validate wheel artifacts
+    needs: build_wheels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+
+      - name: Flatten wheel artifacts
+        run: |
+          mkdir -p wheelhouse
+          find dist -name "*.whl" -exec cp {} wheelhouse/ \;
+
+      - name: Twine and metadata validation
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip twine
+          twine check wheelhouse/*.whl
+
+      - name: Assert wheel package tree
+        run: |
+          set -euxo pipefail
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          wheels = sorted(Path("wheelhouse").glob("*.whl"))
+          if not wheels:
+              raise SystemExit("No wheels found under wheelhouse/")
+
+          for wheel in wheels:
+              with zipfile.ZipFile(wheel) as zf:
+                  names = set(zf.namelist())
+              required = [
+                  "munet_nn/__init__.py",
+                  "munet_nn/_helpers/onnx_integration.py",
+              ]
+              for required_path in required:
+                  if required_path not in names:
+                      raise SystemExit(f"{wheel.name} missing required artifact: {required_path}")
+              if not any(name.startswith("munet_nn/_core") for name in names):
+                  raise SystemExit(f"{wheel.name} missing munet_nn/_core extension")
+          print("wheel package tree validation passed")
+          PY
+
+      - name: Dry-run clean-venv install smoke
+        run: |
+          set -euxo pipefail
+          python -m venv .venv-wheel-check
+          . .venv-wheel-check/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install --no-deps wheelhouse/*.whl
+          python - <<'PY'
+          import munet_nn as munet
+          import munet_nn._helpers.onnx_integration as onnx_helper
+
+          status = munet.backend_status()
+          backends = munet.list_available_backends()
+          assert isinstance(status, dict) and "statuses" in status
+          assert isinstance(backends, list)
+          print("import/helper/probe smoke passed", onnx_helper.__name__)
+          PY
 
   publish_testpypi:
     name: Publish dev wheels to TestPyPI
-    needs: build_wheels
+    needs: validate_wheels
     if: startsWith(github.ref, 'refs/tags/dev')
     runs-on: ubuntu-latest
     permissions:
@@ -121,7 +265,7 @@ jobs:
 
   publish:
     name: Publish release wheels to PyPI
-    needs: build_wheels
+    needs: validate_wheels
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

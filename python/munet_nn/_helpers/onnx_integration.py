@@ -1001,13 +1001,26 @@ def download_yolov5n_onnx(destination_path):
     return destination_path
 
 
-inference.ONNXEngine = ONNXEngine
-inference.load_onnx = load_onnx
-inference.compile_onnx = compile_onnx
-inference.load_serialized = load_for_inference
-inference.load_weights_serialized = load_weights_for_inference
-inference.report_onnx_unsupported_ops = report_onnx_unsupported_ops
-inference.onnx_native_conversion_map = onnx_native_conversion_map
-inference.onnx_conversion_coverage_report = onnx_conversion_coverage_report
-inference.onnx_runtime_package_boundary = onnx_runtime_package_boundary
-inference.download_yolov5n_onnx = download_yolov5n_onnx
+def register_inference_bindings(inference_namespace, *, load_for_inference_fn=None, load_weights_for_inference_fn=None):
+    """Register ONNX integration helpers onto the MuNet inference namespace."""
+    inference_namespace.ONNXEngine = ONNXEngine
+    inference_namespace.load_onnx = load_onnx
+    inference_namespace.compile_onnx = compile_onnx
+    if load_for_inference_fn is None:
+        load_for_inference_fn = globals().get("load_for_inference")
+    if load_weights_for_inference_fn is None:
+        load_weights_for_inference_fn = globals().get("load_weights_for_inference")
+    if load_for_inference_fn is None or load_weights_for_inference_fn is None:
+        raise RuntimeError("MuNet inference load helpers are unavailable for ONNX registration.")
+
+    inference_namespace.load_serialized = load_for_inference_fn
+    inference_namespace.load_weights_serialized = load_weights_for_inference_fn
+    inference_namespace.report_onnx_unsupported_ops = report_onnx_unsupported_ops
+    inference_namespace.onnx_native_conversion_map = onnx_native_conversion_map
+    inference_namespace.onnx_conversion_coverage_report = onnx_conversion_coverage_report
+    inference_namespace.onnx_runtime_package_boundary = onnx_runtime_package_boundary
+    inference_namespace.download_yolov5n_onnx = download_yolov5n_onnx
+
+
+if "inference" in globals():
+    register_inference_bindings(inference)
