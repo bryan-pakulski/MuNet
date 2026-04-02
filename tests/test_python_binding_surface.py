@@ -145,7 +145,8 @@ def test_backend_status_reports_valid_plugin_and_smoke_op(tmp_path, monkeypatch)
 def _accelerator_available(backend_name):
     status = munet.backend_status()
     for item in status.get("statuses", []):
-        if item.get("name") == backend_name and item.get("active"):
+        if (item.get("name") == backend_name and item.get("source") == "builtin"
+                and item.get("active")):
             return True
     return False
 

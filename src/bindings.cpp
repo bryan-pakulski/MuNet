@@ -1788,6 +1788,7 @@ def _resolve_class_from_shell(class_module, class_qualname, class_source=None):
         dynamic_module = types.ModuleType(dynamic_module_name)
         namespace = dynamic_module.__dict__
         namespace["munet_nn"] = __import__("munet_nn")
+        namespace["munet"] = namespace["munet_nn"]
         exec(class_source, namespace, namespace)
         cls = dynamic_module
         try:
@@ -2005,6 +2006,7 @@ def _build_module_from_config(cfg, *, trusted=False):
             dynamic_module = types.ModuleType(f"__munet_dynamic_{module_path.replace('.', '_')}__")
             namespace = dynamic_module.__dict__
             namespace["munet_nn"] = munet
+            namespace["munet"] = munet
             exec(class_source, namespace, namespace)
             leaf_name = class_qualname.split('.')[-1]
             if not hasattr(dynamic_module, leaf_name):
