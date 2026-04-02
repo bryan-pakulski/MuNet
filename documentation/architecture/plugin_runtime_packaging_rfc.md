@@ -189,3 +189,14 @@ For Linux wheels, MuNet now builds a single `munet-nn` core wheel and installs o
 - Core import remains CPU-safe even if plugin runtime dependencies are missing.
 - Plugin binaries are runtime-probed and reported through `backend_status()` rather than being hard import requirements.
 - Extras (Phase 4) remain dependency bundles and do not select different wheel names.
+
+
+## 9) Phase-4 extras mapping (implemented)
+
+Phase-4 extras are now defined in packaging metadata as dependency bundles:
+
+- `vk`
+- `cu12-vk`
+- `cu13-vk`
+
+These extras install runtime/tooling Python dependencies only. They do not select alternate wheel names or binary variants.

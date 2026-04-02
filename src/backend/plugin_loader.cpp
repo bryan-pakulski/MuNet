@@ -175,9 +175,19 @@ std::vector<BackendPluginStatus> discover_backend_plugins() {
   return out;
 }
 
-bool has_active_plugin_for_device(const std::string &device) {
+std::vector<BackendPluginStatus> plugins_for_device(const std::string &device) {
+  std::vector<BackendPluginStatus> out;
   for (const auto &status : discover_backend_plugins()) {
-    if (status.active && status.device == device) {
+    if (status.device == device) {
+      out.push_back(status);
+    }
+  }
+  return out;
+}
+
+bool has_active_plugin_for_device(const std::string &device) {
+  for (const auto &status : plugins_for_device(device)) {
+    if (status.active) {
       return true;
     }
   }

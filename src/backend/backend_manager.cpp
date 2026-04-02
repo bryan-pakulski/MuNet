@@ -229,7 +229,18 @@ std::vector<BackendRuntimeStatus> BackendManager::backend_status() {
 
     if (!plugin::has_active_plugin_for_device(plugin_device)) {
       status.reason_code = "plugin_not_found";
-      status.detail = "No active runtime plugin discovered for this backend device.";
+      std::string detail = "No active runtime plugin discovered for this backend device.";
+      const auto candidates = plugin::plugins_for_device(plugin_device);
+      if (!candidates.empty()) {
+        detail += " Candidates: ";
+        for (size_t i = 0; i < candidates.size(); ++i) {
+          detail += candidates[i].name + "(" + candidates[i].reason_code + ")";
+          if (i + 1 < candidates.size()) {
+            detail += ", ";
+          }
+        }
+      }
+      status.detail = detail;
       statuses.push_back(std::move(status));
       return;
     }
