@@ -173,4 +173,13 @@ std::vector<BackendPluginStatus> discover_backend_plugins() {
   return out;
 }
 
+bool has_active_plugin_for_device(const std::string &device) {
+  for (const auto &status : discover_backend_plugins()) {
+    if (status.active && status.device == device) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace munet::plugin

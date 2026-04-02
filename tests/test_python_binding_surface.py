@@ -140,3 +140,35 @@ def test_backend_status_reports_valid_plugin_and_smoke_op(tmp_path, monkeypatch)
     b = munet.ones([2, 2])
     out = munet.matmul(a, b)
     assert out.shape == [2, 2]
+
+
+def _accelerator_available(backend_name):
+    status = munet.backend_status()
+    for item in status.get("statuses", []):
+        if item.get("name") == backend_name and item.get("active"):
+            return True
+    return False
+
+
+def _gpu_smoke_matmul(device_type):
+    dev = munet.Device(device_type, 0)
+    a = munet.ones([2, 2], dev)
+    b = munet.ones([2, 2], dev)
+    out = munet.matmul(a, b)
+    out_cpu = out.to(munet.Device(munet.DeviceType.CPU, 0))
+    assert out_cpu.shape == [2, 2]
+    import numpy as np
+    np_out = np.array(out_cpu, copy=False)
+    assert (np_out == 2.0).all()
+
+
+def test_cuda_gpu_smoke_if_available():
+    if not _accelerator_available("cuda"):
+        pytest.skip("CUDA accelerator not active in this environment")
+    _gpu_smoke_matmul(munet.DeviceType.CUDA)
+
+
+def test_vulkan_gpu_smoke_if_available():
+    if not _accelerator_available("vulkan"):
+        pytest.skip("Vulkan accelerator not active in this environment")
+    _gpu_smoke_matmul(munet.DeviceType.VULKAN)

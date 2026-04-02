@@ -22,5 +22,6 @@ struct BackendPluginStatus {
 };
 
 std::vector<BackendPluginStatus> discover_backend_plugins();
+bool has_active_plugin_for_device(const std::string &device);
 
 } // namespace munet::plugin
