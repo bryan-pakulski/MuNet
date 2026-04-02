@@ -9,7 +9,16 @@ and allow for mixed gpu training & inference.
 pip install munet_nn
 ```
 
-μNet has provisioning enabled for accelerated support detection, if CUDA / VULKAN libraries are installed on your host they will automatically be discovered.
+μNet has provisioning enabled for accelerated support detection, you can install the accelerated backends by specifying the appropriate feature targeting:
+
+vulkan:
+munet_nn["vk"]
+
+cuda 13:
+munet_nn["cu13_vk"]
+
+cuda 12:
+munet_nn["cu12_vk"]
 
 ## Current repository state
 
@@ -46,11 +55,8 @@ There are two PyPi streams for μNet. Publishing is done via release tags, `dev*
 #### Test stream
 - https://test.pypi.org/project/munet-nn/
 
-
 #### Prod stream
 - https://pypi.org/project/munet-nn/
-
-
 
 ## Tests
 
