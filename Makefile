@@ -23,7 +23,7 @@ PYPI_PACKAGE ?= munet-nn
 	dtype-coverage-report \
 	format doc clean clean-debug clean-release clean-asan clean-gpu \
 	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-gpu \
-	docker-build
+	docker-build 
 
 help:
 	@echo "Targets:"
@@ -48,6 +48,7 @@ help:
 	@echo "  wheel-local-size-check  Fail if any local wheel exceeds 100 MB"
 	@echo "  pip-dev          Install latest package from TestPyPI"
 	@echo "  pip-release      Install latest package from PyPI"
+	@echo "  wheel-local      Build a local Python wheel into ./dist"
 	@echo "  dtype-coverage-report  Generate backend/dtype/op dispatch coverage CSV"
 	@echo "  format           Format code"
 	@echo "  doc              Build docs"
