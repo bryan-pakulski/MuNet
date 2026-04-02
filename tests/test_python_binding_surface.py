@@ -145,10 +145,13 @@ def test_backend_status_reports_valid_plugin_and_smoke_op(tmp_path, monkeypatch)
 def _accelerator_available(backend_name):
     status = munet.backend_status()
     for item in status.get("statuses", []):
-        if (item.get("name") == backend_name and item.get("source") == "builtin"
-                and item.get("active")):
-            return True
-    return False
+        if item.get("name") != backend_name or item.get("source") != "builtin":
+            continue
+        if item.get("active"):
+            return True, "ok"
+        reason = item.get("detail") or item.get("reason_code") or "unknown"
+        return False, reason
+    return False, "builtin status entry not found"
 
 
 def _gpu_smoke_matmul(device_type):
@@ -164,12 +167,14 @@ def _gpu_smoke_matmul(device_type):
 
 
 def test_cuda_gpu_smoke_if_available():
-    if not _accelerator_available("cuda"):
-        pytest.skip("CUDA accelerator not active in this environment")
+    available, reason = _accelerator_available("cuda")
+    if not available:
+        pytest.skip(f"CUDA accelerator not active in this environment: {reason}")
     _gpu_smoke_matmul(munet.DeviceType.CUDA)
 
 
 def test_vulkan_gpu_smoke_if_available():
-    if not _accelerator_available("vulkan"):
-        pytest.skip("Vulkan accelerator not active in this environment")
+    available, reason = _accelerator_available("vulkan")
+    if not available:
+        pytest.skip(f"Vulkan accelerator not active in this environment: {reason}")
     _gpu_smoke_matmul(munet.DeviceType.VULKAN)
