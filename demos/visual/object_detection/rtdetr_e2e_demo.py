@@ -38,10 +38,9 @@ def detect_accelerators(max_index: int = 4) -> list[munet.Device]:
     return devices
 
 
-def conv_bn_act(in_ch: int, out_ch: int, k: int, s: int = 1, p: int = 0):
+def conv_act(in_ch: int, out_ch: int, k: int, s: int = 1, p: int = 0):
     return munet.nn.Sequential(
         munet.nn.Conv2d(in_ch, out_ch, k, stride=s, padding=p),
-        munet.nn.BatchNorm2d(out_ch),
         munet.nn.LeakyReLU(0.1),
     )
 
@@ -51,11 +50,11 @@ class TinyRTDETRDetector(munet.nn.Module):
         super().__init__()
         self.num_queries = num_queries
         self.backbone = munet.nn.Sequential(
-            conv_bn_act(3, 32, 3, p=1),
+            conv_act(3, 32, 3, p=1),
             munet.nn.MaxPool2d(2, 2),
-            conv_bn_act(32, 64, 3, p=1),
+            conv_act(32, 64, 3, p=1),
             munet.nn.MaxPool2d(2, 2),
-            conv_bn_act(64, embed_dim, 3, p=1),
+            conv_act(64, embed_dim, 3, p=1),
             munet.nn.MaxPool2d(2, 2),
         )
         self.token_proj = munet.nn.Linear(embed_dim, embed_dim)
