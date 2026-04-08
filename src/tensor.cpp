@@ -3,6 +3,7 @@
 #include "core/util.hpp"
 #include "ops.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
@@ -350,7 +351,15 @@ ScalarValue Tensor::item_value() const {
     return read_scalar_from_buffer(data(), dtype());
   }
 
-  return to(Device{DeviceType::CPU, 0}).item_value();
+  std::array<unsigned char, sizeof(double)> host_scalar{};
+  const size_t scalar_bytes = dtype_size(dtype());
+  if (scalar_bytes > host_scalar.size()) {
+    throw std::runtime_error("item_value() unsupported scalar byte width");
+  }
+  impl_->backend().copy(data(), host_scalar.data(), scalar_bytes, device(),
+                        Device{DeviceType::CPU, 0});
+  impl_->backend().synchronize();
+  return read_scalar_from_buffer(host_scalar.data(), dtype());
 }
 
 float Tensor::item() const { return item_value().as_float(); }
