@@ -119,6 +119,51 @@ void VulkanBackend::create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
 std::vector<uint32_t>
 VulkanBackend::compile_shader(const std::string &name,
                               const std::string &source) const {
+  auto load_spv = [](const std::string &path) -> std::vector<uint32_t> {
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in.is_open()) {
+      return {};
+    }
+    const auto size = static_cast<size_t>(in.tellg());
+    if (size == 0 || (size % sizeof(uint32_t)) != 0) {
+      return {};
+    }
+    in.seekg(0);
+    std::vector<uint32_t> buffer(size / sizeof(uint32_t));
+    in.read(reinterpret_cast<char *>(buffer.data()),
+            static_cast<std::streamsize>(size));
+    if (!in.good() && !in.eof()) {
+      return {};
+    }
+    return buffer;
+  };
+
+  auto source_hash_hex = [](const std::string &text) -> std::string {
+    const auto hash = std::hash<std::string>{}(text);
+    std::ostringstream out;
+    out << std::hex << hash;
+    return out.str();
+  };
+
+  std::filesystem::path cache_dir;
+  if (const char *cache_env = std::getenv("MUNET_VK_SHADER_CACHE_DIR")) {
+    cache_dir = cache_env;
+  } else if (const char *home_env = std::getenv("HOME")) {
+    cache_dir = std::filesystem::path(home_env) / ".cache" / "munet" / "vulkan";
+  } else {
+    cache_dir = std::filesystem::temp_directory_path() / "munet_vk_cache";
+  }
+  const std::string cache_key = name + "_" + source_hash_hex(source);
+  const std::filesystem::path cache_path = cache_dir / (cache_key + ".spv");
+  std::error_code fs_ec;
+  std::filesystem::create_directories(cache_dir, fs_ec);
+  if (!fs_ec) {
+    std::vector<uint32_t> cached = load_spv(cache_path.string());
+    if (!cached.empty()) {
+      return cached;
+    }
+  }
+
   const uint64_t serial = shader_compile_counter_.fetch_add(1);
   const auto tid_hash =
       std::hash<std::thread::id>{}(std::this_thread::get_id());
@@ -150,6 +195,12 @@ VulkanBackend::compile_shader(const std::string &name,
   in.seekg(0);
   std::vector<uint32_t> buffer(size / 4);
   in.read((char *)buffer.data(), size);
+  if (!fs_ec) {
+    std::error_code ignored;
+    std::filesystem::copy_file(spvPath, cache_path,
+                               std::filesystem::copy_options::overwrite_existing,
+                               ignored);
+  }
   return buffer;
 }
 
