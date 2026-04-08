@@ -364,6 +364,52 @@ ScalarValue Tensor::item_value() const {
 
 float Tensor::item() const { return item_value().as_float(); }
 
+std::vector<ScalarValue> batch_item_values(const std::vector<Tensor> &tensors) {
+  if (tensors.empty()) {
+    return {};
+  }
+
+  const Device device = tensors.front().device();
+  const DataType dtype = tensors.front().dtype();
+  std::vector<ScalarValue> out;
+  out.reserve(tensors.size());
+
+  for (const auto &tensor : tensors) {
+    if (tensor.size() != 1) {
+      throw std::runtime_error(
+          "batch_item_values() requires tensors with exactly one element");
+    }
+    if (tensor.device() != device) {
+      throw std::runtime_error(
+          "batch_item_values() requires tensors on the same device");
+    }
+    if (tensor.dtype() != dtype) {
+      throw std::runtime_error(
+          "batch_item_values() requires tensors with same dtype");
+    }
+  }
+
+  if (device.type == DeviceType::CPU) {
+    for (const auto &tensor : tensors) {
+      out.push_back(tensor.item_value());
+    }
+    return out;
+  }
+
+  std::vector<Tensor> expanded;
+  expanded.reserve(tensors.size());
+  for (const auto &tensor : tensors) {
+    expanded.push_back(tensor.reshape({1}));
+  }
+  Tensor packed = Tensor::cat(expanded, 0).to(Device{DeviceType::CPU, 0});
+  const size_t stride = dtype_size(dtype);
+  const auto *base = static_cast<const unsigned char *>(packed.data());
+  for (size_t i = 0; i < tensors.size(); ++i) {
+    out.push_back(read_scalar_from_buffer(base + i * stride, dtype));
+  }
+  return out;
+}
+
 void Tensor::step(float lr) {
   if (!impl_ || !impl_->grad) {
     MUNET_WARNING << "Skipping tensor step with no grad" << std::endl;

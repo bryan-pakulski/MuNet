@@ -202,4 +202,6 @@ public:
   std::shared_ptr<TensorImpl> impl_ = nullptr;
 };
 
+std::vector<ScalarValue> batch_item_values(const std::vector<Tensor> &tensors);
+
 } // namespace munet

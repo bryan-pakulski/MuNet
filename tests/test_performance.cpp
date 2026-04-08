@@ -54,14 +54,18 @@ double benchmark_ms(const std::function<void()> &fn, int warmup, int iters) {
 bool require_gpu_backends(std::string *reason = nullptr) {
 #ifdef MUNET_USE_CUDA
   const bool has_cuda = has_device(DeviceType::CUDA);
+  constexpr bool cuda_compiled = true;
 #else
   const bool has_cuda = false;
+  constexpr bool cuda_compiled = false;
 #endif
 
 #ifdef MUNET_USE_VULKAN
   const bool has_vulkan = has_device(DeviceType::VULKAN);
+  constexpr bool vulkan_compiled = true;
 #else
   const bool has_vulkan = false;
+  constexpr bool vulkan_compiled = false;
 #endif
 
   if (!perf_tests_enabled()) {
@@ -72,8 +76,13 @@ bool require_gpu_backends(std::string *reason = nullptr) {
   }
   if (!has_cuda || !has_vulkan) {
     if (reason) {
-      *reason = "Performance comparison requires both CUDA and Vulkan devices "
-                "in this environment.";
+      *reason =
+          "Performance comparison requires both CUDA and Vulkan devices. "
+          "compiled(cuda=" +
+          std::string(cuda_compiled ? "yes" : "no") + ", vulkan=" +
+          std::string(vulkan_compiled ? "yes" : "no") +
+          ") runtime(cuda=" + (has_cuda ? std::string("yes") : "no") +
+          ", vulkan=" + (has_vulkan ? std::string("yes") : "no") + ").";
     }
     return false;
   }
