@@ -22,8 +22,9 @@ cuda 12:
 
 ### CUDA runtime expectations
 
-For CUDA-enabled extras, μNet expects CUDA runtime libraries (including cuBLAS) to be installed at the
-system level. The Python package does **not** provision CUDA runtime/cuBLAS via pip for CUDA 13.
+For CUDA-enabled extras (for example `cu12_vk` and `cu13_vk`), μNet expects CUDA runtime libraries
+(including cuBLAS) to be installed at the system level. The Python package does **not** provision
+CUDA runtime/cuBLAS via pip.
 
 Ensure your CUDA library directories are discoverable by the dynamic linker (for example, via
 `LD_LIBRARY_PATH`) before running GPU backends.
