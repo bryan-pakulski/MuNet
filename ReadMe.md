@@ -20,7 +20,8 @@ cuda 13:
 cuda 12:
 `munet_nn["cu12_vk"]`
 
-These extras are metadata selectors and do **not** install CUDA or Vulkan runtime libraries.
+These extras install ONNX Python tooling (`onnx` + runtime variant) but do **not** install CUDA or
+Vulkan runtime libraries.
 
 ### CUDA / Vulkan runtime expectations
 
@@ -36,9 +37,10 @@ For Vulkan backends, μNet expects system Vulkan runtime/driver libraries (for e
 
 ### ONNX tooling expectations
 
-ONNX Runtime is optional and only required when using ONNX-specific helpers (for example
-`munet.inference.ONNXEngine`). Install `onnxruntime` or `onnxruntime-gpu` separately if you use
-those paths.
+ONNX helpers in `munet_nn` use both `onnx` and `onnxruntime`/`onnxruntime-gpu`. Installing the
+extras above will provision those Python dependencies. If you install base `munet_nn` without
+extras and still want ONNX helpers (for example `munet.inference.ONNXEngine`), install ONNX
+packages manually.
 
 ## Current repository state
 
