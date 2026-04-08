@@ -40,29 +40,26 @@ def detect_accelerators(max_index: int = 4) -> list[munet.Device]:
     return devices
 
 
-class ConvBNAct(munet.nn.Module):
-    def __init__(self, in_ch: int, out_ch: int, k: int, s: int = 1, p: int = 0):
-        super().__init__()
-        self.conv = munet.nn.Conv2d(in_ch, out_ch, k, stride=s, padding=p)
-        self.bn = munet.nn.BatchNorm2d(out_ch)
-        self.act = munet.nn.LeakyReLU(0.1)
-
-    def forward(self, x):
-        return self.act(self.bn(self.conv(x)))
+def conv_bn_act(in_ch: int, out_ch: int, k: int, s: int = 1, p: int = 0):
+    return munet.nn.Sequential(
+        munet.nn.Conv2d(in_ch, out_ch, k, stride=s, padding=p),
+        munet.nn.BatchNorm2d(out_ch),
+        munet.nn.LeakyReLU(0.1),
+    )
 
 
 class TinyYoloDetector(munet.nn.Module):
     def __init__(self, num_classes: int):
         super().__init__()
         self.backbone = munet.nn.Sequential(
-            ConvBNAct(3, 16, 3, p=1),
+            conv_bn_act(3, 16, 3, p=1),
             munet.nn.MaxPool2d(2, 2),
-            ConvBNAct(16, 32, 3, p=1),
+            conv_bn_act(16, 32, 3, p=1),
             munet.nn.MaxPool2d(2, 2),
-            ConvBNAct(32, 64, 3, p=1),
+            conv_bn_act(32, 64, 3, p=1),
             munet.nn.MaxPool2d(2, 2),
-            ConvBNAct(64, 128, 3, p=1),
-            ConvBNAct(128, 128, 3, p=1),
+            conv_bn_act(64, 128, 3, p=1),
+            conv_bn_act(128, 128, 3, p=1),
         )
         self.head = munet.nn.Conv2d(128, 5 + num_classes, 1)
 

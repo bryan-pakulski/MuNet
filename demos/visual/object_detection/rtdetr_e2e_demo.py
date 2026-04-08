@@ -38,15 +38,12 @@ def detect_accelerators(max_index: int = 4) -> list[munet.Device]:
     return devices
 
 
-class ConvBNAct(munet.nn.Module):
-    def __init__(self, in_ch: int, out_ch: int, k: int, s: int = 1, p: int = 0):
-        super().__init__()
-        self.conv = munet.nn.Conv2d(in_ch, out_ch, k, stride=s, padding=p)
-        self.bn = munet.nn.BatchNorm2d(out_ch)
-        self.act = munet.nn.LeakyReLU(0.1)
-
-    def forward(self, x):
-        return self.act(self.bn(self.conv(x)))
+def conv_bn_act(in_ch: int, out_ch: int, k: int, s: int = 1, p: int = 0):
+    return munet.nn.Sequential(
+        munet.nn.Conv2d(in_ch, out_ch, k, stride=s, padding=p),
+        munet.nn.BatchNorm2d(out_ch),
+        munet.nn.LeakyReLU(0.1),
+    )
 
 
 class TinyRTDETRDetector(munet.nn.Module):
@@ -54,11 +51,11 @@ class TinyRTDETRDetector(munet.nn.Module):
         super().__init__()
         self.num_queries = num_queries
         self.backbone = munet.nn.Sequential(
-            ConvBNAct(3, 32, 3, p=1),
+            conv_bn_act(3, 32, 3, p=1),
             munet.nn.MaxPool2d(2, 2),
-            ConvBNAct(32, 64, 3, p=1),
+            conv_bn_act(32, 64, 3, p=1),
             munet.nn.MaxPool2d(2, 2),
-            ConvBNAct(64, embed_dim, 3, p=1),
+            conv_bn_act(64, embed_dim, 3, p=1),
             munet.nn.MaxPool2d(2, 2),
         )
         self.token_proj = munet.nn.Linear(embed_dim, embed_dim)
