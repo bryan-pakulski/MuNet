@@ -57,6 +57,9 @@ void record_event_or_recreate(void *&event_slot, int device_index) {
     return;
   }
 
+  // Clear any stale async error so this call reports its own status.
+  cudaGetLastError();
+
   cudaEvent_t event = reinterpret_cast<cudaEvent_t>(event_slot);
   cudaError_t err = cudaEventRecord(event);
   if (err == cudaSuccess) {
@@ -72,7 +75,14 @@ void record_event_or_recreate(void *&event_slot, int device_index) {
   cudaGetLastError();
   CUDA_CHECK(cudaSetDevice(device_index));
   if (event != nullptr) {
-    cudaEventDestroy(event);
+    cudaError_t destroy_err = cudaEventDestroy(event);
+    if (destroy_err != cudaSuccess &&
+        destroy_err != cudaErrorInvalidResourceHandle) {
+      CUDA_CHECK(destroy_err);
+    }
+    if (destroy_err == cudaErrorInvalidResourceHandle) {
+      cudaGetLastError();
+    }
   }
   cudaEvent_t refreshed = nullptr;
   CUDA_CHECK(cudaEventCreate(&refreshed));
