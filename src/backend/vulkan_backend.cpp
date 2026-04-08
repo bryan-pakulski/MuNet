@@ -241,6 +241,7 @@ void VulkanBackend::reset_runtime_state() {
   runtime_->staging_mapped = nullptr;
   runtime_->staging_buffer = VK_NULL_HANDLE;
   runtime_->staging_memory = VK_NULL_HANDLE;
+  runtime_->immediate_fence = VK_NULL_HANDLE;
 }
 
 VulkanBackend::VulkanBackend(int device_index)
@@ -359,6 +360,7 @@ VulkanBackend::VulkanBackend(int device_index)
   VkFenceCreateInfo fenceInfo{};
   fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
   fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+  VK_CHECK(vkCreateFence(device_, &fenceInfo, nullptr, &runtime_->immediate_fence));
 
   VkQueryPoolCreateInfo queryPoolInfo{};
   queryPoolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
@@ -2071,6 +2073,7 @@ VulkanBackend::~VulkanBackend() {
   runtime_ready_ = false;
   if (can_destroy_runtime) {
     vkDeviceWaitIdle(device_); // Full stop
+    vkDestroyFence(device_, runtime_->immediate_fence, nullptr);
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
       vkDestroyFence(device_, runtime_->in_flight_fences[i], nullptr);
       vkDestroyDescriptorPool(device_, runtime_->descriptor_pools[i], nullptr);
@@ -2162,6 +2165,7 @@ VulkanBackend::~VulkanBackend() {
   command_pool_ = VK_NULL_HANDLE;
   descriptor_set_layout_ = VK_NULL_HANDLE;
   runtime_->immediate_cmd_buffer = VK_NULL_HANDLE;
+  runtime_->immediate_fence = VK_NULL_HANDLE;
   pipeline_layout_ = VK_NULL_HANDLE;
   for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
     runtime_->descriptor_pools[i] = VK_NULL_HANDLE;
@@ -2247,13 +2251,35 @@ void VulkanBackend::ensure_recording() {
 
   auto ensure_start = profile_now();
 
-  // Wait for the NEXT frame slot to be free (Fence Wait)
-  auto wait_start = profile_now();
-  VK_CHECK(vkWaitForFences(device_, 1, &runtime_->in_flight_fences[runtime_->current_frame],
-                           VK_TRUE,
-                           UINT64_MAX));
-  profile_cpu_event("vulkan.wait_for_fence", wait_start);
-  profile_backend_event("queue_wait", "in_flight_frame", wait_start);
+  // Prefer an already completed frame slot to avoid blocking the host.
+  int selected_frame = -1;
+  for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+    const int candidate = (runtime_->current_frame + i) % MAX_FRAMES_IN_FLIGHT;
+    const VkResult status =
+        vkGetFenceStatus(device_, runtime_->in_flight_fences[candidate]);
+    if (status == VK_SUCCESS) {
+      selected_frame = candidate;
+      break;
+    }
+    if (status != VK_NOT_READY) {
+      VK_CHECK(status);
+    }
+  }
+
+  if (selected_frame < 0) {
+    selected_frame = runtime_->current_frame;
+    auto wait_start = profile_now();
+    VK_CHECK(vkWaitForFences(device_, 1,
+                             &runtime_->in_flight_fences[selected_frame], VK_TRUE,
+                             UINT64_MAX));
+    profile_cpu_event("vulkan.wait_for_fence", wait_start);
+    profile_backend_event("queue_wait", "in_flight_frame", wait_start);
+  } else if (selected_frame != runtime_->current_frame) {
+    auto reuse_start = profile_now();
+    profile_cpu_event("vulkan.wait_for_fence.reuse_ready_frame", reuse_start);
+  }
+
+  runtime_->current_frame = selected_frame;
 
   // Process deferred frees safely now that the GPU is done with this frame
   auto deferred_flush_start = profile_now();
@@ -2303,10 +2329,7 @@ void VulkanBackend::run_immediate_command(
   if (runtime_->is_recording)
     flush_batch(); // Flush pending work first
 
-  auto pre_idle_start = profile_now();
-  VK_CHECK(vkQueueWaitIdle(compute_queue_));
-  profile_cpu_event("vulkan.immediate_wait_idle.pre", pre_idle_start);
-
+  VK_CHECK(vkResetFences(device_, 1, &runtime_->immediate_fence));
   VK_CHECK(vkResetCommandBuffer(runtime_->immediate_cmd_buffer, 0));
   VkCommandBufferBeginInfo beginInfo{};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -2318,11 +2341,11 @@ void VulkanBackend::run_immediate_command(
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &runtime_->immediate_cmd_buffer;
-  VK_CHECK(vkQueueSubmit(compute_queue_, 1, &submitInfo, VK_NULL_HANDLE));
-
-  auto post_idle_start = profile_now();
-  VK_CHECK(vkQueueWaitIdle(compute_queue_));
-  profile_cpu_event("vulkan.immediate_wait_idle.post", post_idle_start);
+  VK_CHECK(vkQueueSubmit(compute_queue_, 1, &submitInfo, runtime_->immediate_fence));
+  auto wait_start = profile_now();
+  VK_CHECK(
+      vkWaitForFences(device_, 1, &runtime_->immediate_fence, VK_TRUE, UINT64_MAX));
+  profile_cpu_event("vulkan.immediate_wait_fence", wait_start);
   profile_cpu_event("vulkan.immediate_total", total_start);
 }
 

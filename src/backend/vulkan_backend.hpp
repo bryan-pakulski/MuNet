@@ -220,6 +220,7 @@ private:
     size_t staging_size = 0;
     void *staging_mapped = nullptr;
     VkCommandBuffer immediate_cmd_buffer = VK_NULL_HANDLE;
+    VkFence immediate_fence = VK_NULL_HANDLE;
   };
   std::unique_ptr<VulkanRuntimeState> runtime_;
 
