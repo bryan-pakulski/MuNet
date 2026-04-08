@@ -42,6 +42,7 @@ set(MUNET_SOURCES
     src/backend/backend_manager.cpp
     src/backend/plugin_loader.cpp
     src/core/op_dispatch.cpp
+    src/core/kernel_fusion_planner.cpp
     src/core/ops/add.cpp
     src/core/ops/elementwise.cpp
     src/core/ops/matmul.cpp
@@ -224,6 +225,7 @@ if(MUNET_BUILD_TESTS)
         tests/test_optim.cpp
         tests/test_nn.cpp
         tests/test_inference.cpp
+        tests/test_kernel_fusion_planner.cpp
         tests/test_backend_manager.cpp
         tests/test_performance.cpp
     )
