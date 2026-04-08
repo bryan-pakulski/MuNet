@@ -32,6 +32,15 @@ void record_backend_profile_event(const char *domain, const char *event,
                          0.0, bytes, detail);
 }
 
+bool profile_implicit_sync_enabled() {
+  const char *env = std::getenv("MUNET_PROFILE_IMPLICIT_SYNC");
+  if (!env) {
+    return false;
+  }
+  const std::string value(env);
+  return value == "1" || value == "true" || value == "TRUE";
+}
+
 // Intercepts all backend calls and enforces a synchronized sanity check
 class DebugBackend : public Backend,
                      public BackendAllocationTransferCapability,
@@ -72,12 +81,17 @@ class DebugBackend : public Backend,
     try {
       double gpu_us = 0.0;
       const bool collect_gpu_time = should_collect_gpu_time();
+      const bool force_implicit_sync =
+          is_debug_enabled() ||
+          (is_profile_enabled() && profile_implicit_sync_enabled());
 
-      if (collect_gpu_time && (is_debug_enabled() || is_profile_enabled())) {
+      if (collect_gpu_time && force_implicit_sync) {
         Timer sync_timer;
         base_->synchronize();
         record_sync_event("implicit_timing", sync_timer.elapsed_us(),
                           "trigger=" + name);
+        gpu_us = base_->get_last_kernel_time_us();
+      } else if (collect_gpu_time && is_profile_enabled()) {
         gpu_us = base_->get_last_kernel_time_us();
       }
 

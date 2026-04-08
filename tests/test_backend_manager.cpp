@@ -1179,6 +1179,7 @@ TEST(BackendManagerTest, CudaMatmulBFloat16FallbackDeniedWhenCudaAvailable) {
 
 TEST(BackendManagerTest, ProfilingCapturesAllocatorAndSynchronizationMarkers) {
   ScopedProfileOverride profile(true);
+  const ScopedEnvVar implicit_sync_env("MUNET_PROFILE_IMPLICIT_SYNC", "1");
   Profiler::get().reset();
 
   std::shared_ptr<ReusingTimedAddBackend> base_backend;
