@@ -20,6 +20,14 @@ cuda 13:
 cuda 12:
 `munet_nn["cu12_vk"]`
 
+### CUDA runtime expectations
+
+For CUDA-enabled extras, μNet expects CUDA runtime libraries (including cuBLAS) to be installed at the
+system level. The Python package does **not** provision CUDA runtime/cuBLAS via pip for CUDA 13.
+
+Ensure your CUDA library directories are discoverable by the dynamic linker (for example, via
+`LD_LIBRARY_PATH`) before running GPU backends.
+
 ## Current repository state
 
 - Core runtime (`munet_core`) is used by both training and inference surfaces.
