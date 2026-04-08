@@ -22,18 +22,9 @@ classifiers = [
 
 
 [project.optional-dependencies]
-vk = [
-  "vulkan>=1.3.275",
-  "onnxruntime>=1.18",
-]
-cu12-vk = [
-  "vulkan>=1.3.275",
-  "onnxruntime-gpu>=1.18",
-]
-cu13-vk = [
-  "vulkan>=1.3.275",
-  "onnxruntime-gpu>=1.18",
-]
+vk = []
+cu12-vk = []
+cu13-vk = []
 
 [project.urls]
 Homepage = "https://github.com/bryan-pakulski/MuNet"

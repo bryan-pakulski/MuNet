@@ -9,7 +9,7 @@ and allow for mixed gpu training & inference.
 pip install munet_nn
 ```
 
-μNet has provisioning enabled for accelerated support detection, you can install the accelerated backends by specifying the appropriate feature targeting:
+μNet exposes accelerator-targeted extras for environment selection:
 
 vulkan:
 `munet_nn["vk"]`
@@ -20,7 +20,9 @@ cuda 13:
 cuda 12:
 `munet_nn["cu12_vk"]`
 
-### CUDA runtime expectations
+These extras are metadata selectors and do **not** install CUDA or Vulkan runtime libraries.
+
+### CUDA / Vulkan runtime expectations
 
 For CUDA-enabled extras (for example `cu12_vk` and `cu13_vk`), μNet expects CUDA runtime libraries
 (including cuBLAS) to be installed at the system level. The Python package does **not** provision
@@ -28,6 +30,15 @@ CUDA runtime/cuBLAS via pip.
 
 Ensure your CUDA library directories are discoverable by the dynamic linker (for example, via
 `LD_LIBRARY_PATH`) before running GPU backends.
+
+For Vulkan backends, μNet expects system Vulkan runtime/driver libraries (for example
+`libvulkan.so.1`) to be installed and discoverable by the dynamic linker.
+
+### ONNX tooling expectations
+
+ONNX Runtime is optional and only required when using ONNX-specific helpers (for example
+`munet.inference.ONNXEngine`). Install `onnxruntime` or `onnxruntime-gpu` separately if you use
+those paths.
 
 ## Current repository state
 
