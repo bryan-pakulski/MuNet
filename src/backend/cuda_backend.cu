@@ -61,13 +61,13 @@ void record_event_or_recreate(void *&event_slot, int device_index) {
   cudaGetLastError();
 
   cudaEvent_t event = reinterpret_cast<cudaEvent_t>(event_slot);
-  cudaError_t err = cudaEventRecord(event);
-  if (err == cudaSuccess) {
+  cudaError_t event_status = cudaEventRecord(event);
+  if (event_status == cudaSuccess) {
     return;
   }
 
-  if (err != cudaErrorInvalidResourceHandle) {
-    CUDA_CHECK(err);
+  if (event_status != cudaErrorInvalidResourceHandle) {
+    CUDA_CHECK(event_status);
   }
 
   // Root-cause fix: stale event handle on the active device/context.

@@ -68,7 +68,7 @@ static Tensor matmul_cpu_fallback(const Tensor& a, const Tensor& b, bool transA 
     return Tensor();
   }
   
-  Shape out_shape{static_cast<size_t>(M), static_cast<size_t>(N)};
+  Shape out_shape{M, N};
   Tensor out(out_shape, cpu, a_cpu.dtype());
   
   blas->matmul(*a_cpu.impl_->storage, *b_cpu.impl_->storage, *out.impl_->storage,
@@ -118,7 +118,7 @@ Tensor matmul_2d(const Tensor &a, const Tensor &b) {
   }
   
   // Create output tensor
-  Shape out_shape{static_cast<size_t>(M), static_cast<size_t>(N)};
+  Shape out_shape{M, N};
   Tensor out(out_shape, a.device(), a.dtype());
   
   // Call backend matmul
@@ -175,7 +175,7 @@ static Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool
       return Tensor();
     }
     
-    Shape out_shape{static_cast<size_t>(M), static_cast<size_t>(N)};
+    Shape out_shape{M, N};
     Tensor out(out_shape, cpu, a_cpu.dtype());
     blas->matmul(*a_cpu.impl_->storage, *b_cpu.impl_->storage, *out.impl_->storage,
                  M, K, N, transA, transB);
@@ -197,12 +197,12 @@ static Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool
   int64_t stride_out = M * N;
   
   // Create output tensor
-  std::vector<size_t> out_shape_vec;
+  std::vector<int> out_shape_vec;
   for (size_t i = 0; i < a_batch_dims; ++i) {
     out_shape_vec.push_back(a_shape[i]);
   }
-  out_shape_vec.push_back(static_cast<size_t>(M));
-  out_shape_vec.push_back(static_cast<size_t>(N));
+  out_shape_vec.push_back(M);
+  out_shape_vec.push_back(N);
   Shape out_shape(out_shape_vec.begin(), out_shape_vec.end());
   
   Tensor out(out_shape, cpu, a_cpu.dtype());
@@ -303,12 +303,12 @@ Tensor batched_matmul_internal(const Tensor &a, const Tensor &b, bool transA, bo
   int64_t stride_out = M * N;
   
   // Create output tensor
-  std::vector<size_t> out_shape_vec;
+  std::vector<int> out_shape_vec;
   for (size_t i = 0; i < a_batch_dims; ++i) {
     out_shape_vec.push_back(a_shape[i]);
   }
-  out_shape_vec.push_back(static_cast<size_t>(M));
-  out_shape_vec.push_back(static_cast<size_t>(N));
+  out_shape_vec.push_back(M);
+  out_shape_vec.push_back(N);
   Shape out_shape(out_shape_vec.begin(), out_shape_vec.end());
   
   Tensor out(out_shape, a.device(), a.dtype());
@@ -381,7 +381,7 @@ Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA, bool trans
   }
   
   // Create output tensor
-  Shape out_shape{static_cast<size_t>(M_eff), static_cast<size_t>(N_eff)};
+  Shape out_shape{M_eff, N_eff};
   Tensor out(out_shape, a.device(), a.dtype());
   
   // Call backend matmul
