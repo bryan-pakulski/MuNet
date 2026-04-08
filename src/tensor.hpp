@@ -202,6 +202,11 @@ public:
   std::shared_ptr<TensorImpl> impl_ = nullptr;
 };
 
+// Batch scalar extraction helper for metrics/logging hot paths.
+//
+// All tensors must have exactly one element, identical dtype, and live on the
+// same device. On accelerators this can reduce many tiny device->host
+// readbacks by packing values into one transfer.
 std::vector<ScalarValue> batch_item_values(const std::vector<Tensor> &tensors);
 
 } // namespace munet
