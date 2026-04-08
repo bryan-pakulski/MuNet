@@ -1,4 +1,5 @@
 #include "inference.hpp"
+#include "core/kernel_fusion_planner.hpp"
 #include "nn.hpp"
 #include "tensor.hpp"
 #include "test_utils.hpp"
@@ -77,6 +78,71 @@ bool require_gpu_backends(std::string *reason = nullptr) {
     return false;
   }
   return true;
+}
+
+double run_chain_baseline_ms(const Tensor &x, const Tensor &y, int warmup,
+                             int iters) {
+  return benchmark_ms(
+      [&]() {
+        Tensor out = ((x + y).relu() * y).sigmoid();
+        out.impl_->backend().synchronize();
+      },
+      warmup, iters);
+}
+
+double run_chain_workspace_ms(const Tensor &x, const Tensor &y, int warmup,
+                              int iters) {
+  const Device dev = x.device();
+  Tensor ping(x.shape(), dev, x.dtype());
+  Tensor pong(x.shape(), dev, x.dtype());
+  auto &backend = x.impl_->backend();
+  auto *alloc = backend.allocation_transfer_capability();
+  auto *elt = backend.elementwise_capability();
+  if (!alloc || !elt) {
+    return 0.0;
+  }
+
+  const size_t n = x.size();
+  const BroadcastInfo info =
+      compute_broadcast(x.shape(), x.strides(), y.shape(), y.strides());
+  return benchmark_ms(
+      [&]() {
+        elt->add(*x.impl_->storage, *y.impl_->storage, *ping.impl_->storage,
+                 info);
+        elt->relu(*ping.impl_->storage, *pong.impl_->storage, n);
+        elt->mul(*pong.impl_->storage, *y.impl_->storage, *ping.impl_->storage,
+                 info);
+        elt->sigmoid(*ping.impl_->storage, *pong.impl_->storage, n);
+        alloc->synchronize();
+      },
+      warmup, iters);
+}
+
+void run_fusion_chain_speedup_test(Device dev, const Tensor &x, const Tensor &y,
+                                   const char *min_speedup_env,
+                                   double default_speedup) {
+  std::vector<ForwardNode> nodes(4);
+  nodes[0].op_name = "Add";
+  nodes[1].op_name = "Relu";
+  nodes[2].op_name = "Mul";
+  nodes[3].op_name = "Sigmoid";
+  const auto groups = fusion::plan_elementwise_fusion_groups(nodes);
+  ASSERT_EQ(groups.size(), 1u);
+  ASSERT_TRUE(groups[0].fusible);
+
+  const double baseline_ms = run_chain_baseline_ms(x, y, 8, 50);
+  const double workspace_ms = run_chain_workspace_ms(x, y, 8, 50);
+  ASSERT_GT(workspace_ms, 0.0);
+  const double speedup = baseline_ms / workspace_ms;
+  const double min_speedup = get_env_ratio(min_speedup_env, default_speedup);
+
+  std::cout << "[PERF] ElementwiseChainFusion backend="
+            << (dev.type == DeviceType::CUDA ? "cuda" : "vulkan")
+            << " baseline_ms=" << baseline_ms
+            << " workspace_ms=" << workspace_ms << " speedup=" << speedup
+            << std::endl;
+  EXPECT_GE(speedup, min_speedup)
+      << "Expected measurable speedup for chained elementwise plan on backend.";
 }
 
 Tensor make_one_hot_targets(int batch, int classes) {
@@ -162,6 +228,29 @@ TEST(PerformanceTest, ElementwiseMulCudaVsVulkan) {
         out.impl_->backend().synchronize();
       },
       10, 80, "MUNET_PERF_MAX_RATIO_MUL", 3.0);
+}
+
+TEST(PerformanceTest, ElementwiseChainFusionSpeedupCudaAndVulkan) {
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
+
+  constexpr int N = 1 << 20;
+  Tensor x_cpu({N}, {DeviceType::CPU, 0});
+  Tensor y_cpu({N}, {DeviceType::CPU, 0});
+  x_cpu.uniform_(-1.0f, 1.0f);
+  y_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor x_cuda = x_cpu.to({DeviceType::CUDA, 0});
+  Tensor y_cuda = y_cpu.to({DeviceType::CUDA, 0});
+  Tensor x_vk = x_cpu.to({DeviceType::VULKAN, 0});
+  Tensor y_vk = y_cpu.to({DeviceType::VULKAN, 0});
+
+  run_fusion_chain_speedup_test(Device{DeviceType::CUDA, 0}, x_cuda, y_cuda,
+                                "MUNET_PERF_MIN_FUSION_SPEEDUP_CUDA", 1.03);
+  run_fusion_chain_speedup_test(Device{DeviceType::VULKAN, 0}, x_vk, y_vk,
+                                "MUNET_PERF_MIN_FUSION_SPEEDUP_VK", 1.03);
 }
 
 TEST(PerformanceTest, MatmulCudaVsVulkan) {
