@@ -53,6 +53,10 @@ void record_cuda_profile_event(
 }
 
 void record_event_or_recreate(void *&event_slot, int device_index) {
+  if (!is_profile_enabled()) {
+    return;
+  }
+
   cudaEvent_t event = reinterpret_cast<cudaEvent_t>(event_slot);
   cudaError_t err = cudaEventRecord(event);
   if (err == cudaSuccess) {
