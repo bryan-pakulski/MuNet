@@ -200,6 +200,7 @@ private:
     int last_submitted_frame = -1;
     int current_batch_size = 0;
     bool is_recording = false;
+    bool has_pending_shader_writes = false;
     std::array<bool, 2> frame_has_submission{false, false};
 
     std::array<VkDescriptorPool, 2> descriptor_pools{VK_NULL_HANDLE,

@@ -242,6 +242,7 @@ void VulkanBackend::reset_runtime_state() {
   runtime_->last_submitted_frame = -1;
   runtime_->current_batch_size = 0;
   runtime_->is_recording = false;
+  runtime_->has_pending_shader_writes = false;
   runtime_->immediate_cmd_buffer = VK_NULL_HANDLE;
   queue_family_index_ = UINT32_MAX;
 
@@ -2265,6 +2266,7 @@ void VulkanBackend::flush_batch() {
       (runtime_->current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
   runtime_->is_recording = false;
   runtime_->current_batch_size = 0;
+  runtime_->has_pending_shader_writes = false;
 }
 
 void VulkanBackend::ensure_recording() {
@@ -2342,6 +2344,7 @@ void VulkanBackend::ensure_recording() {
     vkCmdResetQueryPool(cmd, runtime_->query_pools[runtime_->current_frame], 0, 2);
   }
   runtime_->is_recording = true;
+  runtime_->has_pending_shader_writes = false;
 
   profile_cpu_event("vulkan.ensure_recording", ensure_start);
 }
@@ -2643,14 +2646,16 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   vkUpdateDescriptorSets(device_, write_count, writes, 0, nullptr);
   profile_cpu_event("vulkan.update_descriptors", descriptor_update_start);
 
-  VkMemoryBarrier memoryBarrier{};
-  memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-  memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-  memoryBarrier.dstAccessMask =
-      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
-                       &memoryBarrier, 0, nullptr, 0, nullptr);
+  if (runtime_->has_pending_shader_writes) {
+    VkMemoryBarrier memoryBarrier{};
+    memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    memoryBarrier.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                         &memoryBarrier, 0, nullptr, 0, nullptr);
+  }
 
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_,
@@ -2663,6 +2668,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
                         runtime_->query_pools[runtime_->current_frame], 0);
   }
   vkCmdDispatch(cmd, x, y, z);
+  runtime_->has_pending_shader_writes = true;
   if (is_profile_enabled()) {
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                         runtime_->query_pools[runtime_->current_frame], 1);
