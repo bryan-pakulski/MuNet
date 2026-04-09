@@ -39,16 +39,6 @@ double get_env_ratio(const char *name, double default_value) {
   }
 }
 
-bool get_env_flag(const char *name, bool default_value) {
-  const char *value = std::getenv(name);
-  if (!value) {
-    return default_value;
-  }
-  const std::string v(value);
-  return v == "1" || v == "true" || v == "TRUE" || v == "yes" ||
-         v == "on";
-}
-
 double benchmark_ms(const std::function<void()> &fn, int warmup, int iters) {
   for (int i = 0; i < warmup; ++i)
     fn();
@@ -207,14 +197,8 @@ void run_fusion_chain_speedup_test(Device dev, const Tensor &x, const Tensor &y,
             << " baseline_ms=" << baseline_ms
             << " workspace_ms=" << workspace_ms << " speedup=" << speedup
             << std::endl;
-  if (get_env_flag("MUNET_PERF_ENFORCE_FUSION_SPEEDUP", false)) {
-    EXPECT_GE(speedup, min_speedup)
-        << "Expected measurable speedup for chained elementwise plan on "
-           "backend.";
-  } else {
-    SUCCEED() << "Fusion speedup assertion disabled by default. Set "
-                 "MUNET_PERF_ENFORCE_FUSION_SPEEDUP=1 to enforce threshold.";
-  }
+  EXPECT_GE(speedup, min_speedup)
+      << "Expected measurable speedup for chained elementwise plan on backend.";
 }
 
 Tensor make_one_hot_targets(int batch, int classes) {
@@ -240,9 +224,7 @@ void run_perf_ratio_test(const std::string &name,
   std::cout << "[PERF] " << name << " cuda_ms=" << cuda_ms << " vk_ms=" << vk_ms
             << " ratio=" << ratio << std::endl;
 
-  const double max_ratio =
-      get_env_ratio(ratio_env, default_ratio) *
-      get_env_ratio("MUNET_PERF_RATIO_SLACK", 1.10);
+  const double max_ratio = get_env_ratio(ratio_env, default_ratio);
   EXPECT_LE(ratio, max_ratio)
       << "Vulkan is too slow relative to CUDA for test " << name
       << ". ratio=" << ratio << " max=" << max_ratio;
@@ -274,7 +256,7 @@ TEST(PerformanceTest, ElementwiseAddCudaVsVulkan) {
             (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda) : (a_vk + b_vk);
         out.impl_->backend().synchronize();
       },
-      10, 80, "MUNET_PERF_MAX_RATIO_ADD", 3.5);
+      10, 80, "MUNET_PERF_MAX_RATIO_ADD", 3.0);
 }
 
 TEST(PerformanceTest, ElementwiseMulCudaVsVulkan) {

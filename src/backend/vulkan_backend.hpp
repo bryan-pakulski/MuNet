@@ -197,8 +197,10 @@ public:
 private:
   struct VulkanRuntimeState {
     int current_frame = 0;
+    int last_submitted_frame = -1;
     int current_batch_size = 0;
     bool is_recording = false;
+    std::array<bool, 2> frame_has_submission{false, false};
 
     std::array<VkDescriptorPool, 2> descriptor_pools{VK_NULL_HANDLE,
                                                      VK_NULL_HANDLE};

@@ -222,6 +222,7 @@ void VulkanBackend::allocate_frame_descriptor_sets(int frame) {
 
 void VulkanBackend::reset_runtime_state() {
   runtime_->current_frame = 0;
+  runtime_->last_submitted_frame = -1;
   runtime_->current_batch_size = 0;
   runtime_->is_recording = false;
   runtime_->immediate_cmd_buffer = VK_NULL_HANDLE;
@@ -234,6 +235,7 @@ void VulkanBackend::reset_runtime_state() {
     runtime_->frame_descriptor_sets[i].clear();
     runtime_->descriptor_set_cursor[i] = 0;
     runtime_->deferred_frees[i].clear();
+    runtime_->frame_has_submission[i] = false;
   }
 
   runtime_->staging_offset = 0;
@@ -2235,6 +2237,8 @@ void VulkanBackend::flush_batch() {
   submitInfo.pCommandBuffers = &cmd;
   VK_CHECK(vkQueueSubmit(compute_queue_, 1, &submitInfo,
                          runtime_->in_flight_fences[runtime_->current_frame]));
+  runtime_->frame_has_submission[runtime_->current_frame] = true;
+  runtime_->last_submitted_frame = runtime_->current_frame;
 
   profile_cpu_event("vulkan.flush_batch", flush_start);
 
@@ -2280,6 +2284,7 @@ void VulkanBackend::ensure_recording() {
   }
 
   runtime_->current_frame = selected_frame;
+  runtime_->frame_has_submission[runtime_->current_frame] = false;
 
   // Process deferred frees safely now that the GPU is done with this frame
   auto deferred_flush_start = profile_now();
@@ -2522,9 +2527,14 @@ void VulkanBackend::synchronize() {
   if (runtime_->is_recording)
     flush_batch();
 
+  if (runtime_->last_submitted_frame < 0 ||
+      !runtime_->frame_has_submission[runtime_->last_submitted_frame]) {
+    return;
+  }
+
   auto sync_wait_start = profile_now();
-  VK_CHECK(vkWaitForFences(device_, MAX_FRAMES_IN_FLIGHT,
-                           runtime_->in_flight_fences.data(),
+  VK_CHECK(vkWaitForFences(device_, 1,
+                           &runtime_->in_flight_fences[runtime_->last_submitted_frame],
                            VK_TRUE, UINT64_MAX));
   profile_cpu_event("vulkan.synchronize_wait_fences", sync_wait_start);
   profile_backend_event("sync", "explicit", sync_wait_start);
@@ -2535,7 +2545,7 @@ void VulkanBackend::synchronize() {
     uint64_t results[2];
     // The work we want to measure is in the frame we JUST flushed
     int frameToQuery =
-        (runtime_->current_frame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
+        runtime_->last_submitted_frame;
 
     auto query_start = profile_now();
     VkResult res = vkGetQueryPoolResults(
