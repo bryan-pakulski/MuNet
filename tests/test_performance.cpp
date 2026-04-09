@@ -1,4 +1,5 @@
 #include "inference.hpp"
+#include "core/backend.hpp"
 #include "core/kernel_fusion_planner.hpp"
 #include "nn.hpp"
 #include "tensor.hpp"
@@ -76,13 +77,24 @@ bool require_gpu_backends(std::string *reason = nullptr) {
   }
   if (!has_cuda || !has_vulkan) {
     if (reason) {
+      std::string backend_details;
+      for (const auto &status : BackendManager::backend_status()) {
+        if (status.source != "builtin") {
+          continue;
+        }
+        if (status.name == "cuda" || status.name == "vulkan") {
+          backend_details += status.name + "{reason=" + status.reason_code +
+                             ", detail=" + status.detail + "} ";
+        }
+      }
       *reason =
           "Performance comparison requires both CUDA and Vulkan devices. "
           "compiled(cuda=" +
           std::string(cuda_compiled ? "yes" : "no") + ", vulkan=" +
           std::string(vulkan_compiled ? "yes" : "no") +
           ") runtime(cuda=" + (has_cuda ? std::string("yes") : "no") +
-          ", vulkan=" + (has_vulkan ? std::string("yes") : "no") + ").";
+          ", vulkan=" + (has_vulkan ? std::string("yes") : "no") + "). " +
+          backend_details;
     }
     return false;
   }

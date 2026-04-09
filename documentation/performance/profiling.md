@@ -210,6 +210,11 @@ Vulkan support. If they skip, the skip message now reports:
 This helps quickly distinguish build-configuration problems from runtime device
 visibility/driver problems.
 
+The skip detail now also appends backend runtime status from
+`BackendManager::backend_status()` for CUDA/Vulkan (for example
+`reason=plugin_not_found` or `reason=runtime_dependency_missing`), which
+pinpoints missing plugin binaries versus missing shared-library dependencies.
+
 ## Trace-Centric Workflow
 
 1. Find the slow request’s `trace_id` from `inference.compile.*`,
