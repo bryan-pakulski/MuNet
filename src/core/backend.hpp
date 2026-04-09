@@ -232,6 +232,9 @@ public:
   virtual void cos(const Storage &in, Storage &out, size_t num_elements) = 0;
   virtual void softmax(const Storage &in, Storage &out, int batch_size,
                        int num_classes) = 0;
+  virtual void log_softmax(const Storage &, Storage &, int, int) {
+    throw std::runtime_error("log_softmax not implemented");
+  }
   virtual void softmax_backward(const Storage &grad_out, const Storage &out,
                                 Storage &grad_in, int batch_size,
                                 int num_classes) = 0;
@@ -556,6 +559,11 @@ public:
                int num_classes) {
     require_capability(elementwise_capability(), "elementwise", "softmax")
         ->softmax(in, out, batch_size, num_classes);
+  }
+  void log_softmax(const Storage &in, Storage &out, int batch_size,
+                   int num_classes) {
+    require_capability(elementwise_capability(), "elementwise", "log_softmax")
+        ->log_softmax(in, out, batch_size, num_classes);
   }
   void softmax_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, int batch_size, int num_classes) {

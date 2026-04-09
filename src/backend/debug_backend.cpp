@@ -433,6 +433,14 @@ public:
     base_->softmax(in, out, batch_size, num_classes);
     check("softmax", t.elapsed_us(), &out);
   }
+  void log_softmax(const Storage &in, Storage &out, int batch_size,
+                   int num_classes) override {
+    MUNET_DEBUG << "log_softmax | " << batch_size << " batches, "
+                << num_classes << " classes" << std::endl;
+    Timer t;
+    base_->log_softmax(in, out, batch_size, num_classes);
+    check("log_softmax", t.elapsed_us(), &out);
+  }
   void softmax_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, int batch_size,
                         int num_classes) override {

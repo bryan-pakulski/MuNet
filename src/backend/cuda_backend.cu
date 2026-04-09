@@ -1537,6 +1537,12 @@ void CUDABackend::softmax(const Storage &in, Storage &out, int batch_size,
   CUDA_CHECK(cudaGetLastError());
 }
 
+void CUDABackend::log_softmax(const Storage &in, Storage &out, int batch_size,
+                              int num_classes) {
+  softmax(in, out, batch_size, num_classes);
+  log(out, out, static_cast<size_t>(batch_size) * num_classes);
+}
+
 void CUDABackend::softmax_backward(const Storage &grad_out, const Storage &out,
                                    Storage &grad_in, int batch_size,
                                    int num_classes) {

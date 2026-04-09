@@ -2815,6 +2815,11 @@ void VulkanBackend::softmax(const Storage &in, Storage &out, int batch_size,
   dispatch_kernel(softmaxPipeline, {in.data(), out.data()}, &pc, sizeof(pc),
                   (batch_size + 255) / 256, 1, 1);
 }
+void VulkanBackend::log_softmax(const Storage &in, Storage &out, int batch_size,
+                                int num_classes) {
+  softmax(in, out, batch_size, num_classes);
+  log(out, out, static_cast<size_t>(batch_size) * num_classes);
+}
 void VulkanBackend::softmax_backward(const Storage &grad_out,
                                      const Storage &out, Storage &grad_in,
                                      int batch_size, int num_classes) {

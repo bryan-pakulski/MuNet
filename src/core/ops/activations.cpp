@@ -254,10 +254,28 @@ Tensor softmax(const Tensor &a, int dim) {
 }
 
 Tensor log_softmax(const Tensor &a, int dim) {
-  resolve_dispatch(OpId::LogSoftmax, a);
-  Tensor out = log(softmax(a, dim));
+  const auto dispatch = resolve_dispatch(OpId::LogSoftmax, a);
+  if (a.shape().empty())
+    throw std::runtime_error("LogSoftmax expects non-empty shape");
+
   const int rank = static_cast<int>(a.shape().size());
   const int resolved = (dim < 0) ? (rank + dim) : dim;
+  if (resolved < 0 || resolved >= rank)
+    throw std::runtime_error("LogSoftmax: dim out of range");
+  if (resolved != rank - 1)
+    throw std::runtime_error(
+        "LogSoftmax currently supports only the last dimension");
+
+  const int num_classes = a.shape().back();
+  const int batch_size = a.size() / num_classes;
+  Tensor out(a.shape(), a.device(), a.dtype());
+  if (dispatch.use_backend) {
+    a.impl_->backend().log_softmax(*a.impl_->storage, *out.impl_->storage,
+                                   batch_size, num_classes);
+  } else {
+    out = log(softmax(a, dim));
+  }
+
   record_registered_trace(OpId::LogSoftmax, out, {a}, {{"dim", {resolved}}});
   return out;
 }

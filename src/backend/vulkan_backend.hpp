@@ -131,6 +131,8 @@ public:
   void cos(const Storage &in, Storage &out, size_t num_elements) override;
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override;
+  void log_softmax(const Storage &in, Storage &out, int batch_size,
+                   int num_classes) override;
   void softmax_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, int batch_size,
                         int num_classes) override;
