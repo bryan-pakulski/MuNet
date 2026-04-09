@@ -2447,7 +2447,11 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
         (preferred_props & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) &&
         !(runtime_->staging_memory_properties &
           VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
-    if (!runtime_->staging_buffer || runtime_->staging_offset + aligned > runtime_->staging_size ||
+    const bool needs_new_buffer =
+        !runtime_->staging_buffer || runtime_->staging_size < aligned ||
+        needs_cached_upgrade;
+    if (!runtime_->staging_buffer ||
+        runtime_->staging_offset + aligned > runtime_->staging_size ||
         needs_cached_upgrade) {
       if (runtime_->is_recording)
         flush_batch();
@@ -2458,15 +2462,16 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
       profile_cpu_event("vulkan.staging_wait_fences", staging_wait_start);
       profile_backend_event("queue_wait", "staging_reuse", staging_wait_start);
       runtime_->staging_offset = 0; // Safe because queue is idle
-      if (runtime_->staging_size < aligned) {
+      if (needs_new_buffer) {
         auto growth_start = profile_now();
         if (runtime_->staging_buffer) {
           vkUnmapMemory(device_, runtime_->staging_memory);
           vkDestroyBuffer(device_, runtime_->staging_buffer, nullptr);
           vkFreeMemory(device_, runtime_->staging_memory, nullptr);
         }
-        runtime_->staging_size =
+        const size_t min_staging_size =
             aligned * 2 < 16 * 1024 * 1024 ? 16 * 1024 * 1024 : aligned * 2;
+        runtime_->staging_size = std::max(runtime_->staging_size, min_staging_size);
         const VkMemoryPropertyFlags required_props =
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
