@@ -121,7 +121,7 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--max-index", type=int, default=2)
     parser.add_argument("--num-devices", type=int, default=2)
-    parser.add_argument("--log-every", type=int, default=2)
+    parser.add_argument("--log-every", type=int, default=10)
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -144,7 +144,7 @@ def main() -> int:
             loss.backward()
             opt.step()
             if step % max(1, args.log_every) == 0 or step == args.steps - 1:
-                print(f"[single] step={step:03d} loss={float(loss.detach().to(CPU).item()):.6f}")
+                print(f"[single] step={step:03d} loss={float(loss.detach().item()):.6f}")
         return 0
 
     devices = detect_accelerators(max_index=args.max_index)
@@ -169,7 +169,7 @@ def main() -> int:
             opt.zero_grad()
             loss = model(x).mse_loss(y)
             loss.backward()
-            losses.append(float(loss.detach().to(CPU).item()))
+            losses.append(float(loss.detach().item()))
         allreduce_parameter_grads(models)
         for opt in opts:
             opt.step()
