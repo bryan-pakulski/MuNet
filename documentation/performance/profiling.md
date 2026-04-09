@@ -206,6 +206,7 @@ Vulkan support. If they skip, the skip message now reports:
 
 - compile-time backend availability (`compiled(cuda=..., vulkan=...)`)
 - runtime device detection (`runtime(cuda=..., vulkan=...)`)
+- backend health probe (`health(cuda=..., vulkan=...)`)
 
 This helps quickly distinguish build-configuration problems from runtime device
 visibility/driver problems.
@@ -214,6 +215,10 @@ The skip detail now also appends backend runtime status from
 `BackendManager::backend_status()` for CUDA/Vulkan (for example
 `reason=plugin_not_found` or `reason=runtime_dependency_missing`), which
 pinpoints missing plugin binaries versus missing shared-library dependencies.
+
+If `runtime(...)=yes` but `health(...)=no`, plugin/runtime probing succeeded but
+an actual tensor-op smoke check failed; the message appends
+`*_health_detail=...` with the thrown error string.
 
 ## Trace-Centric Workflow
 

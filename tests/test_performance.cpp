@@ -53,18 +53,43 @@ double benchmark_ms(const std::function<void()> &fn, int warmup, int iters) {
 }
 
 bool require_gpu_backends(std::string *reason = nullptr) {
+  bool cuda_runtime_active = false;
+  bool vulkan_runtime_active = false;
+  for (const auto &status : BackendManager::backend_status()) {
+    if (status.source != "builtin") {
+      continue;
+    }
+    if (status.name == "cuda") {
+      cuda_runtime_active = status.active;
+    } else if (status.name == "vulkan") {
+      vulkan_runtime_active = status.active;
+    }
+  }
+
 #ifdef MUNET_USE_CUDA
-  const bool has_cuda = has_device(DeviceType::CUDA);
+  std::string cuda_health_detail;
+  const bool has_cuda_health =
+      test::accelerator_health_check(Device{DeviceType::CUDA, 0},
+                                     &cuda_health_detail);
+  const bool has_cuda = cuda_runtime_active && has_cuda_health;
   constexpr bool cuda_compiled = true;
 #else
+  const bool has_cuda_health = false;
+  std::string cuda_health_detail;
   const bool has_cuda = false;
   constexpr bool cuda_compiled = false;
 #endif
 
 #ifdef MUNET_USE_VULKAN
-  const bool has_vulkan = has_device(DeviceType::VULKAN);
+  std::string vulkan_health_detail;
+  const bool has_vulkan_health =
+      test::accelerator_health_check(Device{DeviceType::VULKAN, 0},
+                                     &vulkan_health_detail);
+  const bool has_vulkan = vulkan_runtime_active && has_vulkan_health;
   constexpr bool vulkan_compiled = true;
 #else
+  const bool has_vulkan_health = false;
+  std::string vulkan_health_detail;
   const bool has_vulkan = false;
   constexpr bool vulkan_compiled = false;
 #endif
@@ -92,9 +117,19 @@ bool require_gpu_backends(std::string *reason = nullptr) {
           "compiled(cuda=" +
           std::string(cuda_compiled ? "yes" : "no") + ", vulkan=" +
           std::string(vulkan_compiled ? "yes" : "no") +
-          ") runtime(cuda=" + (has_cuda ? std::string("yes") : "no") +
-          ", vulkan=" + (has_vulkan ? std::string("yes") : "no") + "). " +
+          ") runtime(cuda=" +
+          (cuda_runtime_active ? std::string("yes") : "no") +
+          ", vulkan=" + (vulkan_runtime_active ? std::string("yes") : "no") +
+          ") health(cuda=" + (has_cuda_health ? std::string("yes") : "no") +
+          ", vulkan=" + (has_vulkan_health ? std::string("yes") : "no") +
+          "). " +
           backend_details;
+      if (!has_cuda_health && !cuda_health_detail.empty()) {
+        *reason += " cuda_health_detail=" + cuda_health_detail + ".";
+      }
+      if (!has_vulkan_health && !vulkan_health_detail.empty()) {
+        *reason += " vulkan_health_detail=" + vulkan_health_detail + ".";
+      }
     }
     return false;
   }
