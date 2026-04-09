@@ -976,6 +976,9 @@ void CUDABackend::copy(const void *src, void *dst, size_t bytes, Device src_dev,
   }
 
   cudaSetDevice(device_index_);
+  // Clear sticky async failures from prior kernel/event calls so copy reports
+  // its own status.
+  cudaGetLastError();
   record_event_or_recreate(start_event_, device_index_);
   cudaMemcpyKind kind = cudaMemcpyDefault;
   CUDA_CHECK(cudaMemcpy(dst, src, bytes, kind));
@@ -994,7 +997,27 @@ void CUDABackend::synchronize() {
                                          (cudaEvent_t)stop_event_);
   if (err == cudaSuccess) {
     last_kernel_us_ = (double)ms * 1000.0;
+  } else if (err == cudaErrorInvalidResourceHandle) {
+    // If timing events were never recorded (or were invalidated by context
+    // churn), do not poison subsequent CUDA calls with a sticky error.
+    cudaGetLastError();
+    cudaEvent_t start = reinterpret_cast<cudaEvent_t>(start_event_);
+    cudaEvent_t stop = reinterpret_cast<cudaEvent_t>(stop_event_);
+    if (start) {
+      cudaEventDestroy(start);
+    }
+    if (stop) {
+      cudaEventDestroy(stop);
+    }
+    cudaEvent_t new_start = nullptr;
+    cudaEvent_t new_stop = nullptr;
+    CUDA_CHECK(cudaEventCreate(&new_start));
+    CUDA_CHECK(cudaEventCreate(&new_stop));
+    start_event_ = reinterpret_cast<void *>(new_start);
+    stop_event_ = reinterpret_cast<void *>(new_stop);
+    last_kernel_us_ = 0.0;
   } else {
+    cudaGetLastError();
     last_kernel_us_ = 0.0;
   }
 }

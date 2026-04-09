@@ -1177,6 +1177,26 @@ TEST(BackendManagerTest, CudaMatmulBFloat16FallbackDeniedWhenCudaAvailable) {
   }
 }
 
+TEST(BackendManagerTest, CudaScalarReadbackRemainsHealthyAcrossSynchronizeCalls) {
+  const Device cuda{DeviceType::CUDA, 0};
+  try {
+    (void)Tensor({1}, cuda, DataType::Float32);
+  } catch (const std::runtime_error &) {
+    GTEST_SKIP() << "CUDA backend unavailable in this environment";
+  }
+
+  for (int i = 0; i < 8; ++i) {
+    Tensor a({1}, cuda, DataType::Float32);
+    Tensor b({1}, cuda, DataType::Float32);
+    a.fill_(2.0f);
+    b.fill_(3.0f);
+    Tensor out = a + b;
+    ASSERT_NO_THROW(out.impl_->backend().synchronize());
+    ASSERT_NO_THROW((void)out.to({DeviceType::CPU, 0}));
+    EXPECT_NEAR(out.item(), 5.0f, 1e-6f);
+  }
+}
+
 TEST(BackendManagerTest, ProfilingCapturesAllocatorAndSynchronizationMarkers) {
   ScopedProfileOverride profile(true);
   const ScopedEnvVar implicit_sync_env("MUNET_PROFILE_IMPLICIT_SYNC", "1");
