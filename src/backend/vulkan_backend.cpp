@@ -37,7 +37,24 @@ namespace munet {
 
 // --- Configuration ---
 static const int MAX_FRAMES_IN_FLIGHT = 2;
-static const int BATCH_SIZE_LIMIT = 2048; // Flush after this many ops
+int vulkan_batch_size_limit() {
+  static const int limit = []() {
+    const char *env = std::getenv("MUNET_VK_BATCH_SIZE_LIMIT");
+    if (env) {
+      try {
+        const int parsed = std::stoi(env);
+        if (parsed > 0) {
+          return parsed;
+        }
+      } catch (...) {
+      }
+    }
+    // Lower default while profiling to avoid giant deferred submits that turn
+    // readbacks into long queue-drain stalls.
+    return is_profile_enabled() ? 128 : 512;
+  }();
+  return limit;
+}
 static const int MAX_DESCRIPTORS_PER_FRAME = 2048;
 
 // --- Helpers ---
@@ -2392,7 +2409,7 @@ void VulkanBackend::memset(void *ptr, int value, size_t bytes) {
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
 
   runtime_->current_batch_size++;
-  if (runtime_->current_batch_size >= BATCH_SIZE_LIMIT)
+  if (runtime_->current_batch_size >= vulkan_batch_size_limit())
     flush_batch();
 }
 
@@ -2435,7 +2452,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
                          nullptr, 0, nullptr);
 
     runtime_->current_batch_size++;
-    if (runtime_->current_batch_size >= BATCH_SIZE_LIMIT)
+    if (runtime_->current_batch_size >= vulkan_batch_size_limit())
       flush_batch();
     return;
   }
@@ -2521,7 +2538,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
                          nullptr, 0, nullptr);
 
     runtime_->current_batch_size++;
-    if (runtime_->current_batch_size >= BATCH_SIZE_LIMIT)
+    if (runtime_->current_batch_size >= vulkan_batch_size_limit())
       flush_batch();
   } else if (src_dev.type == DeviceType::VULKAN &&
              dst_dev.type == DeviceType::CPU) {
@@ -2680,7 +2697,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   }
 
   runtime_->current_batch_size++;
-  if (runtime_->current_batch_size >= BATCH_SIZE_LIMIT) {
+  if (runtime_->current_batch_size >= vulkan_batch_size_limit()) {
     flush_batch();
   }
 
