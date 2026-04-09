@@ -95,7 +95,9 @@ uint32_t VulkanBackend::find_memory_type(
 void VulkanBackend::create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
                                   VkMemoryPropertyFlags properties,
                                   VkBuffer &buffer,
-                                  VkDeviceMemory &bufferMemory) const {
+                                  VkDeviceMemory &bufferMemory,
+                                  VkMemoryPropertyFlags preferred_properties,
+                                  uint32_t *selected_memory_type) const {
   VkBufferCreateInfo bufferInfo{};
   bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   bufferInfo.size = size;
@@ -109,8 +111,23 @@ void VulkanBackend::create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
   VkMemoryAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   allocInfo.allocationSize = memReqs.size;
-  allocInfo.memoryTypeIndex =
-      find_memory_type(memReqs.memoryTypeBits, properties);
+  uint32_t memory_type_index = find_memory_type(memReqs.memoryTypeBits, properties);
+  if (preferred_properties != 0) {
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(physical_device_, &memProperties);
+    const VkMemoryPropertyFlags requested = properties | preferred_properties;
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+      if ((memReqs.memoryTypeBits & (1 << i)) &&
+          (memProperties.memoryTypes[i].propertyFlags & requested) == requested) {
+        memory_type_index = i;
+        break;
+      }
+    }
+  }
+  allocInfo.memoryTypeIndex = memory_type_index;
+  if (selected_memory_type) {
+    *selected_memory_type = memory_type_index;
+  }
 
   VK_CHECK(vkAllocateMemory(device_, &allocInfo, nullptr, &bufferMemory));
   VK_CHECK(vkBindBufferMemory(device_, buffer, bufferMemory, 0));
@@ -243,6 +260,7 @@ void VulkanBackend::reset_runtime_state() {
   runtime_->staging_mapped = nullptr;
   runtime_->staging_buffer = VK_NULL_HANDLE;
   runtime_->staging_memory = VK_NULL_HANDLE;
+  runtime_->staging_memory_properties = 0;
   runtime_->immediate_fence = VK_NULL_HANDLE;
 }
 
@@ -2419,9 +2437,15 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     return;
   }
 
-  auto get_staging = [&](size_t req_bytes, size_t &offset) {
+  auto get_staging = [&](size_t req_bytes, size_t &offset,
+                         VkMemoryPropertyFlags preferred_props) {
     size_t aligned = (req_bytes + 255) & ~255;
-    if (!runtime_->staging_buffer || runtime_->staging_offset + aligned > runtime_->staging_size) {
+    const bool needs_cached_upgrade =
+        (preferred_props & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) &&
+        !(runtime_->staging_memory_properties &
+          VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+    if (!runtime_->staging_buffer || runtime_->staging_offset + aligned > runtime_->staging_size ||
+        needs_cached_upgrade) {
       if (runtime_->is_recording)
         flush_batch();
       auto staging_wait_start = profile_now();
@@ -2440,12 +2464,20 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
         }
         runtime_->staging_size =
             aligned * 2 < 16 * 1024 * 1024 ? 16 * 1024 * 1024 : aligned * 2;
+        const VkMemoryPropertyFlags required_props =
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        uint32_t staging_mem_type = 0;
         create_buffer(runtime_->staging_size,
-                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                     runtime_->staging_buffer, runtime_->staging_memory);
+                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      required_props, runtime_->staging_buffer,
+                      runtime_->staging_memory, preferred_props,
+                      &staging_mem_type);
+        VkPhysicalDeviceMemoryProperties memProperties;
+        vkGetPhysicalDeviceMemoryProperties(physical_device_, &memProperties);
+        runtime_->staging_memory_properties =
+            memProperties.memoryTypes[staging_mem_type].propertyFlags;
         VK_CHECK(vkMapMemory(device_, runtime_->staging_memory, 0, runtime_->staging_size, 0,
                              &runtime_->staging_mapped));
         profile_backend_event("allocator", "pool_growth", growth_start,
@@ -2458,7 +2490,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
 
   if (src_dev.type == DeviceType::CPU && dst_dev.type == DeviceType::VULKAN) {
     size_t offset = 0;
-    get_staging(bytes, offset);
+    get_staging(bytes, offset, 0);
     auto h2d_memcpy_start = profile_now();
     std::memcpy((char *)runtime_->staging_mapped + offset, src, bytes);
     profile_cpu_event("vulkan.copy_h2d_memcpy", h2d_memcpy_start, bytes);
@@ -2486,7 +2518,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
   } else if (src_dev.type == DeviceType::VULKAN &&
              dst_dev.type == DeviceType::CPU) {
     size_t offset = 0;
-    get_staging(bytes, offset);
+    get_staging(bytes, offset, VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
 
     ensure_recording();
     VkMemoryBarrier mb{};

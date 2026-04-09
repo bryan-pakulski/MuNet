@@ -218,6 +218,7 @@ private:
 
     VkBuffer staging_buffer = VK_NULL_HANDLE;
     VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+    VkMemoryPropertyFlags staging_memory_properties = 0;
     size_t staging_offset = 0;
     size_t staging_size = 0;
     void *staging_mapped = nullptr;
@@ -237,7 +238,9 @@ private:
                             VkMemoryPropertyFlags properties) const;
   void create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
                      VkMemoryPropertyFlags properties, VkBuffer &buffer,
-                     VkDeviceMemory &buffer_memory) const;
+                     VkDeviceMemory &buffer_memory,
+                     VkMemoryPropertyFlags preferred_properties = 0,
+                     uint32_t *selected_memory_type = nullptr) const;
   std::vector<uint32_t> compile_shader(const std::string &name,
                                        const std::string &source) const;
 
