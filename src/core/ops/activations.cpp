@@ -255,31 +255,9 @@ Tensor softmax(const Tensor &a, int dim) {
 
 Tensor log_softmax(const Tensor &a, int dim) {
   resolve_dispatch(OpId::LogSoftmax, a);
-  Tensor p = softmax(a, dim);
-
-  Tensor p_cpu = p.to(Device{DeviceType::CPU, 0});
-  Tensor out_cpu(a.shape(), Device{DeviceType::CPU, 0}, a.dtype());
-  const char *pv = static_cast<const char *>(p_cpu.data());
-  char *ov = static_cast<char *>(out_cpu.data());
-  const size_t stride = dtype_size(a.dtype());
-  for (size_t i = 0; i < p_cpu.size(); ++i) {
-    const double prob =
-        read_scalar_from_buffer(pv + i * stride, p_cpu.dtype()).value;
-    write_scalar_to_buffer(ov + i * stride, out_cpu.dtype(),
-                           std::log(std::max(prob, 1e-20)));
-  }
-
-  Tensor out =
-      (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+  Tensor out = log(softmax(a, dim));
   const int rank = static_cast<int>(a.shape().size());
   const int resolved = (dim < 0) ? (rank + dim) : dim;
-  if (GradMode::is_enabled() && a.requires_grad()) {
-    auto fn =
-        std::make_shared<autograd_nodes::LogSoftmaxBackward>(out, resolved);
-    link_backward_edges(fn.get(), {a});
-    out.set_requires_grad(true);
-    out.impl_->grad_fn = fn;
-  }
   record_registered_trace(OpId::LogSoftmax, out, {a}, {{"dim", {resolved}}});
   return out;
 }
