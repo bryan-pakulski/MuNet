@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "munet-nn"
-version = "0.1.1"
+version = "0.1.2"
 description = "MuNet: lightweight C++ tensor/autograd framework with Python bindings"
 readme = "ReadMe.md"
 requires-python = ">=3.10"

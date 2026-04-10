@@ -4,6 +4,8 @@
 #include "nn.hpp"
 #include "tensor.hpp"
 #include "test_utils.hpp"
+#include "core/op_dispatch.hpp"
+#include "core/util/logging.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -11,6 +13,7 @@
 #include <functional>
 #include <gtest/gtest.h>
 #include <iostream>
+#include <optional>
 #include <string>
 
 using namespace munet;
@@ -210,6 +213,140 @@ Tensor make_one_hot_targets(int batch, int classes) {
     ptr[b * classes + (b % classes)] = 1.0f;
   return targets_cpu;
 }
+
+struct BackendPerfBreakdown {
+  double e2e_ms = 0.0;
+  double total_cpu_us = 0.0;
+  double total_gpu_us = 0.0;
+  double dispatch_us = 0.0;
+  double kernel_us = 0.0;
+  uint64_t fallback_count = 0;
+  size_t profiled_entries = 0;
+};
+
+BackendPerfBreakdown run_instance_segmentation_workload(Device dev, int warmup,
+                                                        int iters) {
+  constexpr int B = 2;
+  constexpr int H = 128;
+  constexpr int W = 128;
+  constexpr int NUM_CLASSES = 6;
+
+  Tensor input_cpu({B, 3, H, W}, {DeviceType::CPU, 0});
+  input_cpu.uniform_(-1.0f, 1.0f);
+
+  Tensor class_target_cpu({B, NUM_CLASSES, H / 2, W / 2}, {DeviceType::CPU, 0});
+  class_target_cpu.uniform_(0.0f, 1.0f);
+  Tensor mask_target_cpu({B, 1, H, W}, {DeviceType::CPU, 0});
+  mask_target_cpu.uniform_(0.0f, 1.0f);
+
+  auto weight_like = [&](const Shape &shape) {
+    Tensor t(shape, {DeviceType::CPU, 0}, DataType::Float32, true);
+    t.uniform_(-0.05f, 0.05f);
+    return t.to(dev);
+  };
+  auto bias_like = [&](int c) {
+    Tensor t({c}, {DeviceType::CPU, 0}, DataType::Float32, true);
+    t.uniform_(-0.02f, 0.02f);
+    return t.to(dev);
+  };
+
+  Tensor input = input_cpu.to(dev);
+  Tensor class_target = class_target_cpu.to(dev);
+  Tensor mask_target = mask_target_cpu.to(dev);
+
+  Tensor w_stem = weight_like({8, 3, 3, 3});
+  Tensor b_stem = bias_like(8);
+  Tensor w_body = weight_like({16, 8, 3, 3});
+  Tensor b_body = bias_like(16);
+  Tensor w_cls = weight_like({NUM_CLASSES, 16, 1, 1});
+  Tensor b_cls = bias_like(NUM_CLASSES);
+  Tensor w_seed = weight_like({1, 16, 3, 3});
+  Tensor b_seed = bias_like(1);
+  Tensor w_mask = weight_like({1, 24, 3, 3});
+  Tensor b_mask = bias_like(1);
+
+  auto run_once = [&]() {
+    Tensor stem = input.conv2d(w_stem, b_stem, 1, 1).relu();
+    Tensor pooled = stem.max_pool2d(2, 2, 0);
+    Tensor body = pooled.conv2d(w_body, b_body, 1, 1).relu();
+
+    Tensor class_logits = body.conv2d(w_cls, b_cls, 1, 0);
+    Tensor class_probs = class_logits.softmax(1);
+
+    Tensor instance_seed = body.conv2d(w_seed, b_seed, 1, 1).sigmoid();
+    Tensor upsampled = body.upsample2d(2);
+    Tensor fused = Tensor::cat({upsampled, stem}, 1);
+    Tensor mask_logits = fused.conv2d(w_mask, b_mask, 1, 1);
+    Tensor mask_probs = mask_logits.sigmoid();
+    Tensor edge_hint = mask_probs.max_pool2d(3, 1, 1);
+
+    Tensor class_loss = class_probs.mse_loss(class_target);
+    Tensor mask_loss = mask_probs.mse_loss(mask_target);
+    Tensor edge_loss = edge_hint.mse_loss(mask_target);
+    Tensor seed_loss = instance_seed.mean();
+    Tensor total = class_loss + mask_loss + edge_loss + seed_loss;
+
+    total.backward();
+    w_stem.step(1e-3f);
+    b_stem.step(1e-3f);
+    w_body.step(1e-3f);
+    b_body.step(1e-3f);
+    w_cls.step(1e-3f);
+    b_cls.step(1e-3f);
+    w_seed.step(1e-3f);
+    b_seed.step(1e-3f);
+    w_mask.step(1e-3f);
+    b_mask.step(1e-3f);
+
+    w_stem.zero_grad();
+    b_stem.zero_grad();
+    w_body.zero_grad();
+    b_body.zero_grad();
+    w_cls.zero_grad();
+    b_cls.zero_grad();
+    w_seed.zero_grad();
+    b_seed.zero_grad();
+    w_mask.zero_grad();
+    b_mask.zero_grad();
+
+    total.impl_->backend().synchronize();
+    Tensor total_cpu = total.to({DeviceType::CPU, 0});
+    (void)total_cpu;
+  };
+
+  for (int i = 0; i < warmup; ++i) {
+    run_once();
+  }
+
+  Profiler::get().reset();
+  ops::reset_fallback_telemetry();
+  const double e2e_ms = benchmark_ms(run_once, 0, iters);
+
+  const auto snapshot = Profiler::get().snapshot();
+  const auto fallback = ops::fallback_telemetry_snapshot();
+
+  BackendPerfBreakdown out;
+  out.e2e_ms = e2e_ms;
+  out.fallback_count = fallback.accelerator_cpu_fallback_total;
+  out.profiled_entries = snapshot.stats.size();
+
+  for (const auto &entry : snapshot.stats) {
+    const auto &name = entry.first;
+    const auto &stat = entry.second;
+    out.total_cpu_us += stat.cpu_us;
+    out.total_gpu_us += stat.gpu_us;
+    if (name.rfind("dispatch.", 0) == 0) {
+      out.dispatch_us += stat.cpu_us + stat.gpu_us;
+    }
+    if (name.find(".cuda") != std::string::npos ||
+        name.find(".vulkan") != std::string::npos) {
+      out.kernel_us += stat.cpu_us + stat.gpu_us;
+    }
+  }
+
+  return out;
+}
+
 void run_perf_ratio_test(const std::string &name,
                          const std::function<void(Device)> &runner, int warmup,
                          int iters, const char *ratio_env,
@@ -1082,4 +1219,67 @@ TEST(PerformanceTest, RepresentativeInferenceEngineMemoryProfile) {
             baseline_current + input.size() * dtype_size(input.dtype()) * 8);
   EXPECT_EQ(engine.stats().compiled_output_shape, (std::vector<int>{32, 16}));
   EXPECT_GE(engine.stats().peak_memory_bytes, peak_memory);
+}
+
+TEST(PerformanceTest, InstanceSegmentationE2EMetricsCudaVsVulkan) {
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
+
+  set_profile_enabled_override(true);
+  Device cuda{DeviceType::CUDA, 0};
+  Device vk{DeviceType::VULKAN, 0};
+
+  const BackendPerfBreakdown cuda_metrics =
+      run_instance_segmentation_workload(cuda, 2, 8);
+  const BackendPerfBreakdown vk_metrics = run_instance_segmentation_workload(vk, 2, 8);
+
+  const double e2e_ratio = vk_metrics.e2e_ms / std::max(cuda_metrics.e2e_ms, 1e-9);
+  const double dispatch_ratio =
+      vk_metrics.dispatch_us / std::max(cuda_metrics.dispatch_us, 1e-9);
+  const double kernel_ratio =
+      vk_metrics.kernel_us / std::max(cuda_metrics.kernel_us, 1e-9);
+  const double cpu_total_ratio =
+      vk_metrics.total_cpu_us / std::max(cuda_metrics.total_cpu_us, 1e-9);
+
+  std::cout << "[PERF][InstanceSeg] cuda_e2e_ms=" << cuda_metrics.e2e_ms
+            << " vk_e2e_ms=" << vk_metrics.e2e_ms << " e2e_ratio=" << e2e_ratio
+            << " cuda_dispatch_us=" << cuda_metrics.dispatch_us
+            << " vk_dispatch_us=" << vk_metrics.dispatch_us
+            << " dispatch_ratio=" << dispatch_ratio
+            << " cuda_kernel_us=" << cuda_metrics.kernel_us
+            << " vk_kernel_us=" << vk_metrics.kernel_us
+            << " kernel_ratio=" << kernel_ratio
+            << " cuda_total_cpu_us=" << cuda_metrics.total_cpu_us
+            << " vk_total_cpu_us=" << vk_metrics.total_cpu_us
+            << " cpu_total_ratio=" << cpu_total_ratio
+            << " cuda_fallbacks=" << cuda_metrics.fallback_count
+            << " vk_fallbacks=" << vk_metrics.fallback_count
+            << " cuda_profiled_entries=" << cuda_metrics.profiled_entries
+            << " vk_profiled_entries=" << vk_metrics.profiled_entries
+            << std::endl;
+
+  constexpr double kMaxE2ERatio = 1.10;
+  constexpr double kMaxDispatchRatio = 1.30;
+  constexpr double kMaxKernelRatio = 1.20;
+  constexpr double kMaxCpuTotalRatio = 1.30;
+
+  EXPECT_GT(cuda_metrics.profiled_entries, 0u);
+  EXPECT_GT(vk_metrics.profiled_entries, 0u);
+  EXPECT_GT(cuda_metrics.dispatch_us, 0.0);
+  EXPECT_GT(vk_metrics.dispatch_us, 0.0);
+  EXPECT_GT(cuda_metrics.kernel_us, 0.0);
+  EXPECT_GT(vk_metrics.kernel_us, 0.0);
+  EXPECT_EQ(cuda_metrics.fallback_count, 0u);
+  EXPECT_EQ(vk_metrics.fallback_count, 0u);
+  EXPECT_LE(e2e_ratio, kMaxE2ERatio)
+      << "Vulkan e2e latency regressed for instance-segmentation style "
+         "workload. ratio="
+      << e2e_ratio << " max=" << kMaxE2ERatio;
+  EXPECT_LE(dispatch_ratio, kMaxDispatchRatio);
+  EXPECT_LE(kernel_ratio, kMaxKernelRatio);
+  EXPECT_LE(cpu_total_ratio, kMaxCpuTotalRatio);
+
+  set_profile_enabled_override(std::nullopt);
 }
