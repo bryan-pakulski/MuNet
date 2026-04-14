@@ -425,6 +425,16 @@ public:
     base_->cos(in, out, num_elements);
     check("cos", t.elapsed_us(), &out);
   }
+  void fused_elementwise_chain(const std::vector<Storage *> &inputs,
+                               Storage &output,
+                               const std::vector<uint32_t> &op_codes,
+                               size_t num_elements) override {
+    MUNET_DEBUG << "fused_elementwise_chain | " << op_codes.size()
+                << " ops, " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->elementwise_capability()->fused_elementwise_chain(inputs, output, op_codes, num_elements);
+    check("fused_elementwise_chain", t.elapsed_us(), &output);
+  }
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
     MUNET_DEBUG << "softmax | " << batch_size << " batches, " << num_classes

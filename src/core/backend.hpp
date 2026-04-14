@@ -238,6 +238,15 @@ public:
   virtual void softmax_backward(const Storage &grad_out, const Storage &out,
                                 Storage &grad_in, int batch_size,
                                 int num_classes) = 0;
+
+  // Fused elementwise: chain multiple elementwise ops into one kernel dispatch
+  virtual void fused_elementwise_chain(const std::vector<Storage *> &inputs,
+                                       Storage &output,
+                                       const std::vector<uint32_t> &op_codes,
+                                       size_t num_elements) {
+    // Default: no fusion support, throw
+    throw std::runtime_error("fused_elementwise_chain not implemented for this backend");
+  }
 };
 
 class BackendReductionCapability {

@@ -1,6 +1,7 @@
 #include "vulkan_backend.hpp"
 #include "core/all_reduce_runtime.hpp"
 #include "core/util.hpp"
+#include "core/kernel_fusion_planner.hpp"
 #include "cpu_backend.hpp"
 #include "storage.hpp"
 #include <algorithm>
@@ -82,6 +83,38 @@ static inline void profile_backend_event(
   profile_cpu_event(name.c_str(), start, bytes);
 }
 
+// Fine-grained profiling helpers for specific timing categories
+static inline void profile_timing_category(
+    const char *category,
+    const std::chrono::high_resolution_clock::time_point &start,
+    size_t bytes = 0) {
+  if (!is_profile_enabled())
+    return;
+  const auto end = std::chrono::high_resolution_clock::now();
+  const double us =
+      std::chrono::duration<double, std::micro>(end - start).count();
+  Profiler::get().record(category, us, 0.0, bytes);
+}
+
+// RAII wrapper for timing categories
+struct ScopedTimer {
+  const char *category_;
+  std::chrono::high_resolution_clock::time_point start_;
+  size_t bytes_;
+  
+  ScopedTimer(const char *category, size_t bytes = 0)
+      : category_(category), start_(std::chrono::high_resolution_clock::now()), bytes_(bytes) {}
+  
+  ~ScopedTimer() {
+    if (is_profile_enabled()) {
+      const auto end = std::chrono::high_resolution_clock::now();
+      const double us =
+          std::chrono::duration<double, std::micro>(end - start_).count();
+      Profiler::get().record(category_, us, 0.0, bytes_);
+    }
+  }
+};
+
 static size_t round_up_alloc_size(size_t bytes) {
   if (bytes == 0)
     bytes = 4; // Minimal valid size
@@ -153,6 +186,8 @@ void VulkanBackend::create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
 std::vector<uint32_t>
 VulkanBackend::compile_shader(const std::string &name,
                               const std::string &source) const {
+  const auto compile_start = std::chrono::high_resolution_clock::now();
+  
   auto load_spv = [](const std::string &path) -> std::vector<uint32_t> {
     std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in.is_open()) {
@@ -235,6 +270,14 @@ VulkanBackend::compile_shader(const std::string &name,
                                std::filesystem::copy_options::overwrite_existing,
                                ignored);
   }
+  // Record shader compilation time (both kernel_compile and shader_compilation for profiling)
+  if (is_profile_enabled()) {
+    const auto compile_end = std::chrono::high_resolution_clock::now();
+    const double us = std::chrono::duration<double, std::micro>(compile_end - compile_start).count();
+    Profiler::get().record("kernel_compile", us, 0.0, 0);
+    Profiler::get().record("shader_compilation", us, 0.0, 0);
+  }
+  
   return buffer;
 }
 
@@ -341,11 +384,46 @@ VulkanBackend::VulkanBackend(int device_index)
   queueCreateInfo.queueFamilyIndex = queue_family_index_;
   queueCreateInfo.queueCount = 1;
   queueCreateInfo.pQueuePriorities = &queuePriority;
+
+  // Check for VK_KHR_push_descriptor extension support
+  std::vector<const char *> deviceExtensions;
+  {
+    uint32_t extCount = 0;
+    vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &extCount, nullptr);
+    std::vector<VkExtensionProperties> availableExts(extCount);
+    vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &extCount, availableExts.data());
+    for (const auto &ext : availableExts) {
+      if (strcmp(ext.extensionName, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) == 0) {
+        push_descriptors_supported_ = true;
+        deviceExtensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+        fprintf(stderr, "[Vulkan] VK_KHR_push_descriptor supported and enabled\n");
+        break;
+      }
+    }
+    if (!push_descriptors_supported_) {
+      fprintf(stderr, "[Vulkan] VK_KHR_push_descriptor NOT available, using pre-allocated descriptor pools\n");
+    }
+  }
+
   VkDeviceCreateInfo deviceCreateInfo{};
   deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
   deviceCreateInfo.queueCreateInfoCount = 1;
+  if (!deviceExtensions.empty()) {
+    deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
+    deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
+  }
   VK_CHECK(vkCreateDevice(physical_device_, &deviceCreateInfo, nullptr, &device_));
+
+  // Load push descriptor function pointer if supported
+  if (push_descriptors_supported_) {
+    vkCmdPushDescriptorSetKHR_ = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
+        vkGetDeviceProcAddr(device_, "vkCmdPushDescriptorSetKHR"));
+    if (!vkCmdPushDescriptorSetKHR_) {
+      fprintf(stderr, "[Vulkan] WARNING: Failed to load vkCmdPushDescriptorSetKHR, falling back\n");
+      push_descriptors_supported_ = false;
+    }
+  }
   vkGetDeviceQueue(device_, queue_family_index_, 0, &compute_queue_);
 
   VkCommandPoolCreateInfo poolInfo{};
@@ -378,6 +456,27 @@ VulkanBackend::VulkanBackend(int device_index)
   pLayoutInfo.pPushConstantRanges = &pushRange;
   VK_CHECK(
       vkCreatePipelineLayout(device_, &pLayoutInfo, nullptr, &pipeline_layout_));
+
+  // Create push descriptor set layout and pipeline layout if supported
+  if (push_descriptors_supported_) {
+    VkDescriptorSetLayoutCreateInfo pushLayoutInfo{};
+    pushLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    pushLayoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+    pushLayoutInfo.bindingCount = 8;
+    pushLayoutInfo.pBindings = bindings; // Same bindings as the regular layout
+    VK_CHECK(vkCreateDescriptorSetLayout(device_, &pushLayoutInfo, nullptr,
+                                         &push_descriptor_set_layout_));
+
+    VkPipelineLayoutCreateInfo pushPipelineLayoutInfo{};
+    pushPipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pushPipelineLayoutInfo.setLayoutCount = 1;
+    pushPipelineLayoutInfo.pSetLayouts = &push_descriptor_set_layout_;
+    pushPipelineLayoutInfo.pushConstantRangeCount = 1;
+    pushPipelineLayoutInfo.pPushConstantRanges = &pushRange;
+    VK_CHECK(vkCreatePipelineLayout(device_, &pushPipelineLayoutInfo, nullptr,
+                                    &push_pipeline_layout_));
+    fprintf(stderr, "[Vulkan] Push descriptor layout and pipeline layout created\n");
+  }
 
   // Allocate immediate command buffer for fast copies
   VkCommandBufferAllocateInfo immAlloc{};
@@ -424,6 +523,48 @@ VulkanBackend::VulkanBackend(int device_index)
     allocate_frame_descriptor_sets(i);
   }
 
+  // Create pipeline cache for faster pipeline creation on subsequent runs
+  {
+    std::filesystem::path cache_dir;
+    if (const char *cache_env = std::getenv("MUNET_VK_SHADER_CACHE_DIR")) {
+      cache_dir = cache_env;
+    } else if (const char *home_env = std::getenv("HOME")) {
+      cache_dir = std::filesystem::path(home_env) / ".cache" / "munet" / "vulkan";
+    } else {
+      cache_dir = std::filesystem::temp_directory_path() / "munet_vk_cache";
+    }
+    std::string cachePath = (cache_dir / "pipeline_cache.bin").string();
+    std::vector<uint8_t> cacheData;
+
+    // Try to load existing pipeline cache from disk
+    FILE *f = fopen(cachePath.c_str(), "rb");
+    if (f) {
+      fseek(f, 0, SEEK_END);
+      long sz = ftell(f);
+      fseek(f, 0, SEEK_SET);
+      if (sz > 0) {
+        cacheData.resize(sz);
+        fread(cacheData.data(), 1, sz, f);
+        fprintf(stderr, "[Vulkan] Loaded pipeline cache from disk (%ld bytes)\n", sz);
+      }
+      fclose(f);
+    }
+
+    VkPipelineCacheCreateInfo cacheInfo{};
+    cacheInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    if (!cacheData.empty()) {
+      cacheInfo.initialDataSize = cacheData.size();
+      cacheInfo.pInitialData = cacheData.data();
+    }
+    VkResult res = vkCreatePipelineCache(device_, &cacheInfo, nullptr, &pipeline_cache_);
+    if (res != VK_SUCCESS) {
+      fprintf(stderr, "[Vulkan] WARNING: Failed to create pipeline cache (err=%d), continuing without\n", res);
+      pipeline_cache_ = VK_NULL_HANDLE;
+    } else {
+      fprintf(stderr, "[Vulkan] Pipeline cache created successfully\n");
+    }
+  }
+
   // Load Kernels
   auto createComputePipeline = [&](const std::string &name,
                                    const std::string &glsl) {
@@ -436,14 +577,20 @@ VulkanBackend::VulkanBackend(int device_index)
     VK_CHECK(vkCreateShaderModule(device_, &smInfo, nullptr, &sm));
     VkComputePipelineCreateInfo compInfo{};
     compInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    compInfo.layout = pipeline_layout_;
+    compInfo.layout = push_descriptors_supported_ ? push_pipeline_layout_ : pipeline_layout_;
     compInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     compInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     compInfo.stage.module = sm;
     compInfo.stage.pName = "main";
     VkPipeline pipeline;
-    VK_CHECK(vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &compInfo,
+    const auto pipeline_start = std::chrono::high_resolution_clock::now();
+    VK_CHECK(vkCreateComputePipelines(device_, pipeline_cache_, 1, &compInfo,
                                       nullptr, &pipeline));
+    if (is_profile_enabled()) {
+      const auto pipeline_end = std::chrono::high_resolution_clock::now();
+      const double us = std::chrono::duration<double, std::micro>(pipeline_end - pipeline_start).count();
+      Profiler::get().record("pipeline_creation", us, 0.0, 0);
+    }
     vkDestroyShaderModule(device_, sm, nullptr);
     return pipeline;
   };
@@ -454,31 +601,33 @@ VulkanBackend::VulkanBackend(int device_index)
   // Apple	64
   // Intel	128
   addPipeline = createComputePipeline("add", R"(
-				#version 450
-				layout(local_size_x = 256) in;
-				layout(binding = 0) buffer A { float a[]; };
-				layout(binding = 1) buffer B { float b[]; };
-				layout(binding = 2) buffer C { float c[]; };
-				layout(push_constant) uniform Push { uint N; } p;
-				void main() {
-						uint i = gl_GlobalInvocationID.x;
-						if (i < p.N) {
-								c[i] = a[i] + b[i];
-						}
+			#version 450
+			layout(local_size_x = 256) in;
+			layout(binding = 0) buffer A { float a[]; };
+			layout(binding = 1) buffer B { float b[]; };
+			layout(binding = 2) buffer C { float c[]; };
+			layout(push_constant) uniform Push { uint N; } p;
+			void main() {
+				uint i = gl_GlobalInvocationID.x;
+				if (i < p.N) {
+					c[i] = a[i] + b[i];
 				}
+			}
   )");
 
   mulPipeline = createComputePipeline("mul", R"(
-				#version 450
-				layout(local_size_x = 256) in;
-				layout(binding = 0) buffer A { float a[]; };
-				layout(binding = 1) buffer B { float b[]; };
-				layout(binding = 2) buffer C { float c[]; };
-				layout(push_constant) uniform Push { uint N; } p;
-				void main() {
-						uint i = gl_GlobalInvocationID.x;
-						if (i < p.N) c[i] = a[i] * b[i];
+			#version 450
+			layout(local_size_x = 256) in;
+			layout(binding = 0) buffer A { float a[]; };
+			layout(binding = 1) buffer B { float b[]; };
+			layout(binding = 2) buffer C { float c[]; };
+			layout(push_constant) uniform Push { uint N; } p;
+			void main() {
+				uint i = gl_GlobalInvocationID.x;
+				if (i < p.N) {
+					c[i] = a[i] * b[i];
 				}
+			}
   )");
 
   subPipeline = createComputePipeline("sub", R"(
@@ -489,8 +638,10 @@ VulkanBackend::VulkanBackend(int device_index)
 				layout(binding = 2) buffer C { float c[]; };
 				layout(push_constant) uniform Push { uint N; } p;
 				void main() {
-						uint i = gl_GlobalInvocationID.x;
-						if (i < p.N) c[i] = a[i] - b[i];
+					uint i = gl_GlobalInvocationID.x;
+					if (i < p.N) {
+						c[i] = a[i] - b[i];
+					}
 				}
   )");
 
@@ -719,8 +870,8 @@ VulkanBackend::VulkanBackend(int device_index)
         #version 450
         layout(local_size_x = 256) in;
 
-        layout(binding = 0) readonly buffer A { float a[]; };
-        layout(binding = 1) writeonly buffer C { float c[]; };
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer C { float c[]; };
 
         layout(push_constant) uniform Push { uint N; } p;
 
@@ -754,8 +905,8 @@ VulkanBackend::VulkanBackend(int device_index)
         #version 450
         layout(local_size_x = 256) in;
 
-        layout(binding = 0) readonly buffer A { float a[]; };
-        layout(binding = 1) writeonly buffer C { float c[]; };
+        layout(binding = 0) buffer A { float a[]; };
+        layout(binding = 1) buffer C { float c[]; };
 
         layout(push_constant) uniform Push { uint N; } p;
 
@@ -1079,29 +1230,28 @@ VulkanBackend::VulkanBackend(int device_index)
   crossEntropyPipeline = createComputePipeline("ce_loss",
                                                R"(
         #version 450
-				layout(local_size_x = 256) in;
+						layout(local_size_x = 256) in;
 
-				layout(binding = 0) readonly buffer L { float logits[]; };
-				layout(binding = 1) readonly buffer T { float targets[]; };
-				layout(binding = 2) buffer O { uint out_u[]; };
+						layout(binding = 0) readonly buffer L { float logits[]; };
+						layout(binding = 1) readonly buffer T { float targets[]; };
+						layout(binding = 2) buffer O { float partials[]; };
 
-				layout(push_constant) uniform Push {
-						int B;
-						int C;
-						int Spatial;
-				} u;
+						layout(push_constant) uniform Push {
+							int B;
+							int C;
+							int Spatial;
+						} u;
 
-				shared float wg_loss[256];
+						shared float wg_loss[256];
 
-#define ATOMIC_ADD_FLOAT(BUFFER, IDX, VAL) 				do { 						uint expected = BUFFER[IDX]; 						uint current; 						while(true) { 								uint next = floatBitsToUint(uintBitsToFloat(expected) + (VAL)); 								current = atomicCompSwap(BUFFER[IDX], expected, next); 								if (current == expected) break; 								expected = current; 						} 				} while(false)
+						void main() {
+							const int idx = int(gl_GlobalInvocationID.x);
+							const int lid = int(gl_LocalInvocationID.x);
+							const int gid = int(gl_WorkGroupID.x);
+							const int total_pixels = u.B * u.Spatial;
 
-				void main() {
-						const int idx = int(gl_GlobalInvocationID.x);
-						const int lid = int(gl_LocalInvocationID.x);
-						const int total_pixels = u.B * u.Spatial;
-
-						float local_loss = 0.0;
-						if (idx < total_pixels) {
+							float local_loss = 0.0;
+							if (idx < total_pixels) {
 								const int b = idx / u.Spatial;
 								const int s = idx % u.Spatial;
 								const int stride = u.Spatial;
@@ -1109,35 +1259,68 @@ VulkanBackend::VulkanBackend(int device_index)
 
 								float max_val = -3.402823e38;
 								for (int c = 0; c < u.C; ++c)
-										max_val = max(max_val, logits[base + c * stride]);
+									max_val = max(max_val, logits[base + c * stride]);
 
 								float sum_exp = 0.0;
 								float target_weighted = 0.0;
 								float target_sum = 0.0;
 								for (int c = 0; c < u.C; ++c) {
-										const float shifted = logits[base + c * stride] - max_val;
-										const float t = targets[base + c * stride];
-										sum_exp += exp(shifted);
-										target_weighted += t * shifted;
-										target_sum += t;
+									const float shifted = logits[base + c * stride] - max_val;
+									const float t = targets[base + c * stride];
+									sum_exp += exp(shifted);
+									target_weighted += t * shifted;
+									target_sum += t;
 								}
 
 								const float log_sum = log(sum_exp + 1e-9);
 								local_loss = (-target_weighted + target_sum * log_sum) / float(u.B);
-						}
+							}
 
-						wg_loss[lid] = local_loss;
-						barrier();
+							wg_loss[lid] = local_loss;
+							barrier();
 
-						for (int offset = 128; offset > 0; offset >>= 1) {
+							for (int offset = 128; offset > 0; offset >>= 1) {
 								if (lid < offset)
-										wg_loss[lid] += wg_loss[lid + offset];
+									wg_loss[lid] += wg_loss[lid + offset];
 								barrier();
-						}
+							}
 
-						if (lid == 0)
-								ATOMIC_ADD_FLOAT(out_u, 0, wg_loss[0]);
-				}
+							if (lid == 0)
+								partials[gid] = wg_loss[0];
+						}
+      )");
+
+  crossEntropyReducePipeline = createComputePipeline("ce_loss_reduce",
+                                                     R"(
+        #version 450
+						layout(local_size_x = 256) in;
+
+						layout(binding = 0) readonly buffer P { float partials[]; };
+						layout(binding = 1) buffer O { float result[]; };
+
+						layout(push_constant) uniform Push {
+							int N;
+						} u;
+
+						shared float wg_sum[256];
+
+						void main() {
+							const int idx = int(gl_GlobalInvocationID.x);
+							const int lid = int(gl_LocalInvocationID.x);
+
+							float val = (idx < u.N) ? partials[idx] : 0.0;
+							wg_sum[lid] = val;
+							barrier();
+
+							for (int offset = 128; offset > 0; offset >>= 1) {
+								if (lid < offset)
+									wg_sum[lid] += wg_sum[lid + offset];
+								barrier();
+							}
+
+							if (lid == 0)
+								result[0] = wg_sum[0];
+						}
       )");
 
   crossEntropyBackwardPipeline = createComputePipeline("ce_loss_back",
@@ -1194,66 +1377,129 @@ VulkanBackend::VulkanBackend(int device_index)
         #version 450
 				layout(local_size_x = 32, local_size_y = 8) in;
 
-				layout(binding = 0) readonly buffer A { float a[]; };
-				layout(binding = 1) readonly buffer B { float b[]; };
-				layout(binding = 2) writeonly buffer C { float c[]; };
+					layout(binding = 0) readonly buffer A { float a[]; };
+					layout(binding = 1) readonly buffer B { float b[]; };
+					layout(binding = 2) writeonly buffer C { float c[]; };
 
-				layout(push_constant) uniform Push {
+					layout(push_constant) uniform Push {
 						int M;
 						int K;
 						int N;
 						int tA;
 						int tB;
-				} p;
+					} p;
 
-				shared float As[8][32];
-				shared float Bs[32][32];
+					shared float As[32][32];
+					shared float Bs[32][32];
 
-				void main() {
+					void main() {
 						const int lx = int(gl_LocalInvocationID.x); // 0..31
 						const int ly = int(gl_LocalInvocationID.y); // 0..7
 
-						const int row = int(gl_WorkGroupID.y) * 8 + ly;
-						const int col = int(gl_WorkGroupID.x) * 32 + lx;
+						// Register-blocked: each thread computes 4 rows (TM=4)
+					// Workgroup covers 32 rows (y-dim) x 32 cols (x-dim)
+					const int row0 = int(gl_WorkGroupID.y) * 32 + ly;
+					const int row1 = row0 + 8;
+					const int row2 = row0 + 16;
+					const int row3 = row0 + 24;
+					const int col = int(gl_WorkGroupID.x) * 32 + lx;
 
-						const bool out_valid = (row < p.M) && (col < p.N);
-						float sum = 0.0;
+					const bool v0 = (row0 < p.M) && (col < p.N);
+					const bool v1 = (row1 < p.M) && (col < p.N);
+					const bool v2 = (row2 < p.M) && (col < p.N);
+					const bool v3 = (row3 < p.M) && (col < p.N);
+					float sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
 
-						if (p.tA == 0 && p.tB == 0) {
-								const int tiles = (p.K + 31) / 32;
-								for (int t = 0; t < tiles; ++t) {
-										const int kA = t * 32 + lx;
-										As[ly][lx] = (row < p.M && kA < p.K) ? a[row * p.K + kA] : 0.0;
-
-										const int brow = t * 32 + ly;
-										Bs[ly][lx] = (brow < p.K && col < p.N) ? b[brow * p.N + col] : 0.0;
-										Bs[ly + 8][lx] = (brow + 8 < p.K && col < p.N) ? b[(brow + 8) * p.N + col] : 0.0;
-										Bs[ly + 16][lx] = (brow + 16 < p.K && col < p.N) ? b[(brow + 16) * p.N + col] : 0.0;
-										Bs[ly + 24][lx] = (brow + 24 < p.K && col < p.N) ? b[(brow + 24) * p.N + col] : 0.0;
-
-										barrier();
-
-										if (out_valid) {
-												for (int kk = 0; kk < 32; ++kk)
-														sum += As[ly][kk] * Bs[kk][lx];
-										}
-
-										barrier();
-								}
-						} else if (out_valid && p.tA == 1 && p.tB == 0) {
-								for (int k = 0; k < p.K; ++k)
-										sum += a[k * p.M + row] * b[k * p.N + col];
-						} else if (out_valid && p.tA == 0 && p.tB == 1) {
-								for (int k = 0; k < p.K; ++k)
-										sum += a[row * p.K + k] * b[col * p.K + k];
-						} else if (out_valid) {
-								for (int k = 0; k < p.K; ++k)
-										sum += a[k * p.M + row] * b[col * p.K + k];
-						}
-
-						if (out_valid)
-								c[row * p.N + col] = sum;
+			// Unified tiled path for all transpose combinations
+			const int tiles = (p.K + 31) / 32;
+			for (int t = 0; t < tiles; ++t) {
+				// Load As tile: each thread loads 4 rows (ly, ly+8, ly+16, ly+24)
+				const int kA = t * 32 + lx;
+				if (p.tA == 0) {
+					As[ly][lx]      = (row0 < p.M && kA < p.K) ? a[row0 * p.K + kA] : 0.0;
+					As[ly + 8][lx]  = (row1 < p.M && kA < p.K) ? a[row1 * p.K + kA] : 0.0;
+					As[ly + 16][lx] = (row2 < p.M && kA < p.K) ? a[row2 * p.K + kA] : 0.0;
+					As[ly + 24][lx] = (row3 < p.M && kA < p.K) ? a[row3 * p.K + kA] : 0.0;
+				} else {
+					As[ly][lx]      = (kA < p.K && row0 < p.M) ? a[kA * p.M + row0] : 0.0;
+					As[ly + 8][lx]  = (kA < p.K && row1 < p.M) ? a[kA * p.M + row1] : 0.0;
+					As[ly + 16][lx] = (kA < p.K && row2 < p.M) ? a[kA * p.M + row2] : 0.0;
+					As[ly + 24][lx] = (kA < p.K && row3 < p.M) ? a[kA * p.M + row3] : 0.0;
 				}
+
+				// Load B tile into shared memory (handle transpose)
+				const int brow = t * 32 + ly;
+				if (p.tB == 0) {
+					// B not transposed: B is K×N, load B[k, col]
+					Bs[ly][lx] = (brow < p.K && col < p.N) ? b[brow * p.N + col] : 0.0;
+					Bs[ly + 8][lx] = (brow + 8 < p.K && col < p.N) ? b[(brow + 8) * p.N + col] : 0.0;
+					Bs[ly + 16][lx] = (brow + 16 < p.K && col < p.N) ? b[(brow + 16) * p.N + col] : 0.0;
+					Bs[ly + 24][lx] = (brow + 24 < p.K && col < p.N) ? b[(brow + 24) * p.N + col] : 0.0;
+				} else {
+					// B transposed: B is N×K stored, load B[col, k]
+					Bs[ly][lx] = (brow < p.K && col < p.N) ? b[col * p.K + brow] : 0.0;
+					Bs[ly + 8][lx] = (brow + 8 < p.K && col < p.N) ? b[col * p.K + brow + 8] : 0.0;
+					Bs[ly + 16][lx] = (brow + 16 < p.K && col < p.N) ? b[col * p.K + brow + 16] : 0.0;
+					Bs[ly + 24][lx] = (brow + 24 < p.K && col < p.N) ? b[col * p.K + brow + 24] : 0.0;
+				}
+
+				barrier();
+
+				// Register-blocked accumulation: 4 rows x 1 col per thread
+				for (int kk = 0; kk < 32; ++kk) {
+					const float bval = Bs[kk][lx];
+					sum0 += As[ly][kk] * bval;
+					sum1 += As[ly + 8][kk] * bval;
+					sum2 += As[ly + 16][kk] * bval;
+					sum3 += As[ly + 24][kk] * bval;
+				}
+
+				barrier();
+			}
+
+						if (v0) c[row0 * p.N + col] = sum0;
+					if (v1) c[row1 * p.N + col] = sum1;
+					if (v2) c[row2 * p.N + col] = sum2;
+					if (v3) c[row3 * p.N + col] = sum3;
+				}
+    )");
+
+  // Small-matrix matmul shader: 16x16 workgroup, no shared memory.
+  // For tiny matrices (≤64x64), the data fits in GPU cache so shared memory
+  // tiling adds barrier overhead without benefit. Each thread computes one
+  // output element with a direct K-loop, maximizing occupancy by avoiding
+  // shared memory reservation. 16x16 workgroup gives 256 threads/group.
+  matmulSmallPipeline = createComputePipeline("matmul_small",
+                                         R"(
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) readonly buffer A { float a[]; };
+layout(binding = 1) readonly buffer B { float b[]; };
+layout(binding = 2) writeonly buffer C { float c[]; };
+
+layout(push_constant) uniform Push {
+    int M;
+    int K;
+    int N;
+    int tA;
+    int tB;
+} p;
+
+void main() {
+    const int row = int(gl_WorkGroupID.y) * 16 + int(gl_LocalInvocationID.y);
+    const int col = int(gl_WorkGroupID.x) * 16 + int(gl_LocalInvocationID.x);
+
+    if (row >= p.M || col >= p.N) return;
+
+    float sum = 0.0;
+    for (int k = 0; k < p.K; ++k) {
+        const float av = (p.tA == 0) ? a[row * p.K + k] : a[k * p.M + row];
+        const float bv = (p.tB == 0) ? b[k * p.N + col] : b[col * p.K + k];
+        sum += av * bv;
+    }
+    c[row * p.N + col] = sum;
+}
     )");
 
   batchedMatmulPipeline = createComputePipeline("batched_matmul",
@@ -1302,40 +1548,44 @@ void main() {
 
     float sum = 0.0;
 
-    // Tiled path for non-transposed case
-    if (p.tA == 0 && p.tB == 0) {
-        const int tiles = (p.K + 31) / 32;
-        for (int t = 0; t < tiles; ++t) {
+    // Unified tiled path for all transpose combinations
+    const int tiles = (p.K + 31) / 32;
+    for (int t = 0; t < tiles; ++t) {
+        // Load A tile into shared memory (handle transpose)
+        if (p.tA == 0) {
+            // A not transposed: A is M×K, load A[row, k]
             const int kA = t * 32 + lx;
             As[ly][lx] = (row < p.M && kA < p.K) ? a[a_offset + row * p.K + kA] : 0.0;
+        } else {
+            // A transposed: A is K×M stored, load A[k, row]
+            const int kA = t * 32 + lx;
+            As[ly][lx] = (kA < p.K && row < p.M) ? a[a_offset + kA * p.M + row] : 0.0;
+        }
 
-            const int brow = t * 32 + ly;
+        // Load B tile into shared memory (handle transpose)
+        const int brow = t * 32 + ly;
+        if (p.tB == 0) {
+            // B not transposed: B is K×N, load B[k, col]
             Bs[ly][lx] = (brow < p.K && col < p.N) ? b[b_offset + brow * p.N + col] : 0.0;
             Bs[ly + 8][lx] = (brow + 8 < p.K && col < p.N) ? b[b_offset + (brow + 8) * p.N + col] : 0.0;
             Bs[ly + 16][lx] = (brow + 16 < p.K && col < p.N) ? b[b_offset + (brow + 16) * p.N + col] : 0.0;
             Bs[ly + 24][lx] = (brow + 24 < p.K && col < p.N) ? b[b_offset + (brow + 24) * p.N + col] : 0.0;
-
-            barrier();
-
-            if (out_valid) {
-                for (int kk = 0; kk < 32; ++kk)
-                    sum += As[ly][kk] * Bs[kk][lx];
-            }
-
-            barrier();
-        }
-    } else if (out_valid) {
-        // Fallback for transposed cases
-        if (p.tA == 0 && p.tB != 0) {
-            for (int k = 0; k < p.K; ++k)
-                sum += a[a_offset + row * p.K + k] * b[b_offset + col * p.K + k];
-        } else if (p.tA != 0 && p.tB == 0) {
-            for (int k = 0; k < p.K; ++k)
-                sum += a[a_offset + k * p.M + row] * b[b_offset + k * p.N + col];
         } else {
-            for (int k = 0; k < p.K; ++k)
-                sum += a[a_offset + k * p.M + row] * b[b_offset + col * p.K + k];
+            // B transposed: B is N×K stored, load B[col, k]
+            Bs[ly][lx] = (brow < p.K && col < p.N) ? b[b_offset + col * p.K + brow] : 0.0;
+            Bs[ly + 8][lx] = (brow + 8 < p.K && col < p.N) ? b[b_offset + col * p.K + brow + 8] : 0.0;
+            Bs[ly + 16][lx] = (brow + 16 < p.K && col < p.N) ? b[b_offset + col * p.K + brow + 16] : 0.0;
+            Bs[ly + 24][lx] = (brow + 24 < p.K && col < p.N) ? b[b_offset + col * p.K + brow + 24] : 0.0;
         }
+
+        barrier();
+
+        if (out_valid) {
+            for (int kk = 0; kk < 32; ++kk)
+                sum += As[ly][kk] * Bs[kk][lx];
+        }
+
+        barrier();
     }
 
     if (out_valid)
@@ -2101,6 +2351,73 @@ void main() {
           dst[idx] = src[src_off];
       }
   )");
+  // Fused elementwise pipeline: chains multiple elementwise ops in single dispatch
+  // Op codes: 0=add, 1=mul, 2=sub, 3=div, 4=relu, 5=sigmoid, 6=exp, 7=log,
+  //           8=sqrt, 9=rsqrt, 10=sin, 11=cos
+  fusedElementwisePipeline = createComputePipeline("fused_elementwise", R"(
+        #version 450
+        layout(local_size_x = 256) in;
+
+        layout(binding = 0) buffer Buf0 { float buf0[]; };
+        layout(binding = 1) buffer Buf1 { float buf1[]; };
+        layout(binding = 2) buffer Buf2 { float buf2[]; };
+        layout(binding = 3) buffer Buf3 { float buf3[]; };
+        layout(binding = 4) buffer Buf4 { float buf4[]; };
+        layout(binding = 5) buffer Buf5 { float buf5[]; };
+        layout(binding = 6) buffer Buf6 { float buf6[]; };
+        layout(binding = 7) buffer Buf7 { float buf7[]; };
+
+        layout(push_constant) uniform Push {
+            uint N;
+            uint num_ops;
+            uint op_codes[8];
+            uint num_inputs;
+        } p;
+
+        float apply_op(float val, uint op_code, uint idx) {
+            // Binary ops use buf0 as first input, val as second
+            // val comes from the previous op result (or the first input for the first op)
+            switch (op_code) {
+                case 0: return buf0[idx] + val;         // Add
+                case 1: return buf0[idx] * val;         // Mul
+                case 2: return buf0[idx] - val;         // Sub
+                case 3: return buf0[idx] / val;         // Div
+                case 4: return max(0.0, val);           // Relu
+                case 5: return 1.0 / (1.0 + exp(-val)); // Sigmoid
+                case 6: return exp(val);                // Exp
+                case 7: return log(val);                 // Log
+                case 8: return sqrt(val);                // Sqrt
+                case 9: return 1.0 / sqrt(val);         // Rsqrt
+                case 10: return sin(val);               // Sin
+                case 11: return cos(val);               // Cos
+                default: return val;
+            }
+        }
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i >= p.N) return;
+
+            // Start with first input value
+            float val = buf1[i];
+
+            // Apply each op in sequence
+            for (uint op = 0; op < p.num_ops; ++op) {
+                val = apply_op(val, p.op_codes[op], i);
+            }
+
+            // Write result to output buffer (buf2)
+            buf2[i] = val;
+        }
+    )");
+
+  // Check for fusion enable via environment variable
+  const char* fusion_env = std::getenv("MUNET_ENABLE_FUSION");
+  fusion_enabled_ = (fusion_env != nullptr &&
+                      (std::string(fusion_env) == "1" ||
+                       std::string(fusion_env) == "true" ||
+                       std::string(fusion_env) == "yes"));
+
   runtime_ready_ = true;
 }
 
@@ -2182,13 +2499,55 @@ VulkanBackend::~VulkanBackend() {
     vkDestroyPipeline(device_, mseLossPipeline, nullptr);
     vkDestroyPipeline(device_, mseLossBackwardPipeline, nullptr);
     vkDestroyPipeline(device_, crossEntropyPipeline, nullptr);
+    vkDestroyPipeline(device_, crossEntropyReducePipeline, nullptr);
     vkDestroyPipeline(device_, crossEntropyBackwardPipeline, nullptr);
 
+    vkDestroyPipeline(device_, fusedElementwisePipeline, nullptr);
     vkDestroyPipeline(device_, matmulPipeline, nullptr);
+    vkDestroyPipeline(device_, matmulSmallPipeline, nullptr);
     vkDestroyPipeline(device_, batchedMatmulPipeline, nullptr);
 
     vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
     vkDestroyDescriptorSetLayout(device_, descriptor_set_layout_, nullptr);
+    if (push_pipeline_layout_ != VK_NULL_HANDLE) {
+      vkDestroyPipelineLayout(device_, push_pipeline_layout_, nullptr);
+    }
+    if (push_descriptor_set_layout_ != VK_NULL_HANDLE) {
+      vkDestroyDescriptorSetLayout(device_, push_descriptor_set_layout_, nullptr);
+    }
+
+    // Save pipeline cache to disk for faster startup on next run
+    if (pipeline_cache_ != VK_NULL_HANDLE) {
+      size_t cacheSize = 0;
+      VkResult res = vkGetPipelineCacheData(device_, pipeline_cache_, &cacheSize, nullptr);
+      if (res == VK_SUCCESS && cacheSize > 0) {
+        std::vector<uint8_t> cacheData(cacheSize);
+        res = vkGetPipelineCacheData(device_, pipeline_cache_, &cacheSize, cacheData.data());
+        if (res == VK_SUCCESS) {
+          std::filesystem::path cache_dir;
+          if (const char *cache_env = std::getenv("MUNET_VK_SHADER_CACHE_DIR")) {
+            cache_dir = cache_env;
+          } else if (const char *home_env = std::getenv("HOME")) {
+            cache_dir = std::filesystem::path(home_env) / ".cache" / "munet" / "vulkan";
+          } else {
+            cache_dir = std::filesystem::temp_directory_path() / "munet_vk_cache";
+          }
+          std::error_code fs_ec;
+          std::filesystem::create_directories(cache_dir, fs_ec);
+          std::string cachePath = (cache_dir / "pipeline_cache.bin").string();
+          FILE *f = fopen(cachePath.c_str(), "wb");
+          if (f) {
+            fwrite(cacheData.data(), 1, cacheSize, f);
+            fclose(f);
+            fprintf(stderr, "[Vulkan] Pipeline cache saved to disk (%zu bytes)\n", cacheSize);
+          } else {
+            fprintf(stderr, "[Vulkan] WARNING: Failed to save pipeline cache to %s\n", cachePath.c_str());
+          }
+        }
+      }
+      vkDestroyPipelineCache(device_, pipeline_cache_, nullptr);
+    }
+
     vkDestroyCommandPool(device_, command_pool_, nullptr);
     vkDestroyDevice(device_, nullptr);
   }
@@ -2632,19 +2991,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   ensure_recording();
   VkCommandBuffer cmd = runtime_->command_buffers[runtime_->current_frame];
 
-  if (runtime_->descriptor_set_cursor[runtime_->current_frame] >=
-      runtime_->frame_descriptor_sets[runtime_->current_frame].size()) {
-    auto starvation_start = profile_now();
-    flush_batch();
-    ensure_recording();
-    profile_backend_event("queue_starvation", "descriptor_exhaustion",
-                          starvation_start);
-  }
-
-  VkDescriptorSet ds =
-      runtime_->frame_descriptor_sets[runtime_->current_frame][runtime_->descriptor_set_cursor[runtime_->current_frame]++];
-
-  // Update only the bindings used by this kernel to lower CPU overhead.
+  // Prepare descriptor writes (used by both paths)
   const uint32_t write_count = static_cast<uint32_t>(
       std::max<size_t>(1, std::min<size_t>(buffers.size(), 8)));
 
@@ -2658,15 +3005,40 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
     bInfos[i].range = VK_WHOLE_SIZE;
 
     writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[i].dstSet = ds;
     writes[i].dstBinding = i;
     writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[i].descriptorCount = 1;
     writes[i].pBufferInfo = &bInfos[i];
   }
-  auto descriptor_update_start = profile_now();
-  vkUpdateDescriptorSets(device_, write_count, writes, 0, nullptr);
-  profile_cpu_event("vulkan.update_descriptors", descriptor_update_start);
+
+  VkDescriptorSet ds = VK_NULL_HANDLE;
+  VkPipelineLayout layout = pipeline_layout_;
+
+  if (push_descriptors_supported_) {
+    // Push descriptor path: no pool allocation, no vkUpdateDescriptorSets
+    // Descriptors are written directly into the command buffer
+    layout = push_pipeline_layout_;
+  } else {
+    // Pre-allocated pool path (original)
+    if (runtime_->descriptor_set_cursor[runtime_->current_frame] >=
+        runtime_->frame_descriptor_sets[runtime_->current_frame].size()) {
+      auto starvation_start = profile_now();
+      flush_batch();
+      ensure_recording();
+      profile_backend_event("queue_starvation", "descriptor_exhaustion",
+                            starvation_start);
+    }
+
+    ds =
+        runtime_->frame_descriptor_sets[runtime_->current_frame][runtime_->descriptor_set_cursor[runtime_->current_frame]++];
+
+    for (uint32_t i = 0; i < write_count; ++i) {
+      writes[i].dstSet = ds;
+    }
+    auto descriptor_update_start = profile_now();
+    vkUpdateDescriptorSets(device_, write_count, writes, 0, nullptr);
+    profile_cpu_event("vulkan.update_descriptors", descriptor_update_start);
+  }
 
   if (runtime_->has_pending_shader_writes) {
     VkMemoryBarrier memoryBarrier{};
@@ -2680,9 +3052,17 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   }
 
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_,
-                          0, 1, &ds, 0, nullptr);
-  vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+
+  if (push_descriptors_supported_) {
+    // Push descriptors directly into command buffer - no allocation overhead
+    vkCmdPushDescriptorSetKHR_(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout,
+                               0, write_count, writes);
+  } else {
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout,
+                            0, 1, &ds, 0, nullptr);
+  }
+
+  vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                      pcSize, pc);
 
   if (is_profile_enabled()) {
@@ -2829,6 +3209,74 @@ void VulkanBackend::cos(const Storage &in, Storage &out, size_t num_elements) {
   dispatch_kernel(cosPipeline, {in.data(), out.data()}, &N, sizeof(N),
                   (N + 255) / 256, 1, 1);
 }
+
+// --- Fused Elementwise Operations ---
+
+void VulkanBackend::dispatch_fused_elementwise(
+    const std::vector<void *> &buffers,
+    const std::vector<uint32_t> &op_codes,
+    uint32_t N) {
+  // Push constants: N, num_ops, op_codes[8], num_inputs
+  struct FusedPushConstants {
+    uint32_t N;
+    uint32_t num_ops;
+    uint32_t op_codes[8];
+    uint32_t num_inputs;
+  };
+  
+  FusedPushConstants pc{};
+  pc.N = N;
+  pc.num_ops = static_cast<uint32_t>(op_codes.size());
+  pc.num_inputs = static_cast<uint32_t>(buffers.size());
+  for (size_t i = 0; i < op_codes.size() && i < 8; ++i) {
+    pc.op_codes[i] = op_codes[i];
+  }
+  
+  dispatch_kernel(fusedElementwisePipeline, buffers, &pc, sizeof(pc),
+                  (N + 255) / 256, 1, 1);
+}
+
+void VulkanBackend::fused_elementwise_chain(
+    const std::vector<Storage *> &inputs,
+    Storage &output,
+    const std::vector<uint32_t> &op_codes,
+    size_t num_elements) {
+  if (!fusion_enabled_ || op_codes.empty()) {
+    // Fusion not enabled or empty chain - shouldn't be called
+    return;
+  }
+  
+  uint32_t N = static_cast<uint32_t>(num_elements);
+  
+  // Build buffer list: up to 8 bindings
+  // Binding 0: secondary input for binary ops (or input for first unary op)
+  // Binding 1: primary input (or previous result for chained ops)
+  // Binding 2: output
+  // Bindings 3-7: additional intermediate buffers (not used for simple chains)
+  std::vector<void *> buffers;
+  
+  // For a simple chain like relu(sigmoid(add(a, b))):
+  //   First op is binary (add) -> needs 2 inputs: a, b
+  //   Subsequent ops are unary -> operate on previous result
+  // Layout: buf0=a, buf1=b, buf2=output
+  
+  // Determine the number of input buffers needed
+  // Binary ops (add/mul/sub/div) need 2 inputs: buf0 and buf1
+  // All subsequent ops use the running result in buf1
+  // Output always goes to buf2
+  
+  if (inputs.size() >= 1) buffers.push_back(inputs[0]->data());
+  if (inputs.size() >= 2) buffers.push_back(inputs[1]->data());
+  buffers.push_back(output.data());
+  
+  // Pad to at least 8 bindings (Vulkan descriptor set requirement)
+  while (buffers.size() < 8) {
+    buffers.push_back(buffers[0]);  // Point unused bindings at first buffer
+  }
+  
+  dispatch_fused_elementwise(buffers, op_codes, N);
+}
+
 void VulkanBackend::softmax(const Storage &in, Storage &out, int batch_size,
                             int num_classes) {
   struct {
@@ -2875,15 +3323,22 @@ void VulkanBackend::mse_loss_backward(const Storage &grad_out,
 void VulkanBackend::cross_entropy(const Storage &logits, const Storage &targets,
                                   Storage &out_loss, int batch_size,
                                   int num_classes, int spatial) {
-  memset(out_loss.data(), 0, out_loss.size_bytes());
   struct {
     int B, C, Spatial;
   } pc = {batch_size, num_classes, spatial};
-  // Dispatch threads = B * Spatial
   int total = batch_size * spatial;
+  int num_workgroups = (total + 255) / 256;
+  // Kernel 1: Compute per-workgroup partial sums
   dispatch_kernel(crossEntropyPipeline,
                   {logits.data(), targets.data(), out_loss.data()}, &pc,
-                  sizeof(pc), (total + 255) / 256, 1, 1);
+                  sizeof(pc), num_workgroups, 1, 1);
+  // Kernel 2: Reduce partial sums to final loss value
+  struct {
+    int N;
+  } reduce_pc = {num_workgroups};
+  dispatch_kernel(crossEntropyReducePipeline,
+                  {out_loss.data(), out_loss.data()}, &reduce_pc,
+                  sizeof(reduce_pc), 1, 1, 1);
 }
 
 void VulkanBackend::cross_entropy_backward(const Storage &grad_out,
@@ -2925,9 +3380,17 @@ void VulkanBackend::matmul(const Storage &a, const Storage &b, Storage &out,
   struct {
     int m, k, n, ta, tb;
   } pc = {M, K, N, transA, transB};
+  // Adaptive pipeline selection: small-matrix matmul for better occupancy
+  // at sizes where the 32x32-tile shader launches too few workgroups.
+  // Use 16x16 tiling for matrices where both dims <= 64 (only ~16 workgroups
+  // with 32x32 tiles). At 128+ the 32x32 pipeline is already efficient.
+  const bool use_small = (M <= 64 && N <= 64);
+  auto& pipeline = use_small ? matmulSmallPipeline : matmulPipeline;
+  const int tile_x = use_small ? 16 : 32;
+  const int tile_y = use_small ? 16 : 32;  // Register-blocked: 8 y-threads × 4 rows each = 32 rows/workgroup
   // Dispatch x maps to N (cols), y maps to M (rows)
-  dispatch_kernel(matmulPipeline, {a.data(), b.data(), out.data()}, &pc,
-                  sizeof(pc), (N + 31) / 32, (M + 7) / 8, 1);
+  dispatch_kernel(pipeline, {a.data(), b.data(), out.data()}, &pc,
+                  sizeof(pc), (N + tile_x - 1) / tile_x, (M + tile_y - 1) / tile_y, 1);
 }
 
 void VulkanBackend::batched_matmul(const Storage &a, const Storage &b,

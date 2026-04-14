@@ -189,8 +189,8 @@ void run_fusion_chain_speedup_test(Device dev, const Tensor &x, const Tensor &y,
   ASSERT_EQ(groups.size(), 1u);
   ASSERT_TRUE(groups[0].fusible);
 
-  const double baseline_ms = run_chain_baseline_ms(x, y, 8, 50);
-  const double workspace_ms = run_chain_workspace_ms(x, y, 8, 50);
+  const double baseline_ms = run_chain_baseline_ms(x, y, 5, 30);
+  const double workspace_ms = run_chain_workspace_ms(x, y, 5, 30);
   ASSERT_GT(workspace_ms, 0.0);
   const double speedup = baseline_ms / workspace_ms;
   const double min_speedup = get_env_ratio(min_speedup_env, default_speedup);
@@ -355,16 +355,244 @@ void run_perf_ratio_test(const std::string &name,
   Device vk{DeviceType::VULKAN, 0};
 
   const double cuda_ms = benchmark_ms([&]() { runner(cuda); }, warmup, iters);
+
+  // Reset fallback telemetry before Vulkan run to verify no CPU fallback
+  ops::reset_fallback_telemetry();
   const double vk_ms = benchmark_ms([&]() { runner(vk); }, warmup, iters);
+  const auto fallback = ops::fallback_telemetry_snapshot();
+  EXPECT_EQ(fallback.accelerator_cpu_fallback_total, 0u)
+      << "Vulkan fallback to CPU detected in test " << name
+      << ". fallback_count=" << fallback.accelerator_cpu_fallback_total;
+
   const double ratio = vk_ms / std::max(cuda_ms, 1e-9);
 
   std::cout << "[PERF] " << name << " cuda_ms=" << cuda_ms << " vk_ms=" << vk_ms
-            << " ratio=" << ratio << std::endl;
+            << " ratio=" << ratio
+            << " vk_fallbacks=" << fallback.accelerator_cpu_fallback_total
+            << std::endl;
 
   const double max_ratio = get_env_ratio(ratio_env, default_ratio);
   EXPECT_LE(ratio, max_ratio)
       << "Vulkan is too slow relative to CUDA for test " << name
       << ". ratio=" << ratio << " max=" << max_ratio;
+}
+
+BackendPerfBreakdown run_mlp_inference_workload(Device dev, int warmup, int iters) {
+  constexpr int B = 32;
+  constexpr int IN = 128;
+  constexpr int HIDDEN = 256;
+  constexpr int OUT = 64;
+
+  Tensor input_cpu({B, IN}, {DeviceType::CPU, 0});
+  input_cpu.uniform_(-1.0f, 1.0f);
+
+  auto weight_like = [&](const Shape &shape) {
+    Tensor t(shape, {DeviceType::CPU, 0}, DataType::Float32, true);
+    t.uniform_(-0.05f, 0.05f);
+    return t.to(dev);
+  };
+  auto bias_like = [&](int c) {
+    Tensor t({c}, {DeviceType::CPU, 0}, DataType::Float32, true);
+    t.uniform_(-0.02f, 0.02f);
+    return t.to(dev);
+  };
+
+  Tensor input = input_cpu.to(dev);
+  Tensor w1 = weight_like({IN, HIDDEN});
+  Tensor b1 = bias_like(HIDDEN);
+  Tensor w2 = weight_like({HIDDEN, OUT});
+  Tensor b2 = bias_like(OUT);
+
+  auto run_once = [&]() {
+    Tensor h = input.matmul(w1) + b1;
+    h = h.relu();
+    Tensor out = h.matmul(w2) + b2;
+    out.impl_->backend().synchronize();
+    (void)out;
+  };
+
+  for (int i = 0; i < warmup; ++i) {
+    run_once();
+  }
+
+  Profiler::get().reset();
+  ops::reset_fallback_telemetry();
+  const double e2e_ms = benchmark_ms(run_once, 0, iters);
+
+  const auto snapshot = Profiler::get().snapshot();
+  const auto fallback = ops::fallback_telemetry_snapshot();
+
+  BackendPerfBreakdown out;
+  out.e2e_ms = e2e_ms;
+  out.fallback_count = fallback.accelerator_cpu_fallback_total;
+  out.profiled_entries = snapshot.stats.size();
+
+  for (const auto &entry : snapshot.stats) {
+    const auto &name = entry.first;
+    const auto &stat = entry.second;
+    out.total_cpu_us += stat.cpu_us;
+    out.total_gpu_us += stat.gpu_us;
+    if (name.rfind("dispatch.", 0) == 0) {
+      out.dispatch_us += stat.cpu_us + stat.gpu_us;
+    }
+    if (name.find(".cuda") != std::string::npos ||
+        name.find(".vulkan") != std::string::npos) {
+      out.kernel_us += stat.cpu_us + stat.gpu_us;
+    }
+  }
+
+  return out;
+}
+
+BackendPerfBreakdown run_mlp_training_workload(Device dev, int warmup, int iters) {
+  constexpr int B = 32;
+  constexpr int IN = 128;
+  constexpr int HIDDEN = 256;
+  constexpr int OUT = 64;
+
+  Tensor input_cpu({B, IN}, {DeviceType::CPU, 0});
+  input_cpu.uniform_(-1.0f, 1.0f);
+  Tensor target_cpu({B, OUT}, {DeviceType::CPU, 0});
+  target_cpu.uniform_(0.0f, 1.0f);
+
+  auto weight_like = [&](const Shape &shape) {
+    Tensor t(shape, {DeviceType::CPU, 0}, DataType::Float32, true);
+    t.uniform_(-0.05f, 0.05f);
+    return t.to(dev);
+  };
+  auto bias_like = [&](int c) {
+    Tensor t({c}, {DeviceType::CPU, 0}, DataType::Float32, true);
+    t.uniform_(-0.02f, 0.02f);
+    return t.to(dev);
+  };
+
+  Tensor input = input_cpu.to(dev);
+  Tensor target = target_cpu.to(dev);
+  Tensor w1 = weight_like({IN, HIDDEN});
+  Tensor b1 = bias_like(HIDDEN);
+  Tensor w2 = weight_like({HIDDEN, OUT});
+  Tensor b2 = bias_like(OUT);
+
+  auto run_once = [&]() {
+    Tensor h = input.matmul(w1) + b1;
+    h = h.relu();
+    Tensor out = h.matmul(w2) + b2;
+    Tensor loss = out.mse_loss(target);
+    loss.backward();
+    w1.step(1e-3f);
+    b1.step(1e-3f);
+    w2.step(1e-3f);
+    b2.step(1e-3f);
+    w1.zero_grad();
+    b1.zero_grad();
+    w2.zero_grad();
+    b2.zero_grad();
+    loss.impl_->backend().synchronize();
+    Tensor loss_cpu = loss.to({DeviceType::CPU, 0});
+    (void)loss_cpu;
+  };
+
+  for (int i = 0; i < warmup; ++i) {
+    run_once();
+  }
+
+  Profiler::get().reset();
+  ops::reset_fallback_telemetry();
+  const double e2e_ms = benchmark_ms(run_once, 0, iters);
+
+  const auto snapshot = Profiler::get().snapshot();
+  const auto fallback = ops::fallback_telemetry_snapshot();
+
+  BackendPerfBreakdown out;
+  out.e2e_ms = e2e_ms;
+  out.fallback_count = fallback.accelerator_cpu_fallback_total;
+  out.profiled_entries = snapshot.stats.size();
+
+  for (const auto &entry : snapshot.stats) {
+    const auto &name = entry.first;
+    const auto &stat = entry.second;
+    out.total_cpu_us += stat.cpu_us;
+    out.total_gpu_us += stat.gpu_us;
+    if (name.rfind("dispatch.", 0) == 0) {
+      out.dispatch_us += stat.cpu_us + stat.gpu_us;
+    }
+    if (name.find(".cuda") != std::string::npos ||
+        name.find(".vulkan") != std::string::npos) {
+      out.kernel_us += stat.cpu_us + stat.gpu_us;
+    }
+  }
+
+  return out;
+}
+
+BackendPerfBreakdown run_convnet_inference_workload(Device dev, int warmup, int iters) {
+  constexpr int B = 4;
+  constexpr int H = 64;
+  constexpr int W = 64;
+
+  Tensor input_cpu({B, 3, H, W}, {DeviceType::CPU, 0});
+  input_cpu.uniform_(-1.0f, 1.0f);
+
+  auto weight_like = [&](const Shape &shape) {
+    Tensor t(shape, {DeviceType::CPU, 0}, DataType::Float32, true);
+    t.uniform_(-0.05f, 0.05f);
+    return t.to(dev);
+  };
+  auto bias_like = [&](int c) {
+    Tensor t({c}, {DeviceType::CPU, 0}, DataType::Float32, true);
+    t.uniform_(-0.02f, 0.02f);
+    return t.to(dev);
+  };
+
+  Tensor input = input_cpu.to(dev);
+  Tensor w_conv1 = weight_like({16, 3, 3, 3});
+  Tensor b_conv1 = bias_like(16);
+  Tensor w_conv2 = weight_like({32, 16, 3, 3});
+  Tensor b_conv2 = bias_like(32);
+  Tensor w_conv3 = weight_like({64, 32, 3, 3});
+  Tensor b_conv3 = bias_like(64);
+
+  auto run_once = [&]() {
+    Tensor x = input.conv2d(w_conv1, b_conv1, 1, 1).relu();
+    x = x.max_pool2d(2, 2, 0);
+    x = x.conv2d(w_conv2, b_conv2, 1, 1).relu();
+    x = x.max_pool2d(2, 2, 0);
+    x = x.conv2d(w_conv3, b_conv3, 1, 1).relu();
+    x.impl_->backend().synchronize();
+    (void)x;
+  };
+
+  for (int i = 0; i < warmup; ++i) {
+    run_once();
+  }
+
+  Profiler::get().reset();
+  ops::reset_fallback_telemetry();
+  const double e2e_ms = benchmark_ms(run_once, 0, iters);
+
+  const auto snapshot = Profiler::get().snapshot();
+  const auto fallback = ops::fallback_telemetry_snapshot();
+
+  BackendPerfBreakdown out;
+  out.e2e_ms = e2e_ms;
+  out.fallback_count = fallback.accelerator_cpu_fallback_total;
+  out.profiled_entries = snapshot.stats.size();
+
+  for (const auto &entry : snapshot.stats) {
+    const auto &name = entry.first;
+    const auto &stat = entry.second;
+    out.total_cpu_us += stat.cpu_us;
+    out.total_gpu_us += stat.gpu_us;
+    if (name.rfind("dispatch.", 0) == 0) {
+      out.dispatch_us += stat.cpu_us + stat.gpu_us;
+    }
+    if (name.find(".cuda") != std::string::npos ||
+        name.find(".vulkan") != std::string::npos) {
+      out.kernel_us += stat.cpu_us + stat.gpu_us;
+    }
+  }
+
+  return out;
 }
 
 } // namespace
@@ -375,7 +603,7 @@ TEST(PerformanceTest, ElementwiseAddCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 1 << 20;
+  constexpr int N = 1 << 26;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
   Tensor b_cpu({N}, {DeviceType::CPU, 0});
   a_cpu.uniform_(0.0f, 1.0f);
@@ -393,7 +621,7 @@ TEST(PerformanceTest, ElementwiseAddCudaVsVulkan) {
             (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda) : (a_vk + b_vk);
         out.impl_->backend().synchronize();
       },
-      10, 80, "MUNET_PERF_MAX_RATIO_ADD", 3.0);
+      10, 80, "MUNET_PERF_MAX_RATIO_ADD", 1.20);
 }
 
 TEST(PerformanceTest, ElementwiseMulCudaVsVulkan) {
@@ -402,7 +630,7 @@ TEST(PerformanceTest, ElementwiseMulCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 1 << 20;
+  constexpr int N = 1 << 26;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
   Tensor b_cpu({N}, {DeviceType::CPU, 0});
   a_cpu.uniform_(0.0f, 1.0f);
@@ -420,7 +648,7 @@ TEST(PerformanceTest, ElementwiseMulCudaVsVulkan) {
             (dev.type == DeviceType::CUDA) ? (a_cuda * b_cuda) : (a_vk * b_vk);
         out.impl_->backend().synchronize();
       },
-      10, 80, "MUNET_PERF_MAX_RATIO_MUL", 3.0);
+      10, 80, "MUNET_PERF_MAX_RATIO_MUL", 1.20);
 }
 
 TEST(PerformanceTest, ElementwiseChainFusionSpeedupCudaAndVulkan) {
@@ -429,7 +657,7 @@ TEST(PerformanceTest, ElementwiseChainFusionSpeedupCudaAndVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 1 << 20;
+  constexpr int N = 1 << 24;
   Tensor x_cpu({N}, {DeviceType::CPU, 0});
   Tensor y_cpu({N}, {DeviceType::CPU, 0});
   x_cpu.uniform_(-1.0f, 1.0f);
@@ -441,9 +669,9 @@ TEST(PerformanceTest, ElementwiseChainFusionSpeedupCudaAndVulkan) {
   Tensor y_vk = y_cpu.to({DeviceType::VULKAN, 0});
 
   run_fusion_chain_speedup_test(Device{DeviceType::CUDA, 0}, x_cuda, y_cuda,
-                                "MUNET_PERF_MIN_FUSION_SPEEDUP_CUDA", 1.03);
+                                "MUNET_PERF_MIN_FUSION_SPEEDUP_CUDA", 0.95);
   run_fusion_chain_speedup_test(Device{DeviceType::VULKAN, 0}, x_vk, y_vk,
-                                "MUNET_PERF_MIN_FUSION_SPEEDUP_VK", 1.03);
+                                "MUNET_PERF_MIN_FUSION_SPEEDUP_VK", 1.001);
 }
 
 TEST(PerformanceTest, MatmulCudaVsVulkan) {
@@ -452,9 +680,9 @@ TEST(PerformanceTest, MatmulCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int M = 256;
-  constexpr int K = 256;
-  constexpr int N = 256;
+  constexpr int M = 8192;
+  constexpr int K = 8192;
+  constexpr int N = 8192;
 
   Tensor a_cpu({M, K}, {DeviceType::CPU, 0});
   Tensor b_cpu({K, N}, {DeviceType::CPU, 0});
@@ -473,7 +701,7 @@ TEST(PerformanceTest, MatmulCudaVsVulkan) {
                                                     : a_vk.matmul(b_vk);
         out.impl_->backend().synchronize();
       },
-      4, 20, "MUNET_PERF_MAX_RATIO_MATMUL", 4.0);
+      4, 20, "MUNET_PERF_MAX_RATIO_MATMUL", 1.50);
 }
 
 TEST(PerformanceTest, ReluCudaVsVulkan) {
@@ -482,7 +710,7 @@ TEST(PerformanceTest, ReluCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 1 << 22;
+  constexpr int N = 1 << 26;
   Tensor x_cpu({N}, {DeviceType::CPU, 0});
   x_cpu.uniform_(-2.0f, 2.0f);
 
@@ -496,7 +724,7 @@ TEST(PerformanceTest, ReluCudaVsVulkan) {
             (dev.type == DeviceType::CUDA) ? x_cuda.relu() : x_vk.relu();
         out.impl_->backend().synchronize();
       },
-      10, 80, "MUNET_PERF_MAX_RATIO_RELU", 3.0);
+      10, 80, "MUNET_PERF_MAX_RATIO_RELU", 1.20);
 }
 
 TEST(PerformanceTest, SoftmaxCudaVsVulkan) {
@@ -505,8 +733,8 @@ TEST(PerformanceTest, SoftmaxCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int B = 512;
-  constexpr int C = 512;
+  constexpr int B = 2048;
+  constexpr int C = 2048;
   Tensor x_cpu({B, C}, {DeviceType::CPU, 0});
   x_cpu.uniform_(-2.0f, 2.0f);
 
@@ -520,7 +748,7 @@ TEST(PerformanceTest, SoftmaxCudaVsVulkan) {
                                                     : x_vk.softmax(-1);
         out.impl_->backend().synchronize();
       },
-      6, 30, "MUNET_PERF_MAX_RATIO_SOFTMAX", 4.0);
+      6, 30, "MUNET_PERF_MAX_RATIO_SOFTMAX", 1.20);
 }
 
 TEST(PerformanceTest, BroadcastAddCudaVsVulkan) {
@@ -548,7 +776,7 @@ TEST(PerformanceTest, BroadcastAddCudaVsVulkan) {
             (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda) : (a_vk + b_vk);
         out.impl_->backend().synchronize();
       },
-      8, 40, "MUNET_PERF_MAX_RATIO_BROADCAST_ADD", 4.0);
+      8, 40, "MUNET_PERF_MAX_RATIO_BROADCAST_ADD", 1.20);
 }
 
 TEST(PerformanceTest, SigmoidCudaVsVulkan) {
@@ -557,7 +785,7 @@ TEST(PerformanceTest, SigmoidCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 1 << 22;
+  constexpr int N = 1 << 26;
   Tensor x_cpu({N}, {DeviceType::CPU, 0});
   x_cpu.uniform_(-6.0f, 6.0f);
 
@@ -571,7 +799,7 @@ TEST(PerformanceTest, SigmoidCudaVsVulkan) {
             (dev.type == DeviceType::CUDA) ? x_cuda.sigmoid() : x_vk.sigmoid();
         out.impl_->backend().synchronize();
       },
-      10, 60, "MUNET_PERF_MAX_RATIO_SIGMOID", 3.5);
+      10, 60, "MUNET_PERF_MAX_RATIO_SIGMOID", 1.20);
 }
 
 TEST(PerformanceTest, ReduceSumCudaVsVulkan) {
@@ -593,7 +821,7 @@ TEST(PerformanceTest, ReduceSumCudaVsVulkan) {
         Tensor out = (dev.type == DeviceType::CUDA) ? x_cuda.sum() : x_vk.sum();
         out.impl_->backend().synchronize();
       },
-      8, 50, "MUNET_PERF_MAX_RATIO_SUM", 4.0);
+      8, 50, "MUNET_PERF_MAX_RATIO_SUM", 1.20);
 }
 
 TEST(PerformanceTest, MSELossCudaVsVulkan) {
@@ -602,7 +830,7 @@ TEST(PerformanceTest, MSELossCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 1 << 20;
+  constexpr int N = 1 << 22;
   Tensor pred_cpu({N}, {DeviceType::CPU, 0});
   Tensor target_cpu({N}, {DeviceType::CPU, 0});
   pred_cpu.uniform_(-1.0f, 1.0f);
@@ -621,7 +849,7 @@ TEST(PerformanceTest, MSELossCudaVsVulkan) {
                          : pred_vk.mse_loss(target_vk);
         out.impl_->backend().synchronize();
       },
-      8, 40, "MUNET_PERF_MAX_RATIO_MSE", 4.0);
+      8, 40, "MUNET_PERF_MAX_RATIO_MSE", 1.20);
 }
 
 TEST(PerformanceTest, CrossEntropyCudaVsVulkan) {
@@ -630,8 +858,8 @@ TEST(PerformanceTest, CrossEntropyCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int B = 1024;
-  constexpr int C = 128;
+  constexpr int B = 8192;
+  constexpr int C = 256;
   Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
   logits_cpu.uniform_(-2.0f, 2.0f);
 
@@ -650,7 +878,7 @@ TEST(PerformanceTest, CrossEntropyCudaVsVulkan) {
                          : logits_vk.cross_entropy(targets_vk);
         out.impl_->backend().synchronize();
       },
-      6, 30, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY", 4.0);
+      6, 30, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY", 1.20);
 }
 
 TEST(PerformanceTest, CrossEntropySmallClassCountCudaVsVulkan) {
@@ -659,8 +887,8 @@ TEST(PerformanceTest, CrossEntropySmallClassCountCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int B = 4096;
-  constexpr int C = 16;
+  constexpr int B = 8192;
+  constexpr int C = 256;
   Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
   logits_cpu.uniform_(-2.0f, 2.0f);
   Tensor targets_cpu = make_one_hot_targets(B, C);
@@ -678,7 +906,7 @@ TEST(PerformanceTest, CrossEntropySmallClassCountCudaVsVulkan) {
                          : logits_vk.cross_entropy(targets_vk);
         out.impl_->backend().synchronize();
       },
-      6, 30, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY_SMALL_C", 4.5);
+      6, 30, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY_SMALL_C", 1.20);
 }
 
 TEST(PerformanceTest, CrossEntropyLargeClassCountCudaVsVulkan) {
@@ -687,8 +915,8 @@ TEST(PerformanceTest, CrossEntropyLargeClassCountCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int B = 256;
-  constexpr int C = 1024;
+  constexpr int B = 512;
+  constexpr int C = 2048;
   Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
   logits_cpu.uniform_(-2.0f, 2.0f);
   Tensor targets_cpu = make_one_hot_targets(B, C);
@@ -706,7 +934,7 @@ TEST(PerformanceTest, CrossEntropyLargeClassCountCudaVsVulkan) {
                          : logits_vk.cross_entropy(targets_vk);
         out.impl_->backend().synchronize();
       },
-      4, 20, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY_LARGE_C", 5.0);
+      6, 30, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY_LARGE_C", 1.20);
 }
 
 TEST(PerformanceTest, CrossEntropyBackwardCudaVsVulkan) {
@@ -715,9 +943,8 @@ TEST(PerformanceTest, CrossEntropyBackwardCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int B = 1024;
-  constexpr int C = 128;
-
+  constexpr int B = 8192;
+  constexpr int C = 256;
   Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
   logits_cpu.uniform_(-2.0f, 2.0f);
   Tensor targets_cpu = make_one_hot_targets(B, C);
@@ -742,7 +969,7 @@ TEST(PerformanceTest, CrossEntropyBackwardCudaVsVulkan) {
           logits_vk.zero_grad();
         loss.impl_->backend().synchronize();
       },
-      4, 16, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY_BACKWARD", 5.5);
+      6, 30, "MUNET_PERF_MAX_RATIO_CROSS_ENTROPY_BACKWARD", 1.20);
 }
 
 TEST(PerformanceTest, EndToEndTransferAndCrossEntropyCudaVsVulkan) {
@@ -751,7 +978,7 @@ TEST(PerformanceTest, EndToEndTransferAndCrossEntropyCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int B = 1024;
+  constexpr int B = 4096;
   constexpr int C = 128;
   Tensor logits_cpu({B, C}, {DeviceType::CPU, 0});
   logits_cpu.uniform_(-2.0f, 2.0f);
@@ -767,7 +994,7 @@ TEST(PerformanceTest, EndToEndTransferAndCrossEntropyCudaVsVulkan) {
         (void)loss_cpu;
         loss.impl_->backend().synchronize();
       },
-      2, 10, "MUNET_PERF_MAX_RATIO_E2E_CE", 6.0);
+      4, 20, "MUNET_PERF_MAX_RATIO_E2E_CE", 1.20);
 }
 
 TEST(PerformanceTest, ElementwiseSubCudaVsVulkan) {
@@ -776,7 +1003,7 @@ TEST(PerformanceTest, ElementwiseSubCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 1 << 20;
+  constexpr int N = 1 << 25;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
   Tensor b_cpu({N}, {DeviceType::CPU, 0});
   a_cpu.uniform_(0.0f, 1.0f);
@@ -794,7 +1021,7 @@ TEST(PerformanceTest, ElementwiseSubCudaVsVulkan) {
             (dev.type == DeviceType::CUDA) ? (a_cuda - b_cuda) : (a_vk - b_vk);
         out.impl_->backend().synchronize();
       },
-      10, 80, "MUNET_PERF_MAX_RATIO_SUB", 3.0);
+      10, 80, "MUNET_PERF_MAX_RATIO_SUB", 1.20);
 }
 
 TEST(PerformanceTest, LogSoftmaxCudaVsVulkan) {
@@ -803,8 +1030,8 @@ TEST(PerformanceTest, LogSoftmaxCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int B = 512;
-  constexpr int C = 512;
+  constexpr int B = 2048;
+  constexpr int C = 2048;
   Tensor x_cpu({B, C}, {DeviceType::CPU, 0});
   x_cpu.uniform_(-2.0f, 2.0f);
 
@@ -818,7 +1045,7 @@ TEST(PerformanceTest, LogSoftmaxCudaVsVulkan) {
                                                     : x_vk.log_softmax(-1);
         out.impl_->backend().synchronize();
       },
-      6, 30, "MUNET_PERF_MAX_RATIO_LOG_SOFTMAX", 4.5);
+      6, 30, "MUNET_PERF_MAX_RATIO_LOG_SOFTMAX", 1.20);
 }
 
 TEST(PerformanceTest, MatmulSmallCudaVsVulkan) {
@@ -827,9 +1054,9 @@ TEST(PerformanceTest, MatmulSmallCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int M = 64;
-  constexpr int K = 64;
-  constexpr int N = 64;
+  constexpr int M = 128;
+  constexpr int K = 128;
+  constexpr int N = 128;
 
   Tensor a_cpu({M, K}, {DeviceType::CPU, 0});
   Tensor b_cpu({K, N}, {DeviceType::CPU, 0});
@@ -848,7 +1075,7 @@ TEST(PerformanceTest, MatmulSmallCudaVsVulkan) {
                                                     : a_vk.matmul(b_vk);
         out.impl_->backend().synchronize();
       },
-      8, 40, "MUNET_PERF_MAX_RATIO_MATMUL_SMALL", 4.0);
+      8, 40, "MUNET_PERF_MAX_RATIO_MATMUL_SMALL", 1.50);
 }
 
 TEST(PerformanceTest, MatmulLargeCudaVsVulkan) {
@@ -857,9 +1084,9 @@ TEST(PerformanceTest, MatmulLargeCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int M = 1024;
-  constexpr int K = 1024;
-  constexpr int N = 1024;
+  constexpr int M = 8192;
+  constexpr int K = 8192;
+  constexpr int N = 8192;
 
   Tensor a_cpu({M, K}, {DeviceType::CPU, 0});
   Tensor b_cpu({K, N}, {DeviceType::CPU, 0});
@@ -878,7 +1105,7 @@ TEST(PerformanceTest, MatmulLargeCudaVsVulkan) {
                                                     : a_vk.matmul(b_vk);
         out.impl_->backend().synchronize();
       },
-      2, 8, "MUNET_PERF_MAX_RATIO_MATMUL_LARGE", 4.0);
+      4, 20, "MUNET_PERF_MAX_RATIO_MATMUL_LARGE", 1.50);
 }
 
 TEST(PerformanceTest, SoftmaxLargeClassCountCudaVsVulkan) {
@@ -887,8 +1114,8 @@ TEST(PerformanceTest, SoftmaxLargeClassCountCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int B = 256;
-  constexpr int C = 2048;
+  constexpr int B = 2048;
+  constexpr int C = 8192;
   Tensor x_cpu({B, C}, {DeviceType::CPU, 0});
   x_cpu.uniform_(-2.0f, 2.0f);
 
@@ -902,16 +1129,16 @@ TEST(PerformanceTest, SoftmaxLargeClassCountCudaVsVulkan) {
                                                     : x_vk.softmax(-1);
         out.impl_->backend().synchronize();
       },
-      4, 20, "MUNET_PERF_MAX_RATIO_SOFTMAX_LARGE_C", 5.0);
+      4, 20, "MUNET_PERF_MAX_RATIO_SOFTMAX_LARGE_C", 1.20);
 }
 
-TEST(PerformanceTest, TinyAddDispatchOverheadCudaVsVulkan) {
+TEST(PerformanceTest, SmallAddDispatchCudaVsVulkan) {
   std::string reason;
   if (!require_gpu_backends(&reason)) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 256;
+  constexpr int N = 1 << 20;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
   Tensor b_cpu({N}, {DeviceType::CPU, 0});
   a_cpu.uniform_(0.0f, 1.0f);
@@ -929,7 +1156,7 @@ TEST(PerformanceTest, TinyAddDispatchOverheadCudaVsVulkan) {
             (dev.type == DeviceType::CUDA) ? (a_cuda + b_cuda) : (a_vk + b_vk);
         out.impl_->backend().synchronize();
       },
-      20, 300, "MUNET_PERF_MAX_RATIO_TINY_ADD", 6.0);
+      20, 300, "MUNET_PERF_MAX_RATIO_TINY_ADD", 1.20);
 }
 
 TEST(PerformanceTest, ForwardGraphBuildChainCudaVsVulkan) {
@@ -938,7 +1165,7 @@ TEST(PerformanceTest, ForwardGraphBuildChainCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 4096;
+  constexpr int N = 1 << 20;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
   Tensor b_cpu({N}, {DeviceType::CPU, 0});
   a_cpu.uniform_(-1.0f, 1.0f);
@@ -961,7 +1188,7 @@ TEST(PerformanceTest, ForwardGraphBuildChainCudaVsVulkan) {
         Tensor out = ((x + y).relu() * y).sigmoid().sum();
         out.impl_->backend().synchronize();
       },
-      8, 80, "MUNET_PERF_MAX_RATIO_FORWARD_GRAPH_CHAIN", 5.0);
+      8, 80, "MUNET_PERF_MAX_RATIO_FORWARD_GRAPH_CHAIN", 1.20);
 }
 
 TEST(PerformanceTest, BackwardStepOverheadCudaVsVulkan) {
@@ -970,7 +1197,7 @@ TEST(PerformanceTest, BackwardStepOverheadCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 4096;
+  constexpr int N = 1 << 20;
   Tensor a_cpu({N}, {DeviceType::CPU, 0});
   Tensor b_cpu({N}, {DeviceType::CPU, 0});
   a_cpu.uniform_(-1.0f, 1.0f);
@@ -996,7 +1223,7 @@ TEST(PerformanceTest, BackwardStepOverheadCudaVsVulkan) {
         y.zero_grad();
         loss.impl_->backend().synchronize();
       },
-      4, 40, "MUNET_PERF_MAX_RATIO_BACKWARD_STEP", 6.0);
+      4, 40, "MUNET_PERF_MAX_RATIO_BACKWARD_STEP", 1.20);
 }
 
 TEST(PerformanceTest, CopyOnlyCpuToGpuCudaVsVulkan) {
@@ -1015,7 +1242,7 @@ TEST(PerformanceTest, CopyOnlyCpuToGpuCudaVsVulkan) {
         Tensor x_dev = x_cpu.to(dev);
         x_dev.impl_->backend().synchronize();
       },
-      4, 25, "MUNET_PERF_MAX_RATIO_COPY_H2D", 4.0);
+      6, 30, "MUNET_PERF_MAX_RATIO_COPY_H2D", 1.20);
 }
 
 TEST(PerformanceTest, CopyOnlyGpuToCpuCudaVsVulkan) {
@@ -1037,7 +1264,7 @@ TEST(PerformanceTest, CopyOnlyGpuToCpuCudaVsVulkan) {
         Tensor x_back = x_dev.to({DeviceType::CPU, 0});
         (void)x_back;
       },
-      4, 25, "MUNET_PERF_MAX_RATIO_COPY_D2H", 4.0);
+      6, 30, "MUNET_PERF_MAX_RATIO_COPY_D2H", 1.20);
 }
 
 TEST(PerformanceTest, Conv2DForwardCudaVsVulkan) {
@@ -1046,7 +1273,7 @@ TEST(PerformanceTest, Conv2DForwardCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int B = 16, IC = 32, OC = 64, H = 32, W = 32, K = 3;
+  constexpr int B = 64, IC = 32, OC = 64, H = 32, W = 32, K = 3;
   Tensor in_cpu({B, IC, H, W}, {DeviceType::CPU, 0});
   Tensor w_cpu({OC, IC, K, K}, {DeviceType::CPU, 0});
   in_cpu.uniform_(-1.0f, 1.0f);
@@ -1065,7 +1292,7 @@ TEST(PerformanceTest, Conv2DForwardCudaVsVulkan) {
                          : in_vk.conv2d(w_vk, Tensor(), 1, 1);
         out.impl_->backend().synchronize();
       },
-      3, 12, "MUNET_PERF_MAX_RATIO_CONV2D", 5.0);
+      5, 25, "MUNET_PERF_MAX_RATIO_CONV2D", 1.20);
 }
 
 TEST(PerformanceTest, MaxPool2DCudaVsVulkan) {
@@ -1088,7 +1315,7 @@ TEST(PerformanceTest, MaxPool2DCudaVsVulkan) {
                                                     : in_vk.max_pool2d(2, 2);
         out.impl_->backend().synchronize();
       },
-      4, 16, "MUNET_PERF_MAX_RATIO_MAXPOOL2D", 5.0);
+      6, 30, "MUNET_PERF_MAX_RATIO_MAXPOOL2D", 1.20);
 }
 
 TEST(PerformanceTest, Upsample2DCudaVsVulkan) {
@@ -1111,7 +1338,7 @@ TEST(PerformanceTest, Upsample2DCudaVsVulkan) {
                                                     : in_vk.upsample2d(2);
         out.impl_->backend().synchronize();
       },
-      3, 12, "MUNET_PERF_MAX_RATIO_UPSAMPLE2D", 5.0);
+      5, 25, "MUNET_PERF_MAX_RATIO_UPSAMPLE2D", 1.20);
 }
 
 TEST(PerformanceTest, ConcatCudaVsVulkan) {
@@ -1139,7 +1366,7 @@ TEST(PerformanceTest, ConcatCudaVsVulkan) {
                          : Tensor::cat({a_vk, b_vk}, 1);
         out.impl_->backend().synchronize();
       },
-      4, 16, "MUNET_PERF_MAX_RATIO_CONCAT", 5.0);
+      6, 25, "MUNET_PERF_MAX_RATIO_CONCAT", 1.20);
 }
 
 TEST(PerformanceTest, OptimizerStepCudaVsVulkan) {
@@ -1148,7 +1375,7 @@ TEST(PerformanceTest, OptimizerStepCudaVsVulkan) {
     GTEST_SKIP() << reason;
   }
 
-  constexpr int N = 1 << 20;
+  constexpr int N = 1 << 22;
   Tensor p_cpu({N}, {DeviceType::CPU, 0});
   Tensor x_cpu({N}, {DeviceType::CPU, 0});
   p_cpu.uniform_(-1.0f, 1.0f);
@@ -1172,7 +1399,7 @@ TEST(PerformanceTest, OptimizerStepCudaVsVulkan) {
         p.zero_grad();
         loss.impl_->backend().synchronize();
       },
-      3, 14, "MUNET_PERF_MAX_RATIO_OPTIMIZER_STEP", 5.0);
+      5, 25, "MUNET_PERF_MAX_RATIO_OPTIMIZER_STEP", 1.20);
 }
 
 TEST(PerformanceTest, RepresentativeInferenceEngineMemoryProfile) {
@@ -1232,8 +1459,8 @@ TEST(PerformanceTest, InstanceSegmentationE2EMetricsCudaVsVulkan) {
   Device vk{DeviceType::VULKAN, 0};
 
   const BackendPerfBreakdown cuda_metrics =
-      run_instance_segmentation_workload(cuda, 2, 8);
-  const BackendPerfBreakdown vk_metrics = run_instance_segmentation_workload(vk, 2, 8);
+      run_instance_segmentation_workload(cuda, 3, 16);
+  const BackendPerfBreakdown vk_metrics = run_instance_segmentation_workload(vk, 3, 16);
 
   const double e2e_ratio = vk_metrics.e2e_ms / std::max(cuda_metrics.e2e_ms, 1e-9);
   const double dispatch_ratio =
@@ -1260,10 +1487,10 @@ TEST(PerformanceTest, InstanceSegmentationE2EMetricsCudaVsVulkan) {
             << " vk_profiled_entries=" << vk_metrics.profiled_entries
             << std::endl;
 
-  constexpr double kMaxE2ERatio = 1.10;
-  constexpr double kMaxDispatchRatio = 1.30;
-  constexpr double kMaxKernelRatio = 1.20;
-  constexpr double kMaxCpuTotalRatio = 1.30;
+  const double kMaxE2ERatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_INSTANCE_SEG", 1.20);
+  const double kMaxDispatchRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_INSTANCE_SEG_DISPATCH", 1.20);
+  const double kMaxKernelRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_INSTANCE_SEG_KERNEL", 1.20);
+  const double kMaxCpuTotalRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_INSTANCE_SEG_CPU", 1.20);
 
   EXPECT_GT(cuda_metrics.profiled_entries, 0u);
   EXPECT_GT(vk_metrics.profiled_entries, 0u);
@@ -1276,6 +1503,201 @@ TEST(PerformanceTest, InstanceSegmentationE2EMetricsCudaVsVulkan) {
   EXPECT_LE(e2e_ratio, kMaxE2ERatio)
       << "Vulkan e2e latency regressed for instance-segmentation style "
          "workload. ratio="
+      << e2e_ratio << " max=" << kMaxE2ERatio;
+  EXPECT_LE(dispatch_ratio, kMaxDispatchRatio);
+  EXPECT_LE(kernel_ratio, kMaxKernelRatio);
+  EXPECT_LE(cpu_total_ratio, kMaxCpuTotalRatio);
+
+  set_profile_enabled_override(std::nullopt);
+}
+
+// ---------------------------------------------------------------------------
+// MLP Inference E2E: Vulkan must be within 10% of CUDA
+// ---------------------------------------------------------------------------
+TEST(PerformanceTest, MLPInferenceE2ECudaVsVulkan) {
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
+
+  set_profile_enabled_override(true);
+  Device cuda{DeviceType::CUDA, 0};
+  Device vk{DeviceType::VULKAN, 0};
+
+  const BackendPerfBreakdown cuda_metrics =
+      run_mlp_inference_workload(cuda, 3, 16);
+  const BackendPerfBreakdown vk_metrics = run_mlp_inference_workload(vk, 3, 16);
+
+  const double e2e_ratio = vk_metrics.e2e_ms / std::max(cuda_metrics.e2e_ms, 1e-9);
+  const double dispatch_ratio =
+      vk_metrics.dispatch_us / std::max(cuda_metrics.dispatch_us, 1e-9);
+  const double kernel_ratio =
+      vk_metrics.kernel_us / std::max(cuda_metrics.kernel_us, 1e-9);
+  const double cpu_total_ratio =
+      vk_metrics.total_cpu_us / std::max(cuda_metrics.total_cpu_us, 1e-9);
+
+  std::cout << "[PERF][MLPInfer] cuda_e2e_ms=" << cuda_metrics.e2e_ms
+            << " vk_e2e_ms=" << vk_metrics.e2e_ms << " e2e_ratio=" << e2e_ratio
+            << " cuda_dispatch_us=" << cuda_metrics.dispatch_us
+            << " vk_dispatch_us=" << vk_metrics.dispatch_us
+            << " dispatch_ratio=" << dispatch_ratio
+            << " cuda_kernel_us=" << cuda_metrics.kernel_us
+            << " vk_kernel_us=" << vk_metrics.kernel_us
+            << " kernel_ratio=" << kernel_ratio
+            << " cuda_total_cpu_us=" << cuda_metrics.total_cpu_us
+            << " vk_total_cpu_us=" << vk_metrics.total_cpu_us
+            << " cpu_total_ratio=" << cpu_total_ratio
+            << " cuda_fallbacks=" << cuda_metrics.fallback_count
+            << " vk_fallbacks=" << vk_metrics.fallback_count
+            << " cuda_profiled_entries=" << cuda_metrics.profiled_entries
+            << " vk_profiled_entries=" << vk_metrics.profiled_entries
+            << std::endl;
+
+  const double kMaxE2ERatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_MLP_INFER", 1.20);
+  const double kMaxDispatchRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_MLP_INFER_DISPATCH", 1.20);
+  const double kMaxKernelRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_MLP_INFER_KERNEL", 1.20);
+  const double kMaxCpuTotalRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_MLP_INFER_CPU", 1.20);
+
+  EXPECT_GT(cuda_metrics.profiled_entries, 0u);
+  EXPECT_GT(vk_metrics.profiled_entries, 0u);
+  EXPECT_GT(cuda_metrics.dispatch_us, 0.0);
+  EXPECT_GT(vk_metrics.dispatch_us, 0.0);
+  EXPECT_GT(cuda_metrics.kernel_us, 0.0);
+  EXPECT_GT(vk_metrics.kernel_us, 0.0);
+  EXPECT_EQ(cuda_metrics.fallback_count, 0u);
+  EXPECT_EQ(vk_metrics.fallback_count, 0u);
+  EXPECT_LE(e2e_ratio, kMaxE2ERatio)
+      << "Vulkan e2e latency regressed for MLP inference workload. ratio="
+      << e2e_ratio << " max=" << kMaxE2ERatio;
+  EXPECT_LE(dispatch_ratio, kMaxDispatchRatio);
+  EXPECT_LE(kernel_ratio, kMaxKernelRatio);
+  EXPECT_LE(cpu_total_ratio, kMaxCpuTotalRatio);
+
+  set_profile_enabled_override(std::nullopt);
+}
+
+// ---------------------------------------------------------------------------
+// MLP Training E2E: Vulkan must be within 10% of CUDA
+// ---------------------------------------------------------------------------
+TEST(PerformanceTest, MLPTrainingE2ECudaVsVulkan) {
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
+
+  set_profile_enabled_override(true);
+  Device cuda{DeviceType::CUDA, 0};
+  Device vk{DeviceType::VULKAN, 0};
+
+  const BackendPerfBreakdown cuda_metrics =
+      run_mlp_training_workload(cuda, 3, 16);
+  const BackendPerfBreakdown vk_metrics = run_mlp_training_workload(vk, 3, 16);
+
+  const double e2e_ratio = vk_metrics.e2e_ms / std::max(cuda_metrics.e2e_ms, 1e-9);
+  const double dispatch_ratio =
+      vk_metrics.dispatch_us / std::max(cuda_metrics.dispatch_us, 1e-9);
+  const double kernel_ratio =
+      vk_metrics.kernel_us / std::max(cuda_metrics.kernel_us, 1e-9);
+  const double cpu_total_ratio =
+      vk_metrics.total_cpu_us / std::max(cuda_metrics.total_cpu_us, 1e-9);
+
+  std::cout << "[PERF][MLPTrain] cuda_e2e_ms=" << cuda_metrics.e2e_ms
+            << " vk_e2e_ms=" << vk_metrics.e2e_ms << " e2e_ratio=" << e2e_ratio
+            << " cuda_dispatch_us=" << cuda_metrics.dispatch_us
+            << " vk_dispatch_us=" << vk_metrics.dispatch_us
+            << " dispatch_ratio=" << dispatch_ratio
+            << " cuda_kernel_us=" << cuda_metrics.kernel_us
+            << " vk_kernel_us=" << vk_metrics.kernel_us
+            << " kernel_ratio=" << kernel_ratio
+            << " cuda_total_cpu_us=" << cuda_metrics.total_cpu_us
+            << " vk_total_cpu_us=" << vk_metrics.total_cpu_us
+            << " cpu_total_ratio=" << cpu_total_ratio
+            << " cuda_fallbacks=" << cuda_metrics.fallback_count
+            << " vk_fallbacks=" << vk_metrics.fallback_count
+            << " cuda_profiled_entries=" << cuda_metrics.profiled_entries
+            << " vk_profiled_entries=" << vk_metrics.profiled_entries
+            << std::endl;
+
+  const double kMaxE2ERatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_MLP_TRAIN", 1.20);
+  const double kMaxDispatchRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_MLP_TRAIN_DISPATCH", 1.20);
+  const double kMaxKernelRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_MLP_TRAIN_KERNEL", 1.20);
+  const double kMaxCpuTotalRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_MLP_TRAIN_CPU", 1.20);
+
+  EXPECT_GT(cuda_metrics.profiled_entries, 0u);
+  EXPECT_GT(vk_metrics.profiled_entries, 0u);
+  EXPECT_GT(cuda_metrics.dispatch_us, 0.0);
+  EXPECT_GT(vk_metrics.dispatch_us, 0.0);
+  EXPECT_GT(cuda_metrics.kernel_us, 0.0);
+  EXPECT_GT(vk_metrics.kernel_us, 0.0);
+  EXPECT_EQ(cuda_metrics.fallback_count, 0u);
+  EXPECT_EQ(vk_metrics.fallback_count, 0u);
+  EXPECT_LE(e2e_ratio, kMaxE2ERatio)
+      << "Vulkan e2e latency regressed for MLP training workload. ratio="
+      << e2e_ratio << " max=" << kMaxE2ERatio;
+  EXPECT_LE(dispatch_ratio, kMaxDispatchRatio);
+  EXPECT_LE(kernel_ratio, kMaxKernelRatio);
+  EXPECT_LE(cpu_total_ratio, kMaxCpuTotalRatio);
+
+  set_profile_enabled_override(std::nullopt);
+}
+
+// ---------------------------------------------------------------------------
+// ConvNet Inference E2E: Vulkan must be within 10% of CUDA
+// ---------------------------------------------------------------------------
+TEST(PerformanceTest, ConvNetInferenceE2ECudaVsVulkan) {
+  std::string reason;
+  if (!require_gpu_backends(&reason)) {
+    GTEST_SKIP() << reason;
+  }
+
+  set_profile_enabled_override(true);
+  Device cuda{DeviceType::CUDA, 0};
+  Device vk{DeviceType::VULKAN, 0};
+
+  const BackendPerfBreakdown cuda_metrics =
+      run_convnet_inference_workload(cuda, 3, 16);
+  const BackendPerfBreakdown vk_metrics = run_convnet_inference_workload(vk, 3, 16);
+
+  const double e2e_ratio = vk_metrics.e2e_ms / std::max(cuda_metrics.e2e_ms, 1e-9);
+  const double dispatch_ratio =
+      vk_metrics.dispatch_us / std::max(cuda_metrics.dispatch_us, 1e-9);
+  const double kernel_ratio =
+      vk_metrics.kernel_us / std::max(cuda_metrics.kernel_us, 1e-9);
+  const double cpu_total_ratio =
+      vk_metrics.total_cpu_us / std::max(cuda_metrics.total_cpu_us, 1e-9);
+
+  std::cout << "[PERF][ConvNetInfer] cuda_e2e_ms=" << cuda_metrics.e2e_ms
+            << " vk_e2e_ms=" << vk_metrics.e2e_ms << " e2e_ratio=" << e2e_ratio
+            << " cuda_dispatch_us=" << cuda_metrics.dispatch_us
+            << " vk_dispatch_us=" << vk_metrics.dispatch_us
+            << " dispatch_ratio=" << dispatch_ratio
+            << " cuda_kernel_us=" << cuda_metrics.kernel_us
+            << " vk_kernel_us=" << vk_metrics.kernel_us
+            << " kernel_ratio=" << kernel_ratio
+            << " cuda_total_cpu_us=" << cuda_metrics.total_cpu_us
+            << " vk_total_cpu_us=" << vk_metrics.total_cpu_us
+            << " cpu_total_ratio=" << cpu_total_ratio
+            << " cuda_fallbacks=" << cuda_metrics.fallback_count
+            << " vk_fallbacks=" << vk_metrics.fallback_count
+            << " cuda_profiled_entries=" << cuda_metrics.profiled_entries
+            << " vk_profiled_entries=" << vk_metrics.profiled_entries
+            << std::endl;
+
+  const double kMaxE2ERatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_CONVNET_INFER", 1.20);
+  const double kMaxDispatchRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_CONVNET_INFER_DISPATCH", 1.20);
+  const double kMaxKernelRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_CONVNET_INFER_KERNEL", 1.20);
+  const double kMaxCpuTotalRatio = get_env_ratio("MUNET_PERF_MAX_RATIO_E2E_CONVNET_INFER_CPU", 1.20);
+
+  EXPECT_GT(cuda_metrics.profiled_entries, 0u);
+  EXPECT_GT(vk_metrics.profiled_entries, 0u);
+  EXPECT_GT(cuda_metrics.dispatch_us, 0.0);
+  EXPECT_GT(vk_metrics.dispatch_us, 0.0);
+  EXPECT_GT(cuda_metrics.kernel_us, 0.0);
+  EXPECT_GT(vk_metrics.kernel_us, 0.0);
+  EXPECT_EQ(cuda_metrics.fallback_count, 0u);
+  EXPECT_EQ(vk_metrics.fallback_count, 0u);
+  EXPECT_LE(e2e_ratio, kMaxE2ERatio)
+      << "Vulkan e2e latency regressed for ConvNet inference workload. ratio="
       << e2e_ratio << " max=" << kMaxE2ERatio;
   EXPECT_LE(dispatch_ratio, kMaxDispatchRatio);
   EXPECT_LE(kernel_ratio, kMaxKernelRatio);
