@@ -232,9 +232,21 @@ public:
   virtual void cos(const Storage &in, Storage &out, size_t num_elements) = 0;
   virtual void softmax(const Storage &in, Storage &out, int batch_size,
                        int num_classes) = 0;
+  virtual void log_softmax(const Storage &, Storage &, int, int) {
+    throw std::runtime_error("log_softmax not implemented");
+  }
   virtual void softmax_backward(const Storage &grad_out, const Storage &out,
                                 Storage &grad_in, int batch_size,
                                 int num_classes) = 0;
+
+  // Fused elementwise: chain multiple elementwise ops into one kernel dispatch
+  virtual void fused_elementwise_chain(const std::vector<Storage *> &inputs,
+                                       Storage &output,
+                                       const std::vector<uint32_t> &op_codes,
+                                       size_t num_elements) {
+    // Default: no fusion support, throw
+    throw std::runtime_error("fused_elementwise_chain not implemented for this backend");
+  }
 };
 
 class BackendReductionCapability {
@@ -556,6 +568,11 @@ public:
                int num_classes) {
     require_capability(elementwise_capability(), "elementwise", "softmax")
         ->softmax(in, out, batch_size, num_classes);
+  }
+  void log_softmax(const Storage &in, Storage &out, int batch_size,
+                   int num_classes) {
+    require_capability(elementwise_capability(), "elementwise", "log_softmax")
+        ->log_softmax(in, out, batch_size, num_classes);
   }
   void softmax_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, int batch_size, int num_classes) {

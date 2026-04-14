@@ -348,6 +348,25 @@ TEST_P(TensorTest, ItemMethodFailure) {
   EXPECT_THROW(t.item(), std::runtime_error);
 }
 
+TEST_P(TensorTest, BatchItemValues) {
+  Tensor a({1}, dev());
+  Tensor b({1}, dev());
+  Tensor cpu_vals({2}, {DeviceType::CPU, 0});
+  auto *vals = static_cast<float *>(cpu_vals.data());
+  vals[0] = 1.5f;
+  vals[1] = -2.25f;
+
+  a.impl_->backend().copy(vals + 0, a.data(), a.bytes(), cpu_vals.device(),
+                          dev());
+  b.impl_->backend().copy(vals + 1, b.data(), b.bytes(), cpu_vals.device(),
+                          dev());
+
+  const auto out = batch_item_values({a, b});
+  ASSERT_EQ(out.size(), 2u);
+  EXPECT_FLOAT_EQ(out[0].as_float(), 1.5f);
+  EXPECT_FLOAT_EQ(out[1].as_float(), -2.25f);
+}
+
 TEST_P(TensorTest, MaskedFill) {
   Tensor a({2, 2}, dev());
   Tensor mask({2, 2}, dev());

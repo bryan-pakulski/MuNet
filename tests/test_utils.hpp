@@ -1,12 +1,14 @@
 #pragma once
 #include "tensor.hpp"
 #include <cmath>
+#include <string>
 #include <vector>
 
 namespace munet {
 namespace test {
 
-inline bool accelerator_health_check(const Device &device) {
+inline bool accelerator_health_check(const Device &device,
+                                     std::string *error_detail = nullptr) {
   try {
     Tensor a({1}, device, DataType::Float32);
     Tensor b({1}, device, DataType::Float32);
@@ -17,7 +19,15 @@ inline bool accelerator_health_check(const Device &device) {
     Tensor out_cpu = out.to({DeviceType::CPU, 0}); // copy back
     const float v = static_cast<const float *>(out_cpu.data())[0];
     return std::abs(v - 5.0f) <= 1e-4f;
+  } catch (const std::exception &e) {
+    if (error_detail) {
+      *error_detail = e.what();
+    }
+    return false;
   } catch (...) {
+    if (error_detail) {
+      *error_detail = "unknown error";
+    }
     return false;
   }
 }

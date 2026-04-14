@@ -61,6 +61,12 @@ packages manually.
 - `MUNET_DISPATCH_DECISION_DUMP=1` — emit dispatch decision lines.
 - `MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK=1` — throw immediately when a CUDA/Vulkan tensor is dispatched to CPU fallback.
 
+### GPU readback tip
+
+If training/inference is metric-heavy, avoid repeated scalar `.item()` calls on
+CUDA/Vulkan tensors inside tight loops. Use `batch_item_values(...)` to fetch
+multiple scalar tensors in one batched readback.
+
 ## Build
 
 ### Requirements

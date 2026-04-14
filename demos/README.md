@@ -5,7 +5,7 @@ scope to practical examples.
 
 ## Visual
 
-- `visual/object_detection/` — object-detection oriented demos (scaffold).
+- `visual/object_detection/` — YOLO/FPN/RTDETR object-detection audits and end-to-end training demos.
 - `visual/semantic_segmentation/` — segmentation training/inference demos:
   - `mnist.py`
   - `unet.py`

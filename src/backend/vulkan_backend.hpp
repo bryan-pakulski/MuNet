@@ -131,6 +131,8 @@ public:
   void cos(const Storage &in, Storage &out, size_t num_elements) override;
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override;
+  void log_softmax(const Storage &in, Storage &out, int batch_size,
+                   int num_classes) override;
   void softmax_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, int batch_size,
                         int num_classes) override;
@@ -194,11 +196,20 @@ public:
   void to_contiguous(const Storage &src, Storage &dst, const Shape &shape,
                      const Strides &strides, size_t offset) override;
 
+  // Fused elementwise: chain multiple elementwise ops into one kernel dispatch
+  void fused_elementwise_chain(const std::vector<Storage *> &inputs,
+                               Storage &output,
+                               const std::vector<uint32_t> &op_codes,
+                               size_t num_elements) override;
+
 private:
   struct VulkanRuntimeState {
     int current_frame = 0;
+    int last_submitted_frame = -1;
     int current_batch_size = 0;
     bool is_recording = false;
+    bool has_pending_shader_writes = false;
+    std::array<bool, 2> frame_has_submission{false, false};
 
     std::array<VkDescriptorPool, 2> descriptor_pools{VK_NULL_HANDLE,
                                                      VK_NULL_HANDLE};
@@ -216,15 +227,22 @@ private:
 
     VkBuffer staging_buffer = VK_NULL_HANDLE;
     VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+    VkMemoryPropertyFlags staging_memory_properties = 0;
     size_t staging_offset = 0;
     size_t staging_size = 0;
     void *staging_mapped = nullptr;
     VkCommandBuffer immediate_cmd_buffer = VK_NULL_HANDLE;
+    VkFence immediate_fence = VK_NULL_HANDLE;
   };
   std::unique_ptr<VulkanRuntimeState> runtime_;
 
   void dispatch_kernel(VkPipeline pipeline, const std::vector<void *> &buffers,
                        void *pc, size_t pcSize, int x, int y, int z);
+
+  // Fused elementwise dispatch: chains multiple elementwise ops into one kernel
+  void dispatch_fused_elementwise(const std::vector<void *> &buffers,
+                                  const std::vector<uint32_t> &op_codes,
+                                  uint32_t N);
   void reset_runtime_state();
   void allocate_frame_descriptor_sets(int frame);
   void ensure_recording();
@@ -234,7 +252,9 @@ private:
                             VkMemoryPropertyFlags properties) const;
   void create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
                      VkMemoryPropertyFlags properties, VkBuffer &buffer,
-                     VkDeviceMemory &buffer_memory) const;
+                     VkDeviceMemory &buffer_memory,
+                     VkMemoryPropertyFlags preferred_properties = 0,
+                     uint32_t *selected_memory_type = nullptr) const;
   std::vector<uint32_t> compile_shader(const std::string &name,
                                        const std::string &source) const;
 
@@ -273,6 +293,7 @@ private:
   VkPipeline mseLossPipeline = VK_NULL_HANDLE;
   VkPipeline mseLossBackwardPipeline = VK_NULL_HANDLE;
   VkPipeline crossEntropyPipeline = VK_NULL_HANDLE;
+  VkPipeline crossEntropyReducePipeline = VK_NULL_HANDLE;
   VkPipeline crossEntropyBackwardPipeline = VK_NULL_HANDLE;
   VkPipeline rsqrtPipeline = VK_NULL_HANDLE;
   VkPipeline sinPipeline = VK_NULL_HANDLE;
@@ -304,7 +325,24 @@ private:
   VkPipeline bnBackDxPipeline;
 
   VkPipeline matmulPipeline;
+  VkPipeline matmulSmallPipeline;
   VkPipeline batchedMatmulPipeline;
+
+  // Fused elementwise kernel (chains of elementwise ops in single dispatch)
+  VkPipeline fusedElementwisePipeline;
+
+  // Fusion control
+  bool fusion_enabled_ = false;
+
+  // Push descriptor support (VK_KHR_push_descriptor)
+  bool push_descriptors_supported_ = false;
+  VkDescriptorSetLayout push_descriptor_set_layout_ = VK_NULL_HANDLE;
+  VkPipelineLayout push_pipeline_layout_ = VK_NULL_HANDLE;
+  // Function pointer for push descriptor extension
+  PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSetKHR_ = nullptr;
+
+  // Pipeline cache for faster pipeline creation on subsequent runs
+  VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
 };
 
 } // namespace munet

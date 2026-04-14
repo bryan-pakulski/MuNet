@@ -17,7 +17,7 @@ BUILD_GPU := $(BUILD_ROOT)/gpu-debug
 	build build-debug build-release build-asan build-gpu \
 	configure-debug configure-release configure-asan configure-gpu \
 	unit-test test-debug test-release test-asan ctest-debug ctest-release ctest-asan \
-	mem-test gpu-mem-test perf-test py-test \
+	mem-test gpu-mem-test perf-test vulkan-profile perf-ci py-test \
 	format doc clean clean-debug clean-release clean-asan clean-gpu \
 	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-gpu \
 	docker-build
@@ -39,6 +39,8 @@ help:
 	@echo "  mem-test         Alias for test-asan"
 	@echo "  gpu-mem-test     Run compute-sanitizer memcheck"
 	@echo "  perf-test        Run performance tests from release build"
+	@echo "  vulkan-profile   Run Vulkan profiling benchmarks from release build"
+	@echo "  perf-ci          Run CI performance regression check"
 	@echo "  py-test          Run python tests"
 	@echo "  format           Format code"
 	@echo "  doc              Build docs"
@@ -110,6 +112,19 @@ gpu-mem-test: build-gpu
 
 perf-test: build-release
 	MUNET_RUN_PERF_TESTS=1 ./$(BUILD_RELEASE)/munet_tests --gtest_filter=PerformanceTest.*
+
+vulkan-profile: build-release
+	@echo "Running Vulkan profiling benchmarks with MUNET_PROFILE=1"
+	MUNET_PROFILE=1 ./$(BUILD_RELEASE)/munet_perf_tests 2>&1 | tee vulkan_profile_output.txt
+
+perf-vulkan: vulkan-profile
+
+perf-ci: build-release
+	@echo "Running CI performance regression check..."
+	@MUNET_PROFILE=1 ./$(BUILD_RELEASE)/munet_perf_tests 2>&1 | tee perf_ci_output.txt
+	@echo ""
+	@echo "=== CI Performance Regression Check ==="
+	@grep -q "PASSED" perf_ci_output.txt && echo "All benchmarks PASSED" || { echo "Benchmark FAILED - see perf_ci_output.txt"; exit 1; }
 
 py-test: build-debug
 	cd tests && python3 test_python.py && python3 test_pytorch_interop.py

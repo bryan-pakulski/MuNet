@@ -32,6 +32,15 @@ void record_backend_profile_event(const char *domain, const char *event,
                          0.0, bytes, detail);
 }
 
+bool profile_implicit_sync_enabled() {
+  const char *env = std::getenv("MUNET_PROFILE_IMPLICIT_SYNC");
+  if (!env) {
+    return false;
+  }
+  const std::string value(env);
+  return value == "1" || value == "true" || value == "TRUE";
+}
+
 // Intercepts all backend calls and enforces a synchronized sanity check
 class DebugBackend : public Backend,
                      public BackendAllocationTransferCapability,
@@ -72,12 +81,17 @@ class DebugBackend : public Backend,
     try {
       double gpu_us = 0.0;
       const bool collect_gpu_time = should_collect_gpu_time();
+      const bool force_implicit_sync =
+          is_debug_enabled() ||
+          (is_profile_enabled() && profile_implicit_sync_enabled());
 
-      if (collect_gpu_time && (is_debug_enabled() || is_profile_enabled())) {
+      if (collect_gpu_time && force_implicit_sync) {
         Timer sync_timer;
         base_->synchronize();
         record_sync_event("implicit_timing", sync_timer.elapsed_us(),
                           "trigger=" + name);
+        gpu_us = base_->get_last_kernel_time_us();
+      } else if (collect_gpu_time && is_profile_enabled()) {
         gpu_us = base_->get_last_kernel_time_us();
       }
 
@@ -411,6 +425,16 @@ public:
     base_->cos(in, out, num_elements);
     check("cos", t.elapsed_us(), &out);
   }
+  void fused_elementwise_chain(const std::vector<Storage *> &inputs,
+                               Storage &output,
+                               const std::vector<uint32_t> &op_codes,
+                               size_t num_elements) override {
+    MUNET_DEBUG << "fused_elementwise_chain | " << op_codes.size()
+                << " ops, " << num_elements << " elements" << std::endl;
+    Timer t;
+    base_->elementwise_capability()->fused_elementwise_chain(inputs, output, op_codes, num_elements);
+    check("fused_elementwise_chain", t.elapsed_us(), &output);
+  }
   void softmax(const Storage &in, Storage &out, int batch_size,
                int num_classes) override {
     MUNET_DEBUG << "softmax | " << batch_size << " batches, " << num_classes
@@ -418,6 +442,14 @@ public:
     Timer t;
     base_->softmax(in, out, batch_size, num_classes);
     check("softmax", t.elapsed_us(), &out);
+  }
+  void log_softmax(const Storage &in, Storage &out, int batch_size,
+                   int num_classes) override {
+    MUNET_DEBUG << "log_softmax | " << batch_size << " batches, "
+                << num_classes << " classes" << std::endl;
+    Timer t;
+    base_->log_softmax(in, out, batch_size, num_classes);
+    check("log_softmax", t.elapsed_us(), &out);
   }
   void softmax_backward(const Storage &grad_out, const Storage &out,
                         Storage &grad_in, int batch_size,

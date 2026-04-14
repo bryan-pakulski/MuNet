@@ -42,6 +42,7 @@ set(MUNET_SOURCES
     src/backend/backend_manager.cpp
     src/backend/plugin_loader.cpp
     src/core/op_dispatch.cpp
+    src/core/kernel_fusion_planner.cpp
     src/core/ops/add.cpp
     src/core/ops/elementwise.cpp
     src/core/ops/matmul.cpp
@@ -224,10 +225,17 @@ if(MUNET_BUILD_TESTS)
         tests/test_optim.cpp
         tests/test_nn.cpp
         tests/test_inference.cpp
+        tests/test_kernel_fusion_planner.cpp
         tests/test_backend_manager.cpp
         tests/test_performance.cpp
     )
     target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_main munet_build_flags)
+
+    # Performance profiling tests (separate executable for granular profiling)
+    add_executable(munet_perf_tests
+        tests/perf/vulkan_profiling.cpp
+    )
+    target_link_libraries(munet_perf_tests PRIVATE munet_training munet_inference gtest_main munet_build_flags)
 endif()
 
 if(MUNET_BUILD_TOOLS)

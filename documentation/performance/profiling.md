@@ -110,6 +110,17 @@
 ## Best Practices
 
 - Keep benchmark tensors device-resident during loops.
+- Batch scalar readbacks when collecting many metrics/loss values in one step.
+  Instead of repeated `loss.item()` calls, use `batch_item_values(...)` to pack
+  scalar tensors and perform one device→host transfer:
+
+  ```cpp
+  std::vector<ScalarValue> values =
+      batch_item_values({loss, cls_loss, reg_loss, aux_metric});
+  ```
+
+  This is especially helpful on Vulkan/CUDA when profiler output is dominated by
+  `transfer.d2h`, `sync.readback_wait.*`, or backend-specific D2H wait rows.
 - Warm up before measuring.
 - Use profile mode without debug for lower-overhead measurements, but note that
   GPU timing collection still synchronizes per profiled op so the reported
@@ -187,6 +198,27 @@ than shader execution.
 - CPU backends still report `AvgGPU=0`, but the shared wrapper emits the same
   `allocator.*.<backend>` / `sync.*.<backend>` namespaces during profiling so
   cross-backend host-side stall patterns stay comparable.
+
+## Perf test skip diagnostics
+
+GPU comparison tests in `tests/test_performance.cpp` require **both** CUDA and
+Vulkan support. If they skip, the skip message now reports:
+
+- compile-time backend availability (`compiled(cuda=..., vulkan=...)`)
+- runtime device detection (`runtime(cuda=..., vulkan=...)`)
+- backend health probe (`health(cuda=..., vulkan=...)`)
+
+This helps quickly distinguish build-configuration problems from runtime device
+visibility/driver problems.
+
+The skip detail now also appends backend runtime status from
+`BackendManager::backend_status()` for CUDA/Vulkan (for example
+`reason=plugin_not_found` or `reason=runtime_dependency_missing`), which
+pinpoints missing plugin binaries versus missing shared-library dependencies.
+
+If `runtime(...)=yes` but `health(...)=no`, plugin/runtime probing succeeded but
+an actual tensor-op smoke check failed; the message appends
+`*_health_detail=...` with the thrown error string.
 
 ## Trace-Centric Workflow
 

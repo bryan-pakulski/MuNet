@@ -254,32 +254,28 @@ Tensor softmax(const Tensor &a, int dim) {
 }
 
 Tensor log_softmax(const Tensor &a, int dim) {
-  resolve_dispatch(OpId::LogSoftmax, a);
-  Tensor p = softmax(a, dim);
+  const auto dispatch = resolve_dispatch(OpId::LogSoftmax, a);
+  if (a.shape().empty())
+    throw std::runtime_error("LogSoftmax expects non-empty shape");
 
-  Tensor p_cpu = p.to(Device{DeviceType::CPU, 0});
-  Tensor out_cpu(a.shape(), Device{DeviceType::CPU, 0}, a.dtype());
-  const char *pv = static_cast<const char *>(p_cpu.data());
-  char *ov = static_cast<char *>(out_cpu.data());
-  const size_t stride = dtype_size(a.dtype());
-  for (size_t i = 0; i < p_cpu.size(); ++i) {
-    const double prob =
-        read_scalar_from_buffer(pv + i * stride, p_cpu.dtype()).value;
-    write_scalar_to_buffer(ov + i * stride, out_cpu.dtype(),
-                           std::log(std::max(prob, 1e-20)));
-  }
-
-  Tensor out =
-      (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
   const int rank = static_cast<int>(a.shape().size());
   const int resolved = (dim < 0) ? (rank + dim) : dim;
-  if (GradMode::is_enabled() && a.requires_grad()) {
-    auto fn =
-        std::make_shared<autograd_nodes::LogSoftmaxBackward>(out, resolved);
-    link_backward_edges(fn.get(), {a});
-    out.set_requires_grad(true);
-    out.impl_->grad_fn = fn;
+  if (resolved < 0 || resolved >= rank)
+    throw std::runtime_error("LogSoftmax: dim out of range");
+  if (resolved != rank - 1)
+    throw std::runtime_error(
+        "LogSoftmax currently supports only the last dimension");
+
+  const int num_classes = a.shape().back();
+  const int batch_size = a.size() / num_classes;
+  Tensor out(a.shape(), a.device(), a.dtype());
+  if (dispatch.use_backend) {
+    a.impl_->backend().log_softmax(*a.impl_->storage, *out.impl_->storage,
+                                   batch_size, num_classes);
+  } else {
+    out = log(softmax(a, dim));
   }
+
   record_registered_trace(OpId::LogSoftmax, out, {a}, {{"dim", {resolved}}});
   return out;
 }

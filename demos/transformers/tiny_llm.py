@@ -123,7 +123,7 @@ def main():
     ctx = np.array([stoi[c] for c in seed[-context_len:]], dtype=np.int32)
     generated = list(seed)
 
-    for _ in range(80):
+    for _ in range(250):
         nxt = sample_next(model, ctx, vocab)
         generated.append(itos[nxt])
         ctx = np.concatenate([ctx[1:], np.array([nxt], dtype=np.int32)])

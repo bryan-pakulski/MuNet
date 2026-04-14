@@ -3,6 +3,7 @@
 #include "core/util.hpp"
 #include "ops.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
@@ -350,10 +351,64 @@ ScalarValue Tensor::item_value() const {
     return read_scalar_from_buffer(data(), dtype());
   }
 
-  return to(Device{DeviceType::CPU, 0}).item_value();
+  std::array<unsigned char, sizeof(double)> host_scalar{};
+  const size_t scalar_bytes = dtype_size(dtype());
+  if (scalar_bytes > host_scalar.size()) {
+    throw std::runtime_error("item_value() unsupported scalar byte width");
+  }
+  impl_->backend().copy(data(), host_scalar.data(), scalar_bytes, device(),
+                        Device{DeviceType::CPU, 0});
+  impl_->backend().synchronize();
+  return read_scalar_from_buffer(host_scalar.data(), dtype());
 }
 
 float Tensor::item() const { return item_value().as_float(); }
+
+std::vector<ScalarValue> batch_item_values(const std::vector<Tensor> &tensors) {
+  if (tensors.empty()) {
+    return {};
+  }
+
+  const Device device = tensors.front().device();
+  const DataType dtype = tensors.front().dtype();
+  std::vector<ScalarValue> out;
+  out.reserve(tensors.size());
+
+  for (const auto &tensor : tensors) {
+    if (tensor.size() != 1) {
+      throw std::runtime_error(
+          "batch_item_values() requires tensors with exactly one element");
+    }
+    if (tensor.device() != device) {
+      throw std::runtime_error(
+          "batch_item_values() requires tensors on the same device");
+    }
+    if (tensor.dtype() != dtype) {
+      throw std::runtime_error(
+          "batch_item_values() requires tensors with same dtype");
+    }
+  }
+
+  if (device.type == DeviceType::CPU) {
+    for (const auto &tensor : tensors) {
+      out.push_back(tensor.item_value());
+    }
+    return out;
+  }
+
+  std::vector<Tensor> expanded;
+  expanded.reserve(tensors.size());
+  for (const auto &tensor : tensors) {
+    expanded.push_back(tensor.reshape({1}));
+  }
+  Tensor packed = Tensor::cat(expanded, 0).to(Device{DeviceType::CPU, 0});
+  const size_t stride = dtype_size(dtype);
+  const auto *base = static_cast<const unsigned char *>(packed.data());
+  for (size_t i = 0; i < tensors.size(); ++i) {
+    out.push_back(read_scalar_from_buffer(base + i * stride, dtype));
+  }
+  return out;
+}
 
 void Tensor::step(float lr) {
   if (!impl_ || !impl_->grad) {

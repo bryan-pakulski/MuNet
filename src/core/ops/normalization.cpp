@@ -126,13 +126,6 @@ Tensor layer_norm(const Tensor &x, const Tensor &weight, const Tensor &bias,
                   float eps) {
   detail::require_same_dtype(op_metadata(OpId::LayerNorm).name, x, weight);
   detail::require_same_dtype(op_metadata(OpId::LayerNorm).name, x, bias);
-  const auto dispatch = resolve_dispatch(OpId::LayerNorm, x);
-  const bool use_cpu_fallback = dispatch.use_cpu_fallback;
-  if (!use_cpu_fallback) {
-    throw std::runtime_error(
-        "LayerNorm: backend execution path is not implemented for backend '" +
-        std::string(x.impl_->backend().name()) + "'");
-  }
 
   if (x.shape().empty()) {
     throw std::runtime_error("LayerNorm: input must have at least 1 dim");
@@ -145,79 +138,18 @@ Tensor layer_norm(const Tensor &x, const Tensor &weight, const Tensor &bias,
   }
 
   const int rows = static_cast<int>(x.size() / cols);
-  Device cpu{DeviceType::CPU, 0};
-
-  Tensor x_cpu = x.to(cpu);
-  Tensor w_cpu = weight.to(cpu);
-  Tensor b_cpu = bias.to(cpu);
-
-  Tensor out_cpu(x.shape(), cpu, x.dtype());
-  const DataType acc_dtype =
-      accumulation_type(AccumulationOp::Normalization, x.dtype());
-  Tensor mean_cpu({rows}, cpu, acc_dtype, false);
-  Tensor inv_std_cpu({rows}, cpu, acc_dtype, false);
-
-  const char *xv = static_cast<const char *>(x_cpu.data());
-  const char *wv = static_cast<const char *>(w_cpu.data());
-  const char *bv = static_cast<const char *>(b_cpu.data());
-  char *ov = static_cast<char *>(out_cpu.data());
-  char *mv = static_cast<char *>(mean_cpu.data());
-  char *iv = static_cast<char *>(inv_std_cpu.data());
-  const size_t x_stride = dtype_size(x_cpu.dtype());
-  const size_t w_stride = dtype_size(w_cpu.dtype());
-  const size_t b_stride = dtype_size(b_cpu.dtype());
-  const size_t out_stride = dtype_size(out_cpu.dtype());
-  const size_t acc_stride = dtype_size(mean_cpu.dtype());
-
-  for (int r = 0; r < rows; ++r) {
-    double mean = 0.0;
-    for (int c = 0; c < cols; ++c) {
-      mean +=
-          read_scalar_from_buffer(xv + (r * cols + c) * x_stride, x_cpu.dtype())
-              .value;
-    }
-    mean /= cols;
-
-    double var = 0.0;
-    for (int c = 0; c < cols; ++c) {
-      const double x_value =
-          read_scalar_from_buffer(xv + (r * cols + c) * x_stride, x_cpu.dtype())
-              .value;
-      const double d = x_value - mean;
-      var += d * d;
-    }
-    var /= cols;
-
-    const double inv = 1.0 / std::sqrt(var + eps);
-    write_scalar_to_buffer(mv + r * acc_stride, mean_cpu.dtype(), mean);
-    write_scalar_to_buffer(iv + r * acc_stride, inv_std_cpu.dtype(), inv);
-
-    for (int c = 0; c < cols; ++c) {
-      const double x_value =
-          read_scalar_from_buffer(xv + (r * cols + c) * x_stride, x_cpu.dtype())
-              .value;
-      const double w_value =
-          read_scalar_from_buffer(wv + c * w_stride, w_cpu.dtype()).value;
-      const double b_value =
-          read_scalar_from_buffer(bv + c * b_stride, b_cpu.dtype()).value;
-      const double xhat = (x_value - mean) * inv;
-      write_scalar_to_buffer(ov + (r * cols + c) * out_stride, out_cpu.dtype(),
-                             xhat * w_value + b_value);
-    }
-  }
-
-  Tensor out =
-      (x.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(x.device());
-
-  if (GradMode::is_enabled() &&
-      (x.requires_grad() || weight.requires_grad() || bias.requires_grad())) {
-    auto fn = std::make_shared<autograd_nodes::LayerNormBackward>(
-        x, weight, bias, mean_cpu, inv_std_cpu, rows, cols);
-    link_backward_edges(fn.get(), {x, weight, bias});
-    out.set_requires_grad(true);
-    out.impl_->grad_fn = fn;
-  }
-
+  const Shape flat_shape{rows, cols};
+  Tensor x2 = x.reshape(flat_shape);
+  Tensor mean = x2.mean(1, true);
+  Tensor centered = x2 - mean;
+  Tensor var = (centered * centered).mean(1, true);
+  Tensor eps_tensor(var.shape(), var.device(), var.dtype(), false);
+  eps_tensor.fill_(eps);
+  Tensor inv_std = (var + eps_tensor).rsqrt();
+  Tensor normalized = centered * inv_std;
+  Tensor w2 = weight.reshape({1, cols});
+  Tensor b2 = bias.reshape({1, cols});
+  Tensor out = (normalized * w2 + b2).reshape(x.shape());
   record_registered_trace(OpId::LayerNorm, out, {x, weight, bias}, {},
                           {{"eps", eps}});
   return out;
