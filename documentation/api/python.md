@@ -153,3 +153,17 @@ The Python module injects serialization helpers and metadata constants (for
 example `save`, `load`, `load_weights`, `load_for_inference`,
 `serialization_format_info`) during module initialization. See
 `demos/serialization/munet/serialization_roundtrip_demo.py` for end-to-end usage.
+
+## MuNetBoard (web metrics)
+
+- `munet.MuNetBoard.start(interface="127.0.0.1", port=8080)`
+- `board.log_scalar(tag, step, value)` for live scalar time-series.
+- `board.attach_model(model)` for architecture + parameter metadata browsing.
+- `board.stop()` to stop the background HTTP server.
+
+Typical flow:
+
+1. Start board once at training start.
+2. Attach your `nn.Module`.
+3. Log scalars in your training loop (`loss`, `lr`, etc.).
+4. Open browser at `http://<interface>:<port>`.

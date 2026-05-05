@@ -13,6 +13,8 @@ argparser.add_argument(
     help="Device to use",
     choices=["cpu", "cuda", "vulkan"],
 )
+argparser.add_argument("--board-host", type=str, default="127.0.0.1")
+argparser.add_argument("--board-port", type=int, default=8080)
 args = argparser.parse_args()
 
 
@@ -151,6 +153,10 @@ model.to(device)
 
 optimizer = munet.optim.Adam(model.parameters(), lr=0.001)
 
+board = munet.MuNetBoard.start(args.board_host, args.board_port)
+board.attach_model(model)
+print(f"MuNetBoard running at http://{args.board_host}:{args.board_port}")
+
 for epoch in range(50):
     indices = np.random.permutation(len(x_train))
     x_train, y_train = x_train[indices], y_train[indices]
@@ -176,8 +182,12 @@ for epoch in range(50):
         optimizer.step()
         epoch_loss += loss_val
         batches += 1
+        global_step = epoch * (len(x_train) // 64) + batches
+        board.log_scalar("train/loss", global_step, loss_val)
 
-    print(f"Epoch {epoch+1} | Avg Loss: {epoch_loss/batches:.4f}")
+    avg_loss = epoch_loss / batches
+    board.log_scalar("train/epoch_avg_loss", epoch + 1, avg_loss)
+    print(f"Epoch {epoch+1} | Avg Loss: {avg_loss:.4f}")
     if (epoch + 1) % 5 == 0:
         x_test, y_test = generate_shapes(5)
         visualize_results(model, x_test, y_test, epoch + 1, device)

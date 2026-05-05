@@ -1,7 +1,16 @@
+import argparse
 import numpy as np
 
 import munet_nn as munet
 
+
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="MuNet segmentation demo with MuNetBoard")
+    parser.add_argument("--board-host", default="127.0.0.1")
+    parser.add_argument("--board-port", type=int, default=8080)
+    return parser.parse_args()
 
 # --- Data Gen ---
 def generate_shapes(num_samples=100, size=32):
@@ -49,6 +58,7 @@ def create_model():
 
 
 if __name__ == "__main__":
+    args = parse_args()
     device = munet.Device(munet.DeviceType.CPU, 0)
     print("Using CPU")
 
@@ -56,6 +66,10 @@ if __name__ == "__main__":
 
     model = create_model()
     model.to(device)
+
+    board = munet.MuNetBoard.start(args.board_host, args.board_port)
+    board.attach_model(model)
+    print(f"MuNetBoard running at http://{args.board_host}:{args.board_port}")
 
     # SGD with momentum helps convergence
     optimizer = munet.optim.SGD(model.parameters(), lr=0.1)
@@ -91,5 +105,9 @@ if __name__ == "__main__":
             loss_val = loss.item()
             epoch_loss += loss_val
             batches += 1
+            global_step = epoch * (len(x_train) // BATCH_SIZE) + batches
+            board.log_scalar("train/loss", global_step, loss_val)
 
-        print(f"Epoch {epoch}: Avg Loss {epoch_loss / batches:.6f}")
+        avg_loss = epoch_loss / batches
+        board.log_scalar("train/epoch_avg_loss", epoch, avg_loss)
+        print(f"Epoch {epoch}: Avg Loss {avg_loss:.6f}")

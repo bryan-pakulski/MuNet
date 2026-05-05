@@ -8,3 +8,5 @@ _register_onnx(
     load_for_inference_fn=load_for_inference,
     load_weights_for_inference_fn=load_weights_for_inference,
 )
+
+from .board import MuNetBoard
