@@ -1,57 +1,25 @@
 # μNet
 
 μNet is a lightweight C++ tensor + autograd framework with Python bindings.
-It supports CPU, CUDA and Vulkan backends. The goal of the project is to interop with existing frameworks (torch / onnx)
-and allow for mixed gpu training & inference.
+The project is Vulkan-only: builds, wheels, runtime discovery, docs, demos, and tests target Vulkan as the single supported execution surface.
 
 ## Setup / Runtime requirements
 ```bash
 pip install munet_nn
 ```
 
-μNet exposes accelerator-targeted extras for environment selection:
+### Vulkan runtime expectations
 
-vulkan:
-`munet_nn["vk"]`
-
-cuda 13:
-`munet_nn["cu13_vk"]`
-
-cuda 12:
-`munet_nn["cu12_vk"]`
-
-These extras install ONNX Python tooling (`onnx` + runtime variant) but do **not** install CUDA or
-Vulkan runtime libraries.
-
-### CUDA / Vulkan runtime expectations
-
-For CUDA-enabled extras (for example `cu12_vk` and `cu13_vk`), μNet expects CUDA runtime libraries
-(including cuBLAS) to be installed at the system level. The Python package does **not** provision
-CUDA runtime/cuBLAS via pip.
-
-Ensure your CUDA library directories are discoverable by the dynamic linker (for example, via
-`LD_LIBRARY_PATH`) before running GPU backends.
-
-For Vulkan backends, μNet expects system Vulkan runtime/driver libraries (for example
-`libvulkan.so.1`) to be installed and discoverable by the dynamic linker.
-
-### ONNX tooling expectations
-
-ONNX helpers in `munet_nn` use both `onnx` and `onnxruntime`/`onnxruntime-gpu`. Installing the
-extras above will provision those Python dependencies. If you install base `munet_nn` without
-extras and still want ONNX helpers (for example `munet.inference.ONNXEngine`), install ONNX
-packages manually.
+μNet expects system Vulkan runtime/driver libraries (for example `libvulkan.so.1`) to be
+installed and discoverable by the dynamic linker.
 
 ## Current repository state
 
 - Core runtime (`munet_core`) is used by both training and inference surfaces.
 - Training APIs (`nn`, `optim`, losses, autograd) are available in C++ and Python.
 - Inference APIs and serialization flows are available (`munet_inference`, demos under `demos/inference/` and `demos/serialization/`).
-- Backend dispatch which includes:
-  - capability-based support checks,
-  - fallback reason accounting,
-  - accelerator→CPU fallback telemetry counters,
-  - optional fail-fast mode for unexpected accelerator fallbacks.
+- Backend dispatch uses capability-based support checks and reports unsupported Vulkan operations directly.
+- Public device APIs expose only `DeviceType.VULKAN` and stable `vulkan:<index>` device strings.
 
 ## ENV Vars
 
@@ -59,7 +27,6 @@ packages manually.
 - `MUNET_DEBUG=1` — debug logging/checks.
 - `MUNET_LOG_LEVEL=0..3` — log verbosity.
 - `MUNET_DISPATCH_DECISION_DUMP=1` — emit dispatch decision lines.
-- `MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK=1` — throw immediately when a CUDA/Vulkan tensor is dispatched to CPU fallback.
 
 ## Build
 
@@ -67,19 +34,16 @@ packages manually.
 - CMake 3.10+
 - C++17 compiler
 - Python 3.10+
-- Optional: CUDA Toolkit (`nvcc`)
-- Optional: Vulkan SDK (`glslc` in `PATH`)
+- Vulkan SDK/runtime (`glslc` in `PATH` for shader workflows)
 
 ### Python publishing
-There are two PyPi streams for μNet. Publishing is done via release tags, `dev*` tags will push to the test stream and `v*` tags to production.
 
-#### Test stream
-- https://test.pypi.org/project/munet-nn/
+Publishing produces Vulkan wheels only. The wheel workflow installs Vulkan development/runtime packages, validates that the package contains the core extension without removed integration helpers, smoke-tests Vulkan backend discovery, and publishes the same Vulkan-only artifact set to TestPyPI or PyPI.
 
-#### Prod stream
-- https://pypi.org/project/munet-nn/
+- `dev*` tags publish Vulkan wheels to TestPyPI: https://test.pypi.org/project/munet-nn/
+- `v*` tags publish Vulkan wheels to PyPI: https://pypi.org/project/munet-nn/
 
-When building a release ensure that the version in `pyproject.toml` matches the tag.
+Before tagging a release, ensure that `pyproject.toml` has the intended version and that `.github/workflows/wheels.yml` remains Vulkan-only.
 
 ## Tests
 
@@ -116,5 +80,4 @@ See `demos/README.md` for the full categorized catalog:
 - `demos/operators/`
 - `demos/serialization/`
 - `demos/inference/`
-- `demos/multigpu/`
 - `demos/transformers/`

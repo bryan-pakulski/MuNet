@@ -17,7 +17,7 @@ Status legend:
 
 ### Objectives
 
-- Make host-side time attributable to logical modules/layers rather than only
+- Make Vulkan-side time attributable to logical modules/layers rather than only
   to backend ops or whole-engine phases.
 - Support nested/hierarchical spans so complex models can be inspected at the
   block, sub-block, and leaf-module level.
@@ -25,7 +25,7 @@ Status legend:
 
 ### Action Points
 
-- Introduce a scoped host-side module span around `Module::forward(...)`
+- Introduce a scoped Vulkan-side module span around `Module::forward(...)`
   boundaries.
 - Record hierarchical names such as:
   - `module.encoder.block_3.forward`
@@ -33,7 +33,7 @@ Status legend:
   - `module.decoder.head.forward`
 - Reuse registered module names where available, and fall back to deterministic
   positional names for anonymous modules.
-- Record both inclusive host time and call count in the existing profiler.
+- Record both inclusive vulkan time and call count in the existing profiler.
 - Ensure spans can be correlated with inference engine phases when a module is
   executed during `compile(...)`, warmup, or `run(...)`.
 
@@ -62,7 +62,7 @@ Status legend:
 ## [x] 2. Transfer-direction markers
 
 > Status: **Implemented via `transfer.h2d`, `transfer.d2h`,
-> `transfer.d2d`, `transfer.cpu_copy`, and `transfer.dtype_convert`
+> `transfer.d2d`, `transfer.vulkan_copy`, and `transfer.dtype_convert`
 > profiler rows.**
 
 ### Objectives
@@ -70,7 +70,7 @@ Status legend:
 - Make memory traffic direction explicit so transfer bottlenecks are immediately
   distinguishable from compute bottlenecks.
 - Separate device movement from dtype conversion overhead.
-- Make it clear whether traffic is host/device, device/device, or CPU-local.
+- Make it clear whether traffic is Vulkan/device, device/device, or Vulkan-local.
 
 ### Action Points
 
@@ -78,21 +78,21 @@ Status legend:
   - `transfer.h2d`
   - `transfer.d2h`
   - `transfer.d2d`
-  - `transfer.cpu_copy`
+  - `transfer.vulkan_copy`
   - `transfer.dtype_convert`
 - Add shape and byte-size context to every transfer record.
 - Ensure direction markers are emitted consistently from:
   - `Tensor::to(Device)`
   - `Tensor::to(DataType)`
   - backend copy paths
-  - staging-buffer paths in GPU backends
+  - staging-buffer paths in Vulkan backends
 - Keep backend-specific rows where useful (`vulkan.copy_d2h_*`, etc.) but
   ensure they roll up under directionally obvious top-level transfer markers.
 
 ### Exit Criteria
 
 - Every explicit tensor/device move appears under a directional transfer row.
-- CPU-only runs do not show GPU transfer markers.
+- Vulkan-only runs do not show Vulkan transfer markers.
 - Mixed-device runs clearly reveal whether time is dominated by `h2d`, `d2h`,
   or `d2d` traffic.
 
@@ -107,7 +107,7 @@ Status legend:
 - Look at `transfer.*` rows before backend kernels if end-to-end latency is
   high.
 - Heavy `transfer.h2d` often points to repeated uploads or missing caching.
-- Heavy `transfer.d2h` often points to premature readbacks, logging, or CPU-side
+- Heavy `transfer.d2h` often points to premature readbacks, logging, or Vulkan-side
   post-processing.
 - Heavy `transfer.dtype_convert` suggests unnecessary precision churn rather
   than pure transport cost.
@@ -166,7 +166,6 @@ Status legend:
 > Status: **Implemented via shared `allocator.*.<backend>`,
 > `sync.*.<backend>`, `queue_wait.*.<backend>`, and
 > `queue_starvation.*.<backend>` profiler namespaces, plus backend-specific
-> Vulkan stall markers and CUDA allocator/sync profiling.**
 
 ### Objectives
 
@@ -188,7 +187,7 @@ Status legend:
   - queue idle / fence wait / event wait time
 - Add queue starvation markers where a backend is blocked waiting for reusable
   command buffers, descriptors, or in-flight frames.
-- Keep CPU and GPU backend markers consistent enough to compare host-side stall
+- Keep Vulkan and Vulkan backend markers consistent enough to compare Vulkan-side stall
   patterns across backends.
 
 ### Exit Criteria
@@ -197,7 +196,6 @@ Status legend:
   profiler without special ad-hoc logging.
 - It is possible to tell whether a regression is caused by compute, transfer,
   allocation churn, or synchronization/wait behavior.
-- Vulkan/CUDA/CPU backends all emit backend-appropriate stall markers under a
   documented namespace.
 
 ### Enable
@@ -213,7 +211,7 @@ Status legend:
 - Large `sync.*` / `queue_wait.*` time means the backend is idle or blocked,
   often due to readbacks, forced timing syncs, or batching policy.
 - Compare allocator and sync markers against backend-op rows to determine
-  whether the device is busy or the host/runtime is the bottleneck.
+  whether the device is busy or the Vulkan/runtime is the bottleneck.
 
 ## [x] 5. Correlated trace IDs
 
@@ -272,7 +270,7 @@ Status legend:
 3. **Allocator and synchronization visibility**
    - High value for backend/runtime regressions and complements transfer data.
 4. **Per-module spans**
-   - Best next step for model-level attribution once lower-level host costs are
+   - Best next step for model-level attribution once lower-level vulkan costs are
      better understood.
 5. **Correlated trace IDs**
    - Most powerful once the other namespaces exist and can be linked together.

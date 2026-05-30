@@ -22,13 +22,13 @@ std::string profiler_name(const char *domain, const char *event,
 }
 
 void record_backend_profile_event(const char *domain, const char *event,
-                                  const char *backend_name, double cpu_us,
+                                  const char *backend_name, double host_us,
                                   size_t bytes = 0,
                                   const std::string &detail = "") {
   if (!is_profile_enabled()) {
     return;
   }
-  Profiler::get().record(profiler_name(domain, event, backend_name), cpu_us,
+  Profiler::get().record(profiler_name(domain, event, backend_name), host_us,
                          0.0, bytes, detail);
 }
 
@@ -51,15 +51,15 @@ class DebugBackend : public Backend,
   std::unordered_map<size_t, size_t> peak_blocks_by_size_;
   std::unordered_set<void *> reusable_ptrs_;
 
-  void record_sync_event(const char *event, double cpu_us,
+  void record_sync_event(const char *event, double host_us,
                          const std::string &detail = "") const {
-    record_backend_profile_event("sync", event, base_->name(), cpu_us, 0,
+    record_backend_profile_event("sync", event, base_->name(), host_us, 0,
                                  detail);
   }
 
-  void record_allocator_event(const char *event, double cpu_us, size_t bytes,
+  void record_allocator_event(const char *event, double host_us, size_t bytes,
                               const std::string &detail = "") const {
-    record_backend_profile_event("allocator", event, base_->name(), cpu_us,
+    record_backend_profile_event("allocator", event, base_->name(), host_us,
                                  bytes, detail);
   }
 
@@ -67,7 +67,7 @@ class DebugBackend : public Backend,
     return base_->reports_gpu_kernel_time();
   }
 
-  void check(const std::string &name, double cpu_us,
+  void check(const std::string &name, double host_us,
              const Storage *out_storage = nullptr) {
     try {
       double gpu_us = 0.0;
@@ -84,7 +84,7 @@ class DebugBackend : public Backend,
       // Full synchronization and NaN checks are expensive and should only run
       // in explicit debug mode, not in profile-only mode.
       if (is_debug_enabled()) {
-        if (out_storage && out_storage->device().type == DeviceType::CPU) {
+        if (out_storage && out_storage->device().type == DeviceType::VULKAN) {
           float *data = (float *)out_storage->data();
           for (size_t i = 0; i < out_storage->size_bytes() / 4; ++i) {
             if (!std::isfinite(data[i])) {
@@ -97,7 +97,7 @@ class DebugBackend : public Backend,
 
       if (is_profile_enabled()) {
         size_t bytes = out_storage ? out_storage->size_bytes() : 0;
-        Profiler::get().record(name, cpu_us, gpu_us, bytes,
+        Profiler::get().record(name, host_us, gpu_us, bytes,
                                out_storage ? to_string(out_storage->shape())
                                            : "");
       }
@@ -201,14 +201,14 @@ public:
       }
     }
     Profiler::get().record_alloc(bytes);
-    const double cpu_us = timer.elapsed_us();
-    record_allocator_event(reuse_hit ? "reuse_hit" : "reuse_miss", cpu_us,
+    const double host_us = timer.elapsed_us();
+    record_allocator_event(reuse_hit ? "reuse_hit" : "reuse_miss", host_us,
                            bytes);
     if (pool_growth) {
-      record_allocator_event("pool_growth", cpu_us, bytes);
+      record_allocator_event("pool_growth", host_us, bytes);
     }
     if (bytes >= kLargeAllocationSlowPathBytes) {
-      record_allocator_event("large_alloc_slow_path", cpu_us, bytes);
+      record_allocator_event("large_alloc_slow_path", host_us, bytes);
     }
     return ptr;
   }

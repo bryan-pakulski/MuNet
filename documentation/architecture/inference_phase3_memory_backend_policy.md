@@ -68,14 +68,14 @@ This keeps the deploy/runtime classification visible in code and test coverage i
 
 MuNet now has an explicit constrained-system policy encoded in backend fallback helpers:
 
-- `CPUFallback` for deploy-safe math/activation/reduction/random features where CPU execution is acceptable
+- `ExplicitUnsupported` for deploy-safe math/activation/reduction/random features where Vulkan execution is acceptable
 - `ExplicitUnsupported` for features where silent fallback would violate runtime expectations or hide material capability gaps (for example convolution/spatial acceleration gaps or optimizer functionality in an inference runtime)
 
 ### 6. Hardware-tier recommendations
 
-- **Edge / constrained CPU-only**: keep `prepared_input_cache_entries` small (or `0`), favor `lean_mode=True`, and rely on CPU fallback only for deploy-safe math/reduction features.
-- **Workstation / selective accelerator**: use bounded prepared-input cache plus `prepare_batch(...)` when repeated host-to-device transfers dominate request setup.
-- **Enterprise / accelerator-heavy serving**: keep cache policy sized to the active request working set, use `run_batch_into(...)` to avoid repeat batch-output container allocations, and treat unsupported spatial/optimizer features as explicit deployment configuration errors rather than silent fallback.
+- **Edge / constrained Vulkan-only**: keep `prepared_input_cache_entries` small (or `0`), favor `lean_mode=True`, and rely on Vulkan fallback only for deploy-safe math/reduction features.
+- **Workstation / selective Vulkan backend**: use bounded prepared-input cache plus `prepare_batch(...)` when repeated Vulkan transfer transfers dominate request setup.
+- **Enterprise / Vulkan backend-heavy serving**: keep cache policy sized to the active request working set, use `run_batch_into(...)` to avoid repeat batch-output container allocations, and treat unsupported spatial/optimizer features as explicit deployment configuration errors rather than silent fallback.
 
 ## Current follow-on work
 

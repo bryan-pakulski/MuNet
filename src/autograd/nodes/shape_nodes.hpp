@@ -31,12 +31,12 @@ struct SumBackward : public Node {
   SumBackward(Shape s, Device d) : shape(std::move(s)), dev(d) {}
   std::string name() const override { return "SumBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
-    Tensor grad_out_cpu = grads[0].to(Device{DeviceType::CPU, 0});
+    Tensor grad_out_host = grads[0].to(Device{DeviceType::VULKAN, 0});
     const ScalarValue g =
-        read_scalar_from_buffer(grad_out_cpu.data(), grad_out_cpu.dtype());
-    Tensor cpu_grad_in(shape, Device{DeviceType::CPU, 0}, grads[0].dtype());
-    cpu_grad_in.fill_(make_scalar(g.value, cpu_grad_in.dtype()));
-    return {cpu_grad_in.to(dev)};
+        read_scalar_from_buffer(grad_out_host.data(), grad_out_host.dtype());
+    Tensor host_grad_in(shape, Device{DeviceType::VULKAN, 0}, grads[0].dtype());
+    host_grad_in.fill_(make_scalar(g.value, host_grad_in.dtype()));
+    return {host_grad_in.to(dev)};
   }
 };
 
@@ -50,9 +50,9 @@ struct MeanBackward : public Node {
       : input_shape(std::move(s)), dim(d), keepdim(k), dev(device), dtype(dt) {}
   std::string name() const override { return "MeanBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
-    Device cpu{DeviceType::CPU, 0};
-    Tensor grad_out = grads[0].to(cpu).contiguous();
-    Tensor grad_in(input_shape, cpu, dtype);
+    Device host{DeviceType::VULKAN, 0};
+    Tensor grad_out = grads[0].to(host).contiguous();
+    Tensor grad_in(input_shape, host, dtype);
     grad_in.fill_(0.0f);
 
     const int rank = static_cast<int>(input_shape.size());
@@ -129,9 +129,9 @@ struct NarrowBackward : public Node {
         length(length_), dev(device), dtype(dt) {}
   std::string name() const override { return "NarrowBackward"; }
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
-    Device cpu{DeviceType::CPU, 0};
-    Tensor grad_out = grads[0].to(cpu).contiguous();
-    Tensor grad_in(input_shape, cpu, dtype);
+    Device host{DeviceType::VULKAN, 0};
+    Tensor grad_out = grads[0].to(host).contiguous();
+    Tensor grad_in(input_shape, host, dtype);
     grad_in.fill_(0.0f);
 
     Strides in_strides = default_strides(input_shape);

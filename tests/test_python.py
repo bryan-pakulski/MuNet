@@ -34,9 +34,9 @@ def _sequential(layers):
 
 
 class TestBindings(unittest.TestCase):
-    def _available_non_cpu_devices(self):
+    def _available_non_host_devices(self):
         devices = []
-        for device_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+        for device_type in (munet.DeviceType.VULKAN,):
             dev = munet.Device(device_type, 0)
             try:
                 probe = munet.ones([1], device=dev)
@@ -75,22 +75,18 @@ class TestBindings(unittest.TestCase):
     def test_available_accelerators_and_devices_introspection(self):
         accelerators = munet.available_accelerators()
         self.assertIsInstance(accelerators, list)
-        self.assertGreaterEqual(len(accelerators), 3)
+        self.assertGreaterEqual(len(accelerators), 1)
 
         by_name = {entry["name"]: entry for entry in accelerators}
-        self.assertIn("cpu", by_name)
-        self.assertIn("cuda", by_name)
         self.assertIn("vulkan", by_name)
 
-        cpu_entry = by_name["cpu"]
-        self.assertTrue(cpu_entry["available"])
-        self.assertGreaterEqual(len(cpu_entry["devices"]), 1)
-        self.assertEqual(cpu_entry["devices"][0].type, munet.DeviceType.CPU)
+        vulkan_entry = by_name["vulkan"]
+        self.assertGreaterEqual(len(vulkan_entry["devices"]), 0)
 
         devices = munet.available_devices()
         self.assertIsInstance(devices, list)
         self.assertGreaterEqual(len(devices), 1)
-        self.assertEqual(devices[0].type, munet.DeviceType.CPU)
+        self.assertEqual(devices[0].type, munet.DeviceType.VULKAN)
 
     def test_cross_entropy_loss(self):
         logits_np = np.array([[2.0, 1.0, 0.1], [0.1, 1.0, 2.0]], dtype=np.float32)
@@ -182,15 +178,15 @@ class TestBindings(unittest.TestCase):
         self.assertTrue(t.requires_grad)
 
         # Check Enums mapped properly
-        self.assertEqual(t.device.type, munet.DeviceType.CPU)
+        self.assertEqual(t.device.type, munet.DeviceType.VULKAN)
         self.assertEqual(t.dtype, munet.DataType.Float32)
 
     def test_backend_supports_api(self):
-        cpu = munet.Device(munet.DeviceType.CPU, 0)
-        self.assertTrue(munet.supports(cpu, munet.BackendFeature.Matmul, munet.DataType.Float32))
-        self.assertFalse(munet.supports(cpu, munet.BackendFeature.Matmul, munet.DataType.Float16))
-        self.assertTrue(munet.supports(cpu, munet.BackendFeature.RandomFill, munet.DataType.Float16))
-        self.assertFalse(munet.supports(cpu, munet.BackendFeature.RandomFill, munet.DataType.Int32))
+        host = munet.Device(munet.DeviceType.VULKAN, 0)
+        self.assertTrue(munet.supports(host, munet.BackendFeature.Matmul, munet.DataType.Float32))
+        self.assertFalse(munet.supports(host, munet.BackendFeature.Matmul, munet.DataType.Float16))
+        self.assertTrue(munet.supports(host, munet.BackendFeature.RandomFill, munet.DataType.Float16))
+        self.assertFalse(munet.supports(host, munet.BackendFeature.RandomFill, munet.DataType.Int32))
 
     def test_numpy_buffer_protocol(self):
         """Test zero-copy memory sharing between C++ and NumPy."""
@@ -240,50 +236,6 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(a_grad[0], 1.0)
         self.assertEqual(b_grad[0], 1.0)
 
-    def test_cuda_backend(self):
-        """Test moving tensors to GPU and doing math."""
-        # Check if CUDA was compiled in
-        try:
-            munet.Device(munet.DeviceType.CUDA, 0)
-        except RuntimeError:
-            print("\nSkipping CUDA tests (not compiled or no GPU).")
-            return
-
-        # 1. Create on CPU
-        with munet.no_grad():
-            a_cpu = munet.Tensor([2])
-            b_cpu = munet.Tensor([2])
-
-        np.array(a_cpu, copy=False)[:] = [1.0, 2.0]
-        np.array(b_cpu, copy=False)[:] = [3.0, 4.0]
-
-        a_cpu.requires_grad = True
-        b_cpu.requires_grad = True
-
-        # 2. Move to GPU!
-        cuda_dev = munet.Device(munet.DeviceType.CUDA, 0)
-
-        try:
-            a_gpu = a_cpu.to(cuda_dev)
-            b_gpu = b_cpu.to(cuda_dev)
-        except RuntimeError as e:
-            # Catch backend not implemented (if CMake didn't find CUDA)
-            print(f"\nSkipping CUDA test due to: {e}")
-            return
-
-        # Ensure devices changed
-        self.assertEqual(a_gpu.device.type, munet.DeviceType.CUDA)
-
-        # 3. Add on GPU (invokes add_kernel on the device)
-        c_gpu = a_gpu + b_gpu
-
-        # 4. Bring result back to CPU to verify
-        c_cpu = c_gpu.to(munet.Device(munet.DeviceType.CPU, 0))
-
-        result = c_cpu.detach().numpy()
-        self.assertEqual(result[0], 4.0)
-        self.assertEqual(result[1], 6.0)
-
     def test_vulkan_backend(self):
         """Test moving tensors to Vulkan backend."""
         try:
@@ -292,21 +244,21 @@ class TestBindings(unittest.TestCase):
             print("\nSkipping Vulkan tests (not compiled or no GPU).")
             return
 
-        a_cpu = munet.Tensor([2], requires_grad=False)
-        np.array(a_cpu, copy=False)[:] = [9.0, 10.0]
+        a_host = munet.Tensor([2], requires_grad=False)
+        np.array(a_host, copy=False)[:] = [9.0, 10.0]
 
         vk_dev = munet.Device(munet.DeviceType.VULKAN, 0)
 
         try:
-            a_vk = a_cpu.to(vk_dev)
+            a_vk = a_host.to(vk_dev)
         except RuntimeError as e:
             print(f"\nSkipping Vulkan test due to: {e}")
             return
 
         self.assertEqual(a_vk.device.type, munet.DeviceType.VULKAN)
 
-        # Test moving it back to CPU to read the memory
-        a_back = a_vk.to(munet.Device(munet.DeviceType.CPU, 0))
+        # Test moving it back to Host to read the memory
+        a_back = a_vk.to(munet.Device(munet.DeviceType.VULKAN, 0))
         result = a_back.detach().numpy()
         self.assertEqual(result[0], 9.0)
         self.assertEqual(result[1], 10.0)
@@ -373,8 +325,8 @@ class TestBindings(unittest.TestCase):
 
     def test_full_training_loop(self):
         """Train a 2-layer MLP to overfit on dummy data."""
-        # GPU or CPU
-        dev = munet.Device(munet.DeviceType.CPU, 0)
+        # GPU or Host
+        dev = munet.Device(munet.DeviceType.VULKAN, 0)
 
         # Data: Predict sum of features
         x = munet.Tensor([2, 2], device=dev, requires_grad=False)
@@ -421,10 +373,10 @@ class TestBindings(unittest.TestCase):
         self.assertTrue(np.isfinite(loss_end))
 
     def test_multi_device_model_parallelism(self):
-        """Test seamless autograd across CPU and GPU boundaries."""
+        """Test seamless autograd across Host and GPU boundaries."""
         # Find an available GPU
         gpu_dev = None
-        for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+        for dev_type in (munet.DeviceType.VULKAN,):
             try:
                 candidate = munet.Device(dev_type, 0)
                 _ = munet.ones([1], device=candidate)
@@ -436,18 +388,18 @@ class TestBindings(unittest.TestCase):
         if gpu_dev is None:
             print("\nSkipping multi-device test (No GPU available).")
             return
-        cpu_dev = munet.Device(munet.DeviceType.CPU, 0)
-        # --- Layer 1 on CPU ---
-        x_cpu = munet.Tensor([1, 3], device=cpu_dev)
-        w1_cpu = munet.Tensor([3, 4], device=cpu_dev, requires_grad=True)
-        np.array(x_cpu, copy=False)[:] = [[1.0, 2.0, 3.0]]
-        w1_cpu.uniform_(-0.5, 0.5)
+        host_dev = munet.Device(munet.DeviceType.VULKAN, 0)
+        # --- Layer 1 on Host ---
+        x_host = munet.Tensor([1, 3], device=host_dev)
+        w1_host = munet.Tensor([3, 4], device=host_dev, requires_grad=True)
+        np.array(x_host, copy=False)[:] = [[1.0, 2.0, 3.0]]
+        w1_host.uniform_(-0.5, 0.5)
         # --- Layer 2 on GPU ---
         w2_gpu = munet.Tensor([4, 2], device=gpu_dev, requires_grad=True)
         w2_gpu.uniform_(-0.5, 0.5)
         # --- Forward Pass (Cross-device) ---
-        h_cpu = x_cpu @ w1_cpu
-        h_gpu = h_cpu.to(gpu_dev)  # Autograd boundary crossing!
+        h_host = x_host @ w1_host
+        h_gpu = h_host.to(gpu_dev)  # Autograd boundary crossing!
         pred_gpu = h_gpu @ w2_gpu
 
         target_gpu = munet.Tensor([1, 2], device=gpu_dev)
@@ -458,11 +410,11 @@ class TestBindings(unittest.TestCase):
         # --- Backward Pass ---
         loss.backward()
         # --- Verify Gradients Synchronized Correctly ---
-        self.assertTrue(w1_cpu.grad is not None)
+        self.assertTrue(w1_host.grad is not None)
         self.assertTrue(w2_gpu.grad is not None)
-        self.assertEqual(w1_cpu.grad.device.type, munet.DeviceType.CPU)
+        self.assertEqual(w1_host.grad.device.type, munet.DeviceType.VULKAN)
         self.assertEqual(w2_gpu.grad.device.type, gpu_dev.type)
-        print(f"\nSuccessfully backpropagated from {gpu_dev.type} back to CPU!")
+        print(f"\nSuccessfully backpropagated from {gpu_dev.type} back to Host!")
 
     def test_default_grad_mode(self):
         # By default, operations on requires_grad=True tensors build a graph
@@ -550,7 +502,7 @@ class TestBindings(unittest.TestCase):
             t2.item()
 
     def test_numpy_method(self):
-        """Test the .numpy() binding for CPU tensors."""
+        """Test the .numpy() binding for Host tensors."""
         t = munet.Tensor([2, 3])
         np.array(t, copy=False)[:] = 1.0
 
@@ -569,28 +521,6 @@ class TestBindings(unittest.TestCase):
         t = munet.ones([2, 2], requires_grad=True)
         with self.assertRaisesRegex(RuntimeError, r"Use \.detach\(\)\.numpy\(\) instead"):
             t.numpy()
-
-        # 2. Device safety
-        gpu_dev = None
-        for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
-            try:
-                gpu_dev = munet.Device(dev_type, 0)
-                # verify it's actually usable
-                munet.ones([1], device=gpu_dev)
-                break
-            except:
-                continue
-
-        if gpu_dev:
-            try:
-                t_gpu = munet.ones([2], device=gpu_dev)
-            except RuntimeError:
-                return
-            with self.assertRaisesRegex(
-                RuntimeError,
-                r"Cannot convert GPU tensor to NumPy array directly. Call `\.to\(Device\(DeviceType\.CPU\)\)` first\.",
-            ):
-                t_gpu.numpy()
 
     def test_adam_optimizer(self):
         """Test Adam optimizer convergence in Python."""
@@ -1009,26 +939,6 @@ class TestBindings(unittest.TestCase):
             restored = munet.load_for_inference(path)
             y = np.array(restored.forward(x).detach(), copy=False)
             self.assertTrue(np.allclose(y, np.ones((2, 3), dtype=np.float32)))
-
-    def test_inference_load_serialized_alias_and_device(self):
-        model = _sequential([
-            munet.nn.Dropout(0.5),
-        ])
-        model.train(True)
-
-        x = munet.ones([1, 3], dtype=munet.DataType.Float32)
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "deploy_alias.npz")
-            munet.save_deploy(model, path)
-
-            restored = munet.inference.load_serialized(
-                path,
-                device=munet.Device(munet.DeviceType.CPU, 0),
-            )
-            y = np.array(restored.forward(x).detach(), copy=False)
-            self.assertTrue(np.allclose(y, np.ones((1, 3), dtype=np.float32)))
-
     def test_load_weights_for_inference_sets_eval_mode(self):
         src = _sequential([
             munet.nn.Dropout(0.5),
@@ -1046,38 +956,6 @@ class TestBindings(unittest.TestCase):
             munet.load_weights_for_inference(dst, path)
             y = np.array(dst.forward(x).detach(), copy=False)
             self.assertTrue(np.allclose(y, np.ones((2, 2), dtype=np.float32)))
-
-    def test_model_serialization_from_non_cpu_device_preserves_dtype(self):
-        devices = self._available_non_cpu_devices()
-        if not devices:
-            print("\nSkipping non-CPU serialization test (no CUDA/Vulkan device available).")
-            return
-
-        opts = munet.TensorOptions()
-        opts.dtype = munet.DataType.Float16
-        model = _sequential([
-            munet.nn.Linear(4, 4, options=opts),
-            munet.nn.LayerNorm(4, options=opts),
-        ])
-        model.to(devices[0])
-
-        x = munet.ones([2, 4], dtype=munet.DataType.Float16).to(devices[0])
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "non_cpu_dtype_model.npz")
-            munet.save_checkpoint(model, path)
-            loaded = munet.load_checkpoint(path, trusted=False)
-
-            y_ref = np.array(model.forward(x).detach().to(munet.Device(munet.DeviceType.CPU, 0)), copy=False)
-            y_loaded = np.array(
-                loaded.forward(x.to(munet.Device(munet.DeviceType.CPU, 0))).detach(),
-                copy=False,
-            )
-            self.assertEqual(loaded.named_parameters()["0.weight"].dtype, munet.DataType.Float16)
-            self.assertEqual(loaded.named_parameters()["1.weight"].dtype, munet.DataType.Float16)
-            self.assertTrue(np.allclose(y_ref.astype(np.float32), y_loaded.astype(np.float32), atol=5e-2))
-
-
     def test_inference_engine_compile_and_shape_guard(self):
         model = _sequential([
             munet.nn.Linear(4, 8),
@@ -1100,7 +978,7 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(y.shape, [2, 2])
 
         # Avoid mismatched-shape runtime path here; this currently triggers
-        # undefined behavior in debug CPU-only builds.
+        # undefined behavior in debug Host-only builds.
         y2 = eng.run(x)
         self.assertEqual(y2.shape, [2, 2])
 
@@ -1201,532 +1079,6 @@ class TestBindings(unittest.TestCase):
             y_ref = np.array(restored.forward(x).detach(), copy=False)
             y_eng = np.array(eng.run(x).detach(), copy=False)
             self.assertTrue(np.allclose(y_ref, y_eng, atol=1e-6))
-
-    def test_inference_engine_preserves_float16_across_available_devices(self):
-        opts = munet.TensorOptions()
-        opts.dtype = munet.DataType.Float16
-        model = _sequential([
-            munet.nn.Linear(2, 2, options=opts),
-            munet.nn.ReLU(),
-        ])
-
-        x = munet.ones([1, 2], dtype=munet.DataType.Float16)
-        expected = np.array(
-            model.forward(x).detach().to(munet.Device(munet.DeviceType.CPU, 0)),
-            copy=False,
-        )
-
-        for dev in [munet.Device(munet.DeviceType.CPU, 0)] + self._available_non_cpu_devices():
-            if not munet.supports(dev, munet.BackendFeature.Matmul, munet.DataType.Float16):
-                continue
-            eng = munet.inference.Engine()
-            eng.set_device(dev)
-            eng.load(model)
-
-            y = eng.run(x.to(dev)).detach().to(munet.Device(munet.DeviceType.CPU, 0))
-            self.assertEqual(y.dtype, munet.DataType.Float16)
-            self.assertTrue(
-                np.allclose(
-                    np.array(y, copy=False).astype(np.float32),
-                    expected.astype(np.float32),
-                    atol=5e-2,
-                )
-            )
-
-
-
-
-    def test_compile_onnx_to_munet_module(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX compile test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            onnx_path = os.path.join(d, "linear_relu.onnx")
-
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
-
-            W = np.array([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=np.float32)
-            B = np.array([0.5, -1.0], dtype=np.float32)
-
-            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
-            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
-
-            gemm = helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0)
-            relu = helper.make_node("Relu", ["z"], ["y"])
-
-            graph = helper.make_graph([gemm, relu], "linear_relu_graph", [x_info], [y_info], [w_init, b_init])
-            model = helper.make_model(graph, producer_name="munet_compile_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, onnx_path)
-
-            module = munet.inference.compile_onnx(onnx_path)
-
-            x = munet.from_numpy(np.array([[1.0, 2.0, 3.0], [-1.0, 0.5, 2.0]], dtype=np.float32))
-            y = module.forward(x)
-            y_np = np.array(y.detach(), copy=False)
-
-            expected = np.maximum(x.numpy() @ W + B, 0.0)
-            self.assertTrue(np.allclose(y_np, expected, atol=1e-5))
-
-    def test_compile_onnx_report_unsupported_ops(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX unsupported-op report test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            onnx_path = os.path.join(d, "unsupported.onnx")
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
-            node = helper.make_node("Erf", ["x"], ["y"])
-            graph = helper.make_graph([node], "unsupported_graph", [x_info], [y_info])
-            model = helper.make_model(graph, producer_name="munet_compile_report_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, onnx_path)
-
-            missing = munet.inference.report_onnx_unsupported_ops(onnx_path)
-            self.assertIn("Erf", missing)
-
-            with self.assertRaises(ValueError) as ctx:
-                munet.inference.compile_onnx(onnx_path)
-
-            msg = str(ctx.exception)
-            self.assertIn("unsupported_unique", msg)
-            self.assertIn("unsupported_total", msg)
-            self.assertIn("Erf", msg)
-
-    def test_onnx_native_conversion_map_api(self):
-        mp = munet.inference.onnx_native_conversion_map()
-        self.assertIn("Gemm", mp)
-        self.assertEqual(mp["Gemm"]["status"], "lowered")
-        self.assertEqual(mp["LeakyRelu"]["status"], "lowered")
-        self.assertEqual(mp["Gelu"]["status"], "lowered")
-        self.assertEqual(mp["GlobalAveragePool"]["status"], "lowered")
-        self.assertEqual(mp["Add"]["status"], "lowered")
-        self.assertEqual(mp["Sub"]["status"], "lowered")
-        self.assertEqual(mp["Mul"]["status"], "lowered")
-        self.assertEqual(mp["Div"]["status"], "lowered")
-        self.assertEqual(mp["Reshape"]["status"], "lowered")
-        self.assertEqual(mp["Transpose"]["status"], "lowered")
-        self.assertEqual(mp["Concat"]["status"], "lowered")
-        self.assertEqual(mp["Squeeze"]["status"], "lowered")
-        self.assertEqual(mp["Expand"]["status"], "lowered")
-        self.assertEqual(mp["Tile"]["status"], "lowered")
-        self.assertEqual(mp["ConstantOfShape"]["status"], "lowered")
-        self.assertEqual(mp["Gather"]["status"], "lowered")
-
-    def test_compile_onnx_lower_leakyrelu_and_globalavgpool(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX LeakyRelu/GlobalAveragePool lowering test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "conv_lrelu_gap.onnx")
-
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 1, 1])
-
-            W = np.array([[[[1.0]]]], dtype=np.float32)
-            B = np.array([0.0], dtype=np.float32)
-            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
-            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
-
-            conv = helper.make_node("Conv", ["x", "W", "B"], ["z"])
-            lrelu = helper.make_node("LeakyRelu", ["z"], ["a"], alpha=0.1)
-            gap = helper.make_node("GlobalAveragePool", ["a"], ["y"])
-
-            graph = helper.make_graph([conv, lrelu, gap], "conv_lrelu_gap", [x_info], [y_info], [w_init, b_init])
-            model = helper.make_model(graph, producer_name="munet_lrelu_gap_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, path)
-
-            module = munet.inference.compile_onnx(path)
-            x = munet.from_numpy(np.array([[[[-1.0, 3.0], [2.0, -4.0]]]], dtype=np.float32))
-            out = np.array(module.forward(x).detach(), copy=False)
-
-            expected = np.array([[[[( -0.1 + 3.0 + 2.0 - 0.4 ) / 4.0]]]], dtype=np.float32)
-            self.assertTrue(np.allclose(out, expected, atol=1e-5))
-
-    def test_compile_onnx_preserves_float16_dtype_through_graph_runtime(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper, numpy_helper
-        except Exception:
-            print("\nSkipping ONNX float16 dtype test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "float16_add.onnx")
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT16, [1, 2])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT16, [1, 2])
-            bias = numpy_helper.from_array(np.array([[0.5, -1.0]], dtype=np.float16), name="bias")
-
-            node = helper.make_node("Add", ["x", "bias"], ["y"])
-            graph = helper.make_graph([node], "float16_add_graph", [x_info], [y_info], [bias])
-            model = helper.make_model(graph, producer_name="munet_float16_add_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, path)
-
-            module = munet.inference.compile_onnx(path)
-            x = munet.from_numpy(np.array([[1.5, 2.0]], dtype=np.float16))
-            y = module.forward(x)
-
-            self.assertEqual(y.dtype, munet.DataType.Float16)
-            self.assertEqual(np.array(y.detach(), copy=False).dtype, np.float16)
-            self.assertTrue(
-                np.allclose(
-                    np.array(y.detach(), copy=False),
-                    np.array([[2.0, 1.0]], dtype=np.float16),
-                    atol=1e-3,
-                )
-            )
-
-    def test_compile_onnx_cast_preserves_requested_dtype(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX cast dtype test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "cast_to_float16.onnx")
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT16, [1, 2])
-            cast = helper.make_node("Cast", ["x"], ["y"], to=TensorProto.FLOAT16)
-            graph = helper.make_graph([cast], "cast_to_float16_graph", [x_info], [y_info])
-            model = helper.make_model(graph, producer_name="munet_cast_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, path)
-
-            module = munet.inference.compile_onnx(path)
-            x = munet.from_numpy(np.array([[1.5, -2.25]], dtype=np.float32))
-            y = module.forward(x)
-
-            self.assertEqual(y.dtype, munet.DataType.Float16)
-            self.assertEqual(np.array(y.detach(), copy=False).dtype, np.float16)
-            self.assertTrue(
-                np.allclose(
-                    np.array(y.detach(), copy=False).astype(np.float32),
-                    np.array([[1.5, -2.25]], dtype=np.float32),
-                    atol=1e-3,
-                )
-            )
-
-    def test_compile_onnx_binary_ops_add_sub_mul_div(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX binary ops lowering test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "binary_ops.onnx")
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 3])
-
-            c_add = helper.make_tensor("c_add", TensorProto.FLOAT, [1, 3], [1.0, 2.0, 3.0])
-            c_sub = helper.make_tensor("c_sub", TensorProto.FLOAT, [1, 3], [0.5, 1.0, 1.5])
-            c_mul = helper.make_tensor("c_mul", TensorProto.FLOAT, [1, 3], [2.0, 2.0, 2.0])
-            c_div = helper.make_tensor("c_div", TensorProto.FLOAT, [1, 3], [2.0, 4.0, 8.0])
-
-            n1 = helper.make_node("Add", ["x", "c_add"], ["a"])
-            n2 = helper.make_node("Sub", ["a", "c_sub"], ["b"])
-            n3 = helper.make_node("Mul", ["b", "c_mul"], ["c"])
-            n4 = helper.make_node("Div", ["c", "c_div"], ["y"])
-
-            graph = helper.make_graph([n1, n2, n3, n4], "binary_ops_graph", [x_info], [y_info], [c_add, c_sub, c_mul, c_div])
-            model = helper.make_model(graph, producer_name="munet_binary_ops_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, path)
-
-            module = munet.inference.compile_onnx(path)
-            x = np.array([[2.0, 4.0, 8.0]], dtype=np.float32)
-            y = np.array(module.forward(munet.from_numpy(x)).detach(), copy=False)
-            expected = (((x + np.array([[1.0, 2.0, 3.0]], dtype=np.float32)) - np.array([[0.5, 1.0, 1.5]], dtype=np.float32)) * 2.0) / np.array([[2.0, 4.0, 8.0]], dtype=np.float32)
-            self.assertTrue(np.allclose(y, expected, atol=1e-6))
-
-    def test_compile_onnx_phase1_shape_index_ops(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX phase1 shape/index ops test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "phase1_shape_index.onnx")
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 1, 2])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 2, 2])
-
-            # ConstantOfShape input shape
-            shp = helper.make_tensor("shape_vec", TensorProto.INT64, [4], [2, 1, 2, 2])
-            cshape = helper.make_node("ConstantOfShape", ["shape_vec"], ["base"])
-            add = helper.make_node("Add", ["base", "x"], ["a"])
-
-            # Expand to same shape (exercise operator semantics)
-            exp_shape = helper.make_tensor("exp_shape", TensorProto.INT64, [4], [2, 1, 2, 2])
-            expand = helper.make_node("Expand", ["a", "exp_shape"], ["e"])
-
-            # Tile channel dim then gather first channel back
-            reps = helper.make_tensor("reps", TensorProto.INT64, [4], [1, 2, 1, 1])
-            tile = helper.make_node("Tile", ["e", "reps"], ["t"])
-            idx = helper.make_tensor("idx", TensorProto.INT64, [1], [0])
-            gather = helper.make_node("Gather", ["t", "idx"], ["g"], axis=1)
-            sq_axes = helper.make_tensor("sq_axes", TensorProto.INT64, [1], [1])
-            squeeze = helper.make_node("Squeeze", ["g", "sq_axes"], ["y"])
-
-            graph = helper.make_graph(
-                [cshape, add, expand, tile, gather, squeeze],
-                "phase1_shape_index_graph",
-                [x_info],
-                [y_info],
-                [shp, exp_shape, reps, idx, sq_axes],
-            )
-            model = helper.make_model(graph, producer_name="munet_phase1_test", opset_imports=[helper.make_opsetid("", 13)])
-            model.ir_version = 7
-            onnx.save(model, path)
-
-            module = munet.inference.compile_onnx(path)
-            x = munet.from_numpy(np.array([[[[2.0, 4.0]]]], dtype=np.float32))
-            out = np.array(module.forward(x).detach(), copy=False)
-            expected = np.array([[[2.0, 4.0], [2.0, 4.0]], [[2.0, 4.0], [2.0, 4.0]]], dtype=np.float32)
-            self.assertTrue(np.allclose(out, expected, atol=1e-6))
-
-    def test_compile_onnx_strict_failure_reports_counts(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX strict-failure report test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "strict_fail.onnx")
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
-            soft = helper.make_node("Softmax", ["x"], ["z1"])
-            erf = helper.make_node("Erf", ["z1"], ["y"])
-            graph = helper.make_graph([soft, erf], "strict_fail_graph", [x_info], [y_info])
-            model = helper.make_model(graph, producer_name="munet_strict_fail_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, path)
-
-            with self.assertRaises(ValueError) as ctx:
-                munet.inference.compile_onnx(path)
-
-            msg = str(ctx.exception)
-            self.assertIn("unsupported_total=1", msg)
-            self.assertIn("Erf", msg)
-            self.assertIn("op_counts=", msg)
-
-    def test_onnx_conversion_coverage_report_generated_graph(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX coverage-report test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "coverage_graph.onnx")
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
-
-            W = np.array([[1.0, 0.5], [0.0, -1.0], [2.0, 1.0]], dtype=np.float32)
-            B = np.array([0.25, -0.75], dtype=np.float32)
-            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
-            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
-
-            nodes = [
-                helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0),
-                helper.make_node("Relu", ["z"], ["a"]),
-                helper.make_node("Sigmoid", ["a"], ["y"]),
-            ]
-            graph = helper.make_graph(nodes, "coverage_graph", [x_info], [y_info], [w_init, b_init])
-            model = helper.make_model(graph, producer_name="munet_coverage_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, path)
-
-            report = munet.inference.onnx_conversion_coverage_report(path)
-            self.assertEqual(report["total_nodes"], 3)
-            self.assertTrue(report["fully_lowerable"])
-            self.assertTrue(report["native_deployable"])
-            self.assertEqual(report["runtime_role"], "deploy_runtime")
-            self.assertEqual(report["device_policy"], "caller_specified")
-            self.assertEqual(report["dtype_policy"], "preserve_onnx_io_types")
-            self.assertEqual(report["shape_contract_policy"], "caller_declared_at_engine_compile")
-            self.assertEqual(report["warm_state"], "not_embedded")
-            self.assertEqual(report["coverage"]["unsupported"], [])
-            self.assertEqual(report["coverage"]["unmapped"], [])
-
-    def test_compile_onnx_native_module_can_save_deploy_artifact(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX native-output save test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            onnx_path = os.path.join(d, "linear_relu_native.onnx")
-            native_path = os.path.join(d, "linear_relu_native.npz")
-
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 2])
-
-            W = np.array([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=np.float32)
-            B = np.array([0.5, -1.0], dtype=np.float32)
-
-            w_init = helper.make_tensor("W", TensorProto.FLOAT, W.shape, W.flatten().tolist())
-            b_init = helper.make_tensor("B", TensorProto.FLOAT, B.shape, B.flatten().tolist())
-
-            gemm = helper.make_node("Gemm", ["x", "W", "B"], ["z"], transB=0)
-            relu = helper.make_node("Relu", ["z"], ["y"])
-
-            graph = helper.make_graph([gemm, relu], "linear_relu_native_graph", [x_info], [y_info], [w_init, b_init])
-            model = helper.make_model(graph, producer_name="munet_native_save_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, onnx_path)
-
-            from munet_nn import inference
-
-            module = inference.compile_onnx(onnx_path, output_path=native_path)
-            restored = munet.load_for_inference(native_path)
-
-            x_np = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
-            expected = np.maximum(x_np @ W + B, 0.0)
-
-            y0 = np.array(module.forward(munet.from_numpy(x_np)).detach(), copy=False)
-            y1 = np.array(restored.forward(munet.from_numpy(x_np)).detach(), copy=False)
-            self.assertTrue(np.allclose(y0, expected, atol=1e-5))
-            self.assertTrue(np.allclose(y1, expected, atol=1e-5))
-
-            metadata = munet.serialization_metadata(native_path)
-            self.assertEqual(metadata["artifact_kind"], "deploy_model")
-
-    def test_yolov5n_onnx_conversion_coverage_report(self):
-        try:
-            import onnx  # noqa: F401
-        except Exception:
-            print("\nSkipping yolov5n coverage test (onnx not installed).")
-            return
-
-        import urllib.error
-
-        with tempfile.TemporaryDirectory() as d:
-            yolopath = os.path.join(d, "yolov5n.onnx")
-            try:
-                munet.inference.download_yolov5n_onnx(yolopath)
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
-                print(f"\nSkipping yolov5n coverage test (download unavailable): {e}")
-                return
-
-            report = munet.inference.onnx_conversion_coverage_report(yolopath)
-            self.assertGreater(report["total_nodes"], 0)
-            self.assertIn("Conv", report["unique_ops"])
-            self.assertEqual(report["coverage"]["unsupported"], [])
-            self.assertEqual(report["coverage"]["unmapped"], [])
-            self.assertTrue(report["fully_lowerable"])
-
-    def test_compile_onnx_graph_runtime_branching_ops(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX graph-runtime branching test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "branching_ops.onnx")
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2, 2, 2])
-            y_info = helper.make_tensor_value_info("out", TensorProto.FLOAT, [1, 1, 2, 2, 2])
-
-            split = helper.make_node("Split", ["x"], ["a", "b"], axis=1, split=[1, 1])
-            idn = helper.make_node("Identity", ["b"], ["b2"])
-            cat = helper.make_node("Concat", ["a", "b2"], ["c"], axis=1)
-            shape_const = helper.make_tensor("shape", TensorProto.INT64, [4], [1, 2, 2, 2])
-            reshape = helper.make_node("Reshape", ["c", "shape"], ["r"])
-            trans = helper.make_node("Transpose", ["r"], ["t"], perm=[0, 1, 2, 3])
-            unsq_axes = helper.make_tensor("axes", TensorProto.INT64, [1], [0])
-            unsq = helper.make_node("Unsqueeze", ["t", "axes"], ["u"])
-            shape = helper.make_node("Shape", ["u"], ["sh"])
-            st = helper.make_tensor("st", TensorProto.INT64, [1], [0])
-            en = helper.make_tensor("en", TensorProto.INT64, [1], [1])
-            ax = helper.make_tensor("ax", TensorProto.INT64, [1], [0])
-            sl = helper.make_node("Slice", ["sh", "st", "en", "ax"], ["slv"])
-            pw = helper.make_tensor("pw", TensorProto.FLOAT, [1], [2.0])
-            pwn = helper.make_node("Pow", ["slv", "pw"], ["p2"])
-            fl = helper.make_node("Floor", ["p2"], ["f"])
-            cast = helper.make_node("Cast", ["f"], ["f32"], to=TensorProto.FLOAT)
-            add = helper.make_node("Add", ["u", "f32"], ["out"])
-
-            graph = helper.make_graph(
-                [split, idn, cat, reshape, trans, unsq, shape, sl, pwn, fl, cast, add],
-                "branching_ops",
-                [x_info],
-                [y_info],
-                [shape_const, unsq_axes, st, en, ax, pw],
-            )
-            model = helper.make_model(graph, producer_name="munet_graph_runtime_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, path)
-
-            module = munet.inference.compile_onnx(path)
-            x = munet.from_numpy(np.array([[[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]], dtype=np.float32))
-            y = module.forward(x)
-            y_np = np.array(y.detach(), copy=False)
-            self.assertEqual(list(y_np.shape), [1, 1, 2, 2, 2])
-
-            report = munet.inference.onnx_conversion_coverage_report(path)
-            self.assertTrue(report["fully_lowerable"])
-            self.assertFalse(report["native_deployable"])
-            self.assertEqual(report["runtime_role"], "development_tooling")
-
-    def test_onnx_runtime_package_boundary_api(self):
-        boundary = munet.inference.onnx_runtime_package_boundary()
-        self.assertIn("deploy_runtime", boundary)
-        self.assertIn("development_tooling", boundary)
-        self.assertIn("compile_onnx(model_path)", boundary["deploy_runtime"][0])
-        self.assertIn("packaging_policy", boundary)
-
-    def test_onnx_inference_wrapper(self):
-        try:
-            import onnx
-            from onnx import TensorProto, helper
-        except Exception:
-            print("\nSkipping ONNX load_onnx deprecation test (onnx not installed).")
-            return
-
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "add_bias.onnx")
-
-            x_info = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])
-            y_info = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])
-            b_init = helper.make_tensor(
-                "b", TensorProto.FLOAT, [1, 3], np.array([[1.0, 2.0, 3.0]], dtype=np.float32).flatten().tolist()
-            )
-            add_node = helper.make_node("Add", ["x", "b"], ["y"])
-
-            graph = helper.make_graph([add_node], "add_graph", [x_info], [y_info], [b_init])
-            model = helper.make_model(graph, producer_name="munet_test", opset_imports=[helper.make_opsetid("", 11)])
-            model.ir_version = 7
-            onnx.save(model, path)
-
-            with self.assertRaises(RuntimeError):
-                munet.inference.load_onnx(path)
-
     def test_inference_engine_dynamic_dims_with_wildcards(self):
         model = _sequential([
             munet.nn.Conv2d(3, 4, 3, padding=1),

@@ -31,13 +31,13 @@ MuNet now defaults the inference runtime toward lower overhead:
 
 - `capture_profiler_memory` defaults to `False`
 - trace ids / scoped trace contexts are only activated when observers, profiler mode, or debug logging are enabled
-- `lean_mode=True` further favors predictable deploy execution by keeping optional runtime diagnostics off and skipping non-essential load-time diagnostics
+- `lean_mode=True` further favors predictable deploy execution by keeping Vulkan runtime diagnostics off and skipping non-essential load-time diagnostics
 
 For constrained devices, prefer:
 
 - `eng.set_lean_mode(True)` in Python, or `EngineConfig::lean_mode = true` in C++
 - `capture_profiler_memory=True` only when you are actively collecting memory diagnostics
-- a bounded prepared-input cache (`prepared_input_cache_entries`, `prepared_input_cache_max_bytes`) when repeated host-to-device transfers must stay within a fixed memory budget
+- a bounded prepared-input cache (`prepared_input_cache_entries`, `prepared_input_cache_max_bytes`) when repeated Vulkan transfer transfers must stay within a fixed memory budget
 - `prepare_batch([...])` during warmup when you want to pre-populate prepared-input buffers before steady-state batched inference
 - observers only when lifecycle event callbacks are required
 
@@ -60,7 +60,7 @@ The engine exposes lightweight lifecycle hooks without coupling deployment code 
   - profiler current/peak memory snapshots when enabled
   - a human-readable diagnostic message
 - `EngineStats` also records compile/run timings, compiled shapes, profiler memory
-  snapshots, per-run trace ids, and host-side phase timings for:
+  snapshots, per-run trace ids, and Vulkan-side phase timings for:
   - module load transfer/eval
   - compile input preparation / forward / warmup
   - run input preparation / forward / output validation
@@ -73,25 +73,19 @@ engine events with the process-level profiler (`MUNET_PROFILE=1`) when deeper
 backend timing is required. If you also enable `MUNET_DEBUG=1`, log lines will
 include the same `[trace_id=… span=…]` prefix used by profiler detail strings.
 
-## ONNX native conversion direction
 
 MuNet now follows a strict native-conversion flow:
 
-1. `compile_onnx(...)` attempts to convert the full ONNX graph into a MuNet-native module.
 2. If any node cannot be converted, conversion fails with a detailed unsupported-op report.
 
 There is no runtime fallback path in conversion.
 
 ### Deploy packaging boundary
 
-- If `compile_onnx(...)` can lower a model into a plain sequential MuNet module, that result is treated as **deploy runtime** output.
-- In that native-sequential case, `compile_onnx(model_path, output_path="model.npz")` now writes a deploy artifact that can be consumed by `munet.load_for_inference(...)`.
 - If conversion still requires the Python graph-runtime helper, the result remains **development tooling**: it is useful for validation and bring-up, but it is not serialized as a deploy package.
-- Use `munet.inference.onnx_runtime_package_boundary()` and `munet.inference.onnx_conversion_coverage_report(...)` to inspect which side of that boundary a given conversion lands on.
 
 ### Foundation added for runtime conversion
 
-- A central `onnx_native_conversion_map()` reports known ONNX operator mappings and status:
   - `lowered`: converted to MuNet layers today.
   - `pass_through`: graph bookkeeping ops, no emitted layer.
   - `planned` / `unsupported`: not yet lowered.
@@ -118,13 +112,10 @@ There is no runtime fallback path in conversion.
 - basic graph joins: `Concat`
 - shape/index ops: `Squeeze`, `Expand`, `Tile`, `ConstantOfShape`, `Gather`
 
-## YOLOv5 ONNX operator coverage check
 
-You can inspect a downloaded ONNX model without compiling it natively:
 
 ```python
 import munet_nn as munet
-report = munet.inference.onnx_conversion_coverage_report("yolov5n.onnx")
 print(report["unique_ops"])
 print("unsupported:", report["coverage"]["unsupported"])
 print("unmapped:", report["coverage"]["unmapped"])
@@ -136,7 +127,6 @@ To fetch the reference model used by tests/utilities:
 
 ```python
 import munet_nn as munet
-munet.inference.download_yolov5n_onnx("/tmp/yolov5n.onnx")
 ```
 
 ## Builder container for reproducible local builds
@@ -148,21 +138,16 @@ If local pybind11/Python toolchain setup is problematic, use the builder image:
 ```
 
 This builds `docker/Dockerfile.builder` and runs a release CMake build inside
-an Ubuntu 22.04 container with Python, CMake, pybind prerequisites, and ONNX tooling.
 
 ### YOLOv5n conversion status
 
-The ONNX op set observed in `yolov5n.onnx` is now covered by the native
-conversion map and strict native conversion path (`compile_onnx(...)`),
 including:
 
 - `Add`, `Cast`, `Concat`, `Constant`, `Conv`, `Floor`, `MaxPool`, `Mul`,
   `Pow`, `Reshape`, `Resize`, `Shape`, `Sigmoid`, `Slice`, `Split`,
   `Transpose`, `Unsqueeze`.
 
-## Strict ONNX conversion policy
 
-ONNX conversion now follows strict all-or-fail behavior:
 
 1. **Success**: model is fully converted to MuNet native graph module.
 2. **Failure**: conversion aborts and reports unsupported operators with:

@@ -1,7 +1,7 @@
 #include "vulkan_backend.hpp"
 #include "core/all_reduce_runtime.hpp"
 #include "core/util.hpp"
-#include "cpu_backend.hpp"
+#include "host_backend.hpp"
 #include "storage.hpp"
 #include <algorithm>
 #include <atomic>
@@ -46,7 +46,7 @@ static inline std::chrono::high_resolution_clock::time_point profile_now() {
 }
 
 static inline void
-profile_cpu_event(const char *name,
+profile_host_event(const char *name,
                   const std::chrono::high_resolution_clock::time_point &start,
                   size_t bytes = 0) {
   if (!is_profile_enabled())
@@ -62,7 +62,7 @@ static inline void profile_backend_event(
     const std::chrono::high_resolution_clock::time_point &start,
     size_t bytes = 0) {
   const std::string name = std::string(domain) + "." + event + ".vulkan";
-  profile_cpu_event(name.c_str(), start, bytes);
+  profile_host_event(name.c_str(), start, bytes);
 }
 
 static size_t round_up_alloc_size(size_t bytes) {
@@ -2181,7 +2181,7 @@ void VulkanBackend::flush_batch() {
   VK_CHECK(vkQueueSubmit(compute_queue_, 1, &submitInfo,
                          runtime_->in_flight_fences[runtime_->current_frame]));
 
-  profile_cpu_event("vulkan.flush_batch", flush_start);
+  profile_host_event("vulkan.flush_batch", flush_start);
 
   // Advance Frame
   runtime_->current_frame =
@@ -2201,7 +2201,7 @@ void VulkanBackend::ensure_recording() {
   VK_CHECK(vkWaitForFences(device_, 1, &runtime_->in_flight_fences[runtime_->current_frame],
                            VK_TRUE,
                            UINT64_MAX));
-  profile_cpu_event("vulkan.wait_for_fence", wait_start);
+  profile_host_event("vulkan.wait_for_fence", wait_start);
   profile_backend_event("queue_wait", "in_flight_frame", wait_start);
 
   // Process deferred frees safely now that the GPU is done with this frame
@@ -2223,7 +2223,7 @@ void VulkanBackend::ensure_recording() {
   // descriptors and it is safe to reuse them by just rewinding the cursor.
   auto descriptor_reuse_start = profile_now();
   runtime_->descriptor_set_cursor[runtime_->current_frame] = 0;
-  profile_cpu_event("vulkan.descriptor_set_reuse", descriptor_reuse_start);
+  profile_host_event("vulkan.descriptor_set_reuse", descriptor_reuse_start);
   profile_backend_event("queue_starvation", "descriptor_reuse",
                         descriptor_reuse_start);
 
@@ -2243,7 +2243,7 @@ void VulkanBackend::ensure_recording() {
   }
   runtime_->is_recording = true;
 
-  profile_cpu_event("vulkan.ensure_recording", ensure_start);
+  profile_host_event("vulkan.ensure_recording", ensure_start);
 }
 
 void VulkanBackend::run_immediate_command(
@@ -2254,7 +2254,7 @@ void VulkanBackend::run_immediate_command(
 
   auto pre_idle_start = profile_now();
   VK_CHECK(vkQueueWaitIdle(compute_queue_));
-  profile_cpu_event("vulkan.immediate_wait_idle.pre", pre_idle_start);
+  profile_host_event("vulkan.immediate_wait_idle.pre", pre_idle_start);
 
   VK_CHECK(vkResetCommandBuffer(runtime_->immediate_cmd_buffer, 0));
   VkCommandBufferBeginInfo beginInfo{};
@@ -2271,8 +2271,8 @@ void VulkanBackend::run_immediate_command(
 
   auto post_idle_start = profile_now();
   VK_CHECK(vkQueueWaitIdle(compute_queue_));
-  profile_cpu_event("vulkan.immediate_wait_idle.post", post_idle_start);
-  profile_cpu_event("vulkan.immediate_total", total_start);
+  profile_host_event("vulkan.immediate_wait_idle.post", post_idle_start);
+  profile_host_event("vulkan.immediate_total", total_start);
 }
 
 void VulkanBackend::memset(void *ptr, int value, size_t bytes) {
@@ -2349,7 +2349,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
       VK_CHECK(vkWaitForFences(device_, MAX_FRAMES_IN_FLIGHT,
                                runtime_->in_flight_fences.data(),
                                VK_TRUE, UINT64_MAX));
-      profile_cpu_event("vulkan.staging_wait_fences", staging_wait_start);
+      profile_host_event("vulkan.staging_wait_fences", staging_wait_start);
       profile_backend_event("queue_wait", "staging_reuse", staging_wait_start);
       runtime_->staging_offset = 0; // Safe because queue is idle
       if (runtime_->staging_size < aligned) {
@@ -2377,12 +2377,12 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     runtime_->staging_offset += aligned;
   };
 
-  if (src_dev.type == DeviceType::CPU && dst_dev.type == DeviceType::VULKAN) {
+  if (src_dev.type == DeviceType::VULKAN && dst_dev.type == DeviceType::VULKAN) {
     size_t offset = 0;
     get_staging(bytes, offset);
     auto h2d_memcpy_start = profile_now();
     std::memcpy((char *)runtime_->staging_mapped + offset, src, bytes);
-    profile_cpu_event("vulkan.copy_h2d_memcpy", h2d_memcpy_start, bytes);
+    profile_host_event("vulkan.copy_h2d_memcpy", h2d_memcpy_start, bytes);
 
     ensure_recording();
     VkBufferCopy copyRegion{};
@@ -2405,7 +2405,7 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
     if (runtime_->current_batch_size >= BATCH_SIZE_LIMIT)
       flush_batch();
   } else if (src_dev.type == DeviceType::VULKAN &&
-             dst_dev.type == DeviceType::CPU) {
+             dst_dev.type == DeviceType::VULKAN) {
     size_t offset = 0;
     get_staging(bytes, offset);
 
@@ -2431,11 +2431,11 @@ void VulkanBackend::copy(const void *src, void *dst, size_t bytes,
         (runtime_->current_frame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
     VK_CHECK(vkWaitForFences(device_, 1, &runtime_->in_flight_fences[submitted_frame],
                              VK_TRUE, UINT64_MAX));
-    profile_cpu_event("vulkan.copy_d2h_wait_fence", d2h_wait_start, bytes);
+    profile_host_event("vulkan.copy_d2h_wait_fence", d2h_wait_start, bytes);
     profile_backend_event("sync", "readback_wait", d2h_wait_start, bytes);
     auto d2h_memcpy_start = profile_now();
     std::memcpy(dst, (char *)runtime_->staging_mapped + offset, bytes);
-    profile_cpu_event("vulkan.copy_d2h_memcpy", d2h_memcpy_start, bytes);
+    profile_host_event("vulkan.copy_d2h_memcpy", d2h_memcpy_start, bytes);
     runtime_->staging_offset =
         0; // Free entire staging buffer since we just forced a full wait
   } else {
@@ -2452,7 +2452,7 @@ void VulkanBackend::synchronize() {
   VK_CHECK(vkWaitForFences(device_, MAX_FRAMES_IN_FLIGHT,
                            runtime_->in_flight_fences.data(),
                            VK_TRUE, UINT64_MAX));
-  profile_cpu_event("vulkan.synchronize_wait_fences", sync_wait_start);
+  profile_host_event("vulkan.synchronize_wait_fences", sync_wait_start);
   profile_backend_event("sync", "explicit", sync_wait_start);
 
   // Only attempt to fetch results if profiling is actually active and work was
@@ -2467,7 +2467,7 @@ void VulkanBackend::synchronize() {
     VkResult res = vkGetQueryPoolResults(
         device_, runtime_->query_pools[frameToQuery], 0, 2, sizeof(uint64_t) * 2, results,
         sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
-    profile_cpu_event("vulkan.query_results", query_start);
+    profile_host_event("vulkan.query_results", query_start);
     profile_backend_event("sync", "implicit_timing", query_start);
 
     if (res == VK_SUCCESS) {
@@ -2503,7 +2503,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   VkDescriptorSet ds =
       runtime_->frame_descriptor_sets[runtime_->current_frame][runtime_->descriptor_set_cursor[runtime_->current_frame]++];
 
-  // Update only the bindings used by this kernel to lower CPU overhead.
+  // Update only the bindings used by this kernel to lower Host overhead.
   const uint32_t write_count = static_cast<uint32_t>(
       std::max<size_t>(1, std::min<size_t>(buffers.size(), 8)));
 
@@ -2525,7 +2525,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
   }
   auto descriptor_update_start = profile_now();
   vkUpdateDescriptorSets(device_, write_count, writes, 0, nullptr);
-  profile_cpu_event("vulkan.update_descriptors", descriptor_update_start);
+  profile_host_event("vulkan.update_descriptors", descriptor_update_start);
 
   VkMemoryBarrier memoryBarrier{};
   memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -2557,7 +2557,7 @@ void VulkanBackend::dispatch_kernel(VkPipeline pipeline,
     flush_batch();
   }
 
-  profile_cpu_event("vulkan.dispatch_encode", encode_start);
+  profile_host_event("vulkan.dispatch_encode", encode_start);
 }
 
 // --- Kernel Wrappers ---
@@ -3016,11 +3016,11 @@ void VulkanBackend::mean_last_dim(const Storage &in, Storage &out,
   
   // For mean_last_dim, we need to sum along the last dimension and divide by dim_size
   // This is a simplified implementation - full implementation would need a dedicated kernel
-  Storage cpu_in(in.size_bytes(), Device{DeviceType::CPU, 0}, in.dtype());
-  Storage cpu_out(out.size_bytes(), Device{DeviceType::CPU, 0}, out.dtype());
-  copy(in.data(), cpu_in.data(), in.size_bytes(), in.device(), cpu_in.device());
-  CPUBackend().mean_last_dim(cpu_in, cpu_out, outer_size, dim_size);
-  copy(cpu_out.data(), out.data(), out.size_bytes(), cpu_out.device(),
+  Storage host_in(in.size_bytes(), Device{DeviceType::VULKAN, 0}, in.dtype());
+  Storage host_out(out.size_bytes(), Device{DeviceType::VULKAN, 0}, out.dtype());
+  copy(in.data(), host_in.data(), in.size_bytes(), in.device(), host_in.device());
+  HostBackend().mean_last_dim(host_in, host_out, outer_size, dim_size);
+  copy(host_out.data(), out.data(), out.size_bytes(), host_out.device(),
        out.device());
 }
 

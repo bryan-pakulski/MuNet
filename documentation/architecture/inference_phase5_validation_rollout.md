@@ -15,7 +15,7 @@ This document closes **Phase 5 - Validation, benchmarking, and rollout** for the
 ### 1. Inference-only build/link coverage
 
 - `munet_inference_boundary_check` is now exercised directly by CTest.
-- `munet_inference_baseline_cpu_smoke` is also exercised by CTest so the benchmark/tooling path stays build- and run-valid in CI.
+- `munet_inference_baseline_vulkan_smoke` is also exercised by CTest so the benchmark/tooling path stays build- and run-valid in CI.
 
 ### 2. Autograd isolation guarantees
 
@@ -49,17 +49,16 @@ Deploy serialization + run workflow is now validated by:
 - `munet.load_for_inference(...)` tests
 - `munet.inference.load_serialized(...)` tests
 - serialized-model -> `inference.Engine` run coverage
-- ONNX native-sequential -> serialized deploy artifact coverage
 
 ## Benchmark suites
 
 Phase 5 standardizes the following benchmark scenarios around `munet_inference_baseline`:
 
-### A. CPU-only edge / cold-start
+### A. Vulkan-only edge / cold-start
 
 ```bash
 ./build/munet_inference_baseline \
-  --device cpu --dtype float32 \
+  --device vulkan --dtype float32 \
   --batch 8 --input-dim 32 --hidden-dim 64 --output-dim 16 \
   --warmup-runs 0 \
   --single-run-iters 20 \
@@ -75,11 +74,11 @@ Observed in this environment:
 - steady single-run avg wall: **0.7350 ms**
 - steady batch per-input wall: **1.1161 ms**
 
-### B. CPU-only edge / lean-mode tradeoff
+### B. Vulkan-only edge / lean-mode tradeoff
 
 ```bash
 ./build/munet_inference_baseline \
-  --device cpu --dtype float32 \
+  --device vulkan --dtype float32 \
   --batch 8 --input-dim 32 --hidden-dim 64 --output-dim 16 \
   --warmup-runs 0 \
   --single-run-iters 20 \
@@ -98,14 +97,14 @@ Observed in this environment:
 
 Tradeoff note:
 
-- lean mode improved cold-start and batched per-input cost in this CPU-only run
+- lean mode improved cold-start and batched per-input cost in this Vulkan-only run
 - the steady single-run average was slightly worse here, so the rollout guidance is to treat `lean_mode` as a deploy-policy knob rather than an unconditional throughput win
 
 ### C. Memory-policy / batch reuse scenario
 
 ```bash
 ./build/munet_inference_baseline \
-  --device cpu --dtype float32 \
+  --device vulkan --dtype float32 \
   --batch 8 --input-dim 32 --hidden-dim 64 --output-dim 16 \
   --warmup-runs 0 \
   --single-run-iters 20 \
@@ -124,30 +123,27 @@ Observed in this environment:
 
 Tradeoff note:
 
-- this CPU-only environment showed the biggest benefit on repeated batched runs
-- prepared-input cache counters remained zero because no host-to-device transfer cache is needed on CPU-only execution, so this scenario mostly reflects preallocated repeated-batch setup rather than transfer reuse
+- this Vulkan-only environment showed the biggest benefit on repeated batched runs
+- prepared-input cache counters remained zero because no Vulkan transfer transfer cache is needed on Vulkan-only execution, so this scenario mostly reflects preallocated repeated-batch setup rather than transfer reuse
 
-### D. Accelerator rollout suites
+### D. Vulkan backend rollout suites
 
 Use the same benchmark with deployment-target hardware for:
 
-- `--device cuda --dtype float16`
 - `--device vulkan --dtype float16`
 
-Phase 5 keeps these suites documented even when the current validation environment is CPU-only; accelerator comparisons remain intentionally opt-in and hardware-specific.
+Phase 5 keeps these suites documented even when the current validation environment is Vulkan-only; Vulkan backend comparisons remain intentionally opt-in and hardware-specific.
 
 ## Migration notes
 
 - **Deploy loading:** use `munet.load_for_inference(...)` or `munet.inference.load_serialized(...)` for deployment code; use `munet.load_checkpoint(...)` for training/checkpoint reconstruction.
 - **Deploy artifacts:** serialized `.npz` artifacts are now validated as **runtime-only** payloads, and training/checkpoint-style keys are rejected during deploy loading.
-- **ONNX packaging:** only native-sequential ONNX conversions should be promoted as deploy artifacts (`compile_onnx(..., output_path="model.npz")`); graph-runtime ONNX results remain development tooling.
-- **Performance tests:** GPU comparison tests are now skipped cleanly unless both CUDA and Vulkan are available and `MUNET_RUN_PERF_TESTS=1` is set, which keeps CPU-only CI green without hiding the accelerator benchmark suite.
 
 ## Rollout conclusion
 
 Phase 5 closes with:
 
 - automated coverage for separation guarantees
-- benchmark workflows that can be rerun on CPU-only and accelerator hardware
+- benchmark workflows that can be rerun on Vulkan-only and Vulkan backend hardware
 - explicit tradeoff documentation instead of assuming every runtime knob is a universal win
 - a stable, intentionally minimal deploy boundary for future inference work

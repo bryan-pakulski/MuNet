@@ -15,9 +15,6 @@
 #include <stdexcept>
 #include <unordered_map>
 
-#ifdef MUNET_USE_CUDA
-#include <cuda_runtime_api.h>
-#endif
 
 #ifdef MUNET_USE_VULKAN
 #include <vulkan/vulkan.h>
@@ -82,14 +79,14 @@ Tensor tensor_from_numpy_array(py::array input) {
   py::buffer_info buf = contiguous.request();
   std::vector<int> shape(buf.shape.begin(), buf.shape.end());
   DataType dtype = numpy_dtype_to_data_type(buf);
-  Tensor t(shape, Device{DeviceType::CPU, 0}, dtype, false);
+  Tensor t(shape, Device{DeviceType::VULKAN, 0}, dtype, false);
   std::memcpy(t.data(), buf.ptr, t.bytes());
   return t;
 }
 
 void copy_numpy_array_into_tensor(Tensor &tensor, py::array input) {
-  if (tensor.device().type != DeviceType::CPU) {
-    throw std::runtime_error("Target tensor must be on CPU.");
+  if (tensor.device().type != DeviceType::VULKAN) {
+    throw std::runtime_error("Target tensor must be on Vulkan.");
   }
 
   Tensor source = tensor_from_numpy_array(std::move(input));
@@ -143,7 +140,7 @@ py::dict accelerator_probe_dict(DeviceType type, const std::string &name,
         break;
       } catch (...) {
         if (index == 0) {
-          detail = "Unknown runtime probe failure.";
+          detail = "Vulkan runtime probe failure.";
         }
         break;
       }
@@ -264,7 +261,7 @@ ops::OpId parse_op_id_name(const std::string &name) {
   };
   auto it = kNameToOp.find(name);
   if (it == kNameToOp.end()) {
-    throw std::runtime_error("Unknown op name for dispatch debug dump: " +
+    throw std::runtime_error("Debug dump op name was not registered: " +
                              name);
   }
   return it->second;
@@ -288,8 +285,6 @@ PYBIND11_MODULE(_core, m) {
   // Enums and Devices
   // ============================================================================
   py::enum_<DeviceType>(m, "DeviceType", "Types of compute devices available.")
-      .value("CPU", DeviceType::CPU)
-      .value("CUDA", DeviceType::CUDA)
       .value("VULKAN", DeviceType::VULKAN)
       .export_values();
 
@@ -320,12 +315,12 @@ PYBIND11_MODULE(_core, m) {
 
   py::class_<Device>(
       m, "Device",
-      "Represents a compute device (e.g., CPU, CUDA) and its index.")
+      "Represents the Vulkan compute device and its index.")
       .def(py::init<DeviceType, int>(),
-           py::arg_v("type", DeviceType::CPU, "munet.DeviceType.CPU"),
+           py::arg_v("type", DeviceType::VULKAN, "munet.DeviceType.VULKAN"),
            py::arg("index") = 0, "Initializes a new Device.")
       .def("to_string", &Device::to_string,
-           "Returns a stable device string like 'cpu:0' or 'cuda:1'.")
+           "Returns a stable device string like 'vulkan:0'.")
       .def("__repr__", &Device::to_string)
       .def("__str__", &Device::to_string)
       .def_readwrite("type", &Device::type, "The type of the device.")
@@ -344,8 +339,8 @@ PYBIND11_MODULE(_core, m) {
   py::class_<Tensor>(m, "Tensor", py::buffer_protocol(),
                      "Multi-dimensional matrix with autograd support.")
       .def(py::init<Shape, Device, DataType, bool>(), py::arg("shape"),
-           py::arg_v("device", Device{DeviceType::CPU, 0},
-                     "munet.Device(munet.DeviceType.CPU, 0)"),
+           py::arg_v("device", Device{DeviceType::VULKAN, 0},
+                     "munet.Device(munet.DeviceType.VULKAN, 0)"),
            py::arg_v("dtype", DataType::Float32, "munet.DataType.Float32"),
            py::arg("requires_grad") = false)
       .def(py::init<Shape, const TensorOptions &>(), py::arg("shape"),
@@ -367,7 +362,7 @@ PYBIND11_MODULE(_core, m) {
       .def_property_readonly(
           "device",
           [](const Tensor &t) {
-            return t.impl_ ? t.device() : Device{DeviceType::UNKNOWN, 0};
+            return t.impl_ ? t.device() : Device{DeviceType::VULKAN, 0};
           },
           "The device where this tensor is allocated.")
       .def_property_readonly(
@@ -546,7 +541,7 @@ PYBIND11_MODULE(_core, m) {
       .def(
           "numpy", [](py::object self) { return py::cast<py::array>(self); },
           "Returns the tensor as a NumPy ndarray. The returned array and the "
-          "tensor will share their storage (CPU only).")
+          "tensor will share their storage (Host only).")
       .def("item", &Tensor::item,
            "Returns the value of this tensor as a standard Python number. Only "
            "works for tensors with one element.")
@@ -608,10 +603,10 @@ PYBIND11_MODULE(_core, m) {
 
       // Buffer Protocol (Zero-copy to NumPy)
       .def_buffer([](Tensor &t) -> py::buffer_info {
-        if (t.device().type != DeviceType::CPU) {
+        if (t.device().type != DeviceType::VULKAN) {
           throw std::runtime_error(
               "Cannot convert GPU tensor to NumPy array directly. Call "
-              "`.to(Device(DeviceType.CPU))` first.");
+              "`.to(Device(DeviceType.VULKAN))` first.");
         }
 
         if (t.requires_grad()) {
@@ -668,7 +663,7 @@ PYBIND11_MODULE(_core, m) {
         }
         return out;
       },
-      "Returns active backend names, including CPU and loadable accelerators.");
+      "Returns active Vulkan backend names.");
 
   m.def(
       "backend_status",
@@ -691,7 +686,7 @@ PYBIND11_MODULE(_core, m) {
           entry["capability_flags"] = py::cast(status.capability_flags);
           statuses.append(std::move(entry));
 
-          if (status.name != "cpu" && status.active) {
+          if (status.name == "vulkan" && status.active) {
             accelerator_loaded = true;
           }
         }
@@ -701,7 +696,7 @@ PYBIND11_MODULE(_core, m) {
         out["summary"] = py::cast(
             accelerator_loaded
                 ? std::string("One or more accelerator backends are active.")
-                : std::string("No accelerators loaded; CPU backend active."));
+                : std::string("No Vulkan backend is active."));
         return out;
       },
       "Returns backend diagnostics including plugin discovery and ABI status.");
@@ -711,42 +706,6 @@ PYBIND11_MODULE(_core, m) {
       []() {
         py::list out;
 
-        py::dict cpu;
-        cpu["name"] = py::cast(std::string("cpu"));
-        cpu["type"] = py::cast(DeviceType::CPU);
-        cpu["compiled"] = py::cast(true);
-        cpu["available"] = py::cast(true);
-        cpu["version"] = py::cast(std::string(""));
-        py::list cpu_devices;
-        cpu_devices.append(py::cast(Device{DeviceType::CPU, 0}));
-        cpu["devices"] = std::move(cpu_devices);
-        cpu["detail"] = py::cast(std::string("Always available."));
-        out.append(std::move(cpu));
-
-#ifdef MUNET_USE_CUDA
-        int runtime_version = 0;
-        int driver_version = 0;
-        std::string cuda_version = "";
-        if (cudaRuntimeGetVersion(&runtime_version) == cudaSuccess) {
-          cuda_version +=
-              "runtime=" + std::to_string(runtime_version / 1000) + "." +
-              std::to_string((runtime_version % 1000) / 10);
-        }
-        if (cudaDriverGetVersion(&driver_version) == cudaSuccess) {
-          if (!cuda_version.empty()) {
-            cuda_version += ", ";
-          }
-          cuda_version +=
-              "driver=" + std::to_string(driver_version / 1000) + "." +
-              std::to_string((driver_version % 1000) / 10);
-        }
-        out.append(accelerator_probe_dict(DeviceType::CUDA, "cuda", true,
-                                          cuda_version));
-#else
-        out.append(accelerator_probe_dict(DeviceType::CUDA, "cuda", false));
-#endif
-
-#ifdef MUNET_USE_VULKAN
         uint32_t vk_header_version_complete = VK_HEADER_VERSION_COMPLETE;
         std::string vk_version =
             std::to_string(VK_API_VERSION_MAJOR(vk_header_version_complete)) +
@@ -756,9 +715,6 @@ PYBIND11_MODULE(_core, m) {
             std::to_string(VK_API_VERSION_PATCH(vk_header_version_complete));
         out.append(accelerator_probe_dict(DeviceType::VULKAN, "vulkan", true,
                                           vk_version));
-#else
-        out.append(accelerator_probe_dict(DeviceType::VULKAN, "vulkan", false));
-#endif
         return out;
       },
       "Returns runtime accelerator availability and detected device indices.");
@@ -767,22 +723,8 @@ PYBIND11_MODULE(_core, m) {
       "available_devices",
       []() {
         py::list devices;
-        devices.append(py::cast(Device{DeviceType::CPU, 0}));
+        devices.append(py::cast(Device{DeviceType::VULKAN, 0}));
 
-#ifdef MUNET_USE_CUDA
-        for (int index = 0; index < 32; ++index) {
-          try {
-            Device d{DeviceType::CUDA, index};
-            auto backend = BackendManager::get(d);
-            backend->synchronize();
-            devices.append(py::cast(d));
-          } catch (...) {
-            break;
-          }
-        }
-#endif
-
-#ifdef MUNET_USE_VULKAN
         for (int index = 0; index < 32; ++index) {
           try {
             Device d{DeviceType::VULKAN, index};
@@ -793,16 +735,15 @@ PYBIND11_MODULE(_core, m) {
             break;
           }
         }
-#endif
         return devices;
       },
-      "Returns concrete available devices (CPU plus detected accelerator devices).");
+      "Returns concrete available devices (Host plus detected accelerator devices).");
 
   m.def(
       "zeros",
       [](Shape shape, std::optional<Device> device, bool requires_grad,
          DataType dtype) {
-        Device dev = device.value_or(Device{DeviceType::CPU, 0});
+        Device dev = device.value_or(Device{DeviceType::VULKAN, 0});
         return make_constant_tensor(shape, dev, dtype, requires_grad,
                                     make_scalar(0.0, dtype));
       },
@@ -815,7 +756,7 @@ PYBIND11_MODULE(_core, m) {
       "ones",
       [](Shape shape, std::optional<Device> device, bool requires_grad,
          DataType dtype) {
-        Device dev = device.value_or(Device{DeviceType::CPU, 0});
+        Device dev = device.value_or(Device{DeviceType::VULKAN, 0});
         return make_constant_tensor(shape, dev, dtype, requires_grad,
                                     make_scalar(1.0, dtype));
       },
@@ -828,7 +769,7 @@ PYBIND11_MODULE(_core, m) {
       "rand",
       [](Shape shape, std::optional<Device> device, bool requires_grad,
          DataType dtype) {
-        Device dev = device.value_or(Device{DeviceType::CPU, 0});
+        Device dev = device.value_or(Device{DeviceType::VULKAN, 0});
         if (!is_floating(dtype)) {
           throw std::runtime_error("rand only supports floating-point dtypes");
         }
@@ -845,7 +786,7 @@ PYBIND11_MODULE(_core, m) {
   m.def(
       "from_numpy",
       [](py::array input) { return tensor_from_numpy_array(input); },
-      py::arg("input"), "Creates a CPU Tensor from a NumPy array.");
+      py::arg("input"), "Creates a Host Tensor from a NumPy array.");
 
   // Alias copy_from_numpy to module level as well
   m.def(
@@ -859,7 +800,7 @@ PYBIND11_MODULE(_core, m) {
         }
       },
       py::arg("tensor"), py::arg("input"),
-      "Copies data from a NumPy array into the given CPU tensor.");
+      "Copies data from a NumPy array into the given Host tensor.");
 
   py::class_<core::Module, std::shared_ptr<core::Module>>(m, "_CoreModule");
   py::class_<core::OffloadValidationReport>(m, "OffloadValidationReport")
@@ -1392,16 +1333,16 @@ PYBIND11_MODULE(_core, m) {
       []() {
         const auto snapshot = ops::fallback_telemetry_snapshot();
         py::dict out;
-        out["accelerator_cpu_fallback_total"] =
-            py::int_(snapshot.accelerator_cpu_fallback_total);
-        out["accelerator_cpu_fallback_counters"] =
-            py::cast(snapshot.accelerator_cpu_fallback_counters);
+        out["accelerator_host_fallback_total"] =
+            py::int_(snapshot.accelerator_host_fallback_total);
+        out["accelerator_host_fallback_counters"] =
+            py::cast(snapshot.accelerator_host_fallback_counters);
         return out;
       },
-      "Returns dispatch telemetry counters for accelerator->CPU fallbacks.");
+      "Returns dispatch telemetry counters for Vulkan staging fallbacks.");
   m.def(
       "reset_fallback_telemetry", &ops::reset_fallback_telemetry,
-      "Clears dispatch telemetry counters for accelerator->CPU fallbacks.");
+      "Clears dispatch telemetry counters for Vulkan staging fallbacks.");
   m.def(
       "dispatch_decision_debug_dump",
       [](const std::string &op_name, const Tensor &tensor) {
@@ -1441,10 +1382,10 @@ def _tensor_to_numpy(t):
     import numpy as np
     import munet_nn as munet
 
-    cpu = munet.Device(munet.DeviceType.CPU, 0)
+    host = munet.Device(munet.DeviceType.VULKAN, 0)
     td = t.detach()
-    if td.device.type != munet.DeviceType.CPU:
-        td = td.to(cpu)
+    if td.device.type != munet.DeviceType.VULKAN:
+        td = td.to(host)
     return np.array(td, copy=False).copy()
 
 def _copy_numpy_into_tensor(t, arr):
@@ -1456,7 +1397,7 @@ def _copy_numpy_into_tensor(t, arr):
     src = munet.from_numpy(np.ascontiguousarray(arr))
     if src.dtype != t.dtype:
         src = src.to(t.dtype)
-    if target.type != munet.DeviceType.CPU:
+    if target.type != munet.DeviceType.VULKAN:
         src = src.to(target)
     t.replace_(src)
     t.requires_grad = req

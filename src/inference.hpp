@@ -30,7 +30,7 @@ public:
 };
 
 struct EngineConfig {
-  Device device{DeviceType::CPU, 0};
+  Device device{DeviceType::VULKAN, 0};
   int warmup_runs = 0;
   bool strict_shape_check = true;
   bool allow_autograd_inputs = false;
@@ -77,7 +77,7 @@ enum class EngineEventType {
 
 struct EngineEvent {
   EngineEventType type{EngineEventType::LoadStarted};
-  Device device{DeviceType::CPU, 0};
+  Device device{DeviceType::VULKAN, 0};
   uint64_t trace_id = 0;
   size_t run_index = 0;
   double duration_ms = 0.0;
@@ -186,15 +186,15 @@ private:
 struct PreparedInputCacheEntry {
   const TensorImpl *input_impl = nullptr;
   uint64_t input_version = 0;
-  Device source_device{DeviceType::UNKNOWN, 0};
-  Device target_device{DeviceType::UNKNOWN, 0};
+  Device source_device{DeviceType::VULKAN, 0};
+  Device target_device{DeviceType::VULKAN, 0};
   Tensor prepared{};
 
   void clear() {
     input_impl = nullptr;
     input_version = 0;
-    source_device = Device{DeviceType::UNKNOWN, 0};
-    target_device = Device{DeviceType::UNKNOWN, 0};
+    source_device = Device{DeviceType::VULKAN, 0};
+    target_device = Device{DeviceType::VULKAN, 0};
     prepared = {};
   }
 

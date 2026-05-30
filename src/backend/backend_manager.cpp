@@ -1,16 +1,10 @@
-#include "backend/cpu_backend.hpp"
+#include "backend/host_backend.hpp"
 #include "backend/debug_backend.hpp"
 #include "backend/plugin_loader.hpp"
 #include "core/backend.hpp"
 #include "core/util.hpp"
 
-#ifdef MUNET_USE_CUDA
-#include "backend/cuda_backend.hpp"
-#endif
-
-#ifdef MUNET_USE_VULKAN
 #include "backend/vulkan_backend.hpp"
-#endif
 
 #include <algorithm>
 #include <mutex>
@@ -35,7 +29,7 @@ bool backend_probe_ok(DeviceType type, const char *backend_name,
   } catch (...) {
     MUNET_WARNING << backend_name
                   << " backend compiled but unavailable at runtime; disabling "
-                     "acceleration for this backend due to unknown error."
+                     "acceleration for this backend due to vulkan error."
                   << std::endl;
     return false;
   }
@@ -45,20 +39,8 @@ void register_default_backends(BackendRegistry &registry) {
   static std::once_flag once;
   std::call_once(once, [&registry]() {
     registry.register_backend(
-        DeviceType::CPU, [](Device) { return std::make_shared<CPUBackend>(); });
+        DeviceType::VULKAN, [](Device) { return std::make_shared<HostBackend>(); });
 
-#ifdef MUNET_USE_CUDA
-    if (plugin::has_active_plugin_for_device("cuda")) {
-      BackendRegistry::BackendFactory cuda_factory = [](Device device) {
-        return std::make_shared<CUDABackend>(device.index);
-      };
-      if (backend_probe_ok(DeviceType::CUDA, "CUDA", cuda_factory)) {
-        registry.register_backend(DeviceType::CUDA, std::move(cuda_factory));
-      }
-    }
-#endif
-
-#ifdef MUNET_USE_VULKAN
     if (plugin::has_active_plugin_for_device("vulkan")) {
       BackendRegistry::BackendFactory vulkan_factory = [](Device device) {
         return std::make_shared<VulkanBackend>(device.index);
@@ -67,7 +49,6 @@ void register_default_backends(BackendRegistry &registry) {
         registry.register_backend(DeviceType::VULKAN, std::move(vulkan_factory));
       }
     }
-#endif
 
     registry.set_decorator([](std::shared_ptr<Backend> backend) {
       if (is_debug_enabled() || is_profile_enabled()) {
@@ -168,25 +149,14 @@ std::shared_ptr<Backend> BackendManager::get(Device device) {
 
 
 std::vector<std::string> BackendManager::list_available_backends() {
-  std::vector<std::string> out{"cpu"};
+  std::vector<std::string> out;
 
-#ifdef MUNET_USE_CUDA
-  if (plugin::has_active_plugin_for_device("cuda") &&
-      backend_probe_ok(DeviceType::CUDA, "CUDA", [](Device device) {
-        return std::make_shared<CUDABackend>(device.index);
-      })) {
-    out.push_back("cuda");
-  }
-#endif
-
-#ifdef MUNET_USE_VULKAN
   if (plugin::has_active_plugin_for_device("vulkan") &&
       backend_probe_ok(DeviceType::VULKAN, "Vulkan", [](Device device) {
         return std::make_shared<VulkanBackend>(device.index);
       })) {
     out.push_back("vulkan");
   }
-#endif
 
   for (const auto &plugin_status : plugin::discover_backend_plugins()) {
     if (plugin_status.active) {
@@ -201,16 +171,6 @@ std::vector<std::string> BackendManager::list_available_backends() {
 
 std::vector<BackendRuntimeStatus> BackendManager::backend_status() {
   std::vector<BackendRuntimeStatus> statuses;
-
-  BackendRuntimeStatus cpu;
-  cpu.name = "cpu";
-  cpu.source = "builtin";
-  cpu.discovered = true;
-  cpu.loadable = true;
-  cpu.active = true;
-  cpu.reason_code = "ok";
-  cpu.detail = "CPU backend is always available.";
-  statuses.push_back(std::move(cpu));
 
   auto add_builtin_status = [&](const std::string &name, bool compiled,
                                 DeviceType type,
@@ -257,30 +217,16 @@ std::vector<BackendRuntimeStatus> BackendManager::backend_status() {
       status.detail = e.what();
     } catch (...) {
       status.reason_code = "runtime_dependency_missing";
-      status.detail = "Unknown runtime probe failure.";
+      status.detail = "Vulkan runtime probe failure.";
     }
     statuses.push_back(std::move(status));
   };
 
-#ifdef MUNET_USE_CUDA
-  add_builtin_status("cuda", true, DeviceType::CUDA,
-                     [](Device device) {
-                       return std::make_shared<CUDABackend>(device.index);
-                     },
-                     "cuda");
-#else
-  add_builtin_status("cuda", false, DeviceType::CUDA, nullptr, "cuda");
-#endif
-
-#ifdef MUNET_USE_VULKAN
   add_builtin_status("vulkan", true, DeviceType::VULKAN,
                      [](Device device) {
                        return std::make_shared<VulkanBackend>(device.index);
                      },
                      "vulkan");
-#else
-  add_builtin_status("vulkan", false, DeviceType::VULKAN, nullptr, "vulkan");
-#endif
 
   for (const auto &plugin_status : plugin::discover_backend_plugins()) {
     BackendRuntimeStatus status;

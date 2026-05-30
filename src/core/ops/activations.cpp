@@ -8,13 +8,13 @@ namespace munet {
 namespace ops {
 namespace {
 
-template <typename BackendFn, typename CpuFn>
+template <typename BackendFn, typename HostFn>
 Tensor unary_activation_op(OpId op_id, const Tensor &a, BackendFn &&backend_fn,
-                           CpuFn &&cpu_fn) {
+                           HostFn &&host_fn) {
   const auto dispatch = resolve_dispatch(op_id, a);
   Tensor out = dispatch.use_backend
                    ? Tensor(a.shape(), a.device(), a.dtype())
-                   : detail::unary_cpu_fallback(a, std::forward<CpuFn>(cpu_fn));
+                   : detail::unary_host_fallback(a, std::forward<HostFn>(host_fn));
   if (dispatch.use_backend) {
     backend_fn(*a.impl_->storage, *out.impl_->storage, a.size());
   }
@@ -206,10 +206,10 @@ Tensor softmax(const Tensor &a, int dim) {
     a.impl_->backend().softmax(*a.impl_->storage, *out.impl_->storage,
                                batch_size, num_classes);
   } else {
-    Tensor a_cpu = a.to(Device{DeviceType::CPU, 0});
-    Tensor out_cpu(a.shape(), Device{DeviceType::CPU, 0}, a.dtype());
-    const char *ip = static_cast<const char *>(a_cpu.data());
-    char *op = static_cast<char *>(out_cpu.data());
+    Tensor a_host = a.to(Device{DeviceType::VULKAN, 0});
+    Tensor out_host(a.shape(), Device{DeviceType::VULKAN, 0}, a.dtype());
+    const char *ip = static_cast<const char *>(a_host.data());
+    char *op = static_cast<char *>(out_host.data());
     const size_t stride = dtype_size(a.dtype());
     for (int b = 0; b < batch_size; ++b) {
       double max_val =
@@ -236,11 +236,11 @@ Tensor softmax(const Tensor &a, int dim) {
                      max_val) /
             sum_exp;
         write_scalar_to_buffer(op + (b * num_classes + i) * stride,
-                               out_cpu.dtype(), prob);
+                               out_host.dtype(), prob);
       }
     }
     out =
-        (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+        (a.device().type == DeviceType::VULKAN) ? out_host : out_host.to(a.device());
   }
 
   if (GradMode::is_enabled() && a.requires_grad()) {
@@ -257,20 +257,20 @@ Tensor log_softmax(const Tensor &a, int dim) {
   resolve_dispatch(OpId::LogSoftmax, a);
   Tensor p = softmax(a, dim);
 
-  Tensor p_cpu = p.to(Device{DeviceType::CPU, 0});
-  Tensor out_cpu(a.shape(), Device{DeviceType::CPU, 0}, a.dtype());
-  const char *pv = static_cast<const char *>(p_cpu.data());
-  char *ov = static_cast<char *>(out_cpu.data());
+  Tensor p_host = p.to(Device{DeviceType::VULKAN, 0});
+  Tensor out_host(a.shape(), Device{DeviceType::VULKAN, 0}, a.dtype());
+  const char *pv = static_cast<const char *>(p_host.data());
+  char *ov = static_cast<char *>(out_host.data());
   const size_t stride = dtype_size(a.dtype());
-  for (size_t i = 0; i < p_cpu.size(); ++i) {
+  for (size_t i = 0; i < p_host.size(); ++i) {
     const double prob =
-        read_scalar_from_buffer(pv + i * stride, p_cpu.dtype()).value;
-    write_scalar_to_buffer(ov + i * stride, out_cpu.dtype(),
+        read_scalar_from_buffer(pv + i * stride, p_host.dtype()).value;
+    write_scalar_to_buffer(ov + i * stride, out_host.dtype(),
                            std::log(std::max(prob, 1e-20)));
   }
 
   Tensor out =
-      (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+      (a.device().type == DeviceType::VULKAN) ? out_host : out_host.to(a.device());
   const int rank = static_cast<int>(a.shape().size());
   const int resolved = (dim < 0) ? (rank + dim) : dim;
   if (GradMode::is_enabled() && a.requires_grad()) {

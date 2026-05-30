@@ -93,24 +93,24 @@ public:
     auto s = x.shape();
 
     if (s.size() == 2 && !weight.requires_grad() && !x.requires_grad()) {
-      Device cpu{DeviceType::CPU, 0};
-      Tensor x_cpu = x.to(cpu);
-      Tensor w_cpu = weight.to(cpu);
+      Device host{DeviceType::VULKAN, 0};
+      Tensor x_host = x.to(host);
+      Tensor w_host = weight.to(host);
       int B = s[0], T = s[1];
 
-      Tensor out_cpu({B, T, embedding_dim_}, cpu, weight.dtype(), false);
-      const char *idx = static_cast<const char *>(x_cpu.data());
-      const char *wv = static_cast<const char *>(w_cpu.data());
-      char *ov = static_cast<char *>(out_cpu.data());
-      const size_t idx_stride = dtype_size(x_cpu.dtype());
-      const size_t weight_stride = dtype_size(w_cpu.dtype());
-      const size_t out_stride = dtype_size(out_cpu.dtype());
+      Tensor out_host({B, T, embedding_dim_}, host, weight.dtype(), false);
+      const char *idx = static_cast<const char *>(x_host.data());
+      const char *wv = static_cast<const char *>(w_host.data());
+      char *ov = static_cast<char *>(out_host.data());
+      const size_t idx_stride = dtype_size(x_host.dtype());
+      const size_t weight_stride = dtype_size(w_host.dtype());
+      const size_t out_stride = dtype_size(out_host.dtype());
 
       for (int b = 0; b < B; ++b) {
         for (int t = 0; t < T; ++t) {
           int token = static_cast<int>(
               read_scalar_from_buffer(idx + (b * T + t) * idx_stride,
-                                      x_cpu.dtype())
+                                      x_host.dtype())
                   .value);
           if (token < 0 || token >= num_embeddings_)
             throw std::runtime_error("Embedding index out of range");
@@ -119,15 +119,15 @@ public:
           char *dst = ov + (b * T + t) * embedding_dim_ * out_stride;
           for (int d = 0; d < embedding_dim_; ++d) {
             const ScalarValue value =
-                read_scalar_from_buffer(src + d * weight_stride, w_cpu.dtype());
-            write_scalar_to_buffer(dst + d * out_stride, out_cpu.dtype(),
+                read_scalar_from_buffer(src + d * weight_stride, w_host.dtype());
+            write_scalar_to_buffer(dst + d * out_stride, out_host.dtype(),
                                    value.value);
           }
         }
       }
 
-      return (x.device().type == DeviceType::CPU) ? out_cpu
-                                                  : out_cpu.to(x.device());
+      return (x.device().type == DeviceType::VULKAN) ? out_host
+                                                  : out_host.to(x.device());
     }
 
     if (s.size() != 3)

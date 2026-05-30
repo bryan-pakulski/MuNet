@@ -114,7 +114,7 @@ def demo_pytorch_export():
     else:
         # Manual save
         state_dict = model.state_dict()
-        weights_dict = {k: v.detach().cpu().numpy() for k, v in state_dict.items()}
+        weights_dict = {k: v.detach().host().numpy() for k, v in state_dict.items()}
         save_as_npz(config, weights_dict, output_path)
         print("    Saved using manual NPZ serialization")
     
@@ -143,7 +143,7 @@ def demo_pytorch_export():
         munet_model = munet.inference.load_serialized(output_path)
         
         print("    Running inference with MuNet...")
-        device = munet.Device(munet.DeviceType.CUDA if torch.cuda.is_available() else munet.DeviceType.CPU, 0)
+        device = munet.Device(munet.DeviceType.VULKAN, 0)
         config = munet.inference.EngineConfig()
         config.device = device
         engine = munet.inference.Engine(config)
@@ -156,7 +156,7 @@ def demo_pytorch_export():
         
         engine.compile(input_tensor)
         output_tensor = engine.run(input_tensor)
-        output_np = output_tensor.to(munet.Device(munet.DeviceType.CPU, 0)).detach().numpy()
+        output_np = output_tensor.to(munet.Device(munet.DeviceType.VULKAN, 0)).detach().numpy()
         
         print(f"    MuNet output shape: {output_np.shape}")
         

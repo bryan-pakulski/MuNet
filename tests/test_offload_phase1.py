@@ -7,19 +7,19 @@ except Exception as exc:  # pragma: no cover - environment-dependent import
     pytest.skip(f"munet import unavailable: {exc}", allow_module_level=True)
 
 
-CPU = munet.Device(munet.DeviceType.CPU, 0)
+Host = munet.Device(munet.DeviceType.VULKAN, 0)
 
 
 def _detect_accelerators(max_index: int = 4):
     devices = []
-    for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+    for dev_type in (munet.DeviceType.VULKAN,):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
                 a = munet.ones((1,), device=dev)
                 b = munet.ones((1,), device=dev)
                 c = a + b
-                if float(c.to(CPU).item()) != 2.0:
+                if float(c.to(Host).item()) != 2.0:
                     raise RuntimeError("probe mismatch")
             except RuntimeError:
                 continue
@@ -32,8 +32,8 @@ def _pick_cross_device_pair():
     if not accelerators:
         return None
 
-    # Prefer CPU<->accelerator boundaries first; these are broadly supported.
-    return CPU, accelerators[0]
+    # Prefer Host<->accelerator boundaries first; these are broadly supported.
+    return Host, accelerators[0]
 
 
 def _make_model():
@@ -44,24 +44,24 @@ def _make_model():
     )
 
 
-def test_offload_plan_crud_and_path_resolution_cpu():
+def test_offload_plan_crud_and_path_resolution_host():
     model = _make_model()
-    model.offload(CPU, layers=["0", "1"])
+    model.offload(Host, layers=["0", "1"])
     plan = model.offload_plan()
 
     assert "0" in plan
     assert "1" in plan
-    assert str(plan["0"]) == "cpu:0"
-    assert str(plan["1"]) == "cpu:0"
+    assert str(plan["0"]) == "vulkan:0"
+    assert str(plan["1"]) == "vulkan:0"
 
     model.clear_offload()
     assert model.offload_plan() == {}
 
 
-def test_offload_unknown_layer_raises():
+def test_offload_vulkan_layer_raises():
     model = _make_model()
     with pytest.raises(RuntimeError):
-        model.offload(CPU, layers=["does_not_exist"])
+        model.offload(Host, layers=["does_not_exist"])
 
 
 def test_offload_boundary_transfer_and_backward_mixed_chain():
@@ -74,7 +74,7 @@ def test_offload_boundary_transfer_and_backward_mixed_chain():
     model.offload(d0, layers=["0", "1"])
     model.offload(d1, layers=["2"])
 
-    x = munet.from_numpy(np.random.randn(16, 4).astype(np.float32))  # CPU input
+    x = munet.from_numpy(np.random.randn(16, 4).astype(np.float32))  # Host input
     y = munet.from_numpy(np.random.randn(16, 1).astype(np.float32)).to(d1)
 
     pred = model(x)
@@ -109,8 +109,8 @@ def test_offload_inference_parity_vs_single_device():
             off_params[name].replace_(p.to(off_params[name].device))
 
     with munet.no_grad():
-        out_base = baseline(x).detach().to(CPU)
-        out_off = offloaded(x).detach().to(CPU)
+        out_base = baseline(x).detach().to(Host)
+        out_off = offloaded(x).detach().to(Host)
 
     np.testing.assert_allclose(
         np.array(out_base, copy=False),

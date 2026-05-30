@@ -73,7 +73,7 @@ public:
                                          options.dtype, options.requires_grad);
   }
 
-  Tensor(Shape shape, Device dev = Device{DeviceType::CPU, 0},
+  Tensor(Shape shape, Device dev = Device{DeviceType::VULKAN, 0},
          DataType dtype = DataType::Float32, bool requires_grad = false)
       : Tensor(std::move(shape), TensorOptions{}
                                      .with_device(dev)

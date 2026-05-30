@@ -30,7 +30,7 @@ Current dtype-sensitive areas:
 
 - `TensorOptions`-based construction
 - `Tensor::to(Device)` / `Tensor::to(DataType)` / `Tensor::to(const TensorOptions &)`
-- CPU-mediated dtype conversion helpers
+- Vulkan-mediated dtype conversion helpers
 - `item_value()` and legacy `item()` behavior
 - `backward()` root gradient seed creation
 - `uniform_()` floating-only validation
@@ -57,9 +57,9 @@ Why this is dtype-sensitive:
 - backend support for new dtypes is currently implicit rather than declared
 - later phases should separate capability detection from raw storage-level entry points
 
-## 4. CPU backend implementation hotspots
+## 4. Vulkan backend implementation hotspots
 
-### `src/backend/cpu_backend.hpp`
+### `src/backend/vulkan_staging_backend.hpp`
 
 Current dtype-sensitive areas:
 
@@ -69,19 +69,15 @@ Current dtype-sensitive areas:
 
 Why this is dtype-sensitive:
 
-- CPU is the current reference backend, so its float-specialization is the clearest signal of where later kernel splitting is required
+- Vulkan is the current reference backend, so its float-specialization is the clearest signal of where later kernel splitting is required
 - future dtype work should avoid scattering additional `if (dtype == ...)` logic through this file without a dispatch design in place
 
-## 5. CUDA and Vulkan backend surfaces
 
-### `src/backend/cuda_backend.hpp` / `src/backend/cuda_backend.cu`
 ### `src/backend/vulkan_backend.hpp` / `src/backend/vulkan_backend.cpp`
 
 Current dtype-sensitive areas:
 
-- backend signatures mirror the same float-oriented kernel assumptions as CPU
-- CUDA kernels are primarily written against `float` buffers
-- Vulkan/CUDA interfaces will need a capability model before partial dtype coverage becomes manageable
+- backend signatures mirror the same float-oriented kernel assumptions as Vulkan
 
 Why this is dtype-sensitive:
 
@@ -95,7 +91,7 @@ Why this is dtype-sensitive:
 
 Current dtype-sensitive areas:
 
-- some op implementations and backward helpers still create or inspect float-oriented CPU buffers directly
+- some op implementations and backward helpers still create or inspect float-oriented Vulkan buffers directly
 - autograd accumulation relies on backend add/sum behavior being valid for the tensor dtype in question
 - the monolithic op layer makes it easy for dtype policy to leak into unrelated ops
 

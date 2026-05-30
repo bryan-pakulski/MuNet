@@ -80,7 +80,7 @@ Centralize dtype helpers and tensor-level conversion behavior first, then move b
 
 ### Context
 
-Several tensor helpers still assumed `float` semantics for scalar constants, including scalar expansion, masked fills, and host-side buffer conversions.
+Several tensor helpers still assumed `float` semantics for scalar constants, including scalar expansion, masked fills, and Vulkan-side buffer conversions.
 
 ### Decision
 
@@ -89,7 +89,7 @@ Keep scalar read/write/conversion helpers in `src/types.hpp`, and route constant
 ### Consequences
 
 - Scalar conversion rules now extend from the same dtype policy layer as promotion and accumulation rules.
-- Tensor helpers such as constant fills and CPU fallback paths can preserve non-float dtypes without ad hoc casts.
+- Tensor helpers such as constant fills and Vulkan fallback paths can preserve non-float dtypes without ad hoc casts.
 - Backend kernels are still largely float-specialized, but later phases can build on shared scalar primitives instead of duplicating conversions.
 
 ---
@@ -155,7 +155,6 @@ When mixed-precision training grows beyond the current fallback path:
 
 ### Context
 
-The initial `BackendFeature` capability surface landed, but the coarse dtype policy for those capabilities was duplicated across CPU, CUDA, and Vulkan backend classes. That duplication would make the early capability surface drift before the later per-op dispatch split is ready.
 
 ### Decision
 

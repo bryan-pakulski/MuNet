@@ -14,4 +14,4 @@ MuNet is a layered runtime for model development and deployment:
 
 ## Documentation style
 
-This site is intended to be interactive/searchable when hosted via MkDocs Material (`mkdocs serve` / `mkdocs build`).
+This site is intended to be interactive/searchable when served via MkDocs Material (`mkdocs serve` / `mkdocs build`).

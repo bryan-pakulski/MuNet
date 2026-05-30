@@ -100,7 +100,6 @@ BackendPluginStatus default_status(const std::string &name,
 
 std::vector<BackendPluginStatus> discover_backend_plugins() {
   std::unordered_map<std::string, BackendPluginStatus> by_name;
-  by_name.emplace("cuda", default_status("cuda", "cuda"));
   by_name.emplace("vulkan", default_status("vulkan", "vulkan"));
 
   for (const auto &path : discover_candidate_plugin_files()) {
@@ -138,7 +137,7 @@ std::vector<BackendPluginStatus> discover_backend_plugins() {
     }
 
     status.name = name_fn() ? name_fn() : path.stem().string();
-    status.device = device_fn() ? device_fn() : "unknown";
+    status.device = device_fn() ? device_fn() : "vulkan";
     status.plugin_abi_version = abi_fn();
     status.capability_flags = flags_fn ? flags_fn() : 0;
 

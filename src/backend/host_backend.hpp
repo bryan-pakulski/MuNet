@@ -74,7 +74,7 @@ private:
   bool stop;
 };
 
-class CPUBackend : public Backend,
+class HostBackend : public Backend,
                    public BackendAllocationTransferCapability,
                    public BackendElementwiseCapability,
                    public BackendReductionCapability,
@@ -127,7 +127,7 @@ private:
   }
 
 public:
-  const char *name() const override { return "cpu"; }
+  const char *name() const override { return "host"; }
 
   BackendAllocationTransferCapability *
   allocation_transfer_capability() override {
@@ -175,7 +175,7 @@ public:
     return this;
   }
 
-  ~CPUBackend() override {
+  ~HostBackend() override {
     for (auto &kv : free_blocks_) {
       for (void *ptr : kv.second) {
         std::free(ptr);
@@ -214,19 +214,12 @@ public:
   void copy(const void *src, void *dst, size_t bytes, Device src_dev,
             Device dst_dev) override {
     if (bytes > 0 && (src == nullptr || dst == nullptr)) {
-      throw std::runtime_error("cpu copy: null pointer with non-zero byte count");
+      throw std::runtime_error("host copy: null pointer with non-zero byte count");
     }
-    const auto unsupported_endpoint = [](DeviceType type) {
-      return type == DeviceType::CUDA || type == DeviceType::VULKAN;
-    };
-    if (unsupported_endpoint(src_dev.type) || unsupported_endpoint(dst_dev.type)) {
+    if ((src_dev.type == DeviceType::VULKAN && src_dev.index != 0) ||
+        (dst_dev.type == DeviceType::VULKAN && dst_dev.index != 0)) {
       throw std::runtime_error(
-          "cpu copy: CPU backend cannot service CUDA/Vulkan transfer endpoints");
-    }
-    if ((src_dev.type == DeviceType::CPU && src_dev.index != 0) ||
-        (dst_dev.type == DeviceType::CPU && dst_dev.index != 0)) {
-      throw std::runtime_error(
-          "cpu copy: CPU endpoint device index must be 0");
+          "host copy: Vulkan endpoint device index must be 0");
     }
     std::memcpy(dst, src, bytes);
   }
@@ -407,7 +400,7 @@ public:
     const float *bp = (const float *)b.data();
     float *cp = (float *)out.data();
     for (int b_idx = 0; b_idx < batch_size; ++b_idx) {
-      ops::detail::batched_matmul_cpu_fallback(
+      ops::detail::batched_matmul_host_fallback(
           ap + b_idx * stride_a, bp + b_idx * stride_b, cp + b_idx * stride_out,
           M, K, N, transA, transB);
     }
@@ -1041,7 +1034,7 @@ public:
     const float *ip = (const float *)in.data();
     float *op = (float *)out.data();
 
-    // Simple sequential sum for now to avoid atomic overheads on CPU
+    // Simple sequential sum for now to avoid atomic overheads on Host
     float total = 0.0f;
     for (size_t i = 0; i < num_elements; ++i)
       total += ip[i];

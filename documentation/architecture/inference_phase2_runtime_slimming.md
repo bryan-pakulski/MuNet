@@ -11,7 +11,7 @@ The goal of this phase is to make low-overhead inference the default runtime beh
 - [x] Optional runtime hooks gated off the default path
 - [x] Lean-mode execution profile added
 - [x] Benchmark support updated for lean-mode comparisons
-- [x] Host/device transfer path slimmed further
+- [x] Vulkan/device transfer path slimmed further
 - [x] Repeat-run benchmark deltas recorded across multiple hardware tiers
 
 ## Hot-path audit summary
@@ -53,7 +53,7 @@ Current lean-mode behavior:
 Phase 2 now also removes avoidable transfer work in the remaining load/input-preparation paths:
 
 - `load(...)` skips the model-wide `to(device)` walk when the module is already fully positioned on the target device
-- prepared-input caching now retains a small working set, which lets repeated `run_batch(...)` calls reuse already transferred inputs instead of re-copying the same host tensors every iteration
+- prepared-input caching now retains a small working set, which lets repeated `run_batch(...)` calls reuse already transferred inputs instead of re-copying the same vulkan tensors every iteration
 - autograd-input rejection still happens before any transfer is attempted, so invalid debugging inputs do not pay a device-copy penalty first
 
 ### 4. Benchmark support
@@ -66,20 +66,20 @@ This provides a repository-level way to compare:
 - lean-mode behavior
 - explicit diagnostic/profiler settings
 
-## Current CPU validation snapshot
+## Current Vulkan validation snapshot
 
 The repository-side benchmark was rerun in this environment with both the default low-overhead path and explicit lean mode:
 
 Default path:
 
 ```bash
-./build/munet_inference_baseline --device cpu --dtype float32 --batch 8 --input-dim 32 --hidden-dim 64 --output-dim 16 --warmup-runs 0 --single-run-iters 3 --batch-run-inputs 2 --batch-run-iters 2
+./build/munet_inference_baseline --device vulkan --dtype float32 --batch 8 --input-dim 32 --hidden-dim 64 --output-dim 16 --warmup-runs 0 --single-run-iters 3 --batch-run-inputs 2 --batch-run-iters 2
 ```
 
 Lean mode:
 
 ```bash
-./build/munet_inference_baseline --device cpu --dtype float32 --lean-mode true --batch 8 --input-dim 32 --hidden-dim 64 --output-dim 16 --warmup-runs 0 --single-run-iters 3 --batch-run-inputs 2 --batch-run-iters 2
+./build/munet_inference_baseline --device vulkan --dtype float32 --lean-mode true --batch 8 --input-dim 32 --hidden-dim 64 --output-dim 16 --warmup-runs 0 --single-run-iters 3 --batch-run-inputs 2 --batch-run-iters 2
 ```
 
 Observed comparison summary:
@@ -88,11 +88,10 @@ Observed comparison summary:
 - both runs preserved equivalent output-shape contracts and steady-state behavior
 - lean mode kept the explicit deploy-safe diagnostic suppression contract visible in the benchmark output, which gives later phases a stable knob for constrained-device comparisons
 
-## Latest accelerator validation snapshot
+## Latest Vulkan backend validation snapshot
 
-Accelerator reruns were provided from target hardware after the latest Phase 2 runtime updates.
+Vulkan backend reruns were provided from target hardware after the latest Phase 2 runtime updates.
 
-### CUDA (`float16`)
 
 - cold load wall time: `204.4189 ms`
 - compile time: `186.0020 ms`
@@ -110,11 +109,10 @@ Accelerator reruns were provided from target hardware after the latest Phase 2 r
 - `avg_prepare_input_ms`: `0.0001 ms`
 - `avg_forward_ms`: `41.4471 ms`
 
-### Comparison against the earlier Phase 0 accelerator baselines
+### Comparison against the earlier Phase 0 Vulkan backend baselines
 
-- **CUDA cold load improved materially** (`2113.0076 ms` -> `204.4189 ms`), while steady-state latency stayed effectively flat (`28.0683 ms` -> `28.1116 ms`).
 - **Vulkan cold load also improved** (`6063.4427 ms` -> `4157.7010 ms`), but compile and steady-state latency moved upward (`177.8639 ms` -> `229.6482 ms`, `36.2972 ms` -> `41.5417 ms`).
-- For both accelerators, `avg_prepare_input_ms` remained effectively zero and `avg_engine_run_ms` stayed aligned with `avg_forward_ms`, which indicates the latest inference-engine bookkeeping changes are not the dominant source of the remaining accelerator cost.
+- For both Vulkan backends, `avg_prepare_input_ms` remained effectively zero and `avg_engine_run_ms` stayed aligned with `avg_forward_ms`, which indicates the latest inference-engine bookkeeping changes are not the dominant source of the remaining Vulkan backend cost.
 - The current evidence points at backend/device execution behavior—especially Vulkan forward/warmup cost—rather than a new inference hot-path regression in `Engine::prepare_input`, tracing, or shape validation.
 
 ## Current guidance
@@ -128,6 +126,5 @@ For the lowest-overhead deploy path today:
 
 ## Follow-on Phase 2 work
 
-- capture lean-mode versus diagnostic-heavy deltas on CUDA and Vulkan hardware so the deploy profile has accelerator-side evidence in addition to CPU snapshots
 - decide whether batched execution should gain a lighter-weight path that avoids per-item observer/event churn when batch-level reporting is enough
-- carry Vulkan forward/warmup investigation into the next backend-focused phase, since the remaining accelerator variance now appears backend-dominated rather than inference-engine dominated
+- carry Vulkan forward/warmup investigation into the next backend-focused phase, since the remaining Vulkan backend variance now appears backend-dominated rather than inference-engine dominated

@@ -26,7 +26,7 @@ transfers, and diagnostics.
 ### Out of scope (initially)
 - Distributed multi-process orchestration.
 - Graph compiler-level partitioning.
-- Cross-host / network collectives.
+- Cross-vulkan / network collectives.
 
 ---
 
@@ -65,7 +65,7 @@ transfers, and diagnostics.
 - Python API docs for `offload`, `clear_offload`, `offload_plan`.
 - Debugging Playbook section: common offload errors and fixes.
 - New demo:
-  - `demos/multigpu/model_offload_manual_demo.py`
+  - `demos/multivulkan/model_offload_manual_demo.py`
   - Show 2-stage model split across devices and normal `model(x)` usage.
 
 ## Phase 1 exit criteria (all required)
@@ -82,8 +82,8 @@ transfers, and diagnostics.
     `tests/test_offload_phase1.py`.
 - **Left to confirm before declaring Phase 1 fully complete**
   1. **Demo validation on supported device pairs**
-     - Run `demos/multigpu/model_offload_manual_demo.py` on at least one supported
-       accelerator pair configuration and capture smoke-test evidence.
+     - Run `demos/multivulkan/model_offload_manual_demo.py` on at least one supported
+       Vulkan backend pair configuration and capture smoke-test evidence.
 
 ---
 
@@ -174,10 +174,10 @@ transfers, and diagnostics.
     documents fields and tradeoffs.
 - **Benchmark gain vs naive**
   - Covered by `tests/test_offload_phase3.py::test_balanced_strategy_improves_boundary_metric_vs_naive_split`
-    and `demos/multigpu/auto_offload_strategy_compare_demo.py`.
+    and `demos/multivulkan/auto_offload_strategy_compare_demo.py`.
 - **Plan persistence/reuse**
   - `freeze_offload_plan()` / `apply_offload_plan(...)` API plus
-    `demos/multigpu/offload_plan_export_import_demo.py`.
+    `demos/multivulkan/offload_plan_export_import_demo.py`.
 
 ### Post-Phase 3 follow-up architecture items
 - Persistence compatibility contract and schema versioning plan:

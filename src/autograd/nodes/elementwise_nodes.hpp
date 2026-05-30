@@ -17,28 +17,28 @@ struct MaskedFillBackward : public Node {
   std::vector<Tensor> apply(const std::vector<Tensor> &grads) override {
     Tensor mask = saved_tensor(0);
     const Tensor &grad_out = grads[0];
-    Device cpu{DeviceType::CPU, 0};
-    Tensor go_cpu = grad_out.to(cpu);
-    Tensor mask_cpu = mask.to(cpu);
-    Tensor gi_cpu(input_shape, cpu, grad_out.dtype());
+    Device host{DeviceType::VULKAN, 0};
+    Tensor go_host = grad_out.to(host);
+    Tensor mask_host = mask.to(host);
+    Tensor gi_host(input_shape, host, grad_out.dtype());
 
-    for (size_t i = 0; i < gi_cpu.size(); ++i) {
+    for (size_t i = 0; i < gi_host.size(); ++i) {
       const ScalarValue mask_value =
-          read_scalar_from_buffer(static_cast<const char *>(mask_cpu.data()) +
+          read_scalar_from_buffer(static_cast<const char *>(mask_host.data()) +
                                       i * dtype_size(mask.dtype()),
                                   mask.dtype());
       const ScalarValue grad_value =
-          read_scalar_from_buffer(static_cast<const char *>(go_cpu.data()) +
+          read_scalar_from_buffer(static_cast<const char *>(go_host.data()) +
                                       i * dtype_size(grad_out.dtype()),
                                   grad_out.dtype());
       write_scalar_to_buffer(
-          static_cast<char *>(gi_cpu.data()) + i * dtype_size(gi_cpu.dtype()),
-          gi_cpu.dtype(), mask_value.is_nonzero() ? 0.0 : grad_value.value);
+          static_cast<char *>(gi_host.data()) + i * dtype_size(gi_host.dtype()),
+          gi_host.dtype(), mask_value.is_nonzero() ? 0.0 : grad_value.value);
     }
 
-    Tensor gi_dev = (grad_out.device().type == DeviceType::CPU)
-                        ? gi_cpu
-                        : gi_cpu.to(grad_out.device());
+    Tensor gi_dev = (grad_out.device().type == DeviceType::VULKAN)
+                        ? gi_host
+                        : gi_host.to(grad_out.device());
     return {gi_dev, Tensor()};
   }
 };

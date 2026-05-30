@@ -194,7 +194,7 @@ def convert_state_dict_to_numpy(state_dict: Dict[str, torch.Tensor]) -> Dict[str
     """
     numpy_dict = {}
     for name, param in state_dict.items():
-        numpy_dict[name] = param.detach().cpu().numpy()
+        numpy_dict[name] = param.detach().to("host").numpy()
     return numpy_dict
 
 
@@ -585,7 +585,7 @@ class PyTorchInterop:
     def load_from_file(self, module, path: str) -> None:
         if TORCH_AVAILABLE:
             state = torch.load(path, weights_only=False)
-            state = {k: (v.detach().cpu().numpy() if hasattr(v, "detach") else v) for k, v in state.items()}
+            state = {k: (v.detach().to("host").numpy() if hasattr(v, "detach") else v) for k, v in state.items()}
         else:
             with np.load(path, allow_pickle=True) as data:
                 state = {k: data[k] for k in data.files}

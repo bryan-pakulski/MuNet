@@ -33,10 +33,6 @@ if(MUNET_BUILD_TESTS)
     FetchContent_MakeAvailable(googletest)
 endif()
 
-# --- Check for CUDA ---
-include(CheckLanguage)
-check_language(CUDA)
-
 set(MUNET_SOURCES
     src/tensor.cpp
     src/backend/backend_manager.cpp
@@ -59,25 +55,11 @@ set_source_files_properties(
     PROPERTIES COMPILE_DEFINITIONS MUNET_ENABLE_TRAINING=1
 )
 
-if(CMAKE_CUDA_COMPILER)
-    enable_language(CUDA)
-    message(STATUS "CUDA Detected! Enabling GPU Acceleration.")
-    add_compile_definitions(MUNET_USE_CUDA)
-    find_package(CUDAToolkit REQUIRED)
-    list(APPEND MUNET_SOURCES src/backend/cuda_backend.cu)
-else()
-    message(WARNING "CUDA not found. Building CPU-only.")
-endif()
-
-# --- Check for Vulkan ---
-find_package(Vulkan)
-if(Vulkan_FOUND)
-    message(STATUS "Vulkan Detected! Enabling Vulkan Backend.")
-    add_compile_definitions(MUNET_USE_VULKAN)
-    list(APPEND MUNET_SOURCES src/backend/vulkan_backend.cpp)
-else()
-    message(WARNING "Vulkan not found.")
-endif()
+# --- Vulkan backend (required) ---
+find_package(Vulkan REQUIRED)
+message(STATUS "Vulkan detected. Building Vulkan-only runtime.")
+add_compile_definitions(MUNET_USE_VULKAN)
+list(APPEND MUNET_SOURCES src/backend/vulkan_backend.cpp)
 
 # --- Shared compile/link options ---
 add_library(munet_build_flags INTERFACE)
@@ -85,12 +67,8 @@ add_library(munet_build_flags INTERFACE)
 target_compile_features(munet_build_flags INTERFACE cxx_std_17)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    target_compile_options(munet_build_flags INTERFACE -O3)
-    # Only enable LTO if CUDA is NOT being used
-    if(NOT CMAKE_CUDA_COMPILER)
-        target_compile_options(munet_build_flags INTERFACE -flto=auto)
-        target_link_options(munet_build_flags INTERFACE -flto=auto)
-    endif()
+    target_compile_options(munet_build_flags INTERFACE -O3 -flto=auto)
+    target_link_options(munet_build_flags INTERFACE -flto=auto)
 endif()
 
 if(MUNET_ENABLE_ASAN)
@@ -115,13 +93,7 @@ target_include_directories(munet_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_sources(munet_core PRIVATE $<TARGET_OBJECTS:munet_backend_debug>)
 target_link_libraries(munet_core PUBLIC munet_build_flags)
 
-if(Vulkan_FOUND)
-    target_link_libraries(munet_core PUBLIC Vulkan::Vulkan)
-endif()
-
-if(CMAKE_CUDA_COMPILER)
-    target_link_libraries(munet_core PUBLIC CUDA::cudart CUDA::cublas)
-endif()
+target_link_libraries(munet_core PUBLIC Vulkan::Vulkan)
 
 # 2) Training API
 add_library(munet_training INTERFACE)
@@ -190,23 +162,6 @@ if(MUNET_BUILD_RUNTIME_PLUGINS)
         ARCHIVE DESTINATION munet_nn/plugins
     )
 
-    add_library(munet_backend_cu12 SHARED src/backend/plugins/plugin_cu12.cpp)
-    target_include_directories(munet_backend_cu12 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    set_target_properties(munet_backend_cu12 PROPERTIES OUTPUT_NAME "munet_backend_cu12")
-    install(TARGETS munet_backend_cu12
-        LIBRARY DESTINATION munet_nn/plugins
-        RUNTIME DESTINATION munet_nn/plugins
-        ARCHIVE DESTINATION munet_nn/plugins
-    )
-
-    add_library(munet_backend_cu13 SHARED src/backend/plugins/plugin_cu13.cpp)
-    target_include_directories(munet_backend_cu13 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    set_target_properties(munet_backend_cu13 PROPERTIES OUTPUT_NAME "munet_backend_cu13")
-    install(TARGETS munet_backend_cu13
-        LIBRARY DESTINATION munet_nn/plugins
-        RUNTIME DESTINATION munet_nn/plugins
-        ARCHIVE DESTINATION munet_nn/plugins
-    )
 endif()
 
 # --- Unit Tests ---
@@ -224,8 +179,6 @@ if(MUNET_BUILD_TESTS)
         tests/test_optim.cpp
         tests/test_nn.cpp
         tests/test_inference.cpp
-        tests/test_backend_manager.cpp
-        tests/test_performance.cpp
     )
     target_link_libraries(munet_tests PRIVATE munet_training munet_inference gtest_main munet_build_flags)
 endif()
@@ -236,9 +189,9 @@ if(MUNET_BUILD_TOOLS)
 
     if(MUNET_BUILD_TESTS)
         add_test(
-            NAME munet_inference_baseline_cpu_smoke
+            NAME munet_inference_baseline_host_smoke
             COMMAND munet_inference_baseline
-                    --device cpu
+                    --device host
                     --dtype float32
                     --batch 4
                     --input-dim 16

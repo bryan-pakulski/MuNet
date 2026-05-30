@@ -45,7 +45,7 @@ TEST(TensorDTypeTest, DTypeUtilitiesProvidePromotionAndAccumulationRules) {
 
 TEST(TensorDTypeTest, TensorOptionsAndDTypeConversionRoundTrip) {
   TensorOptions options;
-  options.device = Device{DeviceType::CPU, 0};
+  options.device = Device{DeviceType::VULKAN, 0};
   options.dtype = DataType::Float16;
   options.requires_grad = true;
 
@@ -53,7 +53,7 @@ TEST(TensorDTypeTest, TensorOptionsAndDTypeConversionRoundTrip) {
   EXPECT_EQ(configured.dtype(), DataType::Float16);
   EXPECT_TRUE(configured.requires_grad());
 
-  Tensor base({2}, Device{DeviceType::CPU, 0}, DataType::Float32, true);
+  Tensor base({2}, Device{DeviceType::VULKAN, 0}, DataType::Float32, true);
   float *base_ptr = static_cast<float *>(base.data());
   base_ptr[0] = 1.5f;
   base_ptr[1] = -2.25f;
@@ -69,13 +69,13 @@ TEST(TensorDTypeTest, TensorOptionsAndDTypeConversionRoundTrip) {
 }
 
 TEST(TensorDTypeTest, ItemValueSupportsInt32AndFloat16) {
-  Tensor ints({1}, Device{DeviceType::CPU, 0}, DataType::Int32);
+  Tensor ints({1}, Device{DeviceType::VULKAN, 0}, DataType::Int32);
   static_cast<int32_t *>(ints.data())[0] = 7;
   ScalarValue int_value = ints.item_value();
   EXPECT_EQ(int_value.dtype, DataType::Int32);
   EXPECT_EQ(int_value.as_int32(), 7);
 
-  Tensor base({1}, Device{DeviceType::CPU, 0}, DataType::Float32);
+  Tensor base({1}, Device{DeviceType::VULKAN, 0}, DataType::Float32);
   static_cast<float *>(base.data())[0] = 1.25f;
   Tensor half = base.to(DataType::Float16);
   ScalarValue half_value = half.item_value();
@@ -84,15 +84,15 @@ TEST(TensorDTypeTest, ItemValueSupportsInt32AndFloat16) {
 }
 
 TEST(TensorDTypeTest, FillAndMaskedFillSupportTypedScalars) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
 
-  Tensor ints({4}, cpu, DataType::Int32);
+  Tensor ints({4}, host, DataType::Int32);
   ints.fill_(7);
   const int32_t *filled = static_cast<const int32_t *>(ints.data());
   EXPECT_EQ(filled[0], 7);
   EXPECT_EQ(filled[3], 7);
 
-  Tensor mask({4}, cpu, DataType::Int32);
+  Tensor mask({4}, host, DataType::Int32);
   int32_t *mask_ptr = static_cast<int32_t *>(mask.data());
   mask_ptr[0] = 0;
   mask_ptr[1] = 1;
@@ -107,87 +107,20 @@ TEST(TensorDTypeTest, FillAndMaskedFillSupportTypedScalars) {
   EXPECT_EQ(masked_ptr[3], -3);
 }
 
-TEST(TensorDTypeTest, Float16MatmulAndSumUseTypedFallbacks) {
-  Device cpu{DeviceType::CPU, 0};
-
-  Tensor a({2, 3}, cpu, DataType::Float16);
-  Tensor b({3, 2}, cpu, DataType::Float16);
-  Tensor a32({2, 3}, cpu, DataType::Float32);
-  Tensor b32({3, 2}, cpu, DataType::Float32);
-
-  float *a32_ptr = static_cast<float *>(a32.data());
-  float *b32_ptr = static_cast<float *>(b32.data());
-  a32_ptr[0] = 1.0f;
-  a32_ptr[1] = 2.0f;
-  a32_ptr[2] = 3.0f;
-  a32_ptr[3] = 4.0f;
-  a32_ptr[4] = 5.0f;
-  a32_ptr[5] = 6.0f;
-  b32_ptr[0] = 7.0f;
-  b32_ptr[1] = 8.0f;
-  b32_ptr[2] = 9.0f;
-  b32_ptr[3] = 10.0f;
-  b32_ptr[4] = 11.0f;
-  b32_ptr[5] = 12.0f;
-
-  a = a32.to(DataType::Float16);
-  b = b32.to(DataType::Float16);
-
-  Tensor out = a.matmul(b);
-  EXPECT_EQ(out.dtype(), DataType::Float16);
-
-  Tensor out32 = out.to(DataType::Float32);
-  const float *out_ptr = static_cast<const float *>(out32.data());
-  EXPECT_NEAR(out_ptr[0], 58.0f, 2e-1f);
-  EXPECT_NEAR(out_ptr[1], 64.0f, 1e-1f);
-  EXPECT_NEAR(out_ptr[2], 139.0f, 3e-1f);
-  EXPECT_NEAR(out_ptr[3], 154.0f, 1e-1f);
-
-  Tensor total = out.sum().to(DataType::Float32);
-  EXPECT_NEAR(static_cast<float *>(total.data())[0], 415.0f, 5e-1f);
-}
-
 TEST(TensorDTypeTest, MatmulRejectsDTypeMismatch) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor a({2, 2}, cpu, DataType::Float32);
-  Tensor b({2, 2}, cpu, DataType::Float16);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor a({2, 2}, host, DataType::Float32);
+  Tensor b({2, 2}, host, DataType::Float16);
   EXPECT_THROW((void)a.matmul(b), std::runtime_error);
 }
 
-TEST(TensorDTypeTest, BFloat16AndInt8MatmulFallbacksProduceOutputs) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor a32({2, 2}, cpu, DataType::Float32);
-  Tensor b32({2, 2}, cpu, DataType::Float32);
-  float *a = static_cast<float *>(a32.data());
-  float *b = static_cast<float *>(b32.data());
-  a[0] = 1.0f; a[1] = 2.0f; a[2] = 3.0f; a[3] = 4.0f;
-  b[0] = 1.0f; b[1] = 0.0f; b[2] = 0.0f; b[3] = 1.0f;
+TEST(TensorDTypeTest, HostBackendCopyRejectsNullPointers) {
+  Device vk{DeviceType::VULKAN, 0};
+  Tensor src({2}, vk, DataType::Float32);
+  Tensor dst({2}, vk, DataType::Float32);
 
-  Tensor bf_out = a32.to(DataType::BFloat16).matmul(b32.to(DataType::BFloat16));
-  EXPECT_EQ(bf_out.dtype(), DataType::BFloat16);
-
-  Tensor ai8({2, 2}, cpu, DataType::Int8);
-  Tensor bi8({2, 2}, cpu, DataType::Int8);
-  int8_t *ai8p = static_cast<int8_t *>(ai8.data());
-  int8_t *bi8p = static_cast<int8_t *>(bi8.data());
-  ai8p[0] = 1; ai8p[1] = 2; ai8p[2] = 3; ai8p[3] = 4;
-  bi8p[0] = 1; bi8p[1] = 0; bi8p[2] = 0; bi8p[3] = 1;
-  Tensor i8_out = ai8.matmul(bi8);
-  EXPECT_EQ(i8_out.dtype(), DataType::Int8);
-}
-
-TEST(TensorDTypeTest, CpuBackendCopyValidatesTransferEndpoints) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor src({2}, cpu, DataType::Float32);
-  Tensor dst({2}, cpu, DataType::Float32);
-
-  EXPECT_THROW(
-      src.impl_->backend().copy(src.data(), dst.data(), src.bytes(),
-                                Device{DeviceType::CUDA, 0}, cpu),
-      std::runtime_error);
-
-  EXPECT_THROW(src.impl_->backend().copy(nullptr, dst.data(), src.bytes(), cpu,
-                                         cpu),
+  EXPECT_THROW(src.impl_->backend().copy(nullptr, dst.data(), src.bytes(), vk,
+                                         vk),
                std::runtime_error);
 }
 
@@ -199,8 +132,8 @@ TEST(TensorDTypeTest, VulkanMatmulRejectsUnsupportedFloat16WhenAvailable) {
     GTEST_SKIP() << "Vulkan backend unavailable in this environment: " << e.what();
   }
 
-  Tensor a32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);
-  Tensor b32({2, 2}, {DeviceType::CPU, 0}, DataType::Float32);
+  Tensor a32({2, 2}, {DeviceType::VULKAN, 0}, DataType::Float32);
+  Tensor b32({2, 2}, {DeviceType::VULKAN, 0}, DataType::Float32);
   a32.fill_(make_scalar(1.0f));
   b32.fill_(make_scalar(1.0f));
 
@@ -230,8 +163,8 @@ TEST_P(TensorTest, CreationAndMetadata) {
 }
 
 TEST_P(TensorTest, DeviceMovePreservesDTypeAndRequiresGrad) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor base({1}, cpu, DataType::Float32, true);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor base({1}, host, DataType::Float32, true);
   static_cast<float *>(base.data())[0] = 2.5f;
 
   Tensor half = base.to(DataType::Float16);
@@ -241,14 +174,14 @@ TEST_P(TensorTest, DeviceMovePreservesDTypeAndRequiresGrad) {
   EXPECT_TRUE(moved.requires_grad());
   EXPECT_EQ(moved.device(), dev());
 
-  ScalarValue roundtrip = moved.to(cpu).item_value();
+  ScalarValue roundtrip = moved.to(host).item_value();
   EXPECT_EQ(roundtrip.dtype, DataType::Float16);
   EXPECT_NEAR(roundtrip.as_float(), 2.5f, 1e-3f);
 }
 
 TEST_P(TensorTest, ClonePreservesOptionsAndStorageIndependence) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor base({2}, cpu, DataType::Float32, true);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor base({2}, host, DataType::Float32, true);
   float *base_ptr = static_cast<float *>(base.data());
   base_ptr[0] = 1.0f;
   base_ptr[1] = -3.5f;
@@ -263,19 +196,19 @@ TEST_P(TensorTest, ClonePreservesOptionsAndStorageIndependence) {
   EXPECT_EQ(cloned.options().device, dev());
   EXPECT_NE(cloned.data(), original.data());
 
-  Tensor clone_cpu = cloned.to(cpu).to(DataType::Float32);
-  const float *clone_ptr = static_cast<const float *>(clone_cpu.data());
+  Tensor clone_host = cloned.to(host).to(DataType::Float32);
+  const float *clone_ptr = static_cast<const float *>(clone_host.data());
   EXPECT_NEAR(clone_ptr[0], 1.0f, 1e-3f);
   EXPECT_NEAR(clone_ptr[1], -3.5f, 1e-3f);
 
-  Tensor replacement({2}, cpu, DataType::Float16);
+  Tensor replacement({2}, host, DataType::Float16);
   replacement.fill_(make_scalar(5.0, DataType::Float16));
   cloned.impl_->backend().copy(replacement.data(), cloned.data(),
                                cloned.bytes(), replacement.device(),
                                cloned.device());
 
-  Tensor updated_clone = cloned.to(cpu).to(DataType::Float32);
-  Tensor original_roundtrip = original.to(cpu).to(DataType::Float32);
+  Tensor updated_clone = cloned.to(host).to(DataType::Float32);
+  Tensor original_roundtrip = original.to(host).to(DataType::Float32);
   const float *updated_clone_ptr =
       static_cast<const float *>(updated_clone.data());
   const float *original_ptr =
@@ -287,8 +220,8 @@ TEST_P(TensorTest, ClonePreservesOptionsAndStorageIndependence) {
 }
 
 TEST_P(TensorTest, ToOptionsAppliesDTypeDeviceAndRequiresGradTogether) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor base({2}, cpu, DataType::Float32, true);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor base({2}, host, DataType::Float32, true);
   float *base_ptr = static_cast<float *>(base.data());
   base_ptr[0] = 4.25f;
   base_ptr[1] = -1.75f;
@@ -305,7 +238,7 @@ TEST_P(TensorTest, ToOptionsAppliesDTypeDeviceAndRequiresGradTogether) {
   EXPECT_EQ(converted.options().dtype, DataType::Float16);
   EXPECT_EQ(converted.options().device, dev());
 
-  Tensor roundtrip = converted.to(cpu).to(DataType::Float32);
+  Tensor roundtrip = converted.to(host).to(DataType::Float32);
   const float *roundtrip_ptr = static_cast<const float *>(roundtrip.data());
   EXPECT_NEAR(roundtrip_ptr[0], 4.25f, 1e-3f);
   EXPECT_NEAR(roundtrip_ptr[1], -1.75f, 1e-3f);
@@ -315,7 +248,7 @@ TEST_P(TensorTest, Addition) {
   Tensor a({2}, dev());
   Tensor b({2}, dev());
 
-  Tensor val({2}, {DeviceType::CPU, 0});
+  Tensor val({2}, {DeviceType::VULKAN, 0});
   float *data = (float *)val.data();
   data[0] = 1.0f;
   data[1] = 2.0f;
@@ -326,14 +259,14 @@ TEST_P(TensorTest, Addition) {
   b.impl_->backend().copy(val.data(), b.data(), b.bytes(), val.device(), dev());
 
   Tensor c = a + b;
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   EXPECT_FLOAT_EQ(((float *)res.data())[0], 4.0f);
   EXPECT_FLOAT_EQ(((float *)res.data())[1], 6.0f);
 }
 
 TEST_P(TensorTest, ItemMethod) {
   Tensor t({1}, dev());
-  Tensor val({1}, {DeviceType::CPU, 0});
+  Tensor val({1}, {DeviceType::VULKAN, 0});
   ((float *)val.data())[0] = 3.14f;
 
   // Copy to device
@@ -352,10 +285,10 @@ TEST_P(TensorTest, MaskedFill) {
   Tensor a({2, 2}, dev());
   Tensor mask({2, 2}, dev());
 
-  Tensor a_cpu({2, 2}, {DeviceType::CPU, 0});
-  Tensor m_cpu({2, 2}, {DeviceType::CPU, 0});
-  float *ad = (float *)a_cpu.data();
-  float *md = (float *)m_cpu.data();
+  Tensor a_host({2, 2}, {DeviceType::VULKAN, 0});
+  Tensor m_host({2, 2}, {DeviceType::VULKAN, 0});
+  float *ad = (float *)a_host.data();
+  float *md = (float *)m_host.data();
   ad[0] = 1.0f;
   ad[1] = 2.0f;
   ad[2] = 3.0f;
@@ -365,40 +298,17 @@ TEST_P(TensorTest, MaskedFill) {
   md[2] = 0.0f;
   md[3] = 1.0f;
 
-  a.impl_->backend().copy(a_cpu.data(), a.data(), a.bytes(), a_cpu.device(),
+  a.impl_->backend().copy(a_host.data(), a.data(), a.bytes(), a_host.device(),
                           dev());
-  mask.impl_->backend().copy(m_cpu.data(), mask.data(), mask.bytes(),
-                             m_cpu.device(), dev());
+  mask.impl_->backend().copy(m_host.data(), mask.data(), mask.bytes(),
+                             m_host.device(), dev());
 
-  Tensor out = a.masked_fill(mask, -5.0f).to({DeviceType::CPU, 0});
+  Tensor out = a.masked_fill(mask, -5.0f).to({DeviceType::VULKAN, 0});
   const float *o = (const float *)out.data();
   EXPECT_FLOAT_EQ(o[0], 1.0f);
   EXPECT_FLOAT_EQ(o[1], -5.0f);
   EXPECT_FLOAT_EQ(o[2], 3.0f);
   EXPECT_FLOAT_EQ(o[3], -5.0f);
-}
-
-TEST(TensorDTypeTest, Float16SoftmaxBackwardUsesTypedFallback) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor base({1, 3}, cpu, DataType::Float32, true);
-  float *base_ptr = static_cast<float *>(base.data());
-  base_ptr[0] = 1.0f;
-  base_ptr[1] = 2.0f;
-  base_ptr[2] = -1.0f;
-
-  Tensor x = base.to(DataType::Float16).detach();
-  x.set_requires_grad(true);
-  Tensor y = x.softmax(-1);
-  EXPECT_EQ(y.dtype(), DataType::Float16);
-
-  Tensor loss = y.sum();
-  EXPECT_NO_THROW(loss.backward());
-  ASSERT_TRUE(x.has_grad());
-  Tensor grad = x.grad().to(DataType::Float32);
-  const float *grad_ptr = static_cast<const float *>(grad.data());
-  EXPECT_NEAR(grad_ptr[0], 0.0f, 2e-2f);
-  EXPECT_NEAR(grad_ptr[1], 0.0f, 2e-2f);
-  EXPECT_NEAR(grad_ptr[2], 0.0f, 2e-2f);
 }
 
 TEST_P(TensorTest, SoftmaxDimValidation) {
@@ -417,15 +327,15 @@ TEST_P(TensorTest, PermuteViewMetadata) {
 
 TEST_P(TensorTest, LogSoftmaxDim) {
   Tensor x({1, 3}, dev());
-  Tensor x_cpu({1, 3}, {DeviceType::CPU, 0});
-  float *d = (float *)x_cpu.data();
+  Tensor x_host({1, 3}, {DeviceType::VULKAN, 0});
+  float *d = (float *)x_host.data();
   d[0] = 0.0f;
   d[1] = 1.0f;
   d[2] = 2.0f;
-  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(),
+  x.impl_->backend().copy(x_host.data(), x.data(), x.bytes(), x_host.device(),
                           dev());
 
-  Tensor ls = x.log_softmax(-1).to({DeviceType::CPU, 0});
+  Tensor ls = x.log_softmax(-1).to({DeviceType::VULKAN, 0});
   const float *o = (const float *)ls.data();
   float p0 = std::exp(o[0]);
   float p1 = std::exp(o[1]);
@@ -434,21 +344,21 @@ TEST_P(TensorTest, LogSoftmaxDim) {
 }
 
 TEST_P(TensorTest, UnaryMathOpsForward) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor base({3}, cpu, DataType::Float32);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor base({3}, host, DataType::Float32);
   float *ptr = static_cast<float *>(base.data());
   ptr[0] = 1.0f;
   ptr[1] = 4.0f;
   ptr[2] = 9.0f;
 
   Tensor x = base.to(dev());
-  Tensor sqrt_out = x.sqrt().to(cpu);
+  Tensor sqrt_out = x.sqrt().to(host);
   const float *sqrt_ptr = static_cast<const float *>(sqrt_out.data());
   EXPECT_NEAR(sqrt_ptr[0], 1.0f, 1e-5f);
   EXPECT_NEAR(sqrt_ptr[1], 2.0f, 1e-5f);
   EXPECT_NEAR(sqrt_ptr[2], 3.0f, 1e-5f);
 
-  Tensor log_exp = x.log().exp().to(cpu);
+  Tensor log_exp = x.log().exp().to(host);
   const float *roundtrip_ptr = static_cast<const float *>(log_exp.data());
   EXPECT_NEAR(roundtrip_ptr[0], 1.0f, 1e-5f);
   EXPECT_NEAR(roundtrip_ptr[1], 4.0f, 1e-4f);
@@ -456,8 +366,8 @@ TEST_P(TensorTest, UnaryMathOpsForward) {
 }
 
 TEST_P(TensorTest, UnaryMathOpsBackward) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor base({3}, cpu, DataType::Float32);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor base({3}, host, DataType::Float32);
   float *ptr = static_cast<float *>(base.data());
   ptr[0] = 1.0f;
   ptr[1] = 4.0f;
@@ -468,7 +378,7 @@ TEST_P(TensorTest, UnaryMathOpsBackward) {
   Tensor loss = x.log().sum();
   loss.backward();
 
-  Tensor grad = x.grad().to(cpu);
+  Tensor grad = x.grad().to(host);
   const float *grad_ptr = static_cast<const float *>(grad.data());
   EXPECT_NEAR(grad_ptr[0], 1.0f, 1e-5f);
   EXPECT_NEAR(grad_ptr[1], 0.25f, 1e-5f);

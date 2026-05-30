@@ -482,7 +482,7 @@ Tensor tensor_from_npy_array(const NpyArray &array) {
     shape.push_back(static_cast<int>(dim));
   }
 
-  Tensor tensor(shape, Device{DeviceType::CPU, 0}, dtype, false);
+  Tensor tensor(shape, Device{DeviceType::VULKAN, 0}, dtype, false);
   const size_t expected_bytes = element_count(array.shape) * dtype_size(dtype);
   if (array.data.size() != expected_bytes) {
     throw std::runtime_error("Serialized tensor payload size mismatch");

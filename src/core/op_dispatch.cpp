@@ -26,8 +26,8 @@ struct DispatchFallbackRule;
 
 struct FallbackTelemetryState {
   std::mutex mutex;
-  uint64_t accelerator_cpu_fallback_total = 0;
-  std::unordered_map<std::string, uint64_t> accelerator_cpu_fallback_counters;
+  uint64_t accelerator_host_fallback_total = 0;
+  std::unordered_map<std::string, uint64_t> accelerator_host_fallback_counters;
 };
 
 FallbackTelemetryState &fallback_telemetry_state() {
@@ -36,7 +36,7 @@ FallbackTelemetryState &fallback_telemetry_state() {
 }
 
 bool is_accelerator_device(DeviceType type) {
-  return type == DeviceType::CUDA || type == DeviceType::VULKAN;
+  return type == DeviceType::VULKAN;
 }
 
 bool is_dispatch_decision_dump_enabled() {
@@ -49,7 +49,7 @@ bool is_dispatch_decision_dump_enabled() {
 }
 
 bool is_fallback_fail_fast_enabled() {
-  const char *env = std::getenv("MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK");
+  const char *env = std::getenv("MUNET_FAIL_FAST_ACCELERATOR_Host_FALLBACK");
   if (!env) {
     return false;
   }
@@ -61,97 +61,97 @@ const std::unordered_map<OpId, OpMetadata> &registry() {
   static const std::unordered_map<OpId, OpMetadata> kRegistry = {
       {OpId::Add,
        {OpId::Add, "Add", "Add", BackendFeature::ElementwiseBinary, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Sub,
        {OpId::Sub, "Sub", "Sub", BackendFeature::ElementwiseBinary, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Mul,
        {OpId::Mul, "Mul", "Mul", BackendFeature::ElementwiseBinary, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Div,
        {OpId::Div, "Div", "Div", BackendFeature::ElementwiseBinary, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::MaskedFill,
        {OpId::MaskedFill, "MaskedFill", "MaskedFill", std::nullopt, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Matmul,
        {OpId::Matmul, "Matmul", "MatMul", BackendFeature::Matmul, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Relu,
        {OpId::Relu, "Relu", "Relu", BackendFeature::UnaryActivation, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Sigmoid,
        {OpId::Sigmoid, "Sigmoid", "Sigmoid", BackendFeature::UnaryActivation,
-        true, BackendFallbackPolicy::CPUFallback}},
+        true, BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Exp,
        {OpId::Exp, "Exp", "Exp", BackendFeature::UnaryActivation, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Log,
        {OpId::Log, "Log", "Log", BackendFeature::UnaryActivation, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Sqrt,
        {OpId::Sqrt, "Sqrt", "Sqrt", BackendFeature::UnaryActivation, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Rsqrt,
        {OpId::Rsqrt, "Rsqrt", "Rsqrt", BackendFeature::UnaryActivation, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Sin,
        {OpId::Sin, "Sin", "Sin", BackendFeature::UnaryActivation, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Cos,
        {OpId::Cos, "Cos", "Cos", BackendFeature::UnaryActivation, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Softmax,
        {OpId::Softmax, "Softmax", "Softmax", BackendFeature::Softmax, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::LogSoftmax,
        {OpId::LogSoftmax, "LogSoftmax", "LogSoftmax", std::nullopt, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Cat,
        {OpId::Cat, "Concat", "Concat", BackendFeature::Concat, false,
         BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Sum,
        {OpId::Sum, "Sum", "ReduceSum", BackendFeature::Reduction, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::SumToShape,
        {OpId::SumToShape, "SumToShape", "ReduceSum", BackendFeature::Reduction,
-        false, BackendFallbackPolicy::CPUFallback}},
+        false, BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Mean,
        {OpId::Mean, "Mean", "ReduceMean", BackendFeature::Reduction, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Reshape,
        {OpId::Reshape, "Reshape", "Reshape", std::nullopt, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Conv2D,
        {OpId::Conv2D, "Conv2d", "Conv", BackendFeature::Convolution, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::MaxPool2D,
        {OpId::MaxPool2D, "MaxPool2d", "MaxPool", BackendFeature::Pooling, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Upsample2D,
        {OpId::Upsample2D, "Upsample2d", "Upsample2d", BackendFeature::Pooling,
-        true, BackendFallbackPolicy::CPUFallback}},
+        true, BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::BatchNorm,
        {OpId::BatchNorm, "BatchNorm", "BatchNormalization",
-        BackendFeature::BatchNorm, true, BackendFallbackPolicy::CPUFallback}},
+        BackendFeature::BatchNorm, true, BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::LayerNorm,
        {OpId::LayerNorm, "LayerNorm", "LayerNorm", std::nullopt, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::MSELoss,
        {OpId::MSELoss, "MSELoss", "MSELoss", BackendFeature::Loss, true,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::CrossEntropy,
        {OpId::CrossEntropy, "CrossEntropy", "CrossEntropy",
-        BackendFeature::Loss, true, BackendFallbackPolicy::CPUFallback}},
+        BackendFeature::Loss, true, BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Transpose,
        {OpId::Transpose, "Transpose", "Transpose", std::nullopt, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Narrow,
        {OpId::Narrow, "Narrow", "Slice", std::nullopt, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
       {OpId::Zeros,
        {OpId::Zeros, "Zeros", "Zeros", std::nullopt, false,
-        BackendFallbackPolicy::CPUFallback}},
+        BackendFallbackPolicy::ExplicitUnsupported}},
   };
   return kRegistry;
 }
@@ -177,22 +177,22 @@ ForwardNode make_trace_node(
 }
 
 void record_dispatch_profile(const std::string &path, const OpMetadata &meta,
-                             const Tensor &tensor, double cpu_us) {
+                             const Tensor &tensor, double host_us) {
   if (!is_profile_enabled()) {
     return;
   }
 
-  Profiler::get().record("dispatch.resolve." + path + "." + meta.name, cpu_us,
+  Profiler::get().record("dispatch.resolve." + path + "." + meta.name, host_us,
                          0.0, 0, to_string(tensor.shape()));
 }
 
 void record_dispatch_stage_profile(const char *stage, const OpMetadata &meta,
-                                   const Tensor &tensor, double cpu_us) {
+                                   const Tensor &tensor, double host_us) {
   if (!is_profile_enabled()) {
     return;
   }
   Profiler::get().record("dispatch.stage." + std::string(stage) + "." + meta.name,
-                         cpu_us, 0.0, 0, to_string(tensor.shape()));
+                         host_us, 0.0, 0, to_string(tensor.shape()));
 }
 
 void log_dispatch_stage(const char *stage, const OpMetadata &meta,
@@ -208,8 +208,8 @@ void log_dispatch_stage(const char *stage, const OpMetadata &meta,
 
 void record_dispatch_stage(const char *stage, const OpMetadata &meta,
                            const Tensor &tensor, Timer *timer) {
-  const double cpu_us = timer ? timer->elapsed_us() : 0.0;
-  record_dispatch_stage_profile(stage, meta, tensor, cpu_us);
+  const double host_us = timer ? timer->elapsed_us() : 0.0;
+  record_dispatch_stage_profile(stage, meta, tensor, host_us);
   log_dispatch_stage(stage, meta, tensor);
 }
 
@@ -224,7 +224,7 @@ const char *dispatch_fallback_reason_name(DispatchFallbackReason reason) {
   case DispatchFallbackReason::Policy:
     return "policy";
   default:
-    return "unknown";
+    return "vulkan";
   }
 }
 
@@ -290,15 +290,14 @@ void log_dispatch_fallback_reason(const OpMetadata &meta, const Tensor &tensor,
 
 struct DispatchFallbackRule {
   enum class Action {
-    DenyCPUFallback,
-    ForceCPUFallback,
+    DenyExplicitUnsupported,
   };
 
   DeviceType device_type;
   std::optional<BackendFeature> feature;
   std::optional<OpId> op;
   std::optional<DataType> dtype;
-  Action action = Action::DenyCPUFallback;
+  Action action = Action::DenyExplicitUnsupported;
   const char *error_message;
 };
 
@@ -329,9 +328,7 @@ std::string dispatch_decision_detail_line(
   }
   if (rule) {
     oss << " rule_action="
-        << (rule->action == DispatchFallbackRule::Action::DenyCPUFallback
-                ? "deny_cpu_fallback"
-                : "force_cpu_fallback")
+        << "deny_host_fallback"
         << " rule_error=\"" << rule->error_message << "\"";
   } else {
     oss << " rule_action=<none>";
@@ -369,10 +366,10 @@ void record_accelerator_fallback_telemetry(const OpMetadata &meta,
   uint64_t key_count = 0;
   {
     std::lock_guard<std::mutex> lock(state.mutex);
-    total = ++state.accelerator_cpu_fallback_total;
-    key_count = ++state.accelerator_cpu_fallback_counters[key];
+    total = ++state.accelerator_host_fallback_total;
+    key_count = ++state.accelerator_host_fallback_counters[key];
   }
-  MUNET_WARNING << "accelerator_cpu_fallback total=" << total
+  MUNET_WARNING << "accelerator_host_fallback total=" << total
                 << " key_count=" << key_count << " " << key << std::endl;
 }
 
@@ -384,94 +381,55 @@ void maybe_fail_fast_on_accelerator_fallback(const OpMetadata &meta,
     return;
   }
   throw std::runtime_error(
-      std::string("Fail-fast: accelerator tensor fell back to CPU unexpectedly; op=") +
+      std::string("Fail-fast: accelerator tensor fell back to Host unexpectedly; op=") +
       meta.name + " device=" + tensor.device().to_string() +
       " backend=" + tensor.impl_->backend().name() + " reason=" + reason +
-      ". Disable by unsetting MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK.");
+      ". Disable by unsetting MUNET_FAIL_FAST_ACCELERATOR_Host_FALLBACK.");
 }
 
 const std::vector<DispatchFallbackRule> &dispatch_fallback_rules() {
-  // Phase 5 policy matrix:
-  // Prefer feature-level rules per backend, with op-level exceptions only when
-  // we need deterministic precedence behavior beyond feature/dtype matching.
+  // Vulkan-only policy matrix: unsupported accelerator dtype/feature
+  // combinations are explicit errors instead of Host fallbacks.
   static const std::vector<DispatchFallbackRule> kRules = {
-      // Elementwise
-      {DeviceType::CUDA, BackendFeature::ElementwiseBinary, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
-       "CUDA backend does not support bfloat16 elementwise-feature fallback"},
       {DeviceType::VULKAN, BackendFeature::ElementwiseBinary, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
+       DataType::BFloat16, DispatchFallbackRule::Action::DenyExplicitUnsupported,
        "Vulkan backend does not support bfloat16 elementwise-feature fallback"},
-
-      // Matmul
-      {DeviceType::CUDA, BackendFeature::Matmul, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
-       "CUDA backend does not support bfloat16 matmul-feature fallback"},
       {DeviceType::VULKAN, BackendFeature::Matmul, std::nullopt,
-       DataType::Float16, DispatchFallbackRule::Action::DenyCPUFallback,
+       DataType::Float16, DispatchFallbackRule::Action::DenyExplicitUnsupported,
        "Vulkan backend does not support float16 matmul-feature fallback"},
       {DeviceType::VULKAN, BackendFeature::Matmul, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
+       DataType::BFloat16, DispatchFallbackRule::Action::DenyExplicitUnsupported,
        "Vulkan backend does not support bfloat16 matmul-feature fallback"},
-
-      // Convolution
-      {DeviceType::CPU, BackendFeature::Convolution, std::nullopt,
-       DataType::Float16, DispatchFallbackRule::Action::ForceCPUFallback,
-       "CPU backend forces float16 convolution fallback"},
-      {DeviceType::CPU, BackendFeature::Convolution, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::ForceCPUFallback,
-       "CPU backend forces bfloat16 convolution fallback"},
-      {DeviceType::CUDA, BackendFeature::Convolution, std::nullopt,
-       DataType::Float16, DispatchFallbackRule::Action::ForceCPUFallback,
-       "CUDA backend forces float16 convolution fallback"},
       {DeviceType::VULKAN, BackendFeature::Convolution, std::nullopt,
-       DataType::Float16, DispatchFallbackRule::Action::ForceCPUFallback,
-       "Vulkan backend forces float16 convolution fallback"},
-
-      // Pooling
-      {DeviceType::CUDA, BackendFeature::Pooling, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
-       "CUDA backend does not support bfloat16 pooling-feature fallback"},
+       DataType::Float16, DispatchFallbackRule::Action::DenyExplicitUnsupported,
+       "Host backend does not support float16 convolution"},
+      {DeviceType::VULKAN, BackendFeature::Convolution, std::nullopt,
+       DataType::BFloat16, DispatchFallbackRule::Action::DenyExplicitUnsupported,
+       "Host backend does not support bfloat16 convolution"},
+      {DeviceType::VULKAN, BackendFeature::Convolution, std::nullopt,
+       DataType::Float16, DispatchFallbackRule::Action::DenyExplicitUnsupported,
+       "Vulkan backend does not support float16 convolution"},
       {DeviceType::VULKAN, BackendFeature::Pooling, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
+       DataType::BFloat16, DispatchFallbackRule::Action::DenyExplicitUnsupported,
        "Vulkan backend does not support bfloat16 pooling-feature fallback"},
-
-      // Loss
-      {DeviceType::CUDA, BackendFeature::Loss, std::nullopt, DataType::BFloat16,
-       DispatchFallbackRule::Action::DenyCPUFallback,
-       "CUDA backend does not support bfloat16 loss-feature fallback"},
       {DeviceType::VULKAN, BackendFeature::Loss, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
+       DataType::BFloat16, DispatchFallbackRule::Action::DenyExplicitUnsupported,
        "Vulkan backend does not support bfloat16 loss-feature fallback"},
-
-      // Reduction
-      {DeviceType::CUDA, BackendFeature::Reduction, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
-       "CUDA backend does not support bfloat16 reduction-feature fallback"},
       {DeviceType::VULKAN, BackendFeature::Reduction, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
+       DataType::BFloat16, DispatchFallbackRule::Action::DenyExplicitUnsupported,
        "Vulkan backend does not support bfloat16 reduction-feature fallback"},
-
-      // Softmax
-      {DeviceType::CUDA, BackendFeature::Softmax, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
-       "CUDA backend does not support bfloat16 softmax-feature fallback"},
       {DeviceType::VULKAN, BackendFeature::Softmax, std::nullopt,
-       DataType::BFloat16, DispatchFallbackRule::Action::DenyCPUFallback,
+       DataType::BFloat16, DispatchFallbackRule::Action::DenyExplicitUnsupported,
        "Vulkan backend does not support bfloat16 softmax-feature fallback"},
-      {DeviceType::UNKNOWN, BackendFeature::Softmax, std::nullopt, std::nullopt,
-       DispatchFallbackRule::Action::DenyCPUFallback,
-       "UNKNOWN softmax feature fallback denied"},
-      {DeviceType::UNKNOWN, BackendFeature::Softmax, std::nullopt,
-       DataType::Float32, DispatchFallbackRule::Action::DenyCPUFallback,
-       "UNKNOWN softmax float32 fallback denied"},
-
-      // Op-level exception (minimal, documented):
-      // Keep a single op-specific UNKNOWN softmax rule to enforce and test
-      // specificity ordering (op+dtype outranks feature+dtype).
-      {DeviceType::UNKNOWN, BackendFeature::Softmax, OpId::Softmax,
-       DataType::Float32, DispatchFallbackRule::Action::DenyCPUFallback,
-       "UNKNOWN softmax op-specific float32 fallback denied"},
+      {DeviceType::VULKAN, BackendFeature::Softmax, std::nullopt, std::nullopt,
+       DispatchFallbackRule::Action::DenyExplicitUnsupported,
+       "VULKAN softmax feature fallback denied"},
+      {DeviceType::VULKAN, BackendFeature::Softmax, std::nullopt,
+       DataType::Float32, DispatchFallbackRule::Action::DenyExplicitUnsupported,
+       "VULKAN softmax float32 fallback denied"},
+      {DeviceType::VULKAN, BackendFeature::Softmax, OpId::Softmax,
+       DataType::Float32, DispatchFallbackRule::Action::DenyExplicitUnsupported,
+       "VULKAN softmax op-specific float32 fallback denied"},
   };
   return kRules;
 }
@@ -551,7 +509,7 @@ stage_metadata_validation(const OpMetadata &meta, const Tensor &tensor,
         meta, tensor, "metadata_validation", "metadata_fallback", meta.feature,
         &support, nullptr, std::nullopt));
     return DispatchDecision{meta, false,
-                            meta.fallback_policy == BackendFallbackPolicy::CPUFallback,
+                            meta.fallback_policy == BackendFallbackPolicy::ExplicitUnsupported,
                             support};
   }
 
@@ -567,50 +525,23 @@ stage_backend_support_query(const Tensor &tensor, BackendFeature feature) {
 
 struct PolicyStageResult {
   bool use_backend = false;
-  bool use_cpu_fallback = false;
+  bool use_host_fallback = false;
   const DispatchFallbackRule *matched_rule = nullptr;
   BackendSupport support;
 };
 
 PolicyStageResult
-stage_policy_engine_evaluation(OpId id, const OpMetadata &meta,
+stage_policy_engine_evaluation(OpId id, const OpMetadata &,
                                const Tensor &tensor, BackendFeature feature,
                                BackendSupport support, Timer *timer) {
   const DispatchFallbackRule *matched_rule =
       find_matching_dispatch_rule(id, feature, tensor);
-  const bool force_cpu_fallback =
-      matched_rule != nullptr &&
-      matched_rule->action == DispatchFallbackRule::Action::ForceCPUFallback;
-  const bool disallow_cpu_fallback =
-      matched_rule != nullptr &&
-      matched_rule->action == DispatchFallbackRule::Action::DenyCPUFallback;
-
-  if (force_cpu_fallback) {
-    support.fallback_policy = BackendFallbackPolicy::CPUFallback;
-    if (timer) {
-      record_dispatch_profile("cpu_fallback", meta, tensor, timer->elapsed_us());
-    }
-    return {false, true, matched_rule, support};
-  }
 
   if (support.available) {
     if (timer) {
-      record_dispatch_profile("backend", meta, tensor, timer->elapsed_us());
+      record_dispatch_profile("backend", op_metadata(id), tensor, timer->elapsed_us());
     }
     return {true, false, matched_rule, support};
-  }
-
-  if (meta.fallback_policy == BackendFallbackPolicy::CPUFallback &&
-      support.fallback_policy == BackendFallbackPolicy::CPUFallback &&
-      !disallow_cpu_fallback) {
-    const auto reason =
-        classify_dispatch_fallback(meta, tensor, feature, support);
-    log_dispatch_fallback_reason(meta, tensor, feature, support, reason);
-    record_dispatch_fallback_reason(meta, tensor, feature, support, reason);
-    if (timer) {
-      record_dispatch_profile("cpu_fallback", meta, tensor, timer->elapsed_us());
-    }
-    return {false, true, matched_rule, support};
   }
 
   return {false, false, matched_rule, support};
@@ -629,17 +560,17 @@ stage_policy_engine_evaluation(OpId id, const OpMetadata &meta,
     record_dispatch_profile("unsupported", meta, tensor, timer->elapsed_us());
   }
 
-  const bool disallow_cpu_fallback =
+  const bool disallow_host_fallback =
       policy.matched_rule != nullptr &&
-      policy.matched_rule->action == DispatchFallbackRule::Action::DenyCPUFallback;
-  if (disallow_cpu_fallback) {
+      policy.matched_rule->action == DispatchFallbackRule::Action::DenyExplicitUnsupported;
+  if (disallow_host_fallback) {
     const std::string error =
         std::string(meta.name) + ": " +
         std::string(policy.matched_rule->error_message) + " for backend '" +
         std::string(tensor.impl_->backend().name()) +
         "' on device '" + tensor.device().to_string() + "'";
     maybe_log_dispatch_decision(dispatch_decision_detail_line(
-        meta, tensor, "final_decision_error", "deny_cpu_fallback", feature,
+        meta, tensor, "final_decision_error", "deny_host_fallback", feature,
         &policy.support, policy.matched_rule, reason, error.c_str()));
     throw std::runtime_error(error);
   }
@@ -662,7 +593,7 @@ const OpMetadata &op_metadata(OpId id) {
   const auto &map = registry();
   const auto it = map.find(id);
   if (it == map.end()) {
-    throw std::runtime_error("Unknown op metadata request");
+    throw std::runtime_error("Vulkan op metadata request");
   }
   return it->second;
 }
@@ -677,7 +608,7 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
   // Stage 1: metadata validation.
   record_dispatch_stage("metadata_validation", meta, tensor, timer.get());
   if (auto stage1 = stage_metadata_validation(meta, tensor, timer.get())) {
-    if (stage1->use_cpu_fallback) {
+    if (stage1->use_host_fallback) {
       record_accelerator_fallback_telemetry(meta, tensor, "metadata");
       maybe_fail_fast_on_accelerator_fallback(meta, tensor, "metadata");
     }
@@ -699,11 +630,11 @@ DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor) {
         &policy.support, policy.matched_rule, std::nullopt));
     return {meta, true, false, policy.support};
   }
-  if (policy.use_cpu_fallback) {
+  if (policy.use_host_fallback) {
     const auto reason =
         classify_dispatch_fallback(meta, tensor, queried_feature, policy.support);
     maybe_log_dispatch_decision(dispatch_decision_detail_line(
-        meta, tensor, "policy_engine_evaluation", "cpu_fallback",
+        meta, tensor, "policy_engine_evaluation", "host_fallback",
         queried_feature, &policy.support, policy.matched_rule, reason));
     record_accelerator_fallback_telemetry(
         meta, tensor, dispatch_fallback_reason_name(reason));
@@ -721,35 +652,21 @@ FallbackTelemetrySnapshot fallback_telemetry_snapshot() {
   auto &state = fallback_telemetry_state();
   std::lock_guard<std::mutex> lock(state.mutex);
   FallbackTelemetrySnapshot snapshot;
-  snapshot.accelerator_cpu_fallback_total = state.accelerator_cpu_fallback_total;
-  snapshot.accelerator_cpu_fallback_counters =
-      state.accelerator_cpu_fallback_counters;
+  snapshot.accelerator_host_fallback_total = state.accelerator_host_fallback_total;
+  snapshot.accelerator_host_fallback_counters =
+      state.accelerator_host_fallback_counters;
   return snapshot;
 }
 
 void reset_fallback_telemetry() {
   auto &state = fallback_telemetry_state();
   std::lock_guard<std::mutex> lock(state.mutex);
-  state.accelerator_cpu_fallback_total = 0;
-  state.accelerator_cpu_fallback_counters.clear();
+  state.accelerator_host_fallback_total = 0;
+  state.accelerator_host_fallback_counters.clear();
 }
 
 std::string dispatch_policy_snapshot() {
-  const auto device_name = [](DeviceType type) {
-    switch (type) {
-    case DeviceType::CPU:
-      return "cpu";
-    case DeviceType::CUDA:
-      return "cuda";
-    case DeviceType::VULKAN:
-      return "vulkan";
-    case DeviceType::UNKNOWN:
-      return "unknown";
-    default:
-      return "unknown_device";
-    }
-  };
-  std::ostringstream oss;
+  const auto device_name = [](DeviceType) { return "vulkan"; };  std::ostringstream oss;
   for (const auto &rule : dispatch_fallback_rules()) {
     oss << "device=" << device_name(rule.device_type)
         << ";feature="
@@ -764,9 +681,7 @@ std::string dispatch_policy_snapshot() {
     oss << ";dtype="
         << (rule.dtype.has_value() ? dtype_name(*rule.dtype) : "<any>")
         << ";action="
-        << (rule.action == DispatchFallbackRule::Action::DenyCPUFallback
-                ? "deny_cpu_fallback"
-                : "force_cpu_fallback")
+        << "deny_host_fallback"
         << ";error=" << rule.error_message << "\n";
   }
   return oss.str();
@@ -779,9 +694,9 @@ std::string dispatch_decision_debug_dump(OpId id, const Tensor &tensor) {
     const char *result =
         decision.use_backend
             ? "backend"
-            : (decision.use_cpu_fallback ? "cpu_fallback" : "unresolved");
+            : (decision.use_host_fallback ? "host_fallback" : "unresolved");
     std::optional<DispatchFallbackReason> reason = std::nullopt;
-    if (meta.feature.has_value() && decision.use_cpu_fallback) {
+    if (meta.feature.has_value() && decision.use_host_fallback) {
       reason =
           classify_dispatch_fallback(meta, tensor, *meta.feature, decision.backend_support);
     }

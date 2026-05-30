@@ -14,20 +14,20 @@ Tensor max_pool2d(const Tensor &in, int kernel_size, int stride, int padding) {
   const int oH = (iH + 2 * padding - kernel_size) / stride + 1;
   const int oW = (iW + 2 * padding - kernel_size) / stride + 1;
   Tensor out({B, C, oH, oW}, in.device(), in.dtype());
-  if (dispatch.use_cpu_fallback) {
-    Device cpu{DeviceType::CPU, 0};
-    Tensor in_exec = in.to(cpu);
+  if (dispatch.use_host_fallback) {
+    Device host{DeviceType::VULKAN, 0};
+    Tensor in_exec = in.to(host);
     if (in_exec.dtype() != DataType::Float32) {
       in_exec = in_exec.to(DataType::Float32);
     }
-    Tensor out_exec({B, C, oH, oW}, cpu, in_exec.dtype());
+    Tensor out_exec({B, C, oH, oW}, host, in_exec.dtype());
     in_exec.impl_->backend().max_pool2d(*in_exec.impl_->storage,
                                         *out_exec.impl_->storage, B, C, iH, iW,
                                         kernel_size, stride, padding);
     if (out_exec.dtype() != in.dtype()) {
       out_exec = out_exec.to(in.dtype());
     }
-    out = (in.device().type == DeviceType::CPU) ? out_exec
+    out = (in.device().type == DeviceType::VULKAN) ? out_exec
                                                  : out_exec.to(in.device());
   } else {
     in.impl_->backend().max_pool2d(*in.impl_->storage, *out.impl_->storage, B,
@@ -56,13 +56,13 @@ Tensor upsample2d(const Tensor &in, int scale_factor) {
   const int iW = in.shape()[3];
   Tensor out({B, C, iH * scale_factor, iW * scale_factor}, in.device(),
              in.dtype());
-  if (dispatch.use_cpu_fallback) {
-    Device cpu{DeviceType::CPU, 0};
-    Tensor in_exec = in.to(cpu);
+  if (dispatch.use_host_fallback) {
+    Device host{DeviceType::VULKAN, 0};
+    Tensor in_exec = in.to(host);
     if (in_exec.dtype() != DataType::Float32) {
       in_exec = in_exec.to(DataType::Float32);
     }
-    Tensor out_exec({B, C, iH * scale_factor, iW * scale_factor}, cpu,
+    Tensor out_exec({B, C, iH * scale_factor, iW * scale_factor}, host,
                     in_exec.dtype());
     in_exec.impl_->backend().upsample2d(*in_exec.impl_->storage,
                                         *out_exec.impl_->storage, B, C, iH, iW,
@@ -70,7 +70,7 @@ Tensor upsample2d(const Tensor &in, int scale_factor) {
     if (out_exec.dtype() != in.dtype()) {
       out_exec = out_exec.to(in.dtype());
     }
-    out = (in.device().type == DeviceType::CPU) ? out_exec
+    out = (in.device().type == DeviceType::VULKAN) ? out_exec
                                                  : out_exec.to(in.device());
   } else {
     in.impl_->backend().upsample2d(*in.impl_->storage, *out.impl_->storage, B,

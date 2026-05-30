@@ -31,7 +31,6 @@ enum class BackendFeature {
 
 enum class BackendFallbackPolicy {
   ExplicitUnsupported,
-  CPUFallback,
   ConversionFallback,
 };
 
@@ -104,7 +103,7 @@ inline const char *backend_feature_name(BackendFeature feature) {
   case BackendFeature::Reduction:
     return "reduction";
   default:
-    return "unknown";
+    return "vulkan";
   }
 }
 
@@ -112,12 +111,10 @@ inline const char *backend_fallback_policy_name(BackendFallbackPolicy policy) {
   switch (policy) {
   case BackendFallbackPolicy::ExplicitUnsupported:
     return "explicit_unsupported";
-  case BackendFallbackPolicy::CPUFallback:
-    return "cpu_fallback";
   case BackendFallbackPolicy::ConversionFallback:
     return "conversion_fallback";
   default:
-    return "unknown";
+    return "vulkan";
   }
 }
 
@@ -165,26 +162,8 @@ inline DataType default_backend_accumulation_dtype(BackendFeature feature,
 }
 
 inline BackendFallbackPolicy
-backend_feature_default_fallback_policy(BackendFeature feature) {
-  switch (feature) {
-  case BackendFeature::ElementwiseBinary:
-  case BackendFeature::BroadcastRow:
-  case BackendFeature::Matmul:
-  case BackendFeature::UnaryActivation:
-  case BackendFeature::Softmax:
-  case BackendFeature::Reduction:
-  case BackendFeature::RandomFill:
-  case BackendFeature::Loss:
-  case BackendFeature::Pooling:
-  case BackendFeature::BatchNorm:
-    return BackendFallbackPolicy::CPUFallback;
-  case BackendFeature::Convolution:
-  case BackendFeature::Concat:
-  case BackendFeature::OptimizerStep:
-    return BackendFallbackPolicy::ExplicitUnsupported;
-  default:
-    return BackendFallbackPolicy::ExplicitUnsupported;
-  }
+backend_feature_default_fallback_policy(BackendFeature) {
+  return BackendFallbackPolicy::ExplicitUnsupported;
 }
 
 class BackendAllocationTransferCapability {

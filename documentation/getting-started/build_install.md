@@ -47,11 +47,7 @@ MuNet ships a single `munet-nn` wheel. Extras install dependency bundles only; t
 # Vulkan runtime/tooling dependency bundle
 pip install "munet-nn[vk]"
 
-# CUDA 12 + Vulkan dependency bundle
-pip install "munet-nn[cu12-vk]"
 
-# CUDA 13 + Vulkan dependency bundle
-pip install "munet-nn[cu13-vk]"
 ```
 
-If accelerator runtime dependencies are missing at execution time, `import munet_nn` still succeeds and `munet_nn.backend_status()` reports actionable diagnostics.
+If Vulkan backend runtime dependencies are missing at execution time, `import munet_nn` still succeeds and `munet_nn.backend_status()` reports actionable diagnostics.

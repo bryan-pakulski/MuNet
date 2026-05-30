@@ -8,11 +8,11 @@
 
 ### Objectives
 - [x] Provide a single Python entrypoint that can define a GPT-style decoder LM, train it locally, save/load it, and run generation/chat.
-- [x] Keep the architecture compatible with current MuNet primitives so the flow works today on CPU and available accelerator backends.
+- [x] Keep the architecture compatible with current MuNet primitives so the flow works today on Vulkan and available Vulkan backend backends.
 
 ### Action Points
 - [x] Add a trainable decoder-only LM demo with token embeddings, learned positional embeddings, causal attention, residual blocks, LayerNorm, and output head.
-- [x] Support sharded execution across multiple devices, with CPU fallback when GPUs are unavailable.
+- [x] Support sharded execution across multiple devices, with Vulkan fallback when Vulkans are unavailable.
 - [x] Add train / generate / chat CLI modes in one script.
 - [x] Save weights plus JSON config so the same script can reconstruct the model for later inference.
 
@@ -42,19 +42,18 @@
 
 ### Objectives
 - [x] Close the tensor/runtime gaps that block clean backend-accelerated RMSNorm and RoPE implementations.
-- [x] Keep new primitives available through Tensor API, autograd, Python bindings, and CPU/CUDA/Vulkan paths.
 
 ### Action Points
 - [x] Add reduction ops needed for RMSNorm, especially `mean(dim)` or an equivalent last-dimension reduction.
 - [x] Add reciprocal-root math (`rsqrt`) or scalar-power support so RMSNorm can avoid awkward graph workarounds.
 - [x] Add trigonometric unary ops (`sin`, `cos`) for rotary embedding tables.
-- [x] Add tensor slicing/select helpers (`slice`, `narrow`, or `split`) so RoPE can rotate head halves without host-side reshaping hacks.
-- [x] Add focused tests for the new math/shape ops across CPU and any compiled accelerator backends.
+- [x] Add tensor slicing/select helpers (`slice`, `narrow`, or `split`) so RoPE can rotate head halves without Vulkan-side reshaping hacks.
+- [x] Add focused tests for the new math/shape ops across Vulkan and any compiled Vulkan backend backends.
 - [x] Implement `nn::RMSNorm` and a reusable RoPE helper once the underlying ops exist.
 
 ### Exit Criteria
 - [x] RMSNorm runs end-to-end with autograd and backend coverage.
-- [x] RoPE can be applied inside attention without CPU fallbacks.
+- [x] RoPE can be applied inside attention without Vulkan fallbacks.
 - [x] The GPT demo can toggle LayerNorm vs RMSNorm and learned positions vs RoPE.
 
 ## Phase 4 — Full local train/inference quality and usability
@@ -73,4 +72,4 @@
 ### Exit Criteria
 - [x] A user can train on a non-trivial local corpus with restarts/checkpoints.
 - [x] Chat inference is materially faster due to KV caching.
-- [x] The demo documents the practical limits for running larger local models on CPU / multi-GPU setups.
+- [x] The demo documents the practical limits for running larger local models on Vulkan / multi-Vulkan setups.

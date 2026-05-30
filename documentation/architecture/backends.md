@@ -23,23 +23,21 @@ explicit and testable.
 
 ## Dispatch interaction
 
-`src/core/op_dispatch.*` owns policy resolution. Backends do not silently choose
-fallback behavior themselves; they report support and the dispatch layer decides
-whether to run backend-native or CPU fallback.
+`src/core/op_dispatch.*` owns policy resolution. The public runtime is Vulkan-only:
+backend capability checks either route to supported Vulkan kernels or return explicit
+unsupported-operation errors.
 
 Current observability in dispatch includes:
 
 - `dispatch.resolve.backend.<Op>`
-- `dispatch.resolve.cpu_fallback.<Op>`
+- `dispatch.resolve.vulkan_staging.<Op>`
 - `dispatch.fallback.reason.{dtype|shape|feature|policy}`
-- accelerator CPU-fallback telemetry counters (programmatic snapshot/reset APIs)
-- optional fail-fast via `MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK=1`
+- Vulkan telemetry snapshot/reset APIs
+- optional fail-fast via `MUNET_FAIL_FAST_VULKAN_UNSUPPORTED=1`
 
 ## Current backend set
 
-- CPU (always)
-- CUDA (optional build/runtime)
-- Vulkan (optional build/runtime)
+- Vulkan
 
 ## Vulkan state ownership notes
 

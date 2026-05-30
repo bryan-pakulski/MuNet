@@ -11,15 +11,13 @@ MuNet has a strong core architecture trajectory, but it is still in a transition
 ### 1) Reliability & correctness hardening
 
 - Finish distributed primitives and multi-device correctness:
-  - `all_reduce` is still unimplemented in CUDA backend.
-  - Multi-GPU roadmap is documented but not complete.
+  - Multi-Vulkan roadmap is documented but not complete.
 - Complete dtype support parity in core math paths (notably fp16/bf16/int8 inference/training pathways), starting with matmul and reduction critical paths.
 - Add stricter runtime checks and failure-domain isolation for memory, shape/stride, and backend transfer edge-cases.
 
 ## 2) Performance and memory management
 
 - Replace current simple caching allocators with production-grade allocator strategy (arena/slab + fragmentation telemetry + high-watermark controls).
-- Prioritize kernel maturity for CUDA/Vulkan hot paths (matmul, conv, attention) and add vendor-optimized routes where available.
 - Build reproducible perf baselines and regression thresholds into default CI gates (not only opt-in local runs).
 
 ## 3) Inference productization
@@ -61,8 +59,6 @@ MuNet has a strong core architecture trajectory, but it is still in a transition
 
 - README marks inference engine as the highest current priority and lists production improvements still needed (naive kernels, allocator limits, missing dtypes, limited error handling).
 - Refactor roadmap still has Phase 5 in progress and Phase 7 not started (lean inference packaging/runtime separation pending).
-- CPU backend currently uses a simple free-list allocator and no-op `all_reduce`.
-- CUDA backend has `all_reduce` explicitly marked TODO.
-- Performance tests are opt-in via env var and require both CUDA and Vulkan backends.
+- Vulkan backend currently uses a simple free-list allocator and no-op `all_reduce`.
 - Python tests currently self-install NumPy and can trigger local builds if import fails (non-hermetic behavior).
 - Serialization loader currently reads full artifact bytes into memory before parse.

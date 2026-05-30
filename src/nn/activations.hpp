@@ -50,23 +50,23 @@ public:
     if (!is_floating(x.dtype()))
       throw std::runtime_error("Dropout requires floating-point tensors");
 
-    Device cpu{DeviceType::CPU, 0};
-    Tensor mask_cpu(x.shape(), cpu, x.dtype(), false);
+    Device host{DeviceType::VULKAN, 0};
+    Tensor mask_host(x.shape(), host, x.dtype(), false);
 
     float keep_prob = 1.0f - p_;
     std::bernoulli_distribution keep(keep_prob);
     std::mt19937 rng(std::random_device{}());
 
-    for (size_t i = 0; i < mask_cpu.size(); ++i) {
-      write_scalar_to_buffer(static_cast<char *>(mask_cpu.data()) +
-                                 i * dtype_size(mask_cpu.dtype()),
-                             mask_cpu.dtype(),
+    for (size_t i = 0; i < mask_host.size(); ++i) {
+      write_scalar_to_buffer(static_cast<char *>(mask_host.data()) +
+                                 i * dtype_size(mask_host.dtype()),
+                             mask_host.dtype(),
                              keep(rng) ? (1.0 / keep_prob) : 0.0);
     }
 
-    Tensor mask = (x.device().type == DeviceType::CPU)
-                      ? mask_cpu
-                      : mask_cpu.to(x.device());
+    Tensor mask = (x.device().type == DeviceType::VULKAN)
+                      ? mask_host
+                      : mask_host.to(x.device());
     return x * mask;
   }
 

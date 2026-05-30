@@ -16,7 +16,7 @@ using namespace munet;
 namespace {
 
 struct BenchmarkConfig {
-  Device device{DeviceType::CPU, 0};
+  Device device{DeviceType::VULKAN, 0};
   DataType dtype{DataType::Float32};
   int batch = 32;
   int input_dim = 256;
@@ -117,14 +117,12 @@ std::string to_json_array(const std::vector<int> &values) {
 }
 
 Device parse_device(const std::string &value) {
-  if (value == "cpu")
-    return Device{DeviceType::CPU, 0};
-  if (value == "cuda")
-    return Device{DeviceType::CUDA, 0};
+  if (value == "host")
+    return Device{DeviceType::VULKAN, 0};
   if (value == "vulkan")
     return Device{DeviceType::VULKAN, 0};
-  throw std::runtime_error("Unknown device '" + value +
-                           "'. Expected one of: cpu, cuda, vulkan");
+  throw std::runtime_error("Vulkan device '" + value +
+                           "'. Expected one of: host, vulkan");
 }
 
 DataType parse_dtype(const std::string &value) {
@@ -132,7 +130,7 @@ DataType parse_dtype(const std::string &value) {
     return DataType::Float32;
   if (value == "float16")
     return DataType::Float16;
-  throw std::runtime_error("Unknown dtype '" + value +
+  throw std::runtime_error("Vulkan dtype '" + value +
                            "'. Expected one of: float32, float16");
 }
 
@@ -205,7 +203,7 @@ BenchmarkConfig parse_args(int argc, char **argv) {
       std::cout
           << "MuNet inference baseline benchmark\n"
           << "Usage: munet_inference_baseline [options]\n"
-          << "  --device <cpu|cuda|vulkan>\n"
+          << "  --device <host|vulkan>\n"
           << "  --dtype <float32|float16>\n"
           << "  --batch <int>\n"
           << "  --input-dim <int>\n"
@@ -222,14 +220,14 @@ BenchmarkConfig parse_args(int argc, char **argv) {
           << "  --preallocate-batch-inputs <0|1|false|true>\n";
       std::exit(0);
     } else {
-      throw std::runtime_error("Unknown argument: " + arg);
+      throw std::runtime_error("Vulkan argument: " + arg);
     }
   }
   return cfg;
 }
 
 Tensor make_input(const BenchmarkConfig &cfg) {
-  Tensor input({cfg.batch, cfg.input_dim}, Device{DeviceType::CPU, 0},
+  Tensor input({cfg.batch, cfg.input_dim}, Device{DeviceType::VULKAN, 0},
                cfg.dtype, false);
   input.uniform_(-1.0f, 1.0f);
   return input;
@@ -248,17 +246,10 @@ double elapsed_ms(
       .count();
 }
 
-std::string build_profile_hint(const Device &device) {
-  switch (device.type) {
-  case DeviceType::CPU:
-    return "minimal_cpu_edge";
-  case DeviceType::CUDA:
-  case DeviceType::VULKAN:
-    return "accelerator_enabled_runtime";
-  default:
-    return "general_purpose_runtime";
-  }
+std::string build_profile_hint(const Device &) {
+  return "vulkan_runtime";
 }
+
 
 } // namespace
 
@@ -268,7 +259,7 @@ int main(int argc, char **argv) {
     Profiler::get().reset();
 
     TensorOptions options;
-    options.device = Device{DeviceType::CPU, 0};
+    options.device = Device{DeviceType::VULKAN, 0};
     options.dtype = cfg.dtype;
     options.requires_grad = true;
 

@@ -14,16 +14,8 @@ namespace {
 
 std::vector<Device> discover_devices() {
   std::vector<Device> devices;
-  devices.push_back(Device{DeviceType::CPU, 0});
+  devices.push_back(Device{DeviceType::VULKAN, 0});
 
-#ifdef MUNET_USE_CUDA
-  try {
-    Tensor probe({1}, Device{DeviceType::CUDA, 0}, DataType::Float32, false);
-    (void)probe;
-    devices.push_back(Device{DeviceType::CUDA, 0});
-  } catch (...) {
-  }
-#endif
 
 #ifdef MUNET_USE_VULKAN
   try {
@@ -71,7 +63,7 @@ int main() {
 
   std::vector<Device> devices = discover_devices();
 
-  std::cout << "backend,dtype,op,feature,backend_support,fallback_policy,dispatch_backend,dispatch_cpu_fallback,status,error\n";
+  std::cout << "backend,dtype,op,feature,backend_support,fallback_policy,dispatch_backend,dispatch_host_fallback,status,error\n";
 
   for (const auto &dev : devices) {
     for (DataType dtype : dtypes) {
@@ -85,7 +77,7 @@ int main() {
         std::string backend_support = "n/a";
         std::string fallback_policy = "n/a";
         std::string dispatch_backend = "no";
-        std::string dispatch_cpu_fallback = "no";
+        std::string dispatch_host_fallback = "no";
         std::string status = "ok";
         std::string error;
 
@@ -101,7 +93,7 @@ int main() {
 
           DispatchDecision decision = resolve_dispatch(id, t);
           dispatch_backend = bool_text(decision.use_backend);
-          dispatch_cpu_fallback = bool_text(decision.use_cpu_fallback);
+          dispatch_host_fallback = bool_text(decision.use_host_fallback);
         } catch (const std::exception &ex) {
           status = "error";
           error = ex.what();
@@ -110,7 +102,7 @@ int main() {
         std::cout << dev.to_string() << "," << dtype_name(dtype) << ","
                   << meta.name << "," << feature_name << ","
                   << backend_support << "," << fallback_policy << ","
-                  << dispatch_backend << "," << dispatch_cpu_fallback << ","
+                  << dispatch_backend << "," << dispatch_host_fallback << ","
                   << status << ",\"" << error << "\"\n";
       }
     }

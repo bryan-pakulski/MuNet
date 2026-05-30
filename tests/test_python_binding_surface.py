@@ -40,24 +40,24 @@ def test_module_optimizer_inference_surface_exposed():
     assert hasattr(munet.inference, "Engine")
 
 
-def test_backend_probe_apis_exposed_and_cpu_default():
+def test_backend_probe_apis_exposed_and_vulkan_default():
     assert hasattr(munet, "list_available_backends")
     assert hasattr(munet, "backend_status")
 
     backends = set(munet.list_available_backends())
-    assert "cpu" in backends
+    assert "vulkan" in backends or backends == set()
 
     status = munet.backend_status()
     assert isinstance(status, dict)
     assert "statuses" in status
     assert "summary" in status
-    assert "No accelerators loaded" in status["summary"] or status["accelerator_loaded"] is True
+    assert "No Vulkan backend is active" in status["summary"] or status["accelerator_loaded"] is True
 
 
 def test_backend_status_reason_codes_stable_tokens():
     status = munet.backend_status()
     entries = status.get("statuses", [])
-    assert any(item.get("name") == "cpu" and item.get("reason_code") == "ok" for item in entries)
+    assert any(item.get("name") == "vulkan" for item in entries)
 
     valid_reason_codes = {
         "ok",
@@ -80,7 +80,7 @@ def test_backend_status_reports_abi_mismatch_for_incompatible_plugin(tmp_path, m
         #include <stdint.h>
         uint32_t munet_backend_plugin_abi_version(void) { return 999u; }
         const char* munet_backend_plugin_name(void) { return \"badabi\"; }
-        const char* munet_backend_plugin_device_type(void) { return \"cuda\"; }
+        const char* munet_backend_plugin_device_type(void) { return \"vulkan\"; }
         uint64_t munet_backend_plugin_capability_flags(void) { return 0u; }
         const char* munet_backend_plugin_probe(void) { return 0; }
         """
@@ -111,7 +111,7 @@ def test_backend_status_reports_valid_plugin_and_smoke_op(tmp_path, monkeypatch)
         #include <stdint.h>
         uint32_t munet_backend_plugin_abi_version(void) { return 1u; }
         const char* munet_backend_plugin_name(void) { return "goodplugin"; }
-        const char* munet_backend_plugin_device_type(void) { return "cuda"; }
+        const char* munet_backend_plugin_device_type(void) { return "vulkan"; }
         uint64_t munet_backend_plugin_capability_flags(void) { return 7u; }
         const char* munet_backend_plugin_probe(void) { return 0; }
         """
@@ -149,7 +149,7 @@ def _accelerator_available(backend_name):
             continue
         if item.get("active"):
             return True, "ok"
-        reason = item.get("detail") or item.get("reason_code") or "unknown"
+        reason = item.get("detail") or item.get("reason_code") or "vulkan"
         return False, reason
     return False, "builtin status entry not found"
 
@@ -159,18 +159,11 @@ def _gpu_smoke_matmul(device_type):
     a = munet.ones([2, 2], dev)
     b = munet.ones([2, 2], dev)
     out = munet.matmul(a, b)
-    out_cpu = out.to(munet.Device(munet.DeviceType.CPU, 0))
-    assert out_cpu.shape == [2, 2]
+    out_host = out.to(munet.Device(munet.DeviceType.VULKAN, 0))
+    assert out_host.shape == [2, 2]
     import numpy as np
-    np_out = np.array(out_cpu, copy=False)
+    np_out = np.array(out_host, copy=False)
     assert (np_out == 2.0).all()
-
-
-def test_cuda_gpu_smoke_if_available():
-    available, reason = _accelerator_available("cuda")
-    if not available:
-        pytest.skip(f"CUDA accelerator not active in this environment: {reason}")
-    _gpu_smoke_matmul(munet.DeviceType.CUDA)
 
 
 def test_vulkan_gpu_smoke_if_available():

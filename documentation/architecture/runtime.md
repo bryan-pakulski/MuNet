@@ -12,7 +12,7 @@
 ## Execution flow
 
 1. High-level tensor/op API selects op metadata.
-2. Dispatch resolves backend vs CPU fallback via capability query + policy.
+2. Dispatch resolves backend vs Vulkan fallback via capability query + policy.
 3. Runtime executes selected path.
 4. Optional autograd node wiring and tracing/profiling metadata are recorded.
 
@@ -23,8 +23,8 @@ Fallback is explicit and observable:
 - fallback reason classification (`dtype`, `shape`, `feature`, `policy`)
 - structured fallback logs
 - profiler rows for fallback decision paths
-- accelerator fallback telemetry counters
-- optional fail-fast (`MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK=1`)
+- Vulkan backend fallback telemetry counters
+- optional fail-fast (`MUNET_FAIL_FAST_VULKAN_UNSUPPORTED=1`)
 
 This is intended to expose hidden fallback-induced flakiness/perf drift early.
 

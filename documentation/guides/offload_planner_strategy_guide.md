@@ -10,7 +10,6 @@ model.auto_offload(
     devices=[...],
     strategy="balanced",  # balanced | memory-first | transfer-minimized
     sample_input=...,
-    memory_budgets_bytes={"cuda:0": 8_000_000_000}
 )
 plan = model.offload_plan(explain=True)
 frozen = model.freeze_offload_plan()

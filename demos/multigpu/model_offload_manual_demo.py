@@ -15,15 +15,15 @@ import numpy as np
 import munet_nn as munet
 
 
-CPU = munet.Device(munet.DeviceType.CPU, 0)
+Host = munet.Device(munet.DeviceType.VULKAN, 0)
 
 
-def detect_accelerators(max_index: int = 4, backend: str = "cuda"):
+def detect_accelerators(max_index: int = 4, backend: str = "vulkan"):
     devices = []
     backend_map = {
-        "cuda": (munet.DeviceType.CUDA,),
         "vulkan": (munet.DeviceType.VULKAN,),
-        "auto": (munet.DeviceType.CUDA, munet.DeviceType.VULKAN),
+        "vulkan": (munet.DeviceType.VULKAN,),
+        "auto": (munet.DeviceType.VULKAN, munet.DeviceType.VULKAN),
     }
     for dev_type in backend_map[backend]:
         for idx in range(max_index):
@@ -32,7 +32,7 @@ def detect_accelerators(max_index: int = 4, backend: str = "cuda"):
                 a = munet.ones((1,), device=dev)
                 b = munet.ones((1,), device=dev)
                 c = a + b
-                if float(c.to(CPU).item()) != 2.0:
+                if float(c.to(Host).item()) != 2.0:
                     raise RuntimeError("probe mismatch")
             except RuntimeError:
                 continue
@@ -44,7 +44,7 @@ def can_transfer(src, dst) -> bool:
     try:
         probe = munet.ones((2,), device=src)
         moved = probe.to(dst)
-        return float(moved.to(CPU).sum().item()) == 2.0
+        return float(moved.to(Host).sum().item()) == 2.0
     except RuntimeError:
         return False
 
@@ -57,10 +57,10 @@ def pick_offload_pair(accelerators):
             if can_transfer(d0, d1):
                 return d0, d1, "accelerator_pair"
 
-    # Fall back to CPU↔accelerator if multi-accelerator transfer is unsupported.
+    # Fall back to Host↔accelerator if multi-accelerator transfer is unsupported.
     for dev in accelerators:
-        if can_transfer(CPU, dev) and can_transfer(dev, CPU):
-            return CPU, dev, "cpu_accelerator_fallback"
+        if can_transfer(Host, dev) and can_transfer(dev, Host):
+            return Host, dev, "host_accelerator_fallback"
 
     return None, None, "none"
 
@@ -72,9 +72,9 @@ def main():
     ap.add_argument("--max-index", type=int, default=2)
     ap.add_argument(
         "--backend",
-        choices=["cuda", "vulkan", "auto"],
-        default="cuda",
-        help="Accelerator backend selection policy (default: cuda).",
+        choices=["vulkan", "vulkan", "auto"],
+        default="vulkan",
+        help="Accelerator backend selection policy (default: vulkan).",
     )
     args = ap.parse_args()
 
@@ -88,10 +88,10 @@ def main():
         print("Could not find a compatible device pair for boundary transfers.")
         return
 
-    if mode == "cpu_accelerator_fallback":
+    if mode == "host_accelerator_fallback":
         print(
             "Note: no compatible accelerator↔accelerator transfer pair detected; "
-            "falling back to CPU↔accelerator split."
+            "falling back to Host↔accelerator split."
         )
 
     print("Using devices:", d0, d1)
@@ -126,7 +126,7 @@ def main():
         },
     )
 
-    # Intentionally bad plan walkthrough (Phase 2): float16 linear on CPU.
+    # Intentionally bad plan walkthrough (Phase 2): float16 linear on Host.
     bad_opts = munet.TensorOptions()
     bad_opts.dtype = munet.DataType.Float16
     bad_model = munet.nn.Sequential(
@@ -134,7 +134,7 @@ def main():
         munet.nn.ReLU(),
         munet.nn.Linear(8, 1, options=bad_opts),
     )
-    bad_model.offload(CPU, layers=["0", "2"])
+    bad_model.offload(Host, layers=["0", "2"])
     bad_report = bad_model.validate_offload_plan(
         munet.from_numpy(np.random.randn(2, 4).astype(np.float16))
     )
@@ -164,11 +164,11 @@ def main():
             p.step(args.lr)
 
         if step % 2 == 0 or step == args.steps - 1:
-            print(f"step={step:03d} loss={float(loss.detach().to(CPU).item()):.6f}")
+            print(f"step={step:03d} loss={float(loss.detach().to(Host).item()):.6f}")
 
     with munet.no_grad():
         sample = munet.from_numpy(x[:4])
-        out = model(sample).detach().to(CPU)
+        out = model(sample).detach().to(Host)
         print("sample_out:", np.array(out, copy=False).reshape(-1))
 
 

@@ -59,12 +59,12 @@ def _tensor_options_for_dtype(dtype_name):
 
 
 def _tensor_to_numpy(t):
-    """Convert a MuNet tensor to numpy array (CPU copy)."""
+    """Convert a MuNet tensor to numpy array (Host copy)."""
     m = _get_munet()
-    cpu = m.Device(m.DeviceType.CPU, 0)
+    host = m.Device(m.DeviceType.VULKAN, 0)
     td = t.detach()
-    if td.device.type != m.DeviceType.CPU:
-        td = td.to(cpu)
+    if td.device.type != m.DeviceType.VULKAN:
+        td = td.to(host)
     return np.array(td, copy=False).copy()
 
 
@@ -388,7 +388,7 @@ def load(arg, filename=None, device=None):
                     src = m.from_numpy(np.ascontiguousarray(arr))
                     if src.dtype != t.dtype:
                         src = src.to(t.dtype)
-                    if target.type != m.DeviceType.CPU:
+                    if target.type != m.DeviceType.VULKAN:
                         src = src.to(target)
                     t.replace_(src)
                     t.requires_grad = req
@@ -409,7 +409,7 @@ def load(arg, filename=None, device=None):
                 src = m.from_numpy(np.ascontiguousarray(arr))
                 if src.dtype != t.dtype:
                     src = src.to(t.dtype)
-                if target.type != m.DeviceType.CPU:
+                if target.type != m.DeviceType.VULKAN:
                     src = src.to(target)
                 t.replace_(src)
                 t.requires_grad = req

@@ -162,10 +162,10 @@ struct LogSoftmaxBackward : public Node {
 inline std::vector<Tensor>
 SoftmaxBackward::apply(const std::vector<Tensor> &grads) {
   Tensor saved_out = saved_tensor(0);
-  Device cpu{DeviceType::CPU, 0};
-  Tensor go_cpu = grads[0].to(cpu);
-  Tensor out_cpu = saved_out.to(cpu);
-  Tensor gi_cpu(shape, cpu, dtype);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor go_host = grads[0].to(host);
+  Tensor out_host = saved_out.to(host);
+  Tensor gi_host(shape, host, dtype);
 
   int rank = static_cast<int>(shape.size());
   int resolved = (dim < 0) ? (rank + dim) : dim;
@@ -177,47 +177,47 @@ SoftmaxBackward::apply(const std::vector<Tensor> &grads) {
   for (int i = resolved + 1; i < rank; ++i)
     inner *= shape[i];
 
-  const char *go = static_cast<const char *>(go_cpu.data());
-  const char *out = static_cast<const char *>(out_cpu.data());
-  char *gi = static_cast<char *>(gi_cpu.data());
-  const size_t go_stride = dtype_size(go_cpu.dtype());
-  const size_t out_stride = dtype_size(out_cpu.dtype());
-  const size_t gi_stride = dtype_size(gi_cpu.dtype());
+  const char *go = static_cast<const char *>(go_host.data());
+  const char *out = static_cast<const char *>(out_host.data());
+  char *gi = static_cast<char *>(gi_host.data());
+  const size_t go_stride = dtype_size(go_host.dtype());
+  const size_t out_stride = dtype_size(out_host.dtype());
+  const size_t gi_stride = dtype_size(gi_host.dtype());
 
   for (int o = 0; o < outer; ++o) {
     for (int in = 0; in < inner; ++in) {
       double dot = 0.0;
       for (int d = 0; d < dim_size; ++d) {
         int idx = (o * dim_size + d) * inner + in;
-        dot += read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype())
+        dot += read_scalar_from_buffer(go + idx * go_stride, go_host.dtype())
                    .value *
-               read_scalar_from_buffer(out + idx * out_stride, out_cpu.dtype())
+               read_scalar_from_buffer(out + idx * out_stride, out_host.dtype())
                    .value;
       }
       for (int d = 0; d < dim_size; ++d) {
         int idx = (o * dim_size + d) * inner + in;
         const double out_value =
-            read_scalar_from_buffer(out + idx * out_stride, out_cpu.dtype())
+            read_scalar_from_buffer(out + idx * out_stride, out_host.dtype())
                 .value;
         const double go_value =
-            read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
-        write_scalar_to_buffer(gi + idx * gi_stride, gi_cpu.dtype(),
+            read_scalar_from_buffer(go + idx * go_stride, go_host.dtype()).value;
+        write_scalar_to_buffer(gi + idx * gi_stride, gi_host.dtype(),
                                out_value * (go_value - dot));
       }
     }
   }
 
-  Tensor gi_dev = (device.type == DeviceType::CPU) ? gi_cpu : gi_cpu.to(device);
+  Tensor gi_dev = (device.type == DeviceType::VULKAN) ? gi_host : gi_host.to(device);
   return {gi_dev};
 }
 
 inline std::vector<Tensor>
 LogSoftmaxBackward::apply(const std::vector<Tensor> &grads) {
   Tensor saved_log_probs = saved_tensor(0);
-  Device cpu{DeviceType::CPU, 0};
-  Tensor go_cpu = grads[0].to(cpu);
-  Tensor lp_cpu = saved_log_probs.to(cpu);
-  Tensor gi_cpu(shape, cpu, dtype);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor go_host = grads[0].to(host);
+  Tensor lp_host = saved_log_probs.to(host);
+  Tensor gi_host(shape, host, dtype);
 
   int rank = static_cast<int>(shape.size());
   int resolved = (dim < 0) ? (rank + dim) : dim;
@@ -229,12 +229,12 @@ LogSoftmaxBackward::apply(const std::vector<Tensor> &grads) {
   for (int i = resolved + 1; i < rank; ++i)
     inner *= shape[i];
 
-  const char *go = static_cast<const char *>(go_cpu.data());
-  const char *lp = static_cast<const char *>(lp_cpu.data());
-  char *gi = static_cast<char *>(gi_cpu.data());
-  const size_t go_stride = dtype_size(go_cpu.dtype());
-  const size_t lp_stride = dtype_size(lp_cpu.dtype());
-  const size_t gi_stride = dtype_size(gi_cpu.dtype());
+  const char *go = static_cast<const char *>(go_host.data());
+  const char *lp = static_cast<const char *>(lp_host.data());
+  char *gi = static_cast<char *>(gi_host.data());
+  const size_t go_stride = dtype_size(go_host.dtype());
+  const size_t lp_stride = dtype_size(lp_host.dtype());
+  const size_t gi_stride = dtype_size(gi_host.dtype());
 
   for (int o = 0; o < outer; ++o) {
     for (int in = 0; in < inner; ++in) {
@@ -242,23 +242,23 @@ LogSoftmaxBackward::apply(const std::vector<Tensor> &grads) {
       for (int d = 0; d < dim_size; ++d) {
         int idx = (o * dim_size + d) * inner + in;
         sum_go +=
-            read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+            read_scalar_from_buffer(go + idx * go_stride, go_host.dtype()).value;
       }
 
       for (int d = 0; d < dim_size; ++d) {
         int idx = (o * dim_size + d) * inner + in;
         const double p = std::exp(
-            read_scalar_from_buffer(lp + idx * lp_stride, lp_cpu.dtype())
+            read_scalar_from_buffer(lp + idx * lp_stride, lp_host.dtype())
                 .value);
         const double go_value =
-            read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
-        write_scalar_to_buffer(gi + idx * gi_stride, gi_cpu.dtype(),
+            read_scalar_from_buffer(go + idx * go_stride, go_host.dtype()).value;
+        write_scalar_to_buffer(gi + idx * gi_stride, gi_host.dtype(),
                                go_value - p * sum_go);
       }
     }
   }
 
-  Tensor gi_dev = (device.type == DeviceType::CPU) ? gi_cpu : gi_cpu.to(device);
+  Tensor gi_dev = (device.type == DeviceType::VULKAN) ? gi_host : gi_host.to(device);
   return {gi_dev};
 }
 

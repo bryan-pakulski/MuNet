@@ -219,7 +219,7 @@ public:
     for (const auto &layer : layers) {
       auto it = mods.find(layer);
       if (it == mods.end() || !it->second) {
-        throw std::runtime_error("offload: unknown layer path '" + layer + "'");
+        throw std::runtime_error("offload: vulkan layer path '" + layer + "'");
       }
       it->second->to(device);
       root->offload_plan_[layer] = device;
@@ -432,7 +432,7 @@ public:
     for (const auto &[layer, device] : root->offload_plan_) {
       auto it = mods.find(layer);
       if (it == mods.end() || !it->second) {
-        report.errors.push_back("unknown layer path: " + layer);
+        report.errors.push_back("vulkan layer path: " + layer);
         continue;
       }
 
@@ -668,16 +668,14 @@ protected:
                                  "' (index is not numeric)");
       }
     }
-    DeviceType type = DeviceType::UNKNOWN;
-    if (type_str == "cpu") {
-      type = DeviceType::CPU;
-    } else if (type_str == "cuda") {
-      type = DeviceType::CUDA;
+    DeviceType type = DeviceType::VULKAN;
+    if (type_str == "host") {
+      type = DeviceType::VULKAN;
     } else if (type_str == "vulkan") {
       type = DeviceType::VULKAN;
     } else {
       throw std::runtime_error("invalid device spec '" + device_spec +
-                               "' (unknown type)");
+                               "' (vulkan type)");
     }
     return Device{type, std::stoi(idx_str)};
   }

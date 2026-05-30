@@ -22,7 +22,7 @@ Tensor add(const Tensor &a, const Tensor &b) {
   Tensor out =
       dispatch.use_backend
           ? Tensor(info.out_shape, a.device(), a.dtype())
-          : detail::binary_broadcast_cpu_fallback(
+          : detail::binary_broadcast_host_fallback(
                 a, b, info, [](double lhs, double rhs) { return lhs + rhs; });
   if (dispatch.use_backend) {
     a.impl_->backend().add(*a.impl_->storage, *b.impl_->storage,

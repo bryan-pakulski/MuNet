@@ -4,7 +4,7 @@
 This demo:
 1) Creates parameter replicas on multiple accelerator devices.
 2) Runs per-replica forward/backward on batch shards.
-3) Aggregates gradients through CPU (host staging) to emulate all-reduce.
+3) Aggregates gradients through Host (host staging) to emulate all-reduce.
 4) Applies synchronized optimizer steps so replicas stay in sync.
 
 Run:
@@ -22,12 +22,12 @@ import numpy as np
 import munet_nn as munet
 
 
-CPU = munet.Device(munet.DeviceType.CPU, 0)
+Host = munet.Device(munet.DeviceType.VULKAN, 0)
 
 
 def detect_accelerators(max_index: int = 4):
     devices = []
-    for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+    for dev_type in (munet.DeviceType.VULKAN, munet.DeviceType.VULKAN):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
@@ -36,8 +36,8 @@ def detect_accelerators(max_index: int = 4):
                 a = munet.ones((1,), device=dev, dtype=munet.DataType.Float32)
                 b = munet.ones((1,), device=dev, dtype=munet.DataType.Float32)
                 c = a + b
-                c_cpu = c.to(CPU)
-                if float(c_cpu.item()) != 2.0:
+                c_host = c.to(Host)
+                if float(c_host.item()) != 2.0:
                     raise RuntimeError("accelerator health-check produced incorrect value")
             except RuntimeError as exc:
                 # If the index is out of range for this backend, no need to probe
@@ -78,7 +78,7 @@ def allreduce_gradients(param_replicas):
 
 def make_model_replicas(devices):
     # Initialize directly on each target device so mixed backend pairs
-    # (e.g., CUDA + Vulkan) do not depend on cross-backend parameter copies.
+    # (e.g., Vulkan + Vulkan) do not depend on cross-backend parameter copies.
     ws = []
     bs = []
     for dev in devices:
@@ -93,10 +93,10 @@ def make_model_replicas(devices):
 def max_tensor_drift(tensors):
     if len(tensors) < 2:
         return 0.0
-    base = np.array(tensors[0].detach().to(CPU), copy=False)
+    base = np.array(tensors[0].detach().to(Host), copy=False)
     max_drift = 0.0
     for t in tensors[1:]:
-        other = np.array(t.detach().to(CPU), copy=False)
+        other = np.array(t.detach().to(Host), copy=False)
         max_drift = max(max_drift, float(np.max(np.abs(base - other))))
     return max_drift
 
@@ -117,7 +117,7 @@ def main():
 
     devices = detect_accelerators(args.max_index)
     if len(devices) < max(2, args.num_devices):
-        print(f"Need at least {max(2, args.num_devices)} healthy accelerator devices (CUDA/Vulkan).")
+        print(f"Need at least {max(2, args.num_devices)} healthy accelerator devices (Vulkan/Vulkan).")
         return
 
     devices = devices[:args.num_devices]
@@ -156,7 +156,7 @@ def main():
             pred = (xs @ ws[rank]) + bs[rank]
             loss = pred.mse_loss(ys)
             loss.backward()
-            losses.append(float(loss.detach().to(CPU).item()))
+            losses.append(float(loss.detach().to(Host).item()))
 
         grad_drift_pre_w = max_tensor_drift([w.grad for w in ws])
         grad_drift_pre_b = max_tensor_drift([b.grad for b in bs])
@@ -171,8 +171,8 @@ def main():
             b.step(args.lr)
 
         # Check synchronization drift
-        w0 = np.array(ws[0].detach().to(CPU), copy=False)
-        w1 = np.array(ws[1].detach().to(CPU), copy=False)
+        w0 = np.array(ws[0].detach().to(Host), copy=False)
+        w1 = np.array(ws[1].detach().to(Host), copy=False)
         drift = np.abs(w0 - w1).max()
         if step % 5 == 0 or step == args.steps - 1:
             losses_str = ", ".join(f"{v:.4f}" for v in losses)
@@ -185,8 +185,8 @@ def main():
             )
 
     elapsed = time.perf_counter() - wall_start
-    learned_w = np.array(ws[0].detach().to(CPU), copy=False)
-    learned_b = np.array(bs[0].detach().to(CPU), copy=False)
+    learned_w = np.array(ws[0].detach().to(Host), copy=False)
+    learned_b = np.array(bs[0].detach().to(Host), copy=False)
     print(
         f"done: devices={len(devices)} steps={args.steps} "
         f"samples/step={per_replica * len(devices)} elapsed_s={elapsed:.2f}\n"

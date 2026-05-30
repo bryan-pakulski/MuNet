@@ -8,7 +8,7 @@ import numpy as np
 
 import munet_nn as munet
 
-CPU = munet.Device(munet.DeviceType.CPU, 0)
+Host = munet.Device(munet.DeviceType.VULKAN, 0)
 
 
 def make_model():
@@ -22,12 +22,12 @@ def make_model():
 
 
 def first_accelerator(max_index: int = 4):
-    for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+    for dev_type in (munet.DeviceType.VULKAN, munet.DeviceType.VULKAN):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
                 probe = munet.ones((1,), device=dev)
-                if float((probe + probe).to(CPU).item()) == 2.0:
+                if float((probe + probe).to(Host).item()) == 2.0:
                     return dev
             except RuntimeError:
                 continue
@@ -41,7 +41,7 @@ def main():
         return
 
     sample = munet.from_numpy(np.random.randn(8, 4).astype(np.float32))
-    devices = [CPU, accel]
+    devices = [Host, accel]
 
     planner_model = make_model()
     planner_model.auto_offload(devices, strategy="balanced", sample_input=sample)

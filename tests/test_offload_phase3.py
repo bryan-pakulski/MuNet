@@ -8,16 +8,16 @@ except Exception as exc:  # pragma: no cover
     pytest.skip(f"munet import unavailable: {exc}", allow_module_level=True)
 
 
-CPU = munet.Device(munet.DeviceType.CPU, 0)
+Host = munet.Device(munet.DeviceType.VULKAN, 0)
 
 
 def _first_accelerator(max_index: int = 4):
-    for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+    for dev_type in (munet.DeviceType.VULKAN,):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
                 t = munet.ones((1,), device=dev)
-                if float((t + t).to(CPU).item()) == 2.0:
+                if float((t + t).to(Host).item()) == 2.0:
                     return dev
             except RuntimeError:
                 continue
@@ -41,7 +41,7 @@ def test_auto_offload_balanced_is_deterministic_for_fixed_inputs():
         pytest.skip("Need one accelerator for deterministic auto_offload test")
 
     sample = munet.from_numpy(np.random.randn(4, 4).astype(np.float32))
-    devices = [CPU, accel]
+    devices = [Host, accel]
 
     m1 = _make_model()
     plan1 = m1.auto_offload(devices, strategy="balanced", sample_input=sample)
@@ -63,7 +63,7 @@ def test_auto_offload_obeys_backend_dtype_constraints():
     sample = munet.from_numpy(np.random.randn(2, 4).astype(np.float16))
 
     with pytest.raises(RuntimeError):
-        model.auto_offload([CPU], strategy="balanced", sample_input=sample)
+        model.auto_offload([Host], strategy="balanced", sample_input=sample)
 
 
 def test_auto_offload_obeys_memory_budget_constraints():
@@ -91,7 +91,7 @@ def test_auto_offload_explain_and_execution_smoke():
 
     model = _make_model()
     x = munet.from_numpy(np.random.randn(8, 4).astype(np.float32))
-    _ = model.auto_offload([CPU, accel], strategy="transfer-minimized", sample_input=x)
+    _ = model.auto_offload([Host, accel], strategy="transfer-minimized", sample_input=x)
     explain = model.offload_plan(explain=True)
 
     assert "plan" in explain
@@ -116,7 +116,7 @@ def test_frozen_plan_roundtrip_reapply():
 
     model = _make_model()
     x = munet.from_numpy(np.random.randn(8, 4).astype(np.float32))
-    auto_plan = model.auto_offload([CPU, accel], strategy="balanced", sample_input=x)
+    auto_plan = model.auto_offload([Host, accel], strategy="balanced", sample_input=x)
     frozen = model.freeze_offload_plan()
 
     restored = _make_model()
@@ -134,7 +134,7 @@ def test_auto_offload_plan_executes_and_converges_reference_case():
     x = munet.from_numpy(np.random.randn(64, 4).astype(np.float32))
     target = munet.from_numpy(np.random.randn(64, 1).astype(np.float32))
 
-    _ = model.auto_offload([CPU], strategy="balanced", sample_input=x)
+    _ = model.auto_offload([Host], strategy="balanced", sample_input=x)
 
     optim = munet.optim.SGD(model.parameters(), lr=0.001)
     losses = []
@@ -142,7 +142,7 @@ def test_auto_offload_plan_executes_and_converges_reference_case():
         optim.zero_grad()
         pred = model(x)
         loss = ((pred - target) * (pred - target)).sum()
-        losses.append(float(loss.to(CPU).item()))
+        losses.append(float(loss.to(Host).item()))
         loss.backward()
         optim.step()
 
@@ -158,7 +158,7 @@ def test_balanced_strategy_improves_boundary_metric_vs_naive_split():
 
     manual = _make_model()
     manual.reset_offload_telemetry()
-    manual.offload(CPU, ["0", "1"])
+    manual.offload(Host, ["0", "1"])
     manual.offload(accel, ["2", "3", "4"])
     _ = manual(x)
     manual_metric = manual.offload_telemetry_snapshot().boundary_transfer_count
@@ -167,7 +167,7 @@ def test_balanced_strategy_improves_boundary_metric_vs_naive_split():
     for strategy in ("balanced", "memory-first", "transfer-minimized"):
         auto = _make_model()
         auto.reset_offload_telemetry()
-        _ = auto.auto_offload([CPU, accel], strategy=strategy, sample_input=x)
+        _ = auto.auto_offload([Host, accel], strategy=strategy, sample_input=x)
         _ = auto(x)
         metric = auto.offload_telemetry_snapshot().boundary_transfer_count
         best_auto_metric = metric if best_auto_metric is None else min(best_auto_metric, metric)

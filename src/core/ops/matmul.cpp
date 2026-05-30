@@ -20,38 +20,38 @@ static bool is_batched_matmul_shape(const Shape& a_shape, const Shape& b_shape) 
   return true;
 }
 
-// Helper to perform matmul on CPU with dtype conversion
+// Helper to perform matmul on Host with dtype conversion
 // This is used when the target backend doesn't support the dtype (e.g., Float16)
-static Tensor matmul_cpu_fallback(const Tensor& a, const Tensor& b, bool transA = false, bool transB = false) {
+static Tensor matmul_host_fallback(const Tensor& a, const Tensor& b, bool transA = false, bool transB = false) {
   if (a.dtype() != DataType::Float32 && a.dtype() != DataType::Float16) {
-    return detail::matmul_cpu_fallback(a, b, transA, transB);
+    return detail::matmul_host_fallback(a, b, transA, transB);
   }
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   
-  // Convert to CPU if needed
-  Tensor a_cpu = a.device() == cpu ? a : a.to(cpu);
-  Tensor b_cpu = b.device() == cpu ? b : b.to(cpu);
+  // Convert to Host if needed
+  Tensor a_host = a.device() == host ? a : a.to(host);
+  Tensor b_host = b.device() == host ? b : b.to(host);
   
-  // For Float16, convert to Float32 for computation since CPU may not support Float16 matmul
+  // For Float16, convert to Float32 for computation since Host may not support Float16 matmul
   DataType orig_dtype = a.dtype();
   if (orig_dtype == DataType::Float16) {
-    a_cpu = a_cpu.to(DataType::Float32);
-    b_cpu = b_cpu.to(DataType::Float32);
+    a_host = a_host.to(DataType::Float32);
+    b_host = b_host.to(DataType::Float32);
   }
   
   // Get shapes
-  Shape a_shape = a_cpu.shape();
-  Shape b_shape = b_cpu.shape();
+  Shape a_shape = a_host.shape();
+  Shape b_shape = b_host.shape();
   
-  // Get CPU backend's BLAS capability
-  Backend* backend = &a_cpu.impl_->backend();
+  // Get Host backend's BLAS capability
+  Backend* backend = &a_host.impl_->backend();
   auto* blas = backend->blas_capability();
   if (!blas) {
-    MUNET_ERROR << "matmul_cpu_fallback: CPU backend does not support BLAS operations" << std::endl;
+    MUNET_ERROR << "matmul_host_fallback: Host backend does not support BLAS operations" << std::endl;
     return Tensor();
   }
   
-  // Perform 2D matmul on CPU
+  // Perform 2D matmul on Host
   int a_m = static_cast<int>(a_shape[0]);
   int a_k = static_cast<int>(a_shape[1]);
   int b_k = static_cast<int>(b_shape[0]);
@@ -63,15 +63,15 @@ static Tensor matmul_cpu_fallback(const Tensor& a, const Tensor& b, bool transA 
   int N = transB ? b_k : b_n;
 
   if (K_a != K_b) {
-    MUNET_ERROR << "matmul_cpu_fallback: dimension mismatch after transpose handling: "
+    MUNET_ERROR << "matmul_host_fallback: dimension mismatch after transpose handling: "
                 << "K_a=" << K_a << ", K_b=" << K_b << std::endl;
     return Tensor();
   }
   
   Shape out_shape{static_cast<size_t>(M), static_cast<size_t>(N)};
-  Tensor out(out_shape, cpu, a_cpu.dtype());
+  Tensor out(out_shape, host, a_host.dtype());
   
-  blas->matmul(*a_cpu.impl_->storage, *b_cpu.impl_->storage, *out.impl_->storage,
+  blas->matmul(*a_host.impl_->storage, *b_host.impl_->storage, *out.impl_->storage,
                M, K_a, N, transA, transB);
   
   // Convert back to original dtype if we converted
@@ -92,9 +92,9 @@ Tensor matmul_2d(const Tensor &a, const Tensor &b) {
 
   const auto dispatch = resolve_dispatch(OpId::Matmul, a);
 
-  // Use CPU fallback if needed (backend doesn't support this dtype)
-  if (dispatch.use_cpu_fallback) {
-    return matmul_cpu_fallback(a, b, false, false);
+  // Use Host fallback if needed (backend doesn't support this dtype)
+  if (dispatch.use_host_fallback) {
+    return matmul_host_fallback(a, b, false, false);
   }
 
   // Get shapes
@@ -128,27 +128,27 @@ Tensor matmul_2d(const Tensor &a, const Tensor &b) {
   return out;
 }
 
-// Helper for batched matmul with CPU fallback
-static Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool transA, bool transB) {
+// Helper for batched matmul with Host fallback
+static Tensor batched_matmul_host_fallback(const Tensor &a, const Tensor &b, bool transA, bool transB) {
   if (a.dtype() != DataType::Float32 && a.dtype() != DataType::Float16) {
-    return detail::batched_matmul_cpu_fallback(a, b, transA, transB);
+    return detail::batched_matmul_host_fallback(a, b, transA, transB);
   }
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   
-  // Convert to CPU if needed
-  Tensor a_cpu = a.device() == cpu ? a : a.to(cpu);
-  Tensor b_cpu = b.device() == cpu ? b : b.to(cpu);
+  // Convert to Host if needed
+  Tensor a_host = a.device() == host ? a : a.to(host);
+  Tensor b_host = b.device() == host ? b : b.to(host);
   
   // For Float16, convert to Float32 for computation
   DataType orig_dtype = a.dtype();
   if (orig_dtype == DataType::Float16) {
-    a_cpu = a_cpu.to(DataType::Float32);
-    b_cpu = b_cpu.to(DataType::Float32);
+    a_host = a_host.to(DataType::Float32);
+    b_host = b_host.to(DataType::Float32);
   }
   
   // Get shapes
-  Shape a_shape = a_cpu.shape();
-  Shape b_shape = b_cpu.shape();
+  Shape a_shape = a_host.shape();
+  Shape b_shape = b_host.shape();
   
   // Handle transposition
   int K_a = a_shape[a_shape.size() - 1];
@@ -167,17 +167,17 @@ static Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool
   size_t b_batch_dims = b_shape.size() - 2;
   
   if (a_batch_dims == 0) {
-    // Convert to 2D matmul - call CPU BLAS directly
-    Backend* backend = &a_cpu.impl_->backend();
+    // Convert to 2D matmul - call Host BLAS directly
+    Backend* backend = &a_host.impl_->backend();
     auto* blas = backend->blas_capability();
     if (!blas) {
-      MUNET_ERROR << "batched_matmul_cpu_fallback: CPU backend does not support BLAS" << std::endl;
+      MUNET_ERROR << "batched_matmul_host_fallback: Host backend does not support BLAS" << std::endl;
       return Tensor();
     }
     
     Shape out_shape{static_cast<size_t>(M), static_cast<size_t>(N)};
-    Tensor out(out_shape, cpu, a_cpu.dtype());
-    blas->matmul(*a_cpu.impl_->storage, *b_cpu.impl_->storage, *out.impl_->storage,
+    Tensor out(out_shape, host, a_host.dtype());
+    blas->matmul(*a_host.impl_->storage, *b_host.impl_->storage, *out.impl_->storage,
                  M, K, N, transA, transB);
     
     if (orig_dtype == DataType::Float16) {
@@ -205,18 +205,18 @@ static Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool
   out_shape_vec.push_back(static_cast<size_t>(N));
   Shape out_shape(out_shape_vec.begin(), out_shape_vec.end());
   
-  Tensor out(out_shape, cpu, a_cpu.dtype());
+  Tensor out(out_shape, host, a_host.dtype());
   
-  // Get CPU backend's BLAS
-  Backend* backend = &a_cpu.impl_->backend();
+  // Get Host backend's BLAS
+  Backend* backend = &a_host.impl_->backend();
   auto* blas = backend->blas_capability();
   if (!blas) {
-    MUNET_ERROR << "batched_matmul_cpu_fallback: CPU backend does not support BLAS" << std::endl;
+    MUNET_ERROR << "batched_matmul_host_fallback: Host backend does not support BLAS" << std::endl;
     return Tensor();
   }
   
   // Call backend batched_matmul
-  blas->batched_matmul(*a_cpu.impl_->storage, *b_cpu.impl_->storage, *out.impl_->storage,
+  blas->batched_matmul(*a_host.impl_->storage, *b_host.impl_->storage, *out.impl_->storage,
                        batch, M, K, N, transA, transB, stride_a, stride_b, stride_out);
   
   // Convert back to original dtype
@@ -247,9 +247,9 @@ Tensor batched_matmul_internal(const Tensor &a, const Tensor &b, bool transA, bo
   // Resolve dispatch to check for dtype support
   const auto dispatch = resolve_dispatch(OpId::Matmul, a);
   
-  // Use CPU fallback if needed
-  if (dispatch.use_cpu_fallback) {
-    return batched_matmul_cpu_fallback(a, b, transA, transB);
+  // Use Host fallback if needed
+  if (dispatch.use_host_fallback) {
+    return batched_matmul_host_fallback(a, b, transA, transB);
   }
 
   int K_a = a_shape[a_shape.size() - 1];
@@ -351,9 +351,9 @@ Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA, bool trans
   // Resolve dispatch to check for dtype support
   const auto dispatch = resolve_dispatch(OpId::Matmul, a);
   
-  // Use CPU fallback if needed
-  if (dispatch.use_cpu_fallback) {
-    return matmul_cpu_fallback(a, b);
+  // Use Host fallback if needed
+  if (dispatch.use_host_fallback) {
+    return matmul_host_fallback(a, b);
   }
   
   // 2D matmul with transpose-aware dimension bookkeeping.

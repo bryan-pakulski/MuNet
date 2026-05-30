@@ -2,7 +2,7 @@
 
 This implementation plan defines the next project phase: splitting MuNet's inference engine into a lean deploy runtime that stays clearly separated from the training stack.
 
-The target is a runtime that scales from Raspberry Pi-class edge devices up to enterprise GPU servers without carrying unnecessary training-side overhead into deployment flows.
+The target is a runtime that scales from Raspberry Pi-class edge devices up to enterprise Vulkan servers without carrying unnecessary training-side overhead into deployment flows.
 
 ## Status legend
 
@@ -20,9 +20,9 @@ The target is a runtime that scales from Raspberry Pi-class edge devices up to e
   - avoid debug/profiling cost unless explicitly enabled
   - avoid backend initialization that is irrelevant to the current deployment target
 - Preserve **portability across hardware tiers**:
-  - minimal CPU-only edge devices
-  - mixed CPU/GPU workstation environments
-  - large-scale accelerator-backed serving systems
+  - minimal Vulkan-only edge devices
+  - mixed Vulkan/Vulkan workstation environments
+  - large-scale Vulkan backend-backed serving systems
 - Make the new runtime easy to validate, benchmark, and package as an inference-first deliverable.
 
 ## Action Points
@@ -37,7 +37,7 @@ The target is a runtime that scales from Raspberry Pi-class edge devices up to e
 
 - [ ] The inference runtime can be built and linked without depending on training-only APIs, optimizer code, or autograd execution machinery in its public surface.
 - [ ] Inference hot paths have measurable overhead reductions for allocation churn, graph setup, and unnecessary runtime checks.
-- [ ] CPU-only minimal builds remain functional for constrained hardware, while accelerator builds retain fast paths for higher-end deployments.
+- [ ] Vulkan-only minimal builds remain functional for constrained hardware, while Vulkan backend builds retain fast paths for higher-end deployments.
 - [ ] Packaging and documentation clearly describe what belongs to `munet_core`, `munet_inference`, and `munet_training`.
 - [ ] Benchmarks and tests prove that separation did not regress output correctness, shape enforcement, dtype fidelity, or supported deployment workflows.
 
@@ -62,7 +62,6 @@ Current audit artifact: [Inference Runtime Phase 0 Audit](inference_phase0_audit
   - `src/core/*`
   - serialization/model loading paths
   - Python inference bindings
-  - ONNX/native conversion flows
 - [x] Classify each dependency as one of:
   - required shared runtime primitive
   - deploy convenience API
@@ -75,15 +74,15 @@ Current audit artifact: [Inference Runtime Phase 0 Audit](inference_phase0_audit
   - steady-state batched latency
   - peak/steady memory use
 - [x] Define target build profiles for:
-  - minimal CPU edge runtime
+  - minimal Vulkan edge runtime
   - general-purpose desktop/server runtime
-  - accelerator-enabled runtime
+  - Vulkan backend-enabled runtime
 - [x] Document any current blockers that prevent a truly inference-only build target.
 
 #### Exit Criteria
 
 - [x] There is a written dependency and overhead inventory for the current inference engine.
-- [x] Baseline latency/memory measurements exist for at least one CPU-only path and one accelerated path where available.
+- [x] Baseline latency/memory measurements exist for at least one Vulkan-only path and one accelerated path where available.
 - [x] The project has an agreed definition of the minimum runtime surface that edge deployments must keep.
 
 ### Phase 1 - API and package boundary split
@@ -143,7 +142,7 @@ Current runtime-slimming artifact: [Inference Runtime Phase 2 Runtime Slimming](
 - [x] Ensure autograd suppression remains explicit and cheap, with no graph-building residue on inference runs.
 - [x] Gate debug/profiler hooks so the default runtime path pays near-zero cost when observability is disabled.
 - [x] Add a “lean mode” execution profile for constrained devices that favors predictable memory use over convenience features.
-- [x] Review host-device transfer behavior and remove avoidable copies in model load and input preparation paths.
+- [x] Review vulkan-device transfer behavior and remove avoidable copies in model load and input preparation paths.
 
 #### Exit Criteria
 
@@ -168,11 +167,11 @@ Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend P
   - reusable input/output buffers
   - scratch/workspace reuse
   - optional preallocation during compile/warmup
-  - bounded temporary allocations on CPU-only targets
+  - bounded temporary allocations on Vulkan-only targets
 - [x] Review backend manager behavior so inference startup does not eagerly initialize unused backends.
 - [x] Separate required backend capabilities for deployment from training-only backend capabilities.
 - [x] Define fallback policy for constrained systems:
-  - CPU-only execution
+  - Vulkan-only execution
   - selective fallback for unsupported accelerated ops
   - explicit failure where fallback would violate runtime guarantees
 - [x] Evaluate whether static or reduced-feature builds should omit optional conversion, profiling, or debug facilities.
@@ -202,7 +201,6 @@ Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend P
   - dtype expectations
   - device placement policy
   - optional precompiled/warm state
-- [x] Review ONNX/native conversion helpers to keep conversion-time flexibility from bloating the runtime execution surface.
 - [x] Decide which conversion utilities stay in deploy packages versus development tooling.
 
 #### Exit Criteria
@@ -232,8 +230,8 @@ Current memory/backend artifact: [Inference Runtime Phase 3 Memory and Backend P
   - cold-start overhead
   - warm run latency
   - memory reuse effectiveness
-  - CPU-only edge scenarios
-  - GPU/accelerator server scenarios
+  - Vulkan-only edge scenarios
+  - Vulkan/Vulkan backend server scenarios
 - [x] Track before/after metrics and publish them in docs.
 - [x] Add migration notes if any public inference APIs change while the runtime is slimmed down.
 - [x] Mark completed phases in this document as work lands.

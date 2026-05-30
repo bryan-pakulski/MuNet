@@ -25,7 +25,7 @@ This guide summarizes the currently exposed Python surface in `munet`.
 Related env flags:
 
 - `MUNET_DISPATCH_DECISION_DUMP=1`
-- `MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK=1`
+- `MUNET_FAIL_FAST_VULKAN_UNSUPPORTED=1`
 
 ### Profiling helpers
 
@@ -41,7 +41,6 @@ Related env flags:
 
 ## Devices and dtypes
 
-- `munet.DeviceType` (`CPU`, `CUDA`, `VULKAN`)
 - `munet.DataType` (`Float32`, `Float16`, `BFloat16`, `Int32`, `Int8`)
 - `munet.Device(type, index=0)`
 - `munet.TensorOptions` (`device`, `dtype`, `requires_grad`)
@@ -92,7 +91,6 @@ Module management:
 - `offload(device, layers=[...])`, `clear_offload()`, `offload_plan()`
 - `freeze_offload_plan() -> dict[layer, "device:index"]`
 - `apply_offload_plan(plan_dict)`
-- `auto_offload(devices, strategy="balanced", sample_input=..., memory_budgets_bytes={"cuda:0": ...})`
 - `offload_plan(explain=True)` includes structured planner rationale payload per layer.
 - `validate_offload_plan(sample_input) -> OffloadValidationReport`
 - `set_offload_warnings(enabled=True)`

@@ -178,16 +178,16 @@ inline void write_tensor_binary(std::ostream& out, const std::string& name, Tens
     uint64_t data_size = t->numel() * dtype_size(t->dtype());
     out.write(reinterpret_cast<const char*>(&data_size), sizeof(data_size));
     
-    // Copy tensor data to CPU if needed
-    Tensor* cpu_tensor = t;
-    std::unique_ptr<Tensor> cpu_copy;
-    if (t->device().type != DeviceType::CPU) {
-        cpu_copy = std::make_unique<Tensor>(t->shape(), t->dtype(), Device(DeviceType::CPU, 0));
-        cpu_copy->copy_from(*t);
-        cpu_tensor = cpu_copy.get();
+    // Copy tensor data to Host if needed
+    Tensor* host_tensor = t;
+    std::unique_ptr<Tensor> host_copy;
+    if (t->device().type != DeviceType::VULKAN) {
+        host_copy = std::make_unique<Tensor>(t->shape(), t->dtype(), Device(DeviceType::VULKAN, 0));
+        host_copy->copy_from(*t);
+        host_tensor = host_copy.get();
     }
     
-    out.write(reinterpret_cast<const char*>(cpu_tensor->data_ptr()), data_size);
+    out.write(reinterpret_cast<const char*>(host_tensor->data_ptr()), data_size);
 }
 
 // Read tensor result
@@ -222,7 +222,7 @@ inline ReadTensorResult read_tensor_binary(std::istream& in) {
     uint64_t data_size;
     in.read(reinterpret_cast<char*>(&data_size), sizeof(data_size));
     
-    result.tensor = Tensor(shape, static_cast<DataType>(dtype), Device(DeviceType::CPU, 0));
+    result.tensor = Tensor(shape, static_cast<DataType>(dtype), Device(DeviceType::VULKAN, 0));
     in.read(reinterpret_cast<char*>(result.tensor.data_ptr()), data_size);
     
     return result;
@@ -241,7 +241,7 @@ inline py::object restore_tensors_to_state(
             if (tensor_idx >= tensors.size()) {
                 throw std::runtime_error("Tensor index out of bounds during restoration");
             }
-            // Return a copy of the tensor (on CPU for now)
+            // Return a copy of the tensor (on Host for now)
             return py::cast(Tensor(tensors[tensor_idx++].tensor));
         }
         

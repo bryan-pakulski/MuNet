@@ -19,22 +19,6 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 
-
-
-[project.optional-dependencies]
-vk = [
-  "onnx>=1.16",
-  "onnxruntime>=1.18",
-]
-cu12-vk = [
-  "onnx>=1.16",
-  "onnxruntime-gpu>=1.18",
-]
-cu13-vk = [
-  "onnx>=1.16",
-  "onnxruntime-gpu>=1.18",
-]
-
 [project.urls]
 Homepage = "https://github.com/bryan-pakulski/MuNet"
 Repository = "https://github.com/bryan-pakulski/MuNet"
@@ -55,4 +39,8 @@ wheel.packages = ["python/munet_nn"]
 build = "cp310-* cp311-* cp312-*"
 skip = "*-musllinux_*"
 build-verbosity = 1
-test-command = "python -c \"import munet_nn as munet; import munet_nn._helpers.onnx_integration as _onnx; status = munet.backend_status(); assert isinstance(status, dict) and 'statuses' in status; assert isinstance(munet.list_available_backends(), list); print(munet.__doc__ is not None, _onnx.__name__)\""
+test-command = "python -c \"import munet_nn as munet; status = munet.backend_status(); backends = munet.list_available_backends(); assert isinstance(status, dict) and 'statuses' in status; assert isinstance(backends, list); assert all(name == 'vulkan' for name in backends); print(munet.__doc__ is not None)\""
+
+[tool.cibuildwheel.linux]
+before-all = "dnf -y install vulkan-devel vulkan-tools glslang-tools || dnf -y install vulkan-devel vulkan-tools"
+environment = { CMAKE_ARGS = "-DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/lib64/libvulkan.so.1" }

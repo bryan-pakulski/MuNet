@@ -9,14 +9,12 @@
 
 This RFC defines the compatibility contract for moving to:
 
-1. A single `munet-nn` distribution containing `munet_nn._core` (CPU runtime + plugin loader).
-2. Optional accelerator backends loaded at runtime as native plugins.
-3. Extras that install dependency bundles only (`vk`, `cu12-vk`, `cu13-vk`) and do not select wheel variants.
+1. A single `munet-nn` distribution containing `munet_nn._core` (Vulkan runtime + plugin loader).
+2. Optional Vulkan backend backends loaded at runtime as native plugins.
 
 Non-goals for this phase:
 
 - Finalizing every plugin implementation detail.
-- Shipping CUDA/Vulkan plugins in this change.
 
 ## 2) Packaging contract (public)
 
@@ -30,14 +28,12 @@ Non-goals for this phase:
 Extras are dependency bundles, not binary selectors:
 
 - `munet-nn[vk]`: Vulkan runtime/tooling dependencies.
-- `munet-nn[cu12-vk]`: CUDA 12 + Vulkan dependency bundle.
-- `munet-nn[cu13-vk]`: CUDA 13 + Vulkan dependency bundle.
 
 Rules:
 
 - Installing an extra must never swap to a different core wheel artifact.
-- Core install (`pip install munet-nn`) must remain CPU-usable.
-- Missing optional runtimes must degrade gracefully with diagnostics.
+- Core install (`pip install munet-nn`) must remain Vulkan-usable.
+- Missing Vulkan runtimes must degrade gracefully with diagnostics.
 
 ### 2.3 Wheel content baseline
 
@@ -47,12 +43,12 @@ Core wheel ships:
 - `munet_nn/_core*.so`
 - `munet_nn/_helpers/*`
 
-Optional plugin binaries may be:
+Vulkan plugin binaries may be:
 
 - included in wheel when legally/technically viable, or
 - installed as runtime artifacts discoverable by the loader.
 
-In both cases, import of `munet_nn` must not fail due to absent accelerator stack.
+In both cases, import of `munet_nn` must not fail due to absent Vulkan backend stack.
 
 ## 3) Core/plugin ABI contract (stable surface)
 
@@ -65,8 +61,6 @@ Linux plugin soname/file convention:
 Initial canonical names:
 
 - `libmunet_backend_vk.so`
-- `libmunet_backend_cu12.so`
-- `libmunet_backend_cu13.so`
 
 Discovery order (highest to lowest priority):
 
@@ -82,12 +76,11 @@ Each plugin must export **C ABI** symbols (exact names):
 
 - `munet_backend_plugin_abi_version()` -> `uint32_t`
 - `munet_backend_plugin_descriptor()` -> pointer to immutable descriptor struct
-- `munet_backend_plugin_create(const munet_plugin_host_api*)` -> opaque plugin instance/handle
+- `munet_backend_plugin_create(const munet_plugin_vulkan_api*)` -> opaque plugin instance/handle
 - `munet_backend_plugin_destroy(void*)`
 
 The descriptor must include:
 
-- backend key (`"vk"`, `"cu12"`, `"cu13"`),
 - plugin build/runtime version strings,
 - capability bitset,
 - minimum/maximum compatible core ABI versions.
@@ -117,10 +110,10 @@ Deprecation policy:
 
 ## 4) Runtime behavior contract
 
-### 4.1 CPU baseline
+### 4.1 Vulkan baseline
 
-- CPU backend is always available when `munet_nn` imports successfully.
-- Accelerator unavailability cannot break CPU execution paths.
+- Vulkan backend is always available when `munet_nn` imports successfully.
+- Vulkan backend unavailability cannot break Vulkan execution paths.
 
 ### 4.2 Python probing APIs
 
@@ -144,7 +137,7 @@ Core runtime will expose:
 
 | Scenario | Import `munet_nn` | `list_available_backends()` | `backend_status()` reason_code | User-facing guidance |
 |---|---|---|---|---|
-| No plugins installed | Success | `['cpu']` | `plugin_not_found` | Install plugin/runtime bundle or use CPU |
+| No plugins installed | Success | `['vulkan']` | `plugin_not_found` | Install plugin/runtime bundle or use Vulkan |
 | Plugin found, ABI mismatch | Success | excludes backend | `abi_mismatch` | Upgrade/downgrade plugin or core to compatible ABI |
 | Plugin found, missing driver/runtime | Success | excludes backend | `runtime_dependency_missing` | Install required driver/runtime package |
 | Plugin found, init failure | Success | excludes backend | `plugin_init_failed` | Check `detail`, collect logs, validate driver/toolkit |
@@ -184,9 +177,9 @@ This RFC satisfies the required Phase 0 approvals by defining:
 
 ## 8) Phase-3 distribution decision
 
-For Linux wheels, MuNet now builds a single `munet-nn` core wheel and installs optional plugin shared libraries under `munet_nn/plugins` when built.
+For Linux wheels, MuNet now builds a single `munet-nn` core wheel and installs Vulkan plugin shared libraries under `munet_nn/plugins` when built.
 
-- Core import remains CPU-safe even if plugin runtime dependencies are missing.
+- Core import remains Vulkan-safe even if plugin runtime dependencies are missing.
 - Plugin binaries are runtime-probed and reported through `backend_status()` rather than being hard import requirements.
 - Extras (Phase 4) remain dependency bundles and do not select different wheel names.
 
@@ -196,7 +189,5 @@ For Linux wheels, MuNet now builds a single `munet-nn` core wheel and installs o
 Phase-4 extras are now defined in packaging metadata as dependency bundles:
 
 - `vk`
-- `cu12-vk`
-- `cu13-vk`
 
 These extras install runtime/tooling Python dependencies only. They do not select alternate wheel names or binary variants.

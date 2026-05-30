@@ -44,20 +44,20 @@ inline void require_backend_support(const std::string &op, const Tensor &tensor,
 }
 
 template <typename Fn>
-inline Tensor binary_broadcast_cpu_fallback(const Tensor &a, const Tensor &b,
+inline Tensor binary_broadcast_host_fallback(const Tensor &a, const Tensor &b,
                                             const BroadcastInfo &info,
                                             Fn &&fn) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor a_cpu = a.to(cpu);
-  Tensor b_cpu = b.to(cpu);
-  Tensor out_cpu(info.out_shape, cpu, a.dtype());
+  Device host{DeviceType::VULKAN, 0};
+  Tensor a_host = a.to(host);
+  Tensor b_host = b.to(host);
+  Tensor out_host(info.out_shape, host, a.dtype());
 
-  const char *ap = static_cast<const char *>(a_cpu.data());
-  const char *bp = static_cast<const char *>(b_cpu.data());
-  char *op = static_cast<char *>(out_cpu.data());
+  const char *ap = static_cast<const char *>(a_host.data());
+  const char *bp = static_cast<const char *>(b_host.data());
+  char *op = static_cast<char *>(out_host.data());
   const size_t a_stride = dtype_size(a.dtype());
   const size_t b_stride = dtype_size(b.dtype());
-  const size_t out_stride = dtype_size(out_cpu.dtype());
+  const size_t out_stride = dtype_size(out_host.dtype());
   const size_t total = numel(info.out_shape);
   const int ndim = static_cast<int>(info.out_shape.size());
 
@@ -76,31 +76,31 @@ inline Tensor binary_broadcast_cpu_fallback(const Tensor &a, const Tensor &b,
         read_scalar_from_buffer(ap + off_a * a_stride, a.dtype());
     const ScalarValue rhs =
         read_scalar_from_buffer(bp + off_b * b_stride, b.dtype());
-    write_scalar_to_buffer(op + i * out_stride, out_cpu.dtype(),
+    write_scalar_to_buffer(op + i * out_stride, out_host.dtype(),
                            fn(lhs.value, rhs.value));
   }
 
-  return (a.device().type == DeviceType::CPU) ? out_cpu
-                                              : out_cpu.to(a.device());
+  return (a.device().type == DeviceType::VULKAN) ? out_host
+                                              : out_host.to(a.device());
 }
 
-inline Tensor sum_to_shape_cpu_fallback(const Tensor &t,
+inline Tensor sum_to_shape_host_fallback(const Tensor &t,
                                         const Shape &target_shape) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor t_cpu = t.to(cpu);
-  Tensor out_cpu(target_shape, cpu, t.dtype());
-  out_cpu.fill_(make_scalar(0.0, out_cpu.dtype()));
+  Device host{DeviceType::VULKAN, 0};
+  Tensor t_host = t.to(host);
+  Tensor out_host(target_shape, host, t.dtype());
+  out_host.fill_(make_scalar(0.0, out_host.dtype()));
 
-  const char *ip = static_cast<const char *>(t_cpu.data());
-  char *op = static_cast<char *>(out_cpu.data());
+  const char *ip = static_cast<const char *>(t_host.data());
+  char *op = static_cast<char *>(out_host.data());
   const size_t in_stride = dtype_size(t.dtype());
-  const size_t out_stride = dtype_size(out_cpu.dtype());
+  const size_t out_stride = dtype_size(out_host.dtype());
 
   const int ndim = static_cast<int>(t.shape().size());
   const int out_ndim = static_cast<int>(target_shape.size());
   const Strides out_strides = default_strides(target_shape);
 
-  for (size_t i = 0; i < t_cpu.size(); ++i) {
+  for (size_t i = 0; i < t_host.size(); ++i) {
     size_t out_off = 0;
     size_t curr = i;
     for (int d = ndim - 1; d >= 0; --d) {
@@ -114,34 +114,34 @@ inline Tensor sum_to_shape_cpu_fallback(const Tensor &t,
     }
 
     const ScalarValue accum =
-        read_scalar_from_buffer(op + out_off * out_stride, out_cpu.dtype());
+        read_scalar_from_buffer(op + out_off * out_stride, out_host.dtype());
     const ScalarValue val =
         read_scalar_from_buffer(ip + i * in_stride, t.dtype());
-    write_scalar_to_buffer(op + out_off * out_stride, out_cpu.dtype(),
+    write_scalar_to_buffer(op + out_off * out_stride, out_host.dtype(),
                            accum.value + val.value);
   }
 
-  return (t.device().type == DeviceType::CPU) ? out_cpu
-                                              : out_cpu.to(t.device());
+  return (t.device().type == DeviceType::VULKAN) ? out_host
+                                              : out_host.to(t.device());
 }
 
-inline Tensor matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool transA,
+inline Tensor matmul_host_fallback(const Tensor &a, const Tensor &b, bool transA,
                                   bool transB) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor a_cpu = a.to(cpu);
-  Tensor b_cpu = b.to(cpu);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor a_host = a.to(host);
+  Tensor b_host = b.to(host);
 
   const int M = transA ? a.shape()[1] : a.shape()[0];
   const int K = transA ? a.shape()[0] : a.shape()[1];
   const int N = transB ? b.shape()[0] : b.shape()[1];
 
-  Tensor out_cpu({M, N}, cpu, a.dtype());
-  const char *ap = static_cast<const char *>(a_cpu.data());
-  const char *bp = static_cast<const char *>(b_cpu.data());
-  char *cp = static_cast<char *>(out_cpu.data());
+  Tensor out_host({M, N}, host, a.dtype());
+  const char *ap = static_cast<const char *>(a_host.data());
+  const char *bp = static_cast<const char *>(b_host.data());
+  char *cp = static_cast<char *>(out_host.data());
   const size_t a_stride = dtype_size(a.dtype());
   const size_t b_stride = dtype_size(b.dtype());
-  const size_t out_stride = dtype_size(out_cpu.dtype());
+  const size_t out_stride = dtype_size(out_host.dtype());
 
   for (int m = 0; m < M; ++m) {
     for (int n = 0; n < N; ++n) {
@@ -155,20 +155,20 @@ inline Tensor matmul_cpu_fallback(const Tensor &a, const Tensor &b, bool transA,
             read_scalar_from_buffer(bp + b_index * b_stride, b.dtype());
         sum += a_val.value * b_val.value;
       }
-      write_scalar_to_buffer(cp + (m * N + n) * out_stride, out_cpu.dtype(),
+      write_scalar_to_buffer(cp + (m * N + n) * out_stride, out_host.dtype(),
                              sum);
     }
   }
 
-  return (a.device().type == DeviceType::CPU) ? out_cpu
-                                              : out_cpu.to(a.device());
+  return (a.device().type == DeviceType::VULKAN) ? out_host
+                                              : out_host.to(a.device());
 }
 
-inline Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b,
+inline Tensor batched_matmul_host_fallback(const Tensor &a, const Tensor &b,
                                           bool transA, bool transB) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor a_cpu = a.to(cpu);
-  Tensor b_cpu = b.to(cpu);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor a_host = a.to(host);
+  Tensor b_host = b.to(host);
 
   // Determine dimensions
   const int a_ndim = static_cast<int>(a.shape().size());
@@ -220,14 +220,14 @@ inline Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b,
   out_shape.push_back(M);
   out_shape.push_back(N);
 
-  Tensor out_cpu(out_shape, cpu, a.dtype());
+  Tensor out_host(out_shape, host, a.dtype());
 
-  const char *ap = static_cast<const char *>(a_cpu.data());
-  const char *bp = static_cast<const char *>(b_cpu.data());
-  char *cp = static_cast<char *>(out_cpu.data());
+  const char *ap = static_cast<const char *>(a_host.data());
+  const char *bp = static_cast<const char *>(b_host.data());
+  char *cp = static_cast<char *>(out_host.data());
   const size_t a_stride = dtype_size(a.dtype());
   const size_t b_stride = dtype_size(b.dtype());
-  const size_t out_stride = dtype_size(out_cpu.dtype());
+  const size_t out_stride = dtype_size(out_host.dtype());
 
   // Iterate over batches
   for (size_t batch = 0; batch < batch_size; ++batch) {
@@ -247,33 +247,33 @@ inline Tensor batched_matmul_cpu_fallback(const Tensor &a, const Tensor &b,
               read_scalar_from_buffer(b_batch + b_index * b_stride, b.dtype());
           sum += a_val.value * b_val.value;
         }
-        write_scalar_to_buffer(c_batch + (m * N + n) * out_stride, out_cpu.dtype(), sum);
+        write_scalar_to_buffer(c_batch + (m * N + n) * out_stride, out_host.dtype(), sum);
       }
     }
   }
 
-  return (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+  return (a.device().type == DeviceType::VULKAN) ? out_host : out_host.to(a.device());
 }
 
 template <typename Fn>
-inline Tensor unary_cpu_fallback(const Tensor &input, Fn &&fn) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor in_cpu = input.to(cpu);
-  Tensor out_cpu(input.shape(), cpu, input.dtype());
-  const char *ip = static_cast<const char *>(in_cpu.data());
-  char *op = static_cast<char *>(out_cpu.data());
+inline Tensor unary_host_fallback(const Tensor &input, Fn &&fn) {
+  Device host{DeviceType::VULKAN, 0};
+  Tensor in_host = input.to(host);
+  Tensor out_host(input.shape(), host, input.dtype());
+  const char *ip = static_cast<const char *>(in_host.data());
+  char *op = static_cast<char *>(out_host.data());
   const size_t stride = dtype_size(input.dtype());
-  for (size_t i = 0; i < in_cpu.size(); ++i) {
+  for (size_t i = 0; i < in_host.size(); ++i) {
     const ScalarValue value =
         read_scalar_from_buffer(ip + i * stride, input.dtype());
-    write_scalar_to_buffer(op + i * stride, out_cpu.dtype(), fn(value.value));
+    write_scalar_to_buffer(op + i * stride, out_host.dtype(), fn(value.value));
   }
-  return (input.device().type == DeviceType::CPU) ? out_cpu
-                                                  : out_cpu.to(input.device());
+  return (input.device().type == DeviceType::VULKAN) ? out_host
+                                                  : out_host.to(input.device());
 }
 
 // Low-level batched matmul fallback for backends (works with raw pointers)
-inline void batched_matmul_cpu_fallback(const float *a, const float *b, float *out,
+inline void batched_matmul_host_fallback(const float *a, const float *b, float *out,
                                          int M, int K, int N, bool transA, bool transB) {
   for (int m = 0; m < M; ++m) {
     for (int n = 0; n < N; ++n) {
@@ -369,8 +369,8 @@ inline Tensor sum_to_shape(const Tensor &t, const Shape &target_shape) {
   }
 
   const auto dispatch = resolve_dispatch(OpId::SumToShape, t);
-  if (dispatch.use_cpu_fallback) {
-    return detail::sum_to_shape_cpu_fallback(t, target_shape);
+  if (dispatch.use_host_fallback) {
+    return detail::sum_to_shape_host_fallback(t, target_shape);
   }
 
   Tensor out(target_shape, t.device(), t.dtype());

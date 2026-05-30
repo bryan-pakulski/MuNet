@@ -12,29 +12,29 @@ Tensor masked_fill(const Tensor &a, const Tensor &mask,
   if (a.device() != mask.device())
     throw std::runtime_error("masked_fill: input/mask device mismatch");
 
-  Tensor a_cpu = a.to(Device{DeviceType::CPU, 0});
-  Tensor m_cpu = mask.to(Device{DeviceType::CPU, 0});
-  Tensor out_cpu(a.shape(), Device{DeviceType::CPU, 0}, a.dtype());
+  Tensor a_host = a.to(Device{DeviceType::VULKAN, 0});
+  Tensor m_host = mask.to(Device{DeviceType::VULKAN, 0});
+  Tensor out_host(a.shape(), Device{DeviceType::VULKAN, 0}, a.dtype());
 
-  const char *av = static_cast<const char *>(a_cpu.data());
-  const char *mv = static_cast<const char *>(m_cpu.data());
-  char *ov = static_cast<char *>(out_cpu.data());
+  const char *av = static_cast<const char *>(a_host.data());
+  const char *mv = static_cast<const char *>(m_host.data());
+  char *ov = static_cast<char *>(out_host.data());
   const size_t a_stride = dtype_size(a.dtype());
   const size_t mask_stride = dtype_size(mask.dtype());
-  const size_t out_stride = dtype_size(out_cpu.dtype());
+  const size_t out_stride = dtype_size(out_host.dtype());
 
-  for (size_t i = 0; i < out_cpu.size(); ++i) {
+  for (size_t i = 0; i < out_host.size(); ++i) {
     const ScalarValue mask_value =
         read_scalar_from_buffer(mv + i * mask_stride, mask.dtype());
     const ScalarValue input_value =
         read_scalar_from_buffer(av + i * a_stride, a.dtype());
-    write_scalar_to_buffer(ov + i * out_stride, out_cpu.dtype(),
+    write_scalar_to_buffer(ov + i * out_stride, out_host.dtype(),
                            mask_value.is_nonzero() ? value.value
                                                    : input_value.value);
   }
 
   Tensor out =
-      (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+      (a.device().type == DeviceType::VULKAN) ? out_host : out_host.to(a.device());
   if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<autograd_nodes::MaskedFillBackward>(mask);
     link_backward_edges(fn.get(), {a, mask});
@@ -67,7 +67,7 @@ Tensor sub(const Tensor &a, const Tensor &b) {
   Tensor out =
       dispatch.use_backend
           ? Tensor(info.out_shape, a.device(), a.dtype())
-          : detail::binary_broadcast_cpu_fallback(
+          : detail::binary_broadcast_host_fallback(
                 a, b, info, [](double lhs, double rhs) { return lhs - rhs; });
   if (dispatch.use_backend) {
     a.impl_->backend().sub(*a.impl_->storage, *b.impl_->storage,
@@ -98,7 +98,7 @@ Tensor mul(const Tensor &a, const Tensor &b) {
   Tensor out =
       dispatch.use_backend
           ? Tensor(info.out_shape, a.device(), a.dtype())
-          : detail::binary_broadcast_cpu_fallback(
+          : detail::binary_broadcast_host_fallback(
                 a, b, info, [](double lhs, double rhs) { return lhs * rhs; });
   if (dispatch.use_backend) {
     a.impl_->backend().mul(*a.impl_->storage, *b.impl_->storage,
@@ -128,7 +128,7 @@ Tensor div(const Tensor &a, const Tensor &b) {
   Tensor out =
       dispatch.use_backend
           ? Tensor(info.out_shape, a.device(), a.dtype())
-          : detail::binary_broadcast_cpu_fallback(
+          : detail::binary_broadcast_host_fallback(
                 a, b, info, [](double lhs, double rhs) { return lhs / rhs; });
   if (dispatch.use_backend) {
     a.impl_->backend().div(*a.impl_->storage, *b.impl_->storage,

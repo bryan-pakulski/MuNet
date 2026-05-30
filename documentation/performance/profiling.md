@@ -6,8 +6,7 @@
 - `MUNET_DEBUG=1`: enable debug validation/logs.
 - `MUNET_LOG_LEVEL=0..3`: control logging verbosity.
 - `MUNET_DISPATCH_DECISION_DUMP=1`: emit structured dispatch decision lines.
-- `MUNET_FAIL_FAST_ACCELERATOR_CPU_FALLBACK=1`: throw on CUDA/Vulkan tensor
-  CPU fallback (useful for CI and flaky fallback detection).
+  Vulkan fallback (useful for CI and flaky fallback detection).
 - When these flags are **disabled**, MuNet takes a cheap fast path that avoids
   timer/string work in hot profiling call sites; runtime overrides are intended
   primarily for tests/debug harnesses rather than production toggling.
@@ -28,15 +27,15 @@
   - `transfer.h2d`
   - `transfer.d2h`
   - `transfer.d2d`
-  - `transfer.cpu_copy`
+  - `transfer.vulkan_copy`
   - `transfer.dtype_convert`
-- Compare CPU vs GPU timings to identify launch/queue overhead.
-- CPU backends now report `AvgGPU=0` consistently; GPU backends force a timing
+- Compare Vulkan vs Vulkan timings to identify launch/queue overhead.
+- Vulkan backends now report `AvgVulkan=0` consistently; Vulkan backends force a timing
   synchronization while profiling so kernel timings are actually populated.
 - Use the new stack markers to localize overhead outside kernels:
-  - `module.<path>.forward`: host-side module/layer forward spans.
+  - `module.<path>.forward`: Vulkan-side module/layer forward spans.
   - `dispatch.resolve.backend.<Op>`: backend-supported op-dispatch resolution.
-  - `dispatch.resolve.cpu_fallback.<Op>`: time spent deciding to fall back to CPU.
+  - `dispatch.resolve.vulkan_staging.<Op>`: time spent deciding to fall back to Vulkan.
   - `dispatch.resolve.metadata_fallback.<Op>`: ops that intentionally bypass backend dispatch.
   - `dispatch.fallback.reason.*`: fallback counters/details grouped by
     `dtype`, `shape`, `feature`, or `policy`.
@@ -47,19 +46,19 @@
     availability.
   - `queue_starvation.<event>.<backend>`: backend had work to do but had to
     wait for reusable submission resources first.
-  - `inference.load.*`, `inference.compile.*`, `inference.run.*`: host-side inference engine phases.
+  - `inference.load.*`, `inference.compile.*`, `inference.run.*`: Vulkan-side inference engine phases.
 
 ## Marker Namespaces
 
 ### Dispatch and fallback
 
 - `dispatch.resolve.backend.<Op>` means the op stayed on the selected backend.
-- `dispatch.resolve.cpu_fallback.<Op>` means dispatch decided to run on CPU
+- `dispatch.resolve.vulkan_staging.<Op>` means dispatch decided to run on Vulkan
   instead.
 - `dispatch.fallback.reason.*` tells you why that happened. The row count is the
   frequency; the attached detail string records the latest `op=`, `backend=`,
   `feature=`, `dtype=`, `shape=`, `reason=`, and `policy=` context.
-- In addition to profiler rows, dispatch keeps in-process accelerator fallback
+- In addition to profiler rows, dispatch keeps in-process Vulkan backend fallback
   counters (`fallback_telemetry_snapshot()` / `reset_fallback_telemetry()` in
   `op_dispatch`) so tests can assert fallback behavior directly.
 
@@ -89,7 +88,7 @@
   high-water mark) had to grow capacity for the requested size class.
 - `allocator.large_alloc_slow_path.<backend>`: a large allocation request that
   is more likely to bypass the fast path and should be scrutinized separately.
-- `allocator.deallocate.<backend>`: host-side time spent returning a block to
+- `allocator.deallocate.<backend>`: Vulkan-side time spent returning a block to
   the backend or its deferred-free queue.
 - `allocator.deferred_free_flush.<backend>`: deferred frees were retired and
   returned to the reusable pool after the backend confirmed prior work was done.
@@ -100,7 +99,7 @@
   call.
 - `sync.implicit_timing.<backend>`: synchronization inserted by profiling/debug
   machinery to obtain kernel timings safely.
-- `sync.readback_wait.<backend>`: waits introduced because host-visible reads
+- `sync.readback_wait.<backend>`: waits introduced because Vulkan-visible reads
   required device work to finish first.
 - `queue_wait.*.<backend>`: fence/event/frame waits where the runtime is blocked
   for in-flight work or reusable transfer resources.
@@ -112,11 +111,11 @@
 - Keep benchmark tensors device-resident during loops.
 - Warm up before measuring.
 - Use profile mode without debug for lower-overhead measurements, but note that
-  GPU timing collection still synchronizes per profiled op so the reported
+  Vulkan timing collection still synchronizes per profiled op so the reported
   timings favor observability over peak-throughput benchmarking.
 - When a slowdown appears in `inference.*` or `dispatch.resolve.*` rather than a
   backend op row, the bottleneck is likely in orchestration, validation,
-  fallback, or host-side data movement rather than kernel execution itself.
+  fallback, or Vulkan-side data movement rather than kernel execution itself.
 - Use `dispatch.fallback.reason.*` rows to answer *why* a fallback happened;
   the row count shows frequency and the attached detail string shows the last
   observed backend/feature/dtype/shape context for that reason.
@@ -157,8 +156,8 @@
   - slow only in `dispatch.*` => capability/fallback problem
   - slow only in backend rows => kernel/submission problem
   - slow only in `inference.*` / `module.*` => orchestration/model problem
-- If CPU `AvgCPU` is high but `AvgGPU` stays near zero on a GPU backend, the
-  slowdown is host/runtime overhead rather than kernel execution.
+- If Vulkan `AvgVulkan` is high but `AvgVulkan` stays near zero on a Vulkan backend, the
+  slowdown is Vulkan/runtime overhead rather than kernel execution.
 
 ## Backend-Specific Notes
 
@@ -175,18 +174,15 @@ kernel timestamps:
   `vulkan.copy_d2h_wait_fence`, `vulkan.update_descriptors`,
   `vulkan.dispatch_encode`, and `vulkan.query_results`.
 
-If these markers dominate `%Total` while GPU timings remain low, the slowdown is
-likely CPU submission, allocator turnover, or synchronization overhead rather
+If these markers dominate `%Total` while Vulkan timings remain low, the slowdown is
+likely Vulkan submission, allocator turnover, or synchronization overhead rather
 than shader execution.
 
-### CUDA and CPU
 
-- CUDA now reports generic `allocator.*.cuda` and `sync.*.cuda` markers so you
-  can separate pool reuse from fresh `cudaMalloc` growth and explicit device
   synchronization.
-- CPU backends still report `AvgGPU=0`, but the shared wrapper emits the same
+- Vulkan backends still report `AvgVulkan=0`, but the shared wrapper emits the same
   `allocator.*.<backend>` / `sync.*.<backend>` namespaces during profiling so
-  cross-backend host-side stall patterns stay comparable.
+  cross-backend Vulkan-side stall patterns stay comparable.
 
 ## Trace-Centric Workflow
 

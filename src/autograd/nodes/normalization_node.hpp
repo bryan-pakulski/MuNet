@@ -124,42 +124,42 @@ struct LayerNormBackward : public Node {
     Tensor x = saved_tensor(0);
     Tensor weight = saved_tensor(1);
     Tensor bias = saved_tensor(2);
-    Tensor mean_cpu = saved_tensor(3);
-    Tensor inv_std_cpu = saved_tensor(4);
-    Device cpu{DeviceType::CPU, 0};
-    Tensor go_cpu = grads[0].to(cpu);
-    Tensor x_cpu = x.to(cpu);
-    Tensor w_cpu = weight.to(cpu);
+    Tensor mean_host = saved_tensor(3);
+    Tensor inv_std_host = saved_tensor(4);
+    Device host{DeviceType::VULKAN, 0};
+    Tensor go_host = grads[0].to(host);
+    Tensor x_host = x.to(host);
+    Tensor w_host = weight.to(host);
 
-    Tensor dx_cpu(x_shape, cpu, x_dtype);
-    Tensor dw_cpu(weight_shape, cpu, weight_dtype);
-    Tensor db_cpu(bias_shape, cpu, bias_dtype);
-    dw_cpu.fill_(make_scalar(0.0, dw_cpu.dtype()));
-    db_cpu.fill_(make_scalar(0.0, db_cpu.dtype()));
+    Tensor dx_host(x_shape, host, x_dtype);
+    Tensor dw_host(weight_shape, host, weight_dtype);
+    Tensor db_host(bias_shape, host, bias_dtype);
+    dw_host.fill_(make_scalar(0.0, dw_host.dtype()));
+    db_host.fill_(make_scalar(0.0, db_host.dtype()));
 
-    const char *go = static_cast<const char *>(go_cpu.data());
-    const char *xv = static_cast<const char *>(x_cpu.data());
-    const char *wv = static_cast<const char *>(w_cpu.data());
-    const char *mv = static_cast<const char *>(mean_cpu.data());
-    const char *iv = static_cast<const char *>(inv_std_cpu.data());
+    const char *go = static_cast<const char *>(go_host.data());
+    const char *xv = static_cast<const char *>(x_host.data());
+    const char *wv = static_cast<const char *>(w_host.data());
+    const char *mv = static_cast<const char *>(mean_host.data());
+    const char *iv = static_cast<const char *>(inv_std_host.data());
 
-    char *dx = static_cast<char *>(dx_cpu.data());
-    char *dw = static_cast<char *>(dw_cpu.data());
-    char *db = static_cast<char *>(db_cpu.data());
+    char *dx = static_cast<char *>(dx_host.data());
+    char *dw = static_cast<char *>(dw_host.data());
+    char *db = static_cast<char *>(db_host.data());
 
-    const size_t go_stride = dtype_size(go_cpu.dtype());
-    const size_t x_stride = dtype_size(x_cpu.dtype());
-    const size_t w_stride = dtype_size(w_cpu.dtype());
-    const size_t acc_stride = dtype_size(mean_cpu.dtype());
-    const size_t dx_stride = dtype_size(dx_cpu.dtype());
-    const size_t dw_stride = dtype_size(dw_cpu.dtype());
-    const size_t db_stride = dtype_size(db_cpu.dtype());
+    const size_t go_stride = dtype_size(go_host.dtype());
+    const size_t x_stride = dtype_size(x_host.dtype());
+    const size_t w_stride = dtype_size(w_host.dtype());
+    const size_t acc_stride = dtype_size(mean_host.dtype());
+    const size_t dx_stride = dtype_size(dx_host.dtype());
+    const size_t dw_stride = dtype_size(dw_host.dtype());
+    const size_t db_stride = dtype_size(db_host.dtype());
 
     for (int r = 0; r < rows; ++r) {
       const double mean =
-          read_scalar_from_buffer(mv + r * acc_stride, mean_cpu.dtype()).value;
+          read_scalar_from_buffer(mv + r * acc_stride, mean_host.dtype()).value;
       const double inv =
-          read_scalar_from_buffer(iv + r * acc_stride, inv_std_cpu.dtype())
+          read_scalar_from_buffer(iv + r * acc_stride, inv_std_host.dtype())
               .value;
       double sum_gy = 0.0;
       double sum_gy_xhat = 0.0;
@@ -167,49 +167,49 @@ struct LayerNormBackward : public Node {
       for (int c = 0; c < cols; ++c) {
         const int idx = r * cols + c;
         const double x_value =
-            read_scalar_from_buffer(xv + idx * x_stride, x_cpu.dtype()).value;
+            read_scalar_from_buffer(xv + idx * x_stride, x_host.dtype()).value;
         const double go_value =
-            read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+            read_scalar_from_buffer(go + idx * go_stride, go_host.dtype()).value;
         const double w_value =
-            read_scalar_from_buffer(wv + c * w_stride, w_cpu.dtype()).value;
+            read_scalar_from_buffer(wv + c * w_stride, w_host.dtype()).value;
         const double xhat = (x_value - mean) * inv;
         const double gy = go_value * w_value;
         sum_gy += gy;
         sum_gy_xhat += gy * xhat;
 
         const double dw_prev =
-            read_scalar_from_buffer(dw + c * dw_stride, dw_cpu.dtype()).value;
+            read_scalar_from_buffer(dw + c * dw_stride, dw_host.dtype()).value;
         const double db_prev =
-            read_scalar_from_buffer(db + c * db_stride, db_cpu.dtype()).value;
-        write_scalar_to_buffer(dw + c * dw_stride, dw_cpu.dtype(),
+            read_scalar_from_buffer(db + c * db_stride, db_host.dtype()).value;
+        write_scalar_to_buffer(dw + c * dw_stride, dw_host.dtype(),
                                dw_prev + go_value * xhat);
-        write_scalar_to_buffer(db + c * db_stride, db_cpu.dtype(),
+        write_scalar_to_buffer(db + c * db_stride, db_host.dtype(),
                                db_prev + go_value);
       }
 
       for (int c = 0; c < cols; ++c) {
         const int idx = r * cols + c;
         const double x_value =
-            read_scalar_from_buffer(xv + idx * x_stride, x_cpu.dtype()).value;
+            read_scalar_from_buffer(xv + idx * x_stride, x_host.dtype()).value;
         const double go_value =
-            read_scalar_from_buffer(go + idx * go_stride, go_cpu.dtype()).value;
+            read_scalar_from_buffer(go + idx * go_stride, go_host.dtype()).value;
         const double w_value =
-            read_scalar_from_buffer(wv + c * w_stride, w_cpu.dtype()).value;
+            read_scalar_from_buffer(wv + c * w_stride, w_host.dtype()).value;
         const double xhat = (x_value - mean) * inv;
         const double gy = go_value * w_value;
-        write_scalar_to_buffer(dx + idx * dx_stride, dx_cpu.dtype(),
+        write_scalar_to_buffer(dx + idx * dx_stride, dx_host.dtype(),
                                (inv / cols) *
                                    (cols * gy - sum_gy - xhat * sum_gy_xhat));
       }
     }
 
     Tensor dx_dev =
-        (x_device.type == DeviceType::CPU) ? dx_cpu : dx_cpu.to(x_device);
-    Tensor dw_dev = (weight_device.type == DeviceType::CPU)
-                        ? dw_cpu
-                        : dw_cpu.to(weight_device);
+        (x_device.type == DeviceType::VULKAN) ? dx_host : dx_host.to(x_device);
+    Tensor dw_dev = (weight_device.type == DeviceType::VULKAN)
+                        ? dw_host
+                        : dw_host.to(weight_device);
     Tensor db_dev =
-        (bias_device.type == DeviceType::CPU) ? db_cpu : db_cpu.to(bias_device);
+        (bias_device.type == DeviceType::VULKAN) ? db_host : db_host.to(bias_device);
     return {dx_dev, dw_dev, db_dev};
   }
 };

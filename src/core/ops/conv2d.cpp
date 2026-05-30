@@ -20,7 +20,7 @@ Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
   }
 
   const auto dispatch = resolve_dispatch(OpId::Conv2D, in);
-  const bool use_cpu_fallback = dispatch.use_cpu_fallback;
+  const bool use_host_fallback = dispatch.use_host_fallback;
 
   if (in.shape().size() != 4 || weight.shape().size() != 4) {
     MUNET_ERROR << "conv2d: inputs must be 4D, in.shape: "
@@ -47,11 +47,11 @@ Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
   const int oH = (iH + 2 * padding - kH) / stride + 1;
   const int oW = (iW + 2 * padding - kW) / stride + 1;
   Tensor out({B, oC, oH, oW}, in.device(), in.dtype());
-  if (use_cpu_fallback) {
-    Device cpu{DeviceType::CPU, 0};
-    Tensor in_exec = in.to(cpu);
-    Tensor weight_exec = weight.to(cpu);
-    Tensor bias_exec = bias.impl_ ? bias.to(cpu) : Tensor();
+  if (use_host_fallback) {
+    Device host{DeviceType::VULKAN, 0};
+    Tensor in_exec = in.to(host);
+    Tensor weight_exec = weight.to(host);
+    Tensor bias_exec = bias.impl_ ? bias.to(host) : Tensor();
     if (in_exec.dtype() != DataType::Float32) {
       in_exec = in_exec.to(DataType::Float32);
       weight_exec = weight_exec.to(DataType::Float32);
@@ -60,7 +60,7 @@ Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
       }
     }
 
-    Tensor out_exec({B, oC, oH, oW}, cpu, in_exec.dtype());
+    Tensor out_exec({B, oC, oH, oW}, host, in_exec.dtype());
     in_exec.impl_->backend().conv2d(
         *in_exec.impl_->storage, *weight_exec.impl_->storage,
         bias_exec.impl_ ? bias_exec.impl_->storage.get() : nullptr,
@@ -69,7 +69,7 @@ Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
     if (out_exec.dtype() != in.dtype()) {
       out_exec = out_exec.to(in.dtype());
     }
-    out = (in.device().type == DeviceType::CPU) ? out_exec : out_exec.to(in.device());
+    out = (in.device().type == DeviceType::VULKAN) ? out_exec : out_exec.to(in.device());
   } else {
     in.impl_->backend().conv2d(*in.impl_->storage, *weight.impl_->storage,
                                bias.impl_ ? bias.impl_->storage.get() : nullptr,

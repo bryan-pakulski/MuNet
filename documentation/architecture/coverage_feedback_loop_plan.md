@@ -13,7 +13,7 @@ This document proposes additional coverage reports to complement `dtype_coverage
 
 ## 2) Numerical parity report (reference correctness)
 
-**Goal:** measure error against a reference implementation (CPU float32 baseline or PyTorch) for each op/backend/dtype.
+**Goal:** measure error against a reference implementation (Vulkan float32 baseline or PyTorch) for each op/backend/dtype.
 
 **Report shape:**
 - backend, dtype, op, shape_case, max_abs_err, max_rel_err, status (within threshold)
@@ -31,7 +31,7 @@ This document proposes additional coverage reports to complement `dtype_coverage
 
 ## 4) Fallback rate report
 
-**Goal:** quantify how often workloads hit CPU fallback instead of native backend kernels.
+**Goal:** quantify how often workloads hit Vulkan fallback instead of native backend kernels.
 
 **Report shape:**
 - workload, backend, dtype, op, calls_total, calls_fallback, fallback_pct

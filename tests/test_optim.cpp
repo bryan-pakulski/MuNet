@@ -24,7 +24,7 @@ TEST_P(OptimTest, AdamConvergence) {
   Tensor x({1}, dev(), DataType::Float32, true);
 
   // Initialize to 2.0 (ensures convergence within 50 steps at LR=0.1)
-  Tensor init({1}, {DeviceType::CPU, 0});
+  Tensor init({1}, {DeviceType::VULKAN, 0});
   ((float *)init.data())[0] = 2.0f;
   x.impl_->backend().copy(init.data(), x.data(), x.bytes(), init.device(),
                           dev());
@@ -58,7 +58,7 @@ TEST_P(OptimTest, AdamStepConsistency) {
   // theta_new = 0.9
 
   Tensor w({1}, dev(), DataType::Float32, true);
-  Tensor init({1}, {DeviceType::CPU, 0});
+  Tensor init({1}, {DeviceType::VULKAN, 0});
   ((float *)init.data())[0] = 1.0f;
   w.impl_->backend().copy(init.data(), w.data(), w.bytes(), init.device(),
                           dev());
@@ -83,7 +83,7 @@ TEST_P(OptimTest, SGDConvergence) {
   // Minimize f(x) = x^2. Optimal x = 0.
   Tensor x({1}, dev(), DataType::Float32, true);
 
-  Tensor init({1}, {DeviceType::CPU, 0});
+  Tensor init({1}, {DeviceType::VULKAN, 0});
   ((float *)init.data())[0] = 1.0f;
   x.impl_->backend().copy(init.data(), x.data(), x.bytes(), init.device(),
                           dev());
@@ -107,7 +107,7 @@ TEST_P(OptimTest, SGDStepConsistency) {
   // theta_new = 1.0 - (0.1 * 0.5) = 0.95
 
   Tensor w({1}, dev(), DataType::Float32, true);
-  Tensor init({1}, {DeviceType::CPU, 0});
+  Tensor init({1}, {DeviceType::VULKAN, 0});
   ((float *)init.data())[0] = 1.0f;
   w.impl_->backend().copy(init.data(), w.data(), w.bytes(), init.device(),
                           dev());
@@ -127,13 +127,13 @@ TEST_P(OptimTest, SGDStepConsistency) {
   EXPECT_NEAR(w.item(), 0.95f, 1e-6);
 }
 
-TEST(OptimPolicyTest, AdamSupportsFloat16ParametersUsingTypedStateFallback) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor x({1}, cpu, DataType::Float16, true);
+TEST(OptimPolicyTest, AdamSupportsFloat16ParametersUsingTypedState) {
+  Device host{DeviceType::VULKAN, 0};
+  Tensor x({1}, host, DataType::Float16, true);
   x.fill_(1.0f);
 
   auto opt = std::make_shared<optim::Adam>(std::vector<Tensor>{x}, 0.1f);
-  Tensor grad({1}, cpu, DataType::Float16, false);
+  Tensor grad({1}, host, DataType::Float16, false);
   grad.fill_(0.5f);
 
   for (int i = 0; i < 8; ++i) {
@@ -147,10 +147,10 @@ TEST(OptimPolicyTest, AdamSupportsFloat16ParametersUsingTypedStateFallback) {
 }
 
 TEST(OptimPolicyTest, AdamParameterGroupsExposeStatePolicies) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor low_precision({1}, cpu, DataType::Float16, true);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor low_precision({1}, host, DataType::Float16, true);
   low_precision.fill_(1.0f);
-  Tensor full_precision({1}, cpu, DataType::Float32, true);
+  Tensor full_precision({1}, host, DataType::Float32, true);
   full_precision.fill_(1.0f);
 
   optim::OptimizerStatePolicy low_precision_policy;
@@ -178,13 +178,13 @@ TEST(OptimPolicyTest, AdamParameterGroupsExposeStatePolicies) {
 }
 
 TEST(OptimPolicyTest, AdamParameterGroupsUsePerGroupLearningRates) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor slow({1}, cpu, DataType::Float32, true);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor slow({1}, host, DataType::Float32, true);
   slow.fill_(1.0f);
-  Tensor fast({1}, cpu, DataType::Float32, true);
+  Tensor fast({1}, host, DataType::Float32, true);
   fast.fill_(1.0f);
 
-  Tensor grad({1}, cpu, DataType::Float32, false);
+  Tensor grad({1}, host, DataType::Float32, false);
   grad.fill_(1.0f);
   slow.impl_->grad = grad.impl_;
   fast.impl_->grad = grad.impl_;
@@ -198,10 +198,10 @@ TEST(OptimPolicyTest, AdamParameterGroupsUsePerGroupLearningRates) {
 }
 
 TEST(OptimPolicyTest, GradScalerScalesAndUnscalesOptimizerGradients) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor param({1}, cpu, DataType::Float32, true);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor param({1}, host, DataType::Float32, true);
   param.fill_(1.0f);
-  Tensor grad({1}, cpu, DataType::Float32, false);
+  Tensor grad({1}, host, DataType::Float32, false);
   grad.fill_(8.0f);
   param.impl_->grad = grad.impl_;
 
@@ -220,8 +220,8 @@ TEST(OptimPolicyTest, GradScalerScalesAndUnscalesOptimizerGradients) {
 }
 
 TEST(OptimPolicyTest, GradScalerScaleReturnsScaledLossTensor) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor loss({1}, cpu, DataType::Float32, false);
+  Device host{DeviceType::VULKAN, 0};
+  Tensor loss({1}, host, DataType::Float32, false);
   loss.fill_(2.0f);
 
   amp::GradScaler scaler(true, 4.0f);
@@ -234,7 +234,7 @@ TEST(OptimPolicyTest, AutocastGuardRestoresPreviousStateAndPolicies) {
 
   amp::AutocastOptions options;
   options.enabled = true;
-  options.device_type = DeviceType::CUDA;
+  options.device_type = DeviceType::VULKAN;
   options.compute_dtype = DataType::Float16;
   options.conversion_policy = amp::AutocastConversionPolicy::PromoteInputs;
 

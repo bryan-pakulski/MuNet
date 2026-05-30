@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
-    python3 -m pip install --no-cache-dir numpy onnx onnxruntime
+    python3 -m pip install --no-cache-dir numpy
 
 WORKDIR /workspace/MuNet
 

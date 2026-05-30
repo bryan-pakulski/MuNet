@@ -7,16 +7,16 @@ try:
 except Exception as exc:  # pragma: no cover
     pytest.skip(f"munet import unavailable: {exc}", allow_module_level=True)
 
-CPU = munet.Device(munet.DeviceType.CPU, 0)
+Host = munet.Device(munet.DeviceType.VULKAN, 0)
 
 
 def _first_accelerator(max_index: int = 4):
-    for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+    for dev_type in (munet.DeviceType.VULKAN,):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
                 t = munet.ones((1,), device=dev)
-                if float((t + t).to(CPU).item()) == 2.0:
+                if float((t + t).to(Host).item()) == 2.0:
                     return dev
             except RuntimeError:
                 continue
@@ -45,7 +45,7 @@ def test_unet_like_auto_offload_explain_schema_and_execution():
     model = _mini_unet_like()
     x = munet.from_numpy(np.random.randn(2, 3, 32, 32).astype(np.float32))
 
-    _ = model.auto_offload([CPU, accel], strategy="transfer-minimized", sample_input=x)
+    _ = model.auto_offload([Host, accel], strategy="transfer-minimized", sample_input=x)
     explain = model.offload_plan(explain=True)
 
     assert "plan" in explain and isinstance(explain["plan"], dict)

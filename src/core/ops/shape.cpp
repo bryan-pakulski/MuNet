@@ -53,17 +53,17 @@ Tensor sum(const Tensor &a) {
   if (dispatch.use_backend) {
     a.impl_->backend().sum(*a.impl_->storage, *out.impl_->storage, a.size());
   } else {
-    Tensor a_cpu = a.to(Device{DeviceType::CPU, 0});
-    Tensor out_cpu({1}, Device{DeviceType::CPU, 0}, a.dtype());
+    Tensor a_host = a.to(Device{DeviceType::VULKAN, 0});
+    Tensor out_host({1}, Device{DeviceType::VULKAN, 0}, a.dtype());
     double total = 0.0;
-    const char *ip = static_cast<const char *>(a_cpu.data());
+    const char *ip = static_cast<const char *>(a_host.data());
     const size_t stride = dtype_size(a.dtype());
-    for (size_t i = 0; i < a_cpu.size(); ++i) {
+    for (size_t i = 0; i < a_host.size(); ++i) {
       total += read_scalar_from_buffer(ip + i * stride, a.dtype()).value;
     }
-    write_scalar_to_buffer(out_cpu.data(), out_cpu.dtype(), total);
+    write_scalar_to_buffer(out_host.data(), out_host.dtype(), total);
     out =
-        (a.device().type == DeviceType::CPU) ? out_cpu : out_cpu.to(a.device());
+        (a.device().type == DeviceType::VULKAN) ? out_host : out_host.to(a.device());
   }
 
   if (GradMode::is_enabled() && a.requires_grad()) {
@@ -114,18 +114,18 @@ Tensor mean(const Tensor &a, int dim, bool keepdim) {
       out = tmp.reshape(out_shape);
     }
   } else {
-    Tensor src = a.to(Device{DeviceType::CPU, 0}).contiguous();
-    Tensor dst_cpu(out_shape, Device{DeviceType::CPU, 0}, a.dtype());
+    Tensor src = a.to(Device{DeviceType::VULKAN, 0}).contiguous();
+    Tensor dst_host(out_shape, Device{DeviceType::VULKAN, 0}, a.dtype());
     const Shape src_shape = src.shape();
     Shape reduced_shape = src_shape;
     reduced_shape[resolved] = 1;
-    Shape cpu_out_shape = keepdim ? reduced_shape : out_shape;
+    Shape host_out_shape = keepdim ? reduced_shape : out_shape;
     Strides src_strides = default_strides(src_shape);
     Strides reduced_strides = default_strides(reduced_shape);
     const size_t elem_size = dtype_size(a.dtype());
     const char *sp = static_cast<const char *>(src.data());
-    char *dp = static_cast<char *>(dst_cpu.data());
-    std::vector<double> accum(numel(cpu_out_shape), 0.0);
+    char *dp = static_cast<char *>(dst_host.data());
+    std::vector<double> accum(numel(host_out_shape), 0.0);
     for (size_t linear = 0; linear < src.size(); ++linear) {
       size_t curr = linear;
       size_t out_off = 0;
@@ -141,18 +141,18 @@ Tensor mean(const Tensor &a, int dim, bool keepdim) {
         out_off += static_cast<size_t>(coord) *
                    static_cast<size_t>(
                        keepdim ? reduced_strides[d]
-                               : default_strides(cpu_out_shape)[out_dim]);
+                               : default_strides(host_out_shape)[out_dim]);
       }
       accum[out_off] +=
           read_scalar_from_buffer(sp + linear * elem_size, src.dtype()).value;
     }
     const double inv = 1.0 / static_cast<double>(src_shape[resolved]);
     for (size_t i = 0; i < accum.size(); ++i) {
-      write_scalar_to_buffer(dp + i * elem_size, dst_cpu.dtype(),
+      write_scalar_to_buffer(dp + i * elem_size, dst_host.dtype(),
                              accum[i] * inv);
     }
     out =
-        (a.device().type == DeviceType::CPU) ? dst_cpu : dst_cpu.to(a.device());
+        (a.device().type == DeviceType::VULKAN) ? dst_host : dst_host.to(a.device());
   }
 
   if (GradMode::is_enabled() && a.requires_grad()) {

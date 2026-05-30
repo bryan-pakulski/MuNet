@@ -57,13 +57,13 @@ struct OpMetadata {
 struct DispatchDecision {
   const OpMetadata &metadata;
   bool use_backend = false;
-  bool use_cpu_fallback = false;
+  bool use_host_fallback = false;
   BackendSupport backend_support;
 };
 
 struct FallbackTelemetrySnapshot {
-  uint64_t accelerator_cpu_fallback_total = 0;
-  std::unordered_map<std::string, uint64_t> accelerator_cpu_fallback_counters;
+  uint64_t accelerator_host_fallback_total = 0;
+  std::unordered_map<std::string, uint64_t> accelerator_host_fallback_counters;
 };
 
 const OpMetadata &op_metadata(OpId id);

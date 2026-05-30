@@ -70,8 +70,8 @@ public:
     scale.fill_(1.0f / std::sqrt(static_cast<float>(head_dim_)));
     scores = scores * scale;
 
-    Device cpu{DeviceType::CPU, 0};
-    Tensor mask_cpu({BH * T, BH * T}, cpu, DataType::Int32, false);
+    Device host{DeviceType::VULKAN, 0};
+    Tensor mask_host({BH * T, BH * T}, host, DataType::Int32, false);
     for (int i = 0; i < BH * T; ++i) {
       int bh_i = i / T;
       int t_i = i % T;
@@ -79,15 +79,15 @@ public:
         int bh_j = j / T;
         int t_j = j % T;
         bool masked = (bh_i != bh_j) || (causal_ && t_j > t_i);
-        write_scalar_to_buffer(static_cast<char *>(mask_cpu.data()) +
+        write_scalar_to_buffer(static_cast<char *>(mask_host.data()) +
                                    (i * (BH * T) + j) *
-                                       dtype_size(mask_cpu.dtype()),
-                               mask_cpu.dtype(), masked ? 1.0 : 0.0);
+                                       dtype_size(mask_host.dtype()),
+                               mask_host.dtype(), masked ? 1.0 : 0.0);
       }
     }
-    Tensor mask = (scores.device().type == DeviceType::CPU)
-                      ? mask_cpu
-                      : mask_cpu.to(scores.device());
+    Tensor mask = (scores.device().type == DeviceType::VULKAN)
+                      ? mask_host
+                      : mask_host.to(scores.device());
     scores = scores.masked_fill(mask, make_scalar(-1e9, scores.dtype()));
 
     Tensor probs = scores.softmax(-1);

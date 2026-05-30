@@ -11,11 +11,11 @@
 namespace munet {
 
 struct OpStats {
-  double cpu_us = 0;
+  double host_us = 0;
   double gpu_us = 0;
-  double min_cpu_us = 1e30;
+  double min_host_us = 1e30;
   double min_gpu_us = 1e30;
-  double max_cpu_us = 0;
+  double max_host_us = 0;
   double max_gpu_us = 0;
   size_t bytes_processed = 0;
   int count = 0;
@@ -74,15 +74,15 @@ public:
     current_memory = (bytes > current_memory) ? 0 : (current_memory - bytes);
   }
 
-  void record(std::string name, double cpu_us, double gpu_us, size_t bytes = 0,
+  void record(std::string name, double host_us, double gpu_us, size_t bytes = 0,
               std::string shape = "") {
     std::lock_guard<std::mutex> lock(mtx);
     auto &s = stats[name];
-    s.cpu_us += cpu_us;
+    s.host_us += host_us;
     s.gpu_us += gpu_us;
-    s.min_cpu_us = std::min(s.min_cpu_us, cpu_us);
+    s.min_host_us = std::min(s.min_host_us, host_us);
     s.min_gpu_us = std::min(s.min_gpu_us, gpu_us);
-    s.max_cpu_us = std::max(s.max_cpu_us, cpu_us);
+    s.max_host_us = std::max(s.max_host_us, host_us);
     s.max_gpu_us = std::max(s.max_gpu_us, gpu_us);
     s.bytes_processed += bytes;
     s.count++;
@@ -136,15 +136,15 @@ private:
 
     std::vector<Row> rows;
     rows.reserve(stats.size());
-    double total_cpu = 0;
+    double total_host = 0;
     double total_gpu = 0;
 
     for (const auto &entry : stats) {
       Row r;
       r.name = entry.first;
       r.stats = entry.second;
-      r.total_us = entry.second.cpu_us + entry.second.gpu_us;
-      total_cpu += entry.second.cpu_us;
+      r.total_us = entry.second.host_us + entry.second.gpu_us;
+      total_host += entry.second.host_us;
       total_gpu += entry.second.gpu_us;
       rows.push_back(std::move(r));
     }
@@ -155,18 +155,18 @@ private:
 
     std::cerr << MUNET_C_GREEN << "\n--- " << title << " ---\n"
               << MUNET_C_RESET;
-    std::cerr << "Total CPU(us): " << std::fixed << std::setprecision(1)
-              << total_cpu << " | Total GPU(us): " << total_gpu << "\n";
+    std::cerr << "Total Host(us): " << std::fixed << std::setprecision(1)
+              << total_host << " | Total GPU(us): " << total_gpu << "\n";
     std::cerr << std::left << std::setw(32) << "Op [Last Shape]" << std::setw(8)
-              << "Count" << std::setw(12) << "AvgCPU" << std::setw(12)
+              << "Count" << std::setw(12) << "AvgHost" << std::setw(12)
               << "AvgGPU" << std::setw(12) << "MaxGPU" << std::setw(12)
               << "GB/s" << std::setw(10) << "%Total" << std::endl;
 
-    const double grand_total = total_cpu + total_gpu;
+    const double grand_total = total_host + total_gpu;
     for (const auto &r : rows) {
       const auto &s = r.stats;
       double avg_gpu = (s.count > 0) ? s.gpu_us / s.count : 0;
-      double avg_cpu = (s.count > 0) ? s.cpu_us / s.count : 0;
+      double avg_host = (s.count > 0) ? s.host_us / s.count : 0;
       double bandwidth =
           (r.total_us > 0) ? ((double)s.bytes_processed / (r.total_us * 1000.0))
                            : 0;
@@ -176,7 +176,7 @@ private:
           r.name + (s.last_shape.empty() ? "" : " " + s.last_shape);
       std::cerr << std::left << std::setw(32) << label.substr(0, 31)
                 << std::setw(8) << s.count << std::setw(12) << std::fixed
-                << std::setprecision(1) << avg_cpu << std::setw(12) << avg_gpu
+                << std::setprecision(1) << avg_host << std::setw(12) << avg_gpu
                 << std::setw(12) << s.max_gpu_us << std::setw(12)
                 << std::setprecision(3) << bandwidth << std::setw(10)
                 << std::setprecision(1) << pct << std::endl;

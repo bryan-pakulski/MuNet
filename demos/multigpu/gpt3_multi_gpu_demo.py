@@ -2,14 +2,14 @@
 """Barebones multi-GPU GPT training/inference demo with per-device backend specification.
 
 Usage:
-    # Train on CUDA devices 0 and 1
-    python gpt3_multi_gpu_demo.py train --devices "0:cuda,1:cuda"
+    # Train on Vulkan devices 0 and 1
+    python gpt3_multi_gpu_demo.py train --devices "0:vulkan,1:vulkan"
     
-    # Mixed backends - CUDA + Vulkan
-    python gpt3_multi_gpu_demo.py train --devices "0:cuda,1:vulkan"
+    # Mixed backends - Vulkan + Vulkan
+    python gpt3_multi_gpu_demo.py train --devices "0:vulkan,1:vulkan"
     
     # Generate with trained model
-    python gpt3_multi_gpu_demo.py generate --devices "0:cuda" --model-dir ./model --prompt "Hello"
+    python gpt3_multi_gpu_demo.py generate --devices "0:vulkan" --model-dir ./model --prompt "Hello"
 """
 import argparse
 import os
@@ -20,12 +20,12 @@ from munet import nn
 
 
 def parse_device_spec(spec: str) -> list:
-    """Parse device specification like "0:cuda,1:vulkan" into [munet.Device, ...].
+    """Parse device specification like "0:vulkan,1:vulkan" into [munet.Device, ...].
     
     Supports formats:
-        - "0:cuda,1:vulkan" -> [Device(CUDA, 0), Device(Vulkan, 1)]
-        - "0,1" -> [Device(CUDA, 0), Device(CUDA, 1)] (defaults to CUDA)
-        - "0:cuda" -> [Device(CUDA, 0)]
+        - "0:vulkan,1:vulkan" -> [Device(Vulkan, 0), Device(Vulkan, 1)]
+        - "0,1" -> [Device(Vulkan, 0), Device(Vulkan, 1)] (defaults to Vulkan)
+        - "0:vulkan" -> [Device(Vulkan, 0)]
     """
     devices = []
     for part in spec.split(","):
@@ -35,14 +35,14 @@ def parse_device_spec(spec: str) -> list:
             backend = backend.capitalize()
         else:
             dev_id = part
-            backend = "CUDA"
+            backend = "Vulkan"
         devices.append((backend, int(dev_id)))
     
     # Convert to munet.Device objects
     device_type_map = {
-        "Cuda": munet.DeviceType.CUDA,
+        "Cuda": munet.DeviceType.VULKAN,
         "Vulkan": munet.DeviceType.VULKAN,
-        "Cpu": munet.DeviceType.CPU,
+        "Host": munet.DeviceType.VULKAN,
     }
     resolved = []
     for backend, dev_id in devices:
@@ -262,8 +262,8 @@ def generate(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Multi-GPU GPT Demo")
-    parser.add_argument("--devices", type=str, default="0:cuda",
-                        help='Device specification, e.g., "0:cuda,1:vulkan"')
+    parser.add_argument("--devices", type=str, default="0:vulkan",
+                        help='Device specification, e.g., "0:vulkan,1:vulkan"')
     
     subparsers = parser.add_subparsers(dest="command")
     

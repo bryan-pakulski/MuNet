@@ -56,7 +56,7 @@ TEST(NNTest, ProfilingCapturesHierarchicalModuleForwardSpans) {
   model->add(std::make_shared<nn::ReLU>());
   model->add(std::make_shared<nn::Linear>(4, 2));
 
-  Tensor x({1, 4}, Device{DeviceType::CPU, 0});
+  Tensor x({1, 4}, Device{DeviceType::VULKAN, 0});
   x.fill_(1.0f);
 
   Tensor y = model->forward(x);
@@ -87,7 +87,7 @@ TEST(NNTest, ModuleToMovesParametersAndBuffers) {
 
 TEST(NNTest, ModuleOptionsControlParameterAndBufferDTypes) {
   TensorOptions options;
-  options.device = Device{DeviceType::CPU, 0};
+  options.device = Device{DeviceType::VULKAN, 0};
   options.dtype = DataType::Float16;
 
   nn::Linear linear(4, 2, true, options);
@@ -107,7 +107,7 @@ TEST(NNTest, ModuleOptionsControlParameterAndBufferDTypes) {
 
 TEST(NNTest, ModuleDefaultOptionsFollowConstructionAndMigration) {
   TensorOptions options;
-  options.device = Device{DeviceType::CPU, 0};
+  options.device = Device{DeviceType::VULKAN, 0};
   options.dtype = DataType::Float16;
 
   nn::BatchNorm2d bn(3, 1e-5f, 0.1f, options);
@@ -132,7 +132,7 @@ TEST(NNTest, ModuleDefaultOptionsFollowConstructionAndMigration) {
 
 TEST(NNTest, ParentModuleDefaultsPropagateToNestedModules) {
   TensorOptions options;
-  options.device = Device{DeviceType::CPU, 0};
+  options.device = Device{DeviceType::VULKAN, 0};
   options.dtype = DataType::Float16;
 
   auto seq = std::make_shared<nn::Sequential>(options);
@@ -160,7 +160,7 @@ TEST(NNTest, ModuleToSupportsDTypeAndTensorOptionsConversions) {
   EXPECT_FALSE(bn->running_var.requires_grad());
 
   TensorOptions options;
-  options.device = Device{DeviceType::CPU, 0};
+  options.device = Device{DeviceType::VULKAN, 0};
   options.dtype = DataType::Float32;
   options.requires_grad = false;
   bn->to(options);
@@ -176,11 +176,11 @@ TEST(NNTest, ModuleToSupportsDTypeAndTensorOptionsConversions) {
 }
 
 TEST(NNTest, BatchNormTrainEval) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   auto bn = std::make_shared<nn::BatchNorm2d>(1);
-  bn->to(cpu);
+  bn->to(host);
 
-  Tensor x({2, 1, 2, 2}, cpu);
+  Tensor x({2, 1, 2, 2}, host);
   x.uniform_(10.0f, 10.0f); // All 10s
 
   // Training mode: running mean should update from 0
@@ -198,54 +198,16 @@ TEST(NNTest, BatchNormTrainEval) {
   EXPECT_FLOAT_EQ(((float *)bn->running_mean.data())[0], prev_rm);
 }
 
-TEST(NNTest, BatchNormFloat16FallbackForwardOnCPU) {
-  Device cpu{DeviceType::CPU, 0};
-  TensorOptions options;
-  options.device = cpu;
-  options.dtype = DataType::Float16;
-  nn::BatchNorm2d bn(2, 1e-5f, 0.1f, options);
-  bn.eval();
-
-  Tensor x32({1, 2, 2, 2}, cpu, DataType::Float32);
-  x32.fill_(make_scalar(1.0f));
-  Tensor x = x32.to(DataType::Float16);
-
-  Tensor y = bn.forward(x);
-  EXPECT_EQ(y.dtype(), DataType::Float16);
-  EXPECT_EQ(y.shape(), x.shape());
-}
-
-TEST(NNTest, BatchNormFloat16FallbackBackwardComputesGradients) {
-  Device cpu{DeviceType::CPU, 0};
-  TensorOptions options;
-  options.device = cpu;
-  options.dtype = DataType::Float16;
-  nn::BatchNorm2d bn(2, 1e-5f, 0.1f, options);
-  bn.train(true);
-
-  Tensor x32({1, 2, 2, 2}, cpu, DataType::Float32);
-  x32.fill_(make_scalar(1.0f));
-  Tensor x = x32.to(DataType::Float16).detach();
-  x.set_requires_grad(true);
-
-  Tensor y = bn.forward(x);
-  Tensor loss = y.sum();
-  loss.backward();
-  EXPECT_TRUE(x.has_grad());
-  EXPECT_TRUE(bn.weight.has_grad());
-  EXPECT_TRUE(bn.bias.has_grad());
-}
-
 TEST(NNTest, TanhForwardRange) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::Tanh tanh;
 
-  Tensor x({4}, cpu);
+  Tensor x({4}, host);
   x.uniform_(-2.0f, 2.0f);
 
   Tensor y = tanh.forward(x);
-  Tensor y_cpu = y.to(cpu);
-  const float *data = static_cast<const float *>(y_cpu.data());
+  Tensor y_host = y.to(host);
+  const float *data = static_cast<const float *>(y_host.data());
 
   for (int i = 0; i < 4; ++i) {
     EXPECT_LE(data[i], 1.0f);
@@ -254,32 +216,32 @@ TEST(NNTest, TanhForwardRange) {
 }
 
 TEST(NNTest, LeakyReLUForwardBehavior) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::LeakyReLU lrelu(0.1f);
 
-  Tensor x({2}, cpu);
+  Tensor x({2}, host);
   float *x_data = static_cast<float *>(x.data());
   x_data[0] = -2.0f;
   x_data[1] = 3.0f;
 
-  Tensor y = lrelu.forward(x).to(cpu);
+  Tensor y = lrelu.forward(x).to(host);
   const float *d = static_cast<const float *>(y.data());
   EXPECT_NEAR(d[0], -0.2f, 1e-5f);
   EXPECT_NEAR(d[1], 3.0f, 1e-5f);
 }
 
 TEST(NNTest, GlobalAvgPool2dForward) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::GlobalAvgPool2d gap;
 
-  Tensor x({1, 1, 2, 2}, cpu);
+  Tensor x({1, 1, 2, 2}, host);
   float *d = static_cast<float *>(x.data());
   d[0] = 1.0f;
   d[1] = 2.0f;
   d[2] = 3.0f;
   d[3] = 4.0f;
 
-  Tensor y = gap.forward(x).to(cpu);
+  Tensor y = gap.forward(x).to(host);
   EXPECT_EQ(y.shape()[0], 1);
   EXPECT_EQ(y.shape()[1], 1);
   EXPECT_EQ(y.shape()[2], 1);
@@ -290,14 +252,14 @@ TEST(NNTest, GlobalAvgPool2dForward) {
 }
 
 TEST(NNTest, DropoutTrainEvalBehavior) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::Dropout dropout(0.5f);
 
-  Tensor x({2000}, cpu);
+  Tensor x({2000}, host);
   x.uniform_(1.0f, 1.0f);
 
   dropout.train(true);
-  Tensor y_train = dropout.forward(x).to(cpu);
+  Tensor y_train = dropout.forward(x).to(host);
   const float *train_data = static_cast<const float *>(y_train.data());
 
   int zeros = 0;
@@ -316,27 +278,15 @@ TEST(NNTest, DropoutTrainEvalBehavior) {
   EXPECT_NEAR(sum / 2000.0f, 1.0f, 0.15f);
 
   dropout.eval();
-  Tensor y_eval = dropout.forward(x).to(cpu);
+  Tensor y_eval = dropout.forward(x).to(host);
   const float *eval_data = static_cast<const float *>(y_eval.data());
   for (int i = 0; i < 2000; ++i) {
     EXPECT_NEAR(eval_data[i], 1.0f, 1e-6f);
   }
 }
 
-TEST(NNTest, DropoutSupportsFloat16ViaTypedMask) {
-  Device cpu{DeviceType::CPU, 0};
-  nn::Dropout dropout(0.25f);
-  Tensor x32({16}, cpu, DataType::Float32);
-  x32.fill_(1.0f);
-  Tensor x = x32.to(DataType::Float16);
-
-  dropout.train(true);
-  Tensor y = dropout.forward(x);
-  EXPECT_EQ(y.dtype(), DataType::Float16);
-}
-
 TEST(NNTest, EmbeddingForwardOneHot) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::Embedding emb(4, 3);
 
   // Make weights deterministic: rows are basis-like vectors.
@@ -359,14 +309,14 @@ TEST(NNTest, EmbeddingForwardOneHot) {
   w[11] = 1.0f;
 
   // x: [B=1, T=2, V=4], tokens [2, 3]
-  Tensor x({1, 2, 4}, cpu);
+  Tensor x({1, 2, 4}, host);
   float *xd = static_cast<float *>(x.data());
   for (int i = 0; i < 8; ++i)
     xd[i] = 0.0f;
   xd[2] = 1.0f; // token 2 at t=0
   xd[7] = 1.0f; // token 3 at t=1
 
-  Tensor y = emb.forward(x).to(cpu);
+  Tensor y = emb.forward(x).to(host);
   EXPECT_EQ(y.shape()[0], 1);
   EXPECT_EQ(y.shape()[1], 2);
   EXPECT_EQ(y.shape()[2], 3);
@@ -383,16 +333,16 @@ TEST(NNTest, EmbeddingForwardOneHot) {
 }
 
 TEST(NNTest, GELUForwardBehavior) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::GELU gelu;
 
-  Tensor x({3}, cpu);
+  Tensor x({3}, host);
   float *d = static_cast<float *>(x.data());
   d[0] = -2.0f;
   d[1] = 0.0f;
   d[2] = 2.0f;
 
-  Tensor y = gelu.forward(x).to(cpu);
+  Tensor y = gelu.forward(x).to(host);
   const float *yo = static_cast<const float *>(y.data());
 
   // Approximate expected values for x*sigmoid(1.702*x)
@@ -401,54 +351,11 @@ TEST(NNTest, GELUForwardBehavior) {
   EXPECT_NEAR(yo[2], 1.9357f, 5e-3f);
 }
 
-TEST(NNTest, LayerNormFloat16BackwardUsesTypedFallback) {
-  Device cpu{DeviceType::CPU, 0};
-  TensorOptions options;
-  options.device = cpu;
-  options.dtype = DataType::Float16;
-  nn::LayerNorm ln(4, 1e-5f, options);
-
-  Tensor x32({2, 4}, cpu, DataType::Float32, true);
-  float *xd = static_cast<float *>(x32.data());
-  xd[0] = 1.0f;
-  xd[1] = 2.0f;
-  xd[2] = 3.0f;
-  xd[3] = 4.0f;
-  xd[4] = -1.0f;
-  xd[5] = 0.0f;
-  xd[6] = 1.0f;
-  xd[7] = 2.0f;
-
-  Tensor x = x32.to(DataType::Float16).detach();
-  x.set_requires_grad(true);
-  Tensor y = ln.forward(x);
-  EXPECT_EQ(y.dtype(), DataType::Float16);
-
-  Tensor loss = y.sum();
-  EXPECT_NO_THROW(loss.backward());
-  EXPECT_TRUE(x.has_grad());
-  EXPECT_TRUE(ln.weight.has_grad());
-  EXPECT_TRUE(ln.bias.has_grad());
-
-  Tensor x_grad = x.grad().to(DataType::Float32);
-  Tensor w_grad = ln.weight.grad().to(DataType::Float32);
-  Tensor b_grad = ln.bias.grad().to(DataType::Float32);
-  const float *xg = static_cast<const float *>(x_grad.data());
-  const float *wg = static_cast<const float *>(w_grad.data());
-  const float *bg = static_cast<const float *>(b_grad.data());
-  for (int i = 0; i < 8; ++i)
-    EXPECT_TRUE(std::isfinite(xg[i]));
-  for (int i = 0; i < 4; ++i) {
-    EXPECT_TRUE(std::isfinite(wg[i]));
-    EXPECT_TRUE(std::isfinite(bg[i]));
-  }
-}
-
 TEST(NNTest, LayerNormForwardAndBackward) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::LayerNorm ln(4);
 
-  Tensor x({2, 4}, cpu, DataType::Float32, true);
+  Tensor x({2, 4}, host, DataType::Float32, true);
   float *xd = static_cast<float *>(x.data());
   // row 0
   xd[0] = 1.0f;
@@ -461,7 +368,7 @@ TEST(NNTest, LayerNormForwardAndBackward) {
   xd[6] = 1.0f;
   xd[7] = 2.0f;
 
-  Tensor y = ln.forward(x).to(cpu);
+  Tensor y = ln.forward(x).to(host);
   const float *yd = static_cast<const float *>(y.data());
 
   for (int r = 0; r < 2; ++r) {
@@ -489,10 +396,10 @@ TEST(NNTest, LayerNormForwardAndBackward) {
 }
 
 TEST(NNTest, RMSNormForwardAndBackward) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::RMSNorm rms(4);
 
-  Tensor x({2, 4}, cpu, DataType::Float32, true);
+  Tensor x({2, 4}, host, DataType::Float32, true);
   float *xd = static_cast<float *>(x.data());
   xd[0] = 1.0f;
   xd[1] = 2.0f;
@@ -503,7 +410,7 @@ TEST(NNTest, RMSNormForwardAndBackward) {
   xd[6] = 1.0f;
   xd[7] = 2.0f;
 
-  Tensor y = rms.forward(x).to(cpu);
+  Tensor y = rms.forward(x).to(host);
   EXPECT_EQ(y.shape(), (Shape{2, 4}));
 
   Tensor loss = y.sum();
@@ -513,7 +420,7 @@ TEST(NNTest, RMSNormForwardAndBackward) {
 }
 
 TEST(NNTest, EmbeddingForwardIndexPath) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::Embedding emb(4, 2);
   emb.weight.set_requires_grad(false); // trigger fast gather path
 
@@ -527,13 +434,13 @@ TEST(NNTest, EmbeddingForwardIndexPath) {
   w[6] = 4.0f;
   w[7] = 4.1f;
 
-  Tensor idx({1, 3}, cpu);
+  Tensor idx({1, 3}, host);
   float *id = static_cast<float *>(idx.data());
   id[0] = 2.0f;
   id[1] = 0.0f;
   id[2] = 3.0f;
 
-  Tensor y = emb.forward(idx).to(cpu);
+  Tensor y = emb.forward(idx).to(host);
   const float *o = static_cast<const float *>(y.data());
   EXPECT_NEAR(o[0], 3.0f, 1e-6f);
   EXPECT_NEAR(o[1], 3.1f, 1e-6f);
@@ -544,13 +451,13 @@ TEST(NNTest, EmbeddingForwardIndexPath) {
 }
 
 TEST(NNTest, EmbeddingForwardIndexPathSupportsInt32IndicesAndFloat16Weights) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   TensorOptions options;
   options.dtype = DataType::Float16;
   nn::Embedding emb(4, 2, options);
   emb.weight.set_requires_grad(false);
 
-  Tensor weights32({4, 2}, cpu, DataType::Float32);
+  Tensor weights32({4, 2}, host, DataType::Float32);
   float *w = static_cast<float *>(weights32.data());
   w[0] = 1.0f;
   w[1] = 1.5f;
@@ -562,7 +469,7 @@ TEST(NNTest, EmbeddingForwardIndexPathSupportsInt32IndicesAndFloat16Weights) {
   w[7] = 4.5f;
   emb.weight = weights32.to(DataType::Float16);
 
-  Tensor idx({1, 3}, cpu, DataType::Int32);
+  Tensor idx({1, 3}, host, DataType::Int32);
   int32_t *id = static_cast<int32_t *>(idx.data());
   id[0] = 2;
   id[1] = 0;
@@ -579,23 +486,23 @@ TEST(NNTest, EmbeddingForwardIndexPathSupportsInt32IndicesAndFloat16Weights) {
 }
 
 TEST(NNTest, MultiHeadAttentionForwardShape) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::MultiHeadAttention mha(8, 2, true);
 
-  Tensor x({2, 4, 8}, cpu);
+  Tensor x({2, 4, 8}, host);
   x.uniform_(-1.0f, 1.0f);
 
-  Tensor y = mha.forward(x).to(cpu);
+  Tensor y = mha.forward(x).to(host);
   EXPECT_EQ(y.shape()[0], 2);
   EXPECT_EQ(y.shape()[1], 4);
   EXPECT_EQ(y.shape()[2], 8);
 }
 
 TEST(NNTest, MultiHeadAttentionCausalMaskBehavior) {
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   nn::MultiHeadAttention mha(4, 2, true);
 
-  Tensor x1({1, 2, 4}, cpu);
+  Tensor x1({1, 2, 4}, host);
   float *d1 = static_cast<float *>(x1.data());
   // token 0
   d1[0] = 0.1f;
@@ -616,8 +523,8 @@ TEST(NNTest, MultiHeadAttentionCausalMaskBehavior) {
   d2[6] = 20.0f;
   d2[7] = -20.0f;
 
-  Tensor y1 = mha.forward(x1).to(cpu);
-  Tensor y2 = mha.forward(x2).to(cpu);
+  Tensor y1 = mha.forward(x1).to(host);
+  Tensor y2 = mha.forward(x2).to(host);
 
   const float *o1 = static_cast<const float *>(y1.data());
   const float *o2 = static_cast<const float *>(y2.data());

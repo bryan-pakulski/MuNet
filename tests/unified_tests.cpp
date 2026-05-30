@@ -41,7 +41,7 @@ TEST_P(BackendTest, ElementwiseAdd) {
   b.uniform_(2.0f, 2.0f); // All 2s
 
   Tensor c = a + b;
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   const float *data = static_cast<const float *>(res.data());
   for (size_t i = 0; i < 4; ++i)
     EXPECT_FLOAT_EQ(data[i], 3.0f);
@@ -57,7 +57,7 @@ TEST_P(BackendTest, MatMul) {
   EXPECT_EQ(c.shape()[0], 2);
   EXPECT_EQ(c.shape()[1], 2);
 
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   const float *data = static_cast<const float *>(res.data());
   for (size_t i = 0; i < 4; ++i)
     EXPECT_FLOAT_EQ(data[i], 3.0f);
@@ -75,7 +75,7 @@ TEST_P(BackendTest, Conv2DForward) {
   // Output should be (3-2+1) = 2x2. Each cell is sum of 2x2 kernel of 1s.
   EXPECT_EQ(out.shape()[2], 2);
 
-  Tensor res = out.to({DeviceType::CPU, 0});
+  Tensor res = out.to({DeviceType::VULKAN, 0});
   const float *data = static_cast<const float *>(res.data());
   for (size_t i = 0; i < 4; ++i)
     EXPECT_FLOAT_EQ(data[i], 4.0f);
@@ -94,7 +94,7 @@ TEST_P(BackendTest, Concatenation) {
   EXPECT_EQ(c.shape()[1], 5);
   EXPECT_EQ(c.shape()[2], 2);
 
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   const float *data = static_cast<const float *>(res.data());
   // First 4 elements (1*2*2) should be 1.0, next 6 (1*3*2) should be 2.0
   for (int i = 0; i < 4; ++i)
@@ -181,25 +181,25 @@ TEST(BroadcastTest, ScalarBroadcasting) {
   EXPECT_EQ(info.strides_b, Strides({0, 0})); // All 0s for scalar
 }
 
-TEST(BroadcastTest, CPUExecution) {
-  Device cpu{DeviceType::CPU, 0};
+TEST(BroadcastTest, HostExecution) {
+  Device host{DeviceType::VULKAN, 0};
 
   // Test [2, 3] + [3]
-  Tensor a({2, 3}, cpu);
+  Tensor a({2, 3}, host);
   a.uniform_(10.0f, 10.0f); // All 10s
 
-  Tensor b({3}, cpu);
-  Tensor val_b({3}, cpu);
+  Tensor b({3}, host);
+  Tensor val_b({3}, host);
   ((float *)val_b.data())[0] = 1.0f;
   ((float *)val_b.data())[1] = 2.0f;
   ((float *)val_b.data())[2] = 3.0f;
-  b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), cpu, cpu);
+  b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), host, host);
 
   Tensor c = a + b;
   EXPECT_EQ(c.shape(), Shape({2, 3}));
 
-  Tensor c_cpu = c.to(cpu);
-  float *data = (float *)c_cpu.data();
+  Tensor c_host = c.to(host);
+  float *data = (float *)c_host.data();
   // Row 1
   EXPECT_FLOAT_EQ(data[0], 11.0f);
   EXPECT_FLOAT_EQ(data[1], 12.0f);
@@ -226,7 +226,7 @@ TEST_P(BackendTest, BatchedMatMul_2D_BackwardCompatible) {
   EXPECT_EQ(c.shape()[0], 2);
   EXPECT_EQ(c.shape()[1], 2);
 
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   const float *data = static_cast<const float *>(res.data());
   for (size_t i = 0; i < 4; ++i)
     EXPECT_FLOAT_EQ(data[i], 3.0f);
@@ -246,7 +246,7 @@ TEST_P(BackendTest, BatchedMatMul_3D_BroadcastedWeights) {
   EXPECT_EQ(c.shape()[1], 3);
   EXPECT_EQ(c.shape()[2], 5);
 
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   const float *data = static_cast<const float *>(res.data());
   // Each element should be K=4 (sum of 4 ones)
   for (size_t i = 0; i < 2 * 3 * 5; ++i)
@@ -267,7 +267,7 @@ TEST_P(BackendTest, BatchedMatMul_3D_BatchedWeights) {
   EXPECT_EQ(c.shape()[1], 3);
   EXPECT_EQ(c.shape()[2], 5);
 
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   const float *data = static_cast<const float *>(res.data());
   // Each element should be K=4 * 2.0 = 8.0
   for (size_t i = 0; i < 2 * 3 * 5; ++i)
@@ -287,7 +287,7 @@ TEST_P(BackendTest, BatchedMatMul_SingleBatch) {
   EXPECT_EQ(c.shape()[1], 3);
   EXPECT_EQ(c.shape()[2], 5);
 
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   const float *data = static_cast<const float *>(res.data());
   for (size_t i = 0; i < 1 * 3 * 5; ++i)
     EXPECT_FLOAT_EQ(data[i], 4.0f);
@@ -306,7 +306,7 @@ TEST_P(BackendTest, BatchedMatMul_LargeBatch) {
   EXPECT_EQ(c.shape()[1], 4);
   EXPECT_EQ(c.shape()[2], 32);
 
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   const float *data = static_cast<const float *>(res.data());
   // Each element should be 16 * 0.5 * 1.0 = 8.0
   for (size_t i = 0; i < 8 * 4 * 32; ++i)

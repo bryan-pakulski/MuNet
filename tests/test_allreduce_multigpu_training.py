@@ -10,19 +10,19 @@ except Exception as exc:  # pragma: no cover - environment-dependent import
     pytest.skip(f"munet import unavailable: {exc}", allow_module_level=True)
 
 
-CPU = munet.Device(munet.DeviceType.CPU, 0)
+Host = munet.Device(munet.DeviceType.VULKAN, 0)
 
 
 def _detect_accelerators(max_index: int = 4):
     devices = []
-    for dev_type in (munet.DeviceType.CUDA, munet.DeviceType.VULKAN):
+    for dev_type in (munet.DeviceType.VULKAN,):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
                 a = munet.ones((1,), device=dev, dtype=munet.DataType.Float32)
                 b = munet.ones((1,), device=dev, dtype=munet.DataType.Float32)
                 c = a + b
-                if float(c.to(CPU).item()) != 2.0:
+                if float(c.to(Host).item()) != 2.0:
                     raise RuntimeError("accelerator probe produced unexpected value")
             except RuntimeError:
                 continue
@@ -91,20 +91,15 @@ def _forward_mlp(x, w1, b1, w2, b2):
 
 
 def _assert_tensors_synced_across_replicas(tensors, rtol=1e-4, atol=1e-5):
-    base = np.array(tensors[0].detach().to(CPU), copy=False)
+    base = np.array(tensors[0].detach().to(Host), copy=False)
     for t in tensors[1:]:
-        other = np.array(t.detach().to(CPU), copy=False)
+        other = np.array(t.detach().to(Host), copy=False)
         np.testing.assert_allclose(base, other, rtol=rtol, atol=atol)
 
 
 @pytest.mark.parametrize(
     "scenario_name,device_specs",
     [
-        pytest.param(
-            "cuda0_vulkan1",
-            [(munet.DeviceType.CUDA, 0), (munet.DeviceType.VULKAN, 1)],
-            id="cuda0_vulkan1",
-        ),
         pytest.param(
             "vulkan0_vulkan1",
             [(munet.DeviceType.VULKAN, 0), (munet.DeviceType.VULKAN, 1)],
@@ -118,7 +113,7 @@ def test_multigpu_e2e_complex_training_scenarios(scenario_name, device_specs):
 
     # Set all-reduce env knobs to match active participants in this scenario.
     os.environ["MUNET_ALLREDUCE_WORLD_SIZE"] = str(len(accelerators))
-    os.environ["MUNET_ALLREDUCE_MODE"] = "host_fallback"
+    os.environ["MUNET_ALLREDUCE_MODE"] = "device_native"
     os.environ["MUNET_ALLREDUCE_GROUP"] = f"pytest_multigpu_{scenario_name}"
     os.environ["MUNET_ALLREDUCE_TIMEOUT_MS"] = "30000"
 
@@ -144,7 +139,7 @@ def test_multigpu_e2e_complex_training_scenarios(scenario_name, device_specs):
             pred = _forward_mlp(xs, w1[rank], b1[rank], w2[rank], b2[rank])
             loss = pred.mse_loss(ys)
             loss.backward()
-            losses.append(float(loss.detach().to(CPU).item()))
+            losses.append(float(loss.detach().to(Host).item()))
 
         _allreduce_grads_via_runtime(w1)
         _allreduce_grads_via_runtime(b1)
@@ -175,10 +170,10 @@ def test_multigpu_e2e_complex_training_scenarios(scenario_name, device_specs):
     assert last_mean_loss <= first_mean_loss * 1.25
 
 
-def test_python_all_reduce_binding_cpu_smoke():
+def test_python_all_reduce_binding_host_smoke():
     os.environ["MUNET_ALLREDUCE_WORLD_SIZE"] = "2"
     os.environ["MUNET_ALLREDUCE_MODE"] = "host_fallback"
-    os.environ["MUNET_ALLREDUCE_GROUP"] = "pytest_python_binding_cpu"
+    os.environ["MUNET_ALLREDUCE_GROUP"] = "pytest_python_binding_vulkan"
 
     a = munet.from_numpy(np.array([1.0, 2.0], dtype=np.float32))
     b = munet.from_numpy(np.array([3.0, 4.0], dtype=np.float32))

@@ -21,15 +21,7 @@ struct OperationCase {
 
 std::vector<Device> discover_devices() {
   std::vector<Device> devices;
-  devices.push_back(Device{DeviceType::CPU, 0});
-#ifdef MUNET_USE_CUDA
-  try {
-    Tensor probe({1}, Device{DeviceType::CUDA, 0}, DataType::Float32, false);
-    (void)probe;
-    devices.push_back(Device{DeviceType::CUDA, 0});
-  } catch (...) {
-  }
-#endif
+  devices.push_back(Device{DeviceType::VULKAN, 0});
 #ifdef MUNET_USE_VULKAN
   try {
     Tensor probe({1}, Device{DeviceType::VULKAN, 0}, DataType::Float32, false);
@@ -139,7 +131,7 @@ int main() {
           const auto decision = resolve_dispatch(op_case.id, probe);
           dispatch_path = decision.use_backend
                               ? "backend"
-                              : (decision.use_cpu_fallback ? "fallback"
+                              : (decision.use_host_fallback ? "fallback"
                                                            : "none");
         } catch (const std::exception &ex) {
           dispatch_path = "error";

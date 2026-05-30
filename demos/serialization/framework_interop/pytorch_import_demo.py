@@ -93,7 +93,7 @@ def demo_round_trip():
     }
     
     state_dict = original_model.state_dict()
-    weights_dict = {k: v.detach().cpu().numpy() for k, v in state_dict.items()}
+    weights_dict = {k: v.detach().host().numpy() for k, v in state_dict.items()}
     save_as_npz(config, weights_dict, output_path)
     print("    Saved successfully")
     
@@ -190,7 +190,7 @@ def demo_batchnorm_loading():
     }
     
     state_dict = model.state_dict()
-    weights_dict = {k: v.detach().cpu().numpy() for k, v in state_dict.items()}
+    weights_dict = {k: v.detach().host().numpy() for k, v in state_dict.items()}
     save_as_npz(config, weights_dict, output_path)
     
     # Load into new model

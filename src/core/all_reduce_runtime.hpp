@@ -21,7 +21,7 @@ namespace munet {
 namespace detail {
 
 inline bool all_reduce_host_accessible(DeviceType type) {
-  return type == DeviceType::CPU || type == DeviceType::UNKNOWN;
+  return type == DeviceType::VULKAN || type == DeviceType::VULKAN;
 }
 
 struct AllReduceTarget {
@@ -141,12 +141,11 @@ inline void all_reduce_via_host(Storage &buffer, size_t num_elements,
   }
 
   const auto mode = configured_all_reduce_mode();
-  const bool accelerator_device = device.type == DeviceType::CUDA ||
-                                  device.type == DeviceType::VULKAN;
+  const bool accelerator_device = device.type == DeviceType::VULKAN;
   if (!force_host_for_accelerators && accelerator_device &&
       mode == AllReduceExecutionMode::DeviceNative) {
     throw std::runtime_error(
-        "all_reduce: device-native mode is default for CUDA/Vulkan in "
+        "all_reduce: device-native mode is default for Vulkan in "
         "multi-GPU runs; native collective backend not implemented yet. "
         "Set MUNET_ALLREDUCE_MODE=host_fallback to use host staging.");
   }
@@ -162,11 +161,11 @@ inline void all_reduce_via_host(Storage &buffer, size_t num_elements,
   }
 
   std::vector<uint8_t> payload(bytes);
-  Device cpu{DeviceType::CPU, 0};
+  Device host{DeviceType::VULKAN, 0};
   if (all_reduce_host_accessible(device.type)) {
     std::memcpy(payload.data(), buffer.data(), bytes);
   } else {
-    backend.copy(buffer.data(), payload.data(), bytes, device, cpu);
+    backend.copy(buffer.data(), payload.data(), bytes, device, host);
   }
 
   static std::mutex mutex;
@@ -235,7 +234,7 @@ inline void all_reduce_via_host(Storage &buffer, size_t num_elements,
     if (all_reduce_host_accessible(target.device.type)) {
       std::memcpy(target.buffer->data(), reduced.data(), bytes);
     } else {
-      target.backend->copy(reduced.data(), target.buffer->data(), bytes, cpu,
+      target.backend->copy(reduced.data(), target.buffer->data(), bytes, host,
                            target.device);
     }
   }

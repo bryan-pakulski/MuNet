@@ -123,15 +123,15 @@ public:
       if (!p.has_grad()) {
         return;
       }
-      Device cpu{DeviceType::CPU, 0};
-      Tensor grad_cpu = (p.grad().device().type == DeviceType::CPU)
+      Device host{DeviceType::VULKAN, 0};
+      Tensor grad_host = (p.grad().device().type == DeviceType::VULKAN)
                             ? p.grad()
-                            : p.grad().to(cpu);
-      const char *bytes = static_cast<const char *>(grad_cpu.data());
-      const size_t stride = dtype_size(grad_cpu.dtype());
-      for (size_t i = 0; i < grad_cpu.size(); ++i) {
+                            : p.grad().to(host);
+      const char *bytes = static_cast<const char *>(grad_host.data());
+      const size_t stride = dtype_size(grad_host.dtype());
+      for (size_t i = 0; i < grad_host.size(); ++i) {
         const double value =
-            read_scalar_from_buffer(bytes + i * stride, grad_cpu.dtype()).value;
+            read_scalar_from_buffer(bytes + i * stride, grad_host.dtype()).value;
         total_sq += value * value;
       }
     });
@@ -216,15 +216,15 @@ protected:
       throw std::runtime_error("Tensor copy requires matching storage size");
     }
 
-    Device cpu{DeviceType::CPU, 0};
-    Tensor src_cpu = (src.device().type == DeviceType::CPU) ? src : src.to(cpu);
-    if (dst.device().type == DeviceType::CPU) {
-      std::memcpy(dst.data(), src_cpu.data(), dst.bytes());
+    Device host{DeviceType::VULKAN, 0};
+    Tensor src_host = (src.device().type == DeviceType::VULKAN) ? src : src.to(host);
+    if (dst.device().type == DeviceType::VULKAN) {
+      std::memcpy(dst.data(), src_host.data(), dst.bytes());
       return;
     }
 
     BackendManager::get(dst.device())
-        ->copy(src_cpu.data(), dst.data(), dst.bytes(), cpu, dst.device());
+        ->copy(src_host.data(), dst.data(), dst.bytes(), host, dst.device());
   }
 
   static void scale_tensor_in_place(Tensor tensor, float factor) {
@@ -236,24 +236,24 @@ protected:
           "Gradient scaling only supports floating-point tensors");
     }
 
-    Device cpu{DeviceType::CPU, 0};
-    Tensor tensor_cpu =
-        (tensor.device().type == DeviceType::CPU) ? tensor : tensor.to(cpu);
-    char *bytes = static_cast<char *>(tensor_cpu.data());
-    const size_t stride = dtype_size(tensor_cpu.dtype());
-    for (size_t i = 0; i < tensor_cpu.size(); ++i) {
+    Device host{DeviceType::VULKAN, 0};
+    Tensor tensor_host =
+        (tensor.device().type == DeviceType::VULKAN) ? tensor : tensor.to(host);
+    char *bytes = static_cast<char *>(tensor_host.data());
+    const size_t stride = dtype_size(tensor_host.dtype());
+    for (size_t i = 0; i < tensor_host.size(); ++i) {
       const float value =
-          read_scalar_from_buffer(bytes + i * stride, tensor_cpu.dtype())
+          read_scalar_from_buffer(bytes + i * stride, tensor_host.dtype())
               .as_float();
-      write_scalar_to_buffer(bytes + i * stride, tensor_cpu.dtype(),
+      write_scalar_to_buffer(bytes + i * stride, tensor_host.dtype(),
                              value * factor);
     }
 
-    if (tensor.device().type == DeviceType::CPU) {
-      std::memcpy(tensor.data(), tensor_cpu.data(), tensor.bytes());
+    if (tensor.device().type == DeviceType::VULKAN) {
+      std::memcpy(tensor.data(), tensor_host.data(), tensor.bytes());
     } else {
       BackendManager::get(tensor.device())
-          ->copy(tensor_cpu.data(), tensor.data(), tensor.bytes(), cpu,
+          ->copy(tensor_host.data(), tensor.data(), tensor.bytes(), host,
                  tensor.device());
     }
     tensor.bump_version();
@@ -356,51 +356,51 @@ private:
       throw std::runtime_error("Adam only supports floating-point parameters");
     }
 
-    Device cpu{DeviceType::CPU, 0};
-    Tensor param_cpu;
+    Device host{DeviceType::VULKAN, 0};
+    Tensor param_host;
     Tensor *target_param = &param;
     if (master_weight.impl_) {
       target_param = &master_weight;
-      param_cpu = (master_weight.device().type == DeviceType::CPU)
+      param_host = (master_weight.device().type == DeviceType::VULKAN)
                       ? master_weight
-                      : master_weight.to(cpu);
+                      : master_weight.to(host);
     } else {
-      param_cpu =
-          (param.device().type == DeviceType::CPU) ? param : param.to(cpu);
+      param_host =
+          (param.device().type == DeviceType::VULKAN) ? param : param.to(host);
     }
-    Tensor grad_cpu =
-        (grad.device().type == DeviceType::CPU) ? grad : grad.to(cpu);
-    Tensor exp_avg_cpu =
-        (exp_avg.device().type == DeviceType::CPU) ? exp_avg : exp_avg.to(cpu);
-    Tensor exp_avg_sq_cpu = (exp_avg_sq.device().type == DeviceType::CPU)
+    Tensor grad_host =
+        (grad.device().type == DeviceType::VULKAN) ? grad : grad.to(host);
+    Tensor exp_avg_host =
+        (exp_avg.device().type == DeviceType::VULKAN) ? exp_avg : exp_avg.to(host);
+    Tensor exp_avg_sq_host = (exp_avg_sq.device().type == DeviceType::VULKAN)
                                 ? exp_avg_sq
-                                : exp_avg_sq.to(cpu);
+                                : exp_avg_sq.to(host);
 
-    char *param_bytes = static_cast<char *>(param_cpu.data());
-    const char *grad_bytes = static_cast<const char *>(grad_cpu.data());
-    char *exp_avg_bytes = static_cast<char *>(exp_avg_cpu.data());
-    char *exp_avg_sq_bytes = static_cast<char *>(exp_avg_sq_cpu.data());
+    char *param_bytes = static_cast<char *>(param_host.data());
+    const char *grad_bytes = static_cast<const char *>(grad_host.data());
+    char *exp_avg_bytes = static_cast<char *>(exp_avg_host.data());
+    char *exp_avg_sq_bytes = static_cast<char *>(exp_avg_sq_host.data());
 
-    const size_t param_stride = dtype_size(param_cpu.dtype());
-    const size_t grad_stride = dtype_size(grad_cpu.dtype());
-    const size_t exp_avg_stride = dtype_size(exp_avg_cpu.dtype());
-    const size_t exp_avg_sq_stride = dtype_size(exp_avg_sq_cpu.dtype());
+    const size_t param_stride = dtype_size(param_host.dtype());
+    const size_t grad_stride = dtype_size(grad_host.dtype());
+    const size_t exp_avg_stride = dtype_size(exp_avg_host.dtype());
+    const size_t exp_avg_sq_stride = dtype_size(exp_avg_sq_host.dtype());
     const float bias_correction1 = 1.0f - std::pow(beta1_, step_count_);
     const float bias_correction2 = 1.0f - std::pow(beta2_, step_count_);
 
     for (size_t j = 0; j < param.size(); ++j) {
       const float p_val = read_scalar_from_buffer(
-                              param_bytes + j * param_stride, param_cpu.dtype())
+                              param_bytes + j * param_stride, param_host.dtype())
                               .as_float();
       const float g_val = read_scalar_from_buffer(grad_bytes + j * grad_stride,
-                                                  grad_cpu.dtype())
+                                                  grad_host.dtype())
                               .as_float();
       float m_val = read_scalar_from_buffer(exp_avg_bytes + j * exp_avg_stride,
-                                            exp_avg_cpu.dtype())
+                                            exp_avg_host.dtype())
                         .as_float();
       float v_val =
           read_scalar_from_buffer(exp_avg_sq_bytes + j * exp_avg_sq_stride,
-                                  exp_avg_sq_cpu.dtype())
+                                  exp_avg_sq_host.dtype())
               .as_float();
 
       m_val = beta1_ * m_val + (1.0f - beta1_) * g_val;
@@ -410,23 +410,23 @@ private:
       const float v_hat = v_val / bias_correction2;
       const float updated = p_val - lr * m_hat / (std::sqrt(v_hat) + eps_);
 
-      write_scalar_to_buffer(param_bytes + j * param_stride, param_cpu.dtype(),
+      write_scalar_to_buffer(param_bytes + j * param_stride, param_host.dtype(),
                              updated);
       write_scalar_to_buffer(exp_avg_bytes + j * exp_avg_stride,
-                             exp_avg_cpu.dtype(), m_val);
+                             exp_avg_host.dtype(), m_val);
       write_scalar_to_buffer(exp_avg_sq_bytes + j * exp_avg_sq_stride,
-                             exp_avg_sq_cpu.dtype(), v_val);
+                             exp_avg_sq_host.dtype(), v_val);
     }
 
-    copy_tensor_storage(exp_avg_cpu, exp_avg);
-    copy_tensor_storage(exp_avg_sq_cpu, exp_avg_sq);
+    copy_tensor_storage(exp_avg_host, exp_avg);
+    copy_tensor_storage(exp_avg_sq_host, exp_avg_sq);
 
     if (master_weight.impl_) {
-      copy_tensor_storage(param_cpu, *target_param);
-      Tensor updated_param = param_cpu.to(param.dtype());
+      copy_tensor_storage(param_host, *target_param);
+      Tensor updated_param = param_host.to(param.dtype());
       copy_tensor_storage(updated_param, param);
     } else {
-      copy_tensor_storage(param_cpu, param);
+      copy_tensor_storage(param_host, param);
     }
   }
 
@@ -473,31 +473,31 @@ public:
 private:
   static void apply_master_weight_sgd_step(Tensor &param, const Tensor &grad,
                                            float lr, DataType master_dtype) {
-    Device cpu{DeviceType::CPU, 0};
+    Device host{DeviceType::VULKAN, 0};
     Tensor master = param.to(master_dtype);
-    Tensor master_cpu =
-        (master.device().type == DeviceType::CPU) ? master : master.to(cpu);
-    Tensor grad_cpu =
-        (grad.device().type == DeviceType::CPU) ? grad : grad.to(cpu);
+    Tensor master_host =
+        (master.device().type == DeviceType::VULKAN) ? master : master.to(host);
+    Tensor grad_host =
+        (grad.device().type == DeviceType::VULKAN) ? grad : grad.to(host);
 
-    char *param_bytes = static_cast<char *>(master_cpu.data());
-    const char *grad_bytes = static_cast<const char *>(grad_cpu.data());
-    const size_t param_stride = dtype_size(master_cpu.dtype());
-    const size_t grad_stride = dtype_size(grad_cpu.dtype());
+    char *param_bytes = static_cast<char *>(master_host.data());
+    const char *grad_bytes = static_cast<const char *>(grad_host.data());
+    const size_t param_stride = dtype_size(master_host.dtype());
+    const size_t grad_stride = dtype_size(grad_host.dtype());
 
     for (size_t j = 0; j < param.size(); ++j) {
       const float p_val =
           read_scalar_from_buffer(param_bytes + j * param_stride,
-                                  master_cpu.dtype())
+                                  master_host.dtype())
               .as_float();
       const float g_val = read_scalar_from_buffer(grad_bytes + j * grad_stride,
-                                                  grad_cpu.dtype())
+                                                  grad_host.dtype())
                               .as_float();
-      write_scalar_to_buffer(param_bytes + j * param_stride, master_cpu.dtype(),
+      write_scalar_to_buffer(param_bytes + j * param_stride, master_host.dtype(),
                              p_val - lr * g_val);
     }
 
-    Tensor updated_param = master_cpu.to(param.dtype());
+    Tensor updated_param = master_host.to(param.dtype());
     copy_tensor_storage(updated_param, param);
   }
 };
@@ -575,7 +575,7 @@ enum class AutocastConversionPolicy {
 
 struct AutocastOptions {
   bool enabled = false;
-  DeviceType device_type = DeviceType::CPU;
+  DeviceType device_type = DeviceType::VULKAN;
   DataType compute_dtype = DataType::Float16;
   AutocastConversionPolicy conversion_policy =
       AutocastConversionPolicy::PromoteInputs;

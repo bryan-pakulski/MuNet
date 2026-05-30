@@ -58,7 +58,6 @@ Custom-checkpoint hybrid payload marker:
 | Python inference normalize (`load_for_inference`) | Deploy | ✅ | Enforces eval mode and optional device move. |
 | C++ `inference::load_serialized` | Deploy | ✅ | Strict deploy contract. |
 | C++ `inference::load_serialized` on checkpoint/custom | Checkpoint/custom | ❌ | Rejected by design (wrong artifact kind / unsupported custom type). |
-| ONNX compile output -> deploy load | Deploy | ✅ | Treated as deploy artifact path. |
 
 ## 4) Safety policy (trusted vs untrusted)
 

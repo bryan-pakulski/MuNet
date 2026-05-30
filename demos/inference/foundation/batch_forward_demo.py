@@ -16,7 +16,7 @@ def build_model():
 
 
 def main():
-    dev = munet.Device(munet.DeviceType.CPU, 0)
+    dev = munet.Device(munet.DeviceType.VULKAN, 0)
     model = build_model()
     model.to(dev)
 
@@ -26,7 +26,7 @@ def main():
         outputs = []
         for b in batches:
             t = munet.from_numpy(b).to(dev)
-            y = model.forward(t).to(munet.Device(munet.DeviceType.CPU, 0)).detach()
+            y = model.forward(t).to(munet.Device(munet.DeviceType.VULKAN, 0)).detach()
             outputs.append(np.array(y, copy=False))
 
     print("Batch forward demo complete")

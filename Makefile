@@ -9,20 +9,20 @@ BUILD_ROOT := build
 BUILD_DEBUG := $(BUILD_ROOT)/debug
 BUILD_RELEASE := $(BUILD_ROOT)/release
 BUILD_ASAN := $(BUILD_ROOT)/asan
-BUILD_GPU := $(BUILD_ROOT)/gpu-debug
+BUILD_VK := $(BUILD_ROOT)/vk-debug
 PYTEST ?= pytest
 PYPI_PACKAGE ?= munet-nn
 
 .DEFAULT_GOAL := help
 
 .PHONY: help \
-	build build-debug build-release build-asan build-gpu \
-	configure-debug configure-release configure-asan configure-gpu \
+	build build-debug build-release build-asan build-vk \
+	configure-debug configure-release configure-asan configure-vk \
 	unit-test test-debug test-release test-asan ctest-debug ctest-release ctest-asan \
-	mem-test gpu-mem-test perf-test py-test pip-dev pip-release wheel-local wheel-local-strip wheel-local-size-check \
+	mem-test vk-mem-test perf-test py-test pip-dev pip-release wheel-local wheel-local-strip wheel-local-size-check \
 	dtype-coverage-report \
-	format doc clean clean-debug clean-release clean-asan clean-gpu \
-	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-gpu \
+	format doc clean clean-debug clean-release clean-asan clean-vk \
+	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-vk \
 	docker-build 
 
 help:
@@ -31,7 +31,7 @@ help:
 	@echo "  build-debug      Configure + build debug"
 	@echo "  build-release    Configure + build release"
 	@echo "  build-asan       Configure + build ASan/UBSan debug"
-	@echo "  build-gpu        Configure + build debug for compute-sanitizer"
+	@echo "  build-vk        Configure + build Vulkan debug"
 	@echo ""
 	@echo "  unit-test        Run debug unit tests"
 	@echo "  test-release     Run release unit tests"
@@ -40,7 +40,7 @@ help:
 	@echo "  ctest-release    Run CTest in release build"
 	@echo "  ctest-asan       Run CTest in ASan build"
 	@echo "  mem-test         Alias for test-asan"
-	@echo "  gpu-mem-test     Run compute-sanitizer memcheck"
+	@echo "  vk-mem-test     Run Vulkan memory check"
 	@echo "  perf-test        Run performance tests from release build"
 	@echo "  py-test          Run python tests"
 	@echo "  wheel-local      Build a local Python wheel into ./dist"
@@ -72,8 +72,8 @@ configure-release:
 configure-asan:
 	$(call configure_build,$(BUILD_ASAN),-DCMAKE_BUILD_TYPE=Debug -DMUNET_ENABLE_ASAN=ON -DMUNET_ENABLE_UBSAN=ON)
 
-configure-gpu:
-	$(call configure_build,$(BUILD_GPU),-DCMAKE_BUILD_TYPE=Debug)
+configure-vk:
+	$(call configure_build,$(BUILD_VK),-DCMAKE_BUILD_TYPE=Debug)
 
 build: build-debug
 
@@ -86,8 +86,8 @@ build-release: configure-release
 build-asan: configure-asan
 	$(call build_dir,$(BUILD_ASAN))
 
-build-gpu: configure-gpu
-	$(call build_dir,$(BUILD_GPU))
+build-vk: configure-vk
+	$(call build_dir,$(BUILD_VK))
 
 unit-test: test-debug
 
@@ -115,8 +115,8 @@ ctest-asan: build-asan
 
 mem-test: test-asan
 
-gpu-mem-test: build-gpu
-	compute-sanitizer --tool memcheck ./$(BUILD_GPU)/munet_tests
+vk-mem-test: build-vk
+	VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation ./$(BUILD_VK)/munet_tests
 
 perf-test: build-release
 	MUNET_RUN_PERF_TESTS=1 ./$(BUILD_RELEASE)/munet_tests --gtest_filter=PerformanceTest.*
@@ -186,13 +186,13 @@ clean-release:
 clean-asan:
 	rm -rf $(BUILD_ASAN)
 
-clean-gpu:
-	rm -rf $(BUILD_GPU)
+clean-vk:
+	rm -rf $(BUILD_VK)
 
 reconfigure-debug: clean-debug build-debug
 reconfigure-release: clean-release build-release
 reconfigure-asan: clean-asan build-asan
-reconfigure-gpu: clean-gpu build-gpu
+reconfigure-vk: clean-vk build-vk
 
 docker-build:
 	./tools/build_in_docker.sh

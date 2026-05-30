@@ -1,6 +1,6 @@
 # MuNet Documentation
 
-Welcome to MuNet docs. This documentation is structured for interactive/searchable hosting.
+Welcome to MuNet docs. This documentation is structured for interactive/searchable serving.
 
 ## Start here
 

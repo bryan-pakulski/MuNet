@@ -14,9 +14,9 @@
 namespace munet {
 namespace {
 
-Tensor convert_tensor_dtype_cpu(const Tensor &input, DataType target_dtype) {
+Tensor convert_tensor_dtype_host(const Tensor &input, DataType target_dtype) {
   NoGradGuard guard;
-  Tensor out(input.shape(), Device{DeviceType::CPU, 0}, target_dtype,
+  Tensor out(input.shape(), Device{DeviceType::VULKAN, 0}, target_dtype,
              input.requires_grad());
 
   convert_buffer_dtype(input.data(), input.dtype(), out.data(), target_dtype,
@@ -44,10 +44,10 @@ void Tensor::backward(bool retain_graph) {
   {
     NoGradGuard guard;
     root_grad = Tensor(shape(), device(), dtype());
-    Tensor root_cpu(shape(), Device{DeviceType::CPU, 0}, dtype());
-    write_scalar_to_buffer(root_cpu.data(), dtype(), 1.0);
-    impl_->backend().copy(root_cpu.data(), root_grad.data(), root_grad.bytes(),
-                          root_cpu.device(), device());
+    Tensor root_host(shape(), Device{DeviceType::VULKAN, 0}, dtype());
+    write_scalar_to_buffer(root_host.data(), dtype(), 1.0);
+    impl_->backend().copy(root_host.data(), root_grad.data(), root_grad.bytes(),
+                          root_host.device(), device());
   }
 
   backward(root_grad, retain_graph);
@@ -133,15 +133,15 @@ Tensor Tensor::to(Device dev) const {
     return *this;
 
   if (!is_contiguous()) {
-    // To avoid recursion, we perform the CPU-based packs/moves manually
+    // To avoid recursion, we perform the Host-based packs/moves manually
     // or ensure contiguous() doesn't call back into this check.
-    // If we are moving to another device, pack it on CPU first.
-    if (device().type != DeviceType::CPU) {
-      // Create a temporary CPU tensor and manually pack into it
-      Tensor cpu_contig(shape(), Device{DeviceType::CPU, 0}, dtype());
-      Tensor cpu_view = this->to(Device{
-          DeviceType::CPU, 0}); // This calls back, but 'this' is non-contiguous
-      // We need a way to move the raw bytes to CPU regardless of contiguity
+    // If we are moving to another device, pack it on Host first.
+    if (device().type != DeviceType::VULKAN) {
+      // Create a temporary Host tensor and manually pack into it
+      Tensor host_contig(shape(), Device{DeviceType::VULKAN, 0}, dtype());
+      Tensor host_view = this->to(Device{
+          DeviceType::VULKAN, 0}); // This calls back, but 'this' is non-contiguous
+      // We need a way to move the raw bytes to Host regardless of contiguity
     }
     return this->contiguous().to(dev);
   }
@@ -149,74 +149,28 @@ Tensor Tensor::to(Device dev) const {
   Tensor out(shape(), dev, dtype(), requires_grad());
   size_t byte_count = bytes();
 
-  const bool src_non_cpu = device().type != DeviceType::CPU;
-  const bool dst_non_cpu = dev.type != DeviceType::CPU;
-  const bool cross_backend_non_cpu =
-      src_non_cpu && dst_non_cpu && device().type != dev.type;
-  const bool cross_vulkan_device_non_cpu =
-      src_non_cpu && dst_non_cpu && device().type == DeviceType::VULKAN &&
+  const bool src_non_host = device().type != DeviceType::VULKAN;
+  const bool dst_non_host = dev.type != DeviceType::VULKAN;
+  const bool cross_backend_non_host =
+      src_non_host && dst_non_host && device().type != dev.type;
+  const bool cross_vulkan_device_non_host =
+      src_non_host && dst_non_host && device().type == DeviceType::VULKAN &&
       dev.type == DeviceType::VULKAN && device().index != dev.index;
 
-  if (cross_backend_non_cpu || cross_vulkan_device_non_cpu) {
-    // Route heterogeneous accelerator transfers through CPU staging to avoid
-    // backend-specific direct-copy assumptions (e.g. CUDA<->Vulkan) and
-    // multi-device Vulkan buffer ownership constraints.
-    Tensor cpu_stage(shape(), Device{DeviceType::CPU, 0}, dtype(), false);
-
-    if (device().type == DeviceType::CUDA) {
-#ifdef MUNET_USE_CUDA
-      BackendManager::get(device())->copy(data(), cpu_stage.data(), byte_count, device(),
-                                          cpu_stage.device());
-#else
-      throw std::runtime_error("CUDA backend not compiled");
-#endif
-    } else if (device().type == DeviceType::VULKAN) {
-#ifdef MUNET_USE_VULKAN
-      BackendManager::get(device())->copy(data(), cpu_stage.data(), byte_count, device(),
-                                          cpu_stage.device());
-#else
-      throw std::runtime_error("Vulkan backend not compiled");
-#endif
-    } else {
-      impl_->backend().copy(data(), cpu_stage.data(), byte_count, device(),
-                            cpu_stage.device());
-    }
-
-    if (dev.type == DeviceType::CUDA) {
-#ifdef MUNET_USE_CUDA
-      BackendManager::get(dev)->copy(cpu_stage.data(), out.data(), byte_count, cpu_stage.device(),
-                                     dev);
-#else
-      throw std::runtime_error("CUDA backend not compiled");
-#endif
-    } else if (dev.type == DeviceType::VULKAN) {
-#ifdef MUNET_USE_VULKAN
-      BackendManager::get(dev)->copy(cpu_stage.data(), out.data(), byte_count, cpu_stage.device(),
-                                     dev);
-#else
-      throw std::runtime_error("Vulkan backend not compiled");
-#endif
-    } else {
-      impl_->backend().copy(cpu_stage.data(), out.data(), byte_count, cpu_stage.device(),
-                            dev);
-    }
-  } else if (device().type == DeviceType::CUDA || dev.type == DeviceType::CUDA) {
-#ifdef MUNET_USE_CUDA
-    Device cuda_dev = (device().type == DeviceType::CUDA) ? device() : dev;
-    BackendManager::get(cuda_dev)->copy(data(), out.data(), byte_count,
-                                        device(), dev);
-#else
-    throw std::runtime_error("CUDA backend not compiled");
-#endif
+  if (cross_backend_non_host || cross_vulkan_device_non_host) {
+    // Route heterogeneous/non-peer Vulkan transfers through Host staging to avoid
+    // backend-specific direct-copy assumptions and multi-device Vulkan buffer
+    // ownership constraints.
+    Tensor host_stage(shape(), Device{DeviceType::VULKAN, 0}, dtype(), false);
+    BackendManager::get(device())->copy(data(), host_stage.data(), byte_count,
+                                        device(), host_stage.device());
+    BackendManager::get(dev)->copy(host_stage.data(), out.data(), byte_count,
+                                   host_stage.device(), dev);
   } else if (device().type == DeviceType::VULKAN ||
              dev.type == DeviceType::VULKAN) {
-#ifdef MUNET_USE_VULKAN
     Device vk_dev = (device().type == DeviceType::VULKAN) ? device() : dev;
     BackendManager::get(vk_dev)->copy(data(), out.data(), byte_count, device(),
                                       dev);
-#else
-    throw std::runtime_error("Vulkan backend not compiled");
-#endif
   } else {
     impl_->backend().copy(data(), out.data(), byte_count, device(), dev);
   }
@@ -250,19 +204,19 @@ Tensor Tensor::to(DataType target_dtype) const {
   if (dtype() == target_dtype)
     return *this;
 
-  Device cpu{DeviceType::CPU, 0};
-  Tensor cpu_src = (device().type == DeviceType::CPU) ? *this : to(cpu);
-  Tensor cpu_out;
+  Device host{DeviceType::VULKAN, 0};
+  Tensor host_src = (device().type == DeviceType::VULKAN) ? *this : to(host);
+  Tensor host_out;
   if (is_profile_enabled()) {
     Timer timer;
-    cpu_out = convert_tensor_dtype_cpu(cpu_src, target_dtype);
+    host_out = convert_tensor_dtype_host(host_src, target_dtype);
     Profiler::get().record("transfer.dtype_convert", timer.elapsed_us(), 0.0,
-                           cpu_src.bytes(), to_string(cpu_src.shape()));
+                           host_src.bytes(), to_string(host_src.shape()));
   } else {
-    cpu_out = convert_tensor_dtype_cpu(cpu_src, target_dtype);
+    host_out = convert_tensor_dtype_host(host_src, target_dtype);
   }
   Tensor out =
-      (device().type == DeviceType::CPU) ? cpu_out : cpu_out.to(device());
+      (device().type == DeviceType::VULKAN) ? host_out : host_out.to(device());
 
   if (GradMode::is_enabled() && requires_grad()) {
     if (impl_->grad_fn) {
@@ -345,12 +299,12 @@ ScalarValue Tensor::item_value() const {
         "item_value() can only be called on tensors with 1 element");
   }
 
-  if (device().type == DeviceType::CPU) {
+  if (device().type == DeviceType::VULKAN) {
     impl_->backend().synchronize();
     return read_scalar_from_buffer(data(), dtype());
   }
 
-  return to(Device{DeviceType::CPU, 0}).item_value();
+  return to(Device{DeviceType::VULKAN, 0}).item_value();
 }
 
 float Tensor::item() const { return item_value().as_float(); }
@@ -398,21 +352,21 @@ void Tensor::fill_(const ScalarValue &value) {
   if (size() == 0)
     return;
 
-  Device cpu{DeviceType::CPU, 0};
-  Tensor cpu_out(shape(), cpu, dtype(), requires_grad());
-  char *cpu_bytes = static_cast<char *>(cpu_out.data());
+  Device host{DeviceType::VULKAN, 0};
+  Tensor host_out(shape(), host, dtype(), requires_grad());
+  char *host_bytes = static_cast<char *>(host_out.data());
   const size_t element_size = dtype_size(dtype());
   for (size_t i = 0; i < size(); ++i) {
-    write_scalar_to_buffer(cpu_bytes + i * element_size, dtype(), value.value);
+    write_scalar_to_buffer(host_bytes + i * element_size, dtype(), value.value);
   }
 
-  if (device().type == DeviceType::CPU) {
-    impl_->backend().copy(cpu_out.data(), data(), bytes(), cpu, device());
+  if (device().type == DeviceType::VULKAN) {
+    impl_->backend().copy(host_out.data(), data(), bytes(), host, device());
     impl_->bump_version();
     return;
   }
 
-  BackendManager::get(device())->copy(cpu_out.data(), data(), bytes(), cpu,
+  BackendManager::get(device())->copy(host_out.data(), data(), bytes(), host,
                                       device());
   impl_->bump_version();
 }

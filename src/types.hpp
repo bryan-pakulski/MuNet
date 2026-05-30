@@ -12,7 +12,7 @@
 
 namespace munet {
 
-enum class DeviceType { CPU, CUDA, VULKAN, UNKNOWN };
+enum class DeviceType { VULKAN };
 enum class DataType { Float32, Float16, BFloat16, Int32, Int8 };
 enum class AccumulationOp {
   Elementwise,
@@ -47,7 +47,7 @@ inline std::string dtype_name(DataType dt) {
   case DataType::Int8:
     return "int8";
   default:
-    return "unknown";
+    return "invalid";
   }
 }
 
@@ -140,29 +140,16 @@ struct Device {
   bool operator!=(const Device &other) const { return !(*this == other); }
 
   std::string to_string() const {
-    std::string t = (type == DeviceType::CPU)      ? "cpu"
-                    : (type == DeviceType::CUDA)   ? "cuda"
-                    : (type == DeviceType::VULKAN) ? "vulkan"
-                                                   : "unknown";
-    return t + ":" + std::to_string(index);
+    return "vulkan:" + std::to_string(index);
   }
 };
 
-inline const char *transfer_profile_name(Device src, Device dst) {
-  if (src.type == DeviceType::CPU && dst.type == DeviceType::CPU) {
-    return "transfer.cpu_copy";
-  }
-  if (src.type == DeviceType::CPU && dst.type != DeviceType::CPU) {
-    return "transfer.h2d";
-  }
-  if (src.type != DeviceType::CPU && dst.type == DeviceType::CPU) {
-    return "transfer.d2h";
-  }
-  return "transfer.d2d";
+inline const char *transfer_profile_name(Device, Device) {
+  return "transfer.vulkan";
 }
 
 struct TensorOptions {
-  Device device{DeviceType::CPU, 0};
+  Device device{DeviceType::VULKAN, 0};
   DataType dtype{DataType::Float32};
   bool requires_grad = false;
 

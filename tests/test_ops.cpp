@@ -30,7 +30,7 @@ TEST_P(OpsTest, ReshapeGradient) {
   EXPECT_EQ(x.grad().shape()[0], 2);
   EXPECT_EQ(x.grad().shape()[1], 2);
 
-  Tensor g = x.grad().to({DeviceType::CPU, 0});
+  Tensor g = x.grad().to({DeviceType::VULKAN, 0});
   for (size_t i = 0; i < 4; ++i)
     EXPECT_FLOAT_EQ((*(float *)g.data()), 1.0f);
 }
@@ -45,7 +45,7 @@ TEST_P(OpsTest, CatDim0) {
   EXPECT_EQ(c.shape()[0], 3);
   EXPECT_EQ(c.shape()[1], 2);
 
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   float *data = (float *)res.data();
   EXPECT_FLOAT_EQ(data[0], 1.0f);
   EXPECT_FLOAT_EQ(data[4], 2.0f);
@@ -55,7 +55,7 @@ TEST_P(OpsTest, BroadCastSubMul) {
   Tensor a({2, 2}, dev());
   Tensor b({2}, dev()); // To be broadcasted as row
 
-  Tensor val_a({2, 2}, {DeviceType::CPU, 0});
+  Tensor val_a({2, 2}, {DeviceType::VULKAN, 0});
   ((float *)val_a.data())[0] = 10;
   ((float *)val_a.data())[1] = 20;
   ((float *)val_a.data())[2] = 30;
@@ -63,21 +63,21 @@ TEST_P(OpsTest, BroadCastSubMul) {
   a.impl_->backend().copy(val_a.data(), a.data(), a.bytes(), val_a.device(),
                           dev());
 
-  Tensor val_b({2}, {DeviceType::CPU, 0});
+  Tensor val_b({2}, {DeviceType::VULKAN, 0});
   ((float *)val_b.data())[0] = 1;
   ((float *)val_b.data())[1] = 2;
   b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), val_b.device(),
                           dev());
 
   Tensor c = a - b; // [10-1, 20-2, 30-1, 40-2]
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   EXPECT_FLOAT_EQ(((float *)res.data())[0], 9.0f);
   EXPECT_FLOAT_EQ(((float *)res.data())[1], 18.0f);
   EXPECT_FLOAT_EQ(((float *)res.data())[2], 29.0f);
   EXPECT_FLOAT_EQ(((float *)res.data())[3], 38.0f);
 
   Tensor d = a * b; // [10*1, 20*2, 30*1, 40*2]
-  res = d.to({DeviceType::CPU, 0});
+  res = d.to({DeviceType::VULKAN, 0});
   EXPECT_FLOAT_EQ(((float *)res.data())[0], 10.0f);
   EXPECT_FLOAT_EQ(((float *)res.data())[1], 40.0f);
 }
@@ -88,7 +88,7 @@ TEST_P(OpsTest, VectorToMatrixAdd) {
   a.uniform_(10.0f, 10.0f); // All 10s
 
   Tensor b({3}, dev());
-  Tensor val_b({3}, {DeviceType::CPU, 0});
+  Tensor val_b({3}, {DeviceType::VULKAN, 0});
   ((float *)val_b.data())[0] = 1.0f;
   ((float *)val_b.data())[1] = 2.0f;
   ((float *)val_b.data())[2] = 3.0f;
@@ -98,8 +98,8 @@ TEST_P(OpsTest, VectorToMatrixAdd) {
   Tensor c = a + b;
   EXPECT_EQ(c.shape(), Shape({2, 3}));
 
-  Tensor c_cpu = c.to({DeviceType::CPU, 0});
-  float *data = (float *)c_cpu.data();
+  Tensor c_host = c.to({DeviceType::VULKAN, 0});
+  float *data = (float *)c_host.data();
   // Row 1: 10+1, 10+2, 10+3
   EXPECT_FLOAT_EQ(data[0], 11.0f);
   EXPECT_FLOAT_EQ(data[1], 12.0f);
@@ -116,13 +116,13 @@ TEST_P(OpsTest, ScalarToTensorMul) {
   a.uniform_(5.0f, 5.0f);
 
   Tensor b({1}, dev());
-  Tensor val_b({1}, {DeviceType::CPU, 0});
+  Tensor val_b({1}, {DeviceType::VULKAN, 0});
   ((float *)val_b.data())[0] = 2.0f;
   b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), val_b.device(),
                           dev());
 
   Tensor c = a * b;
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   float *data = (float *)res.data();
   for (int i = 0; i < 4; ++i)
     EXPECT_FLOAT_EQ(*data, 10.0f);
@@ -138,7 +138,7 @@ TEST_P(OpsTest, MultiDimExpansion) {
   Tensor c = a + b;
   EXPECT_EQ(c.shape(), Shape({2, 3, 2}));
 
-  Tensor res = c.to({DeviceType::CPU, 0});
+  Tensor res = c.to({DeviceType::VULKAN, 0});
   float *data = (float *)res.data();
   for (int i = 0; i < 12; ++i)
     EXPECT_FLOAT_EQ(*data, 3.0f);
@@ -150,7 +150,7 @@ TEST_P(OpsTest, ScalarAutograd) {
   a.uniform_(1.0f, 1.0f);
 
   Tensor b({1}, dev(), DataType::Float32, true);
-  Tensor val_b({1}, {DeviceType::CPU, 0});
+  Tensor val_b({1}, {DeviceType::VULKAN, 0});
   ((float *)val_b.data())[0] = 10.0f;
   b.impl_->backend().copy(val_b.data(), b.data(), b.bytes(), val_b.device(),
                           dev());
@@ -161,33 +161,33 @@ TEST_P(OpsTest, ScalarAutograd) {
 
   // grad for 'a' should be [1, 1, 1, 1]
   // grad for 'b' should be 4.0 (sum of all gradients in c)
-  Tensor gb = b.grad().to({DeviceType::CPU, 0});
+  Tensor gb = b.grad().to({DeviceType::VULKAN, 0});
   EXPECT_FLOAT_EQ(((float *)gb.data())[0], 4.0f);
 }
 
 TEST_P(OpsTest, MeanLastDimForwardAndBackward) {
   Tensor x({2, 3}, dev(), DataType::Float32, true);
-  Tensor x_cpu({2, 3}, {DeviceType::CPU, 0});
-  float *xp = static_cast<float *>(x_cpu.data());
+  Tensor x_host({2, 3}, {DeviceType::VULKAN, 0});
+  float *xp = static_cast<float *>(x_host.data());
   xp[0] = 1.0f;
   xp[1] = 2.0f;
   xp[2] = 3.0f;
   xp[3] = 4.0f;
   xp[4] = 5.0f;
   xp[5] = 6.0f;
-  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(),
+  x.impl_->backend().copy(x_host.data(), x.data(), x.bytes(), x_host.device(),
                           dev());
 
   Tensor y = x.mean(-1, false);
-  Tensor y_cpu = y.to({DeviceType::CPU, 0});
-  const float *yp = static_cast<const float *>(y_cpu.data());
+  Tensor y_host = y.to({DeviceType::VULKAN, 0});
+  const float *yp = static_cast<const float *>(y_host.data());
   EXPECT_NEAR(yp[0], 2.0f, 1e-5f);
   EXPECT_NEAR(yp[1], 5.0f, 1e-5f);
 
   Tensor loss = y.sum();
   loss.backward();
-  Tensor g_cpu = x.grad().to({DeviceType::CPU, 0});
-  const float *gp = static_cast<const float *>(g_cpu.data());
+  Tensor g_host = x.grad().to({DeviceType::VULKAN, 0});
+  const float *gp = static_cast<const float *>(g_host.data());
   for (int i = 0; i < 6; ++i) {
     EXPECT_NEAR(gp[i], 1.0f / 3.0f, 1e-5f);
   }
@@ -195,19 +195,19 @@ TEST_P(OpsTest, MeanLastDimForwardAndBackward) {
 
 TEST_P(OpsTest, NarrowViewSharesStorageOffset) {
   Tensor x({2, 4}, dev());
-  Tensor x_cpu({2, 4}, {DeviceType::CPU, 0});
-  float *xp = static_cast<float *>(x_cpu.data());
+  Tensor x_host({2, 4}, {DeviceType::VULKAN, 0});
+  float *xp = static_cast<float *>(x_host.data());
   for (int i = 0; i < 8; ++i)
     xp[i] = static_cast<float>(i);
-  x.impl_->backend().copy(x_cpu.data(), x.data(), x.bytes(), x_cpu.device(),
+  x.impl_->backend().copy(x_host.data(), x.data(), x.bytes(), x_host.device(),
                           dev());
 
   Tensor slice = x.narrow(1, 1, 2);
   EXPECT_EQ(slice.shape(), Shape({2, 2}));
   EXPECT_EQ(slice.storage_offset(), static_cast<size_t>(1));
 
-  Tensor slice_cpu = slice.contiguous().to({DeviceType::CPU, 0});
-  const float *sp = static_cast<const float *>(slice_cpu.data());
+  Tensor slice_host = slice.contiguous().to({DeviceType::VULKAN, 0});
+  const float *sp = static_cast<const float *>(slice_host.data());
   EXPECT_FLOAT_EQ(sp[0], 1.0f);
   EXPECT_FLOAT_EQ(sp[1], 2.0f);
   EXPECT_FLOAT_EQ(sp[2], 5.0f);

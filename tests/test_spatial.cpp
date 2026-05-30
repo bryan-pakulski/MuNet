@@ -52,8 +52,8 @@ TEST_P(SpatialTest, TrainSpatialModel) {
     Tensor out = u1.conv2d(w2, b2, 1, 1);
 
     Tensor loss = out.mse_loss(y);
-    Tensor loss_cpu = loss.to({DeviceType::CPU, 0});
-    float current_loss = static_cast<float *>(loss_cpu.data())[0];
+    Tensor loss_host = loss.to({DeviceType::VULKAN, 0});
+    float current_loss = static_cast<float *>(loss_host.data())[0];
 
     if (i == 0)
       initial_loss = current_loss;
@@ -81,40 +81,4 @@ TEST_P(SpatialTest, Conv2DShapes) {
   Tensor out2 = in.conv2d(w, Tensor(), 1, 1);
   EXPECT_EQ(out2.shape()[2], 4);
   EXPECT_EQ(out2.shape()[3], 4);
-}
-
-TEST(SpatialDTypeParityTest, Float16ConvPoolUpsampleFallbackOnCPU) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor in32({1, 1, 4, 4}, cpu, DataType::Float32);
-  Tensor w32({1, 1, 3, 3}, cpu, DataType::Float32);
-  in32.fill_(make_scalar(1.0f));
-  w32.fill_(make_scalar(1.0f));
-
-  Tensor in = in32.to(DataType::Float16);
-  Tensor w = w32.to(DataType::Float16);
-
-  Tensor conv = in.conv2d(w, Tensor(), 1, 1);
-  EXPECT_EQ(conv.dtype(), DataType::Float16);
-  EXPECT_EQ(conv.shape(), Shape({1, 1, 4, 4}));
-
-  Tensor pooled = conv.max_pool2d(2, 2, 0);
-  EXPECT_EQ(pooled.dtype(), DataType::Float16);
-  EXPECT_EQ(pooled.shape(), Shape({1, 1, 2, 2}));
-
-  Tensor up = pooled.upsample2d(2);
-  EXPECT_EQ(up.dtype(), DataType::Float16);
-  EXPECT_EQ(up.shape(), Shape({1, 1, 4, 4}));
-}
-
-TEST(SpatialDTypeParityTest, BFloat16ConvFallbackOnCPU) {
-  Device cpu{DeviceType::CPU, 0};
-  Tensor in32({1, 1, 4, 4}, cpu, DataType::Float32);
-  Tensor w32({1, 1, 3, 3}, cpu, DataType::Float32);
-  in32.fill_(make_scalar(1.0f));
-  w32.fill_(make_scalar(1.0f));
-
-  Tensor out = in32.to(DataType::BFloat16).conv2d(w32.to(DataType::BFloat16),
-                                                  Tensor(), 1, 1);
-  EXPECT_EQ(out.dtype(), DataType::BFloat16);
-  EXPECT_EQ(out.shape(), Shape({1, 1, 4, 4}));
 }

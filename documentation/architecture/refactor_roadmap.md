@@ -101,7 +101,7 @@ Mixed precision support depends on having a real dtype model. Right now dtype ex
   - `Tensor::to(DataType)`
   - `Tensor::to(TensorOptions)`
 - [~] Remove scalar helpers that hard-code `float` semantics from the public tensor interface.
-- [~] Add typed scalar utility helpers for constants, fills, and host/device transfers.
+- [~] Add typed scalar utility helpers for constants, fills, and Vulkan/device transfers.
   - Landed core scalar buffer conversion helpers and typed tensor fill/masked-fill paths.
 - [x] Define policy for:
   - parameter dtype
@@ -126,7 +126,6 @@ Mixed precision support depends on having a real dtype model. Right now dtype ex
 ### Exit criteria
 
 - [x] Dtype decisions live in one place, not spread through ops and kernels.
-  - Accumulation, optimizer-state, backend-capability, autograd accumulation, and ONNX graph-runtime dtype handling now route through shared dtype helpers instead of isolated float32-only paths.
 - [x] Future fp16 work no longer requires editing the tensor API shape itself.
 
 Phase 1 follow-up items are complete. Any finer-grained per-op/per-shape dispatch or backend capability refinement belongs to Phase 2 / Phase 3 work rather than keeping Phase 1 open.
@@ -199,7 +198,7 @@ Phase 1 follow-up items are complete. Any finer-grained per-op/per-shape dispatc
 - [x] Introduce a `BackendRegistry` abstraction so registration, override, and test replacement are explicit.
 - [x] Keep debug/profiling wrappers as decorators instead of baking them into backend selection paths.
 - [x] Define fallback policy clearly:
-  - CPU fallback
+  - Vulkan fallback
   - explicit unsupported error
   - opt-in conversion fallback for specific ops
 

@@ -49,8 +49,8 @@ def create_model():
 
 
 if __name__ == "__main__":
-    device = munet.Device(munet.DeviceType.CPU, 0)
-    print("Using CPU")
+    device = munet.Device(munet.DeviceType.VULKAN, 0)
+    print("Using Host")
 
     x_train, y_train = generate_shapes(200)
 

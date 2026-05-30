@@ -9,19 +9,19 @@ argparser = argparse.ArgumentParser(description="Train a simple Unet")
 argparser.add_argument(
     "--device",
     type=str,
-    default="cuda",
+    default="vulkan",
     help="Device to use",
-    choices=["cpu", "cuda", "vulkan"],
+    choices=["host", "vulkan", "vulkan"],
 )
 args = argparser.parse_args()
 
 
 # Helper to find the best available device
 def get_device():
-    if args.device == "cpu":
-        return munet.Device(munet.DeviceType.CPU, 0)
-    elif args.device == "cuda":
-        return munet.Device(munet.DeviceType.CUDA, 0)
+    if args.device == "host":
+        return munet.Device(munet.DeviceType.VULKAN, 0)
+    elif args.device == "vulkan":
+        return munet.Device(munet.DeviceType.VULKAN, 0)
     elif args.device == "vulkan":
         return munet.Device(munet.DeviceType.VULKAN, 0)
 
@@ -112,7 +112,7 @@ def visualize_results(model, x_test, y_test, epoch, device, output_dir="vis_resu
         tx = munet.from_numpy(x_test).to(device)
         logits = model(tx)
         preds = np.array(
-            logits.to(munet.Device(munet.DeviceType.CPU, 0)).detach(), copy=False
+            logits.to(munet.Device(munet.DeviceType.VULKAN, 0)).detach(), copy=False
         )
 
     pred_mask = np.argmax(preds, axis=1)
