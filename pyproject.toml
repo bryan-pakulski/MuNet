@@ -36,8 +36,9 @@ cmake.args = [
 wheel.packages = ["python/munet_nn"]
 
 [tool.cibuildwheel]
-build = "cp310-* cp311-* cp312-*"
-skip = "*-musllinux_*"
+build = "cp310-manylinux_x86_64 cp311-manylinux_x86_64 cp312-manylinux_x86_64"
+skip = "cp3?-* pp* *-musllinux_* *-manylinux_i686"
+archs = ["x86_64"]
 build-verbosity = 1
 test-command = "python -c \"import munet_nn as munet; status = munet.backend_status(); backends = munet.list_available_backends(); assert isinstance(status, dict) and 'statuses' in status; assert isinstance(backends, list); assert all(name == 'vulkan' for name in backends); print(munet.__doc__ is not None)\""
 
