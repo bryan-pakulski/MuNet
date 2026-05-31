@@ -114,7 +114,7 @@ def demo_pytorch_export():
     else:
         # Manual save
         state_dict = model.state_dict()
-        weights_dict = {k: v.detach().host().numpy() for k, v in state_dict.items()}
+        weights_dict = {k: v.detach().numpy() for k, v in state_dict.items()}
         save_as_npz(config, weights_dict, output_path)
         print("    Saved using manual NPZ serialization")
     

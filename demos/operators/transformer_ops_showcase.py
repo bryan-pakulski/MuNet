@@ -23,8 +23,8 @@ def main():
         y = gelu.forward(y)
         y = drop.forward(y)
 
-    y_host = y.to(munet.Device(munet.DeviceType.VULKAN, 0)).detach()
-    arr = np.array(y_host, copy=False)
+    y_vulkan = y.to(munet.Device(munet.DeviceType.VULKAN, 0)).detach()
+    arr = np.array(y_vulkan, copy=False)
     print("Transformer ops showcase complete")
     print(f"output shape={arr.shape}, mean={arr.mean():.5f}, std={arr.std():.5f}")
 

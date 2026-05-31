@@ -58,7 +58,7 @@ inline AllReduceExecutionMode configured_all_reduce_mode() {
     return AllReduceExecutionMode::DeviceNative;
   }
   const std::string mode(env);
-  if (mode == "host_fallback") {
+  if (mode == "host_fallback" || mode == "vulkan_staging") {
     return AllReduceExecutionMode::HostFallback;
   }
   return AllReduceExecutionMode::DeviceNative;
@@ -146,8 +146,8 @@ inline void all_reduce_via_host(Storage &buffer, size_t num_elements,
       mode == AllReduceExecutionMode::DeviceNative) {
     throw std::runtime_error(
         "all_reduce: device-native mode is default for Vulkan in "
-        "multi-GPU runs; native collective backend not implemented yet. "
-        "Set MUNET_ALLREDUCE_MODE=host_fallback to use host staging.");
+        "multi-Vulkan runs; native collective backend not implemented yet. "
+        "Set MUNET_ALLREDUCE_MODE=vulkan_staging to use Vulkan staging.");
   }
 
   const DataType dtype = buffer.dtype();

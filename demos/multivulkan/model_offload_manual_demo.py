@@ -15,24 +15,19 @@ import numpy as np
 import munet_nn as munet
 
 
-Host = munet.Device(munet.DeviceType.VULKAN, 0)
+VULKAN_DEVICE = munet.Device(munet.DeviceType.VULKAN, 0)
 
 
-def detect_accelerators(max_index: int = 4, backend: str = "vulkan"):
+def detect_vulkan_devices(max_index: int = 4):
     devices = []
-    backend_map = {
-        "vulkan": (munet.DeviceType.VULKAN,),
-        "vulkan": (munet.DeviceType.VULKAN,),
-        "auto": (munet.DeviceType.VULKAN, munet.DeviceType.VULKAN),
-    }
-    for dev_type in backend_map[backend]:
+    for dev_type in (munet.DeviceType.VULKAN,):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
                 a = munet.ones((1,), device=dev)
                 b = munet.ones((1,), device=dev)
                 c = a + b
-                if float(c.to(Host).item()) != 2.0:
+                if float(c.to(VULKAN_DEVICE).item()) != 2.0:
                     raise RuntimeError("probe mismatch")
             except RuntimeError:
                 continue
@@ -44,23 +39,21 @@ def can_transfer(src, dst) -> bool:
     try:
         probe = munet.ones((2,), device=src)
         moved = probe.to(dst)
-        return float(moved.to(Host).sum().item()) == 2.0
+        return float(moved.to(VULKAN_DEVICE).sum().item()) == 2.0
     except RuntimeError:
         return False
 
 
-def pick_offload_pair(accelerators):
-    # Prefer true accelerator↔accelerator pairs when transfer works.
-    for i in range(len(accelerators)):
-        for j in range(i + 1, len(accelerators)):
-            d0, d1 = accelerators[i], accelerators[j]
+def pick_offload_pair(vulkan_devices):
+    # Prefer true Vulkan↔Vulkan pairs when transfer works.
+    for i in range(len(vulkan_devices)):
+        for j in range(i + 1, len(vulkan_devices)):
+            d0, d1 = vulkan_devices[i], vulkan_devices[j]
             if can_transfer(d0, d1):
-                return d0, d1, "accelerator_pair"
+                return d0, d1, "vulkan_pair"
 
-    # Fall back to Host↔accelerator if multi-accelerator transfer is unsupported.
-    for dev in accelerators:
-        if can_transfer(Host, dev) and can_transfer(dev, Host):
-            return Host, dev, "host_accelerator_fallback"
+    if vulkan_devices:
+        return VULKAN_DEVICE, vulkan_devices[0], "vulkan_single"
 
     return None, None, "none"
 
@@ -72,15 +65,15 @@ def main():
     ap.add_argument("--max-index", type=int, default=2)
     ap.add_argument(
         "--backend",
-        choices=["vulkan", "vulkan", "auto"],
+        choices=["vulkan"],
         default="vulkan",
-        help="Accelerator backend selection policy (default: vulkan).",
+        help="Vulkan backend selection policy (default: vulkan).",
     )
     args = ap.parse_args()
 
-    devices = detect_accelerators(args.max_index, backend=args.backend)
+    devices = detect_vulkan_devices(args.max_index)
     if not devices:
-        print(f"Need at least one {args.backend} accelerator device for manual offload demo.")
+        print(f"Need at least one Vulkan device for manual offload demo.")
         return
 
     d0, d1, mode = pick_offload_pair(devices)
@@ -88,13 +81,7 @@ def main():
         print("Could not find a compatible device pair for boundary transfers.")
         return
 
-    if mode == "host_accelerator_fallback":
-        print(
-            "Note: no compatible accelerator↔accelerator transfer pair detected; "
-            "falling back to Host↔accelerator split."
-        )
-
-    print("Using devices:", d0, d1)
+        print("Using devices:", d0, d1)
 
     model = munet.nn.Sequential(
         munet.nn.Linear(4, 16),
@@ -126,7 +113,7 @@ def main():
         },
     )
 
-    # Intentionally bad plan walkthrough (Phase 2): float16 linear on Host.
+    # Intentionally bad plan walkthrough (Phase 2): float16 linear on Vulkan.
     bad_opts = munet.TensorOptions()
     bad_opts.dtype = munet.DataType.Float16
     bad_model = munet.nn.Sequential(
@@ -134,7 +121,7 @@ def main():
         munet.nn.ReLU(),
         munet.nn.Linear(8, 1, options=bad_opts),
     )
-    bad_model.offload(Host, layers=["0", "2"])
+    bad_model.offload(VULKAN_DEVICE, layers=["0", "2"])
     bad_report = bad_model.validate_offload_plan(
         munet.from_numpy(np.random.randn(2, 4).astype(np.float16))
     )
@@ -164,11 +151,11 @@ def main():
             p.step(args.lr)
 
         if step % 2 == 0 or step == args.steps - 1:
-            print(f"step={step:03d} loss={float(loss.detach().to(Host).item()):.6f}")
+            print(f"step={step:03d} loss={float(loss.detach().to(VULKAN_DEVICE).item()):.6f}")
 
     with munet.no_grad():
         sample = munet.from_numpy(x[:4])
-        out = model(sample).detach().to(Host)
+        out = model(sample).detach().to(VULKAN_DEVICE)
         print("sample_out:", np.array(out, copy=False).reshape(-1))
 
 

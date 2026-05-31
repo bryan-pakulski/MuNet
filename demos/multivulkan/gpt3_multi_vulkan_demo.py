@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""Barebones multi-GPU GPT training/inference demo with per-device backend specification.
+"""Barebones multi-Vulkan GPT training/inference demo with per-device backend specification.
 
 Usage:
     # Train on Vulkan devices 0 and 1
-    python gpt3_multi_gpu_demo.py train --devices "0:vulkan,1:vulkan"
-    
-    # Mixed backends - Vulkan + Vulkan
-    python gpt3_multi_gpu_demo.py train --devices "0:vulkan,1:vulkan"
+    python gpt3_multi_vulkan_demo.py train --devices "0:vulkan,1:vulkan"
     
     # Generate with trained model
-    python gpt3_multi_gpu_demo.py generate --devices "0:vulkan" --model-dir ./model --prompt "Hello"
+    python gpt3_multi_vulkan_demo.py generate --devices "0:vulkan" --model-dir ./model --prompt "Hello"
 """
 import argparse
 import os
@@ -23,9 +20,9 @@ def parse_device_spec(spec: str) -> list:
     """Parse device specification like "0:vulkan,1:vulkan" into [munet.Device, ...].
     
     Supports formats:
-        - "0:vulkan,1:vulkan" -> [Device(Vulkan, 0), Device(Vulkan, 1)]
-        - "0,1" -> [Device(Vulkan, 0), Device(Vulkan, 1)] (defaults to Vulkan)
-        - "0:vulkan" -> [Device(Vulkan, 0)]
+        - "0:vulkan,1:vulkan" -> [Device(DeviceType.VULKAN, 0), Device(DeviceType.VULKAN, 1)]
+        - "0,1" -> [Device(DeviceType.VULKAN, 0), Device(DeviceType.VULKAN, 1)] (defaults to Vulkan)
+        - "0:vulkan" -> [Device(DeviceType.VULKAN, 0)]
     """
     devices = []
     for part in spec.split(","):
@@ -39,13 +36,11 @@ def parse_device_spec(spec: str) -> list:
         devices.append((backend, int(dev_id)))
     
     # Convert to munet.Device objects
-    device_type_map = {
-        "Cuda": munet.DeviceType.VULKAN,
-        "Vulkan": munet.DeviceType.VULKAN,
-        "Host": munet.DeviceType.VULKAN,
-    }
+    device_type_map = {"Vulkan": munet.DeviceType.VULKAN}
     resolved = []
     for backend, dev_id in devices:
+        if backend not in device_type_map:
+            raise ValueError(f"Unsupported backend {backend!r}; this demo is Vulkan-only")
         dev_type = device_type_map[backend]
         candidate = munet.Device(dev_type, int(dev_id))
         try:
@@ -55,14 +50,14 @@ def parse_device_spec(spec: str) -> list:
             continue
         except RuntimeError as err:
             if int(dev_id) != 0:
-                fallback = munet.Device(dev_type, 0)
+                replacement = munet.Device(dev_type, 0)
                 try:
-                    _ = munet.ones([1], device=fallback)
+                    _ = munet.ones([1], device=replacement)
                     print(
                         f"[WARN] Requested {backend.lower()}:{dev_id} unavailable ({err}); "
-                        f"falling back to {backend.lower()}:0"
+                        f"using {backend.lower()}:0"
                     )
-                    resolved.append(fallback)
+                    resolved.append(replacement)
                     continue
                 except RuntimeError:
                     pass
@@ -261,7 +256,7 @@ def generate(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Multi-GPU GPT Demo")
+    parser = argparse.ArgumentParser(description="Vulkan GPT Demo")
     parser.add_argument("--devices", type=str, default="0:vulkan",
                         help='Device specification, e.g., "0:vulkan,1:vulkan"')
     

@@ -9,16 +9,16 @@ import time
 
 import munet_nn as munet
 
-Host = munet.Device(munet.DeviceType.VULKAN, 0)
+VULKAN_DEVICE = munet.Device(munet.DeviceType.VULKAN, 0)
 
 
-def _first_accelerator(max_index: int = 4):
-    for dev_type in (munet.DeviceType.VULKAN, munet.DeviceType.VULKAN):
+def _first_vulkan_device(max_index: int = 4):
+    for dev_type in (munet.DeviceType.VULKAN,):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
                 t = munet.ones((1,), device=dev)
-                if float((t + t).to(Host).item()) == 2.0:
+                if float((t + t).to(VULKAN_DEVICE).item()) == 2.0:
                     return dev
             except RuntimeError:
                 continue
@@ -46,14 +46,14 @@ def _benchmark_forward(model, sample, iters: int = 40):
 def run_strategy(name: str, devices, sample):
     model = make_model()
     if name == "manual":
-        # Naive baseline split: first half on Host, second half on accelerator.
-        model.offload(Host, ["0", "1"])
+        # Naive baseline split: first half on Vulkan, second half on Vulkan device.
+        model.offload(VULKAN_DEVICE, ["0", "1"])
         model.offload(devices[1], ["2", "3", "4"])
     else:
         model.auto_offload(devices, strategy=name, sample_input=sample)
     explained = model.offload_plan(explain=True)
     avg_ms = _benchmark_forward(model, sample)
-    out = model(sample).detach().to(Host)
+    out = model(sample).detach().to(VULKAN_DEVICE)
     print(
         f"[{name}] plan={explained['plan']} rationale={explained['rationale']} "
         f"avg_ms={avg_ms:.4f} mean_out={float(np.array(out, copy=False).mean()):.6f}"
@@ -65,12 +65,12 @@ def main():
     ap.add_argument("--max-index", type=int, default=4)
     args = ap.parse_args()
 
-    accel = _first_accelerator(args.max_index)
-    if accel is None:
-        print("Need at least one accelerator for auto_offload strategy demo.")
+    vulkan_dev = _first_vulkan_device(args.max_index)
+    if vulkan_dev is None:
+        print("Need at least one Vulkan device for auto_offload strategy demo.")
         return
 
-    devices = [Host, accel]
+    devices = [VULKAN_DEVICE, vulkan_dev]
     sample = munet.from_numpy(np.random.randn(8, 4).astype(np.float32))
     run_strategy("manual", devices, sample)
     run_strategy("balanced", devices, sample)

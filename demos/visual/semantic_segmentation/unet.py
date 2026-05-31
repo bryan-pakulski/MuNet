@@ -11,19 +11,14 @@ argparser.add_argument(
     type=str,
     default="vulkan",
     help="Device to use",
-    choices=["host", "vulkan", "vulkan"],
+    choices=["vulkan"],
 )
 args = argparser.parse_args()
 
 
 # Helper to find the best available device
 def get_device():
-    if args.device == "host":
-        return munet.Device(munet.DeviceType.VULKAN, 0)
-    elif args.device == "vulkan":
-        return munet.Device(munet.DeviceType.VULKAN, 0)
-    elif args.device == "vulkan":
-        return munet.Device(munet.DeviceType.VULKAN, 0)
+    return munet.Device(munet.DeviceType.VULKAN, 0)
 
 
 def generate_shapes(num_samples=100, size=32):

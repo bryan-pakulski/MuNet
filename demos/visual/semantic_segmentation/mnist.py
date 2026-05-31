@@ -50,7 +50,7 @@ def create_model():
 
 if __name__ == "__main__":
     device = munet.Device(munet.DeviceType.VULKAN, 0)
-    print("Using Host")
+    print("Using Vulkan")
 
     x_train, y_train = generate_shapes(200)
 

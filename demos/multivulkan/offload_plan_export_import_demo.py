@@ -8,7 +8,7 @@ import numpy as np
 
 import munet_nn as munet
 
-Host = munet.Device(munet.DeviceType.VULKAN, 0)
+VULKAN_DEVICE = munet.Device(munet.DeviceType.VULKAN, 0)
 
 
 def make_model():
@@ -21,13 +21,13 @@ def make_model():
     )
 
 
-def first_accelerator(max_index: int = 4):
-    for dev_type in (munet.DeviceType.VULKAN, munet.DeviceType.VULKAN):
+def first_vulkan_device(max_index: int = 4):
+    for dev_type in (munet.DeviceType.VULKAN,):
         for idx in range(max_index):
             dev = munet.Device(dev_type, idx)
             try:
                 probe = munet.ones((1,), device=dev)
-                if float((probe + probe).to(Host).item()) == 2.0:
+                if float((probe + probe).to(VULKAN_DEVICE).item()) == 2.0:
                     return dev
             except RuntimeError:
                 continue
@@ -35,13 +35,13 @@ def first_accelerator(max_index: int = 4):
 
 
 def main():
-    accel = first_accelerator()
-    if accel is None:
-        print("Need one accelerator for export/import offload demo")
+    vulkan_dev = first_vulkan_device()
+    if vulkan_dev is None:
+        print("Need one Vulkan device for export/import offload demo")
         return
 
     sample = munet.from_numpy(np.random.randn(8, 4).astype(np.float32))
-    devices = [Host, accel]
+    devices = [VULKAN_DEVICE, vulkan_dev]
 
     planner_model = make_model()
     planner_model.auto_offload(devices, strategy="balanced", sample_input=sample)
