@@ -1,11 +1,9 @@
-#include "backend/host_backend.hpp"
-#include "core/util/profiler.hpp"
 #include "inference.hpp"
 #include "nn.hpp"
 #include "test_utils.hpp"
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -14,15 +12,6 @@
 using namespace munet;
 
 namespace {
-class ScopedProfileOverride {
-public:
-  explicit ScopedProfileOverride(bool enabled) {
-    set_profile_enabled_override(enabled);
-  }
-
-  ~ScopedProfileOverride() { set_profile_enabled_override(std::nullopt); }
-};
-
 class IdentityLayer : public inference::Module {
 public:
   Tensor forward_impl(Tensor x) override { return x; }
@@ -48,22 +37,6 @@ public:
   Tensor running;
 };
 
-class CountingCopyBackend : public HostBackend {
-public:
-  explicit CountingCopyBackend(std::shared_ptr<int> copy_count)
-      : copy_count_(std::move(copy_count)) {}
-
-  const char *name() const override { return "counting_copy"; }
-
-  void copy(const void *src, void *dst, size_t bytes, Device src_dev,
-            Device dst_dev) override {
-    ++(*copy_count_);
-    HostBackend::copy(src, dst, bytes, src_dev, dst_dev);
-  }
-
-private:
-  std::shared_ptr<int> copy_count_;
-};
 } // namespace
 
 namespace {
@@ -154,8 +127,8 @@ std::string npy_descr_for_tensor(const Tensor &tensor) {
 
 std::vector<uint8_t> encode_tensor_npy(const Tensor &tensor) {
   Tensor host = tensor.device().type == DeviceType::VULKAN
-                   ? tensor
-                   : tensor.to(Device{DeviceType::VULKAN, 0});
+                    ? tensor
+                    : tensor.to(Device{DeviceType::VULKAN, 0});
   std::vector<uint8_t> out = {0x93, 'N', 'U', 'M', 'P', 'Y', 0x01, 0x00};
   std::ostringstream header;
   header << "{'descr': '" << npy_descr_for_tensor(host)
@@ -334,16 +307,16 @@ TEST(InferenceTest, TrainCallKeepsEvalMode) {
 TEST(InferenceTest, EngineLoadPrepareRunAndStats) {
   auto m = std::make_shared<IdentityLayer>();
   inference::Engine engine;
-  engine.set_warmup_runs(2);
   engine.load(m);
 
   Device host{DeviceType::VULKAN, 0};
   Tensor x({2, 2}, host);
   x.uniform_(0.5f, 0.5f);
 
-  engine.prepare(x);
+  Tensor prepared = engine.prepare(x);
   EXPECT_TRUE(engine.is_loaded());
   EXPECT_TRUE(engine.is_prepared());
+  EXPECT_EQ(prepared.shape(), x.shape());
 
   Tensor y = engine.run(x).to(host);
   EXPECT_EQ(y.shape(), x.shape());
@@ -383,7 +356,6 @@ TEST(InferenceTest, EngineRunBatch) {
 TEST(InferenceTest, EngineCompileCapturesShapeAndStats) {
   auto m = std::make_shared<IdentityLayer>();
   inference::Engine engine;
-  engine.set_warmup_runs(1);
   engine.load(m);
 
   Device host{DeviceType::VULKAN, 0};
@@ -395,8 +367,7 @@ TEST(InferenceTest, EngineCompileCapturesShapeAndStats) {
   EXPECT_TRUE(engine.is_prepared());
   EXPECT_EQ(engine.compiled_input_shape(), x.shape());
   EXPECT_GE(engine.stats().compile_ms, 0.0);
-  EXPECT_GE(engine.stats().compile_prepare_input_ms, 0.0);
-  EXPECT_GE(engine.stats().compile_forward_ms, 0.0);
+  EXPECT_EQ(engine.stats().compiled_input_shape, x.shape());
 }
 
 TEST(InferenceTest, EngineStrictShapeCheckAfterCompile) {
@@ -501,204 +472,9 @@ TEST(InferenceTest, EngineRejectsAutogradInputsByDefault) {
   EXPECT_THROW(engine.run(x), std::runtime_error);
 }
 
-TEST(InferenceTest, EngineObserverReceivesLifecycleAndErrorEvents) {
-  auto m = std::make_shared<IdentityLayer>();
-  inference::Engine engine;
-  std::vector<inference::EngineEvent> events;
-  engine.set_observer([&events](const inference::EngineEvent &event) {
-    events.push_back(event);
-  });
-  engine.load(m);
-
-  Device host{DeviceType::VULKAN, 0};
-  Tensor x({2, 3}, host);
-  Tensor bad({2, 4}, host);
-  x.uniform_(0.1f, 0.1f);
-  bad.uniform_(0.1f, 0.1f);
-
-  engine.compile(x);
-  (void)engine.run(x);
-  EXPECT_THROW((void)engine.run(bad), std::runtime_error);
-
-  ASSERT_GE(events.size(), 6u);
-  EXPECT_EQ(events.front().type, inference::EngineEventType::LoadStarted);
-  EXPECT_EQ(events[1].type, inference::EngineEventType::LoadCompleted);
-  EXPECT_EQ(events[2].type, inference::EngineEventType::CompileStarted);
-  EXPECT_EQ(events[3].type, inference::EngineEventType::CompileCompleted);
-  EXPECT_EQ(events[4].type, inference::EngineEventType::RunStarted);
-  EXPECT_EQ(events[5].type, inference::EngineEventType::RunCompleted);
-  EXPECT_GT(events[2].trace_id, 0u);
-  EXPECT_EQ(events[2].trace_id, events[3].trace_id);
-  EXPECT_EQ(events[2].span, "compile");
-  EXPECT_EQ(events[3].span, "compile");
-  EXPECT_GT(events[4].trace_id, 0u);
-  EXPECT_EQ(events[4].trace_id, events[5].trace_id);
-  EXPECT_NE(events[2].trace_id, events[4].trace_id);
-  EXPECT_EQ(events[4].span, "run");
-  EXPECT_EQ(events[5].span, "run");
-  EXPECT_EQ(events[3].output_shape, x.shape());
-  EXPECT_EQ(events[5].input_shape, x.shape());
-  EXPECT_GE(events[5].peak_memory_bytes, events[5].current_memory_bytes);
-  EXPECT_EQ(events.back().type, inference::EngineEventType::Error);
-  EXPECT_GT(events.back().trace_id, 0u);
-  EXPECT_EQ(events.back().span, "run");
-  EXPECT_NE(events.back().message.find("run failed"), std::string::npos);
-}
-
-TEST(InferenceTest, EngineProfilesLifecyclePhasesIntoStatsAndProfiler) {
-  ScopedProfileOverride profile(true);
-  Profiler::get().reset();
-
-  auto m = std::make_shared<IdentityLayer>();
-  inference::Engine engine;
-  engine.set_warmup_runs(2);
-  engine.load(m);
-
-  Device host{DeviceType::VULKAN, 0};
-  Tensor x({2, 2}, host);
-  x.fill_(1.0f);
-
-  engine.compile(x);
-  (void)engine.run(x);
-
-  const auto stats = engine.stats();
-  EXPECT_GT(stats.last_compile_trace_id, 0u);
-  EXPECT_GT(stats.last_run_trace_id, 0u);
-  EXPECT_NE(stats.last_compile_trace_id, stats.last_run_trace_id);
-  EXPECT_GE(stats.load_to_device_ms, 0.0);
-  EXPECT_GE(stats.load_eval_ms, 0.0);
-  EXPECT_GE(stats.compile_prepare_input_ms, 0.0);
-  EXPECT_GE(stats.compile_forward_ms, 0.0);
-  EXPECT_GE(stats.compile_warmup_ms, 0.0);
-  EXPECT_GE(stats.last_prepare_input_ms, 0.0);
-  EXPECT_GE(stats.last_forward_ms, 0.0);
-  EXPECT_GE(stats.last_output_validation_ms, 0.0);
-
-  const auto snapshot = Profiler::get().snapshot();
-  EXPECT_NE(snapshot.stats.find("inference.load.to_device"),
-            snapshot.stats.end());
-  EXPECT_NE(snapshot.stats.find("inference.load.eval"), snapshot.stats.end());
-  EXPECT_NE(snapshot.stats.find("inference.compile.prepare_input"),
-            snapshot.stats.end());
-  EXPECT_NE(snapshot.stats.find("inference.compile.forward"),
-            snapshot.stats.end());
-  EXPECT_NE(snapshot.stats.find("inference.compile.warmup"),
-            snapshot.stats.end());
-  EXPECT_NE(snapshot.stats.find("inference.run.prepare_input"),
-            snapshot.stats.end());
-  EXPECT_NE(snapshot.stats.find("inference.run.forward"), snapshot.stats.end());
-  EXPECT_NE(snapshot.stats.find("inference.run.validate_output"),
-            snapshot.stats.end());
-  const auto compile_forward = snapshot.stats.find("inference.compile.forward");
-  ASSERT_NE(compile_forward, snapshot.stats.end());
-  EXPECT_NE(compile_forward->second.last_shape.find(
-                "trace_id=" + std::to_string(stats.last_compile_trace_id)),
-            std::string::npos);
-  EXPECT_NE(compile_forward->second.last_shape.find("span=compile.forward"),
-            std::string::npos);
-  const auto run_forward = snapshot.stats.find("inference.run.forward");
-  ASSERT_NE(run_forward, snapshot.stats.end());
-  EXPECT_NE(run_forward->second.last_shape.find(
-                "trace_id=" + std::to_string(stats.last_run_trace_id)),
-            std::string::npos);
-  EXPECT_NE(run_forward->second.last_shape.find("span=run.forward"),
-            std::string::npos);
-  const auto module_forward = snapshot.stats.find("module.root.forward");
-  ASSERT_NE(module_forward, snapshot.stats.end());
-  EXPECT_NE(module_forward->second.last_shape.find(
-                "trace_id=" + std::to_string(stats.last_run_trace_id)),
-            std::string::npos);
-  EXPECT_NE(module_forward->second.last_shape.find("span=run.forward"),
-            std::string::npos);
-}
-
-TEST(InferenceTest, EngineDefaultHotPathLeavesTraceIdsZeroWithoutDiagnostics) {
-  auto m = std::make_shared<IdentityLayer>();
-  inference::Engine engine;
-  engine.load(m);
-
-  Device host{DeviceType::VULKAN, 0};
-  Tensor x({2, 2}, host);
-  x.fill_(1.0f);
-
-  engine.compile(x);
-  (void)engine.run(x);
-
-  const auto stats = engine.stats();
-  EXPECT_EQ(stats.last_compile_trace_id, 0u);
-  EXPECT_EQ(stats.last_run_trace_id, 0u);
-  EXPECT_EQ(stats.current_memory_bytes, 0u);
-  EXPECT_EQ(stats.peak_memory_bytes, 0u);
-}
-
-TEST(InferenceTest, EngineLeanModeDisablesProfilerMemoryByDefault) {
-  auto m = std::make_shared<IdentityLayer>();
-  inference::EngineConfig cfg;
-  cfg.lean_mode = true;
-  inference::Engine engine(cfg);
-  engine.load(m);
-
-  EXPECT_TRUE(engine.lean_mode());
-  EXPECT_FALSE(engine.capture_profiler_memory());
-
-  Device host{DeviceType::VULKAN, 0};
-  Tensor x({2, 2}, host);
-  x.fill_(1.0f);
-
-  engine.compile(x);
-  (void)engine.run(x);
-
-  const auto stats = engine.stats();
-  EXPECT_EQ(stats.current_memory_bytes, 0u);
-  EXPECT_EQ(stats.peak_memory_bytes, 0u);
-}
-TEST(InferenceTest, EngineRejectsAutogradInputBeforeTransfer) {
-  auto copy_count = std::make_shared<int>(0);
-  BackendManager::register_backend(DeviceType::VULKAN, [copy_count](Device) {
-    return std::make_shared<CountingCopyBackend>(copy_count);
-  });
-
-  auto m = std::make_shared<IdentityLayer>();
-  inference::Engine engine;
-  engine.set_device(Device{DeviceType::VULKAN, 0});
-  engine.load(m);
-
-  Tensor x({2, 2}, Device{DeviceType::VULKAN, 0}, DataType::Float32, true);
-  x.fill_(1.0f);
-  *copy_count = 0;
-
-  EXPECT_THROW((void)engine.run(x), std::runtime_error);
-  EXPECT_EQ(*copy_count, 0);
-
-  BackendManager::register_backend(DeviceType::VULKAN, [](Device) {
-    return std::make_shared<HostBackend>();
-  });
-}
-TEST(InferenceTest, EngineLoadSkipsTransfersForPrepositionedModule) {
-  auto copy_count = std::make_shared<int>(0);
-  BackendManager::register_backend(DeviceType::VULKAN, [copy_count](Device) {
-    return std::make_shared<CountingCopyBackend>(copy_count);
-  });
-
-  TensorOptions options;
-  options.device = Device{DeviceType::VULKAN, 0};
-  options.dtype = DataType::Float32;
-
-  auto m = std::make_shared<IdentityLayerWithState>(options);
-  *copy_count = 0;
-
-  inference::Engine engine;
-  engine.set_device(Device{DeviceType::VULKAN, 0});
-  engine.load(m);
-
-  EXPECT_EQ(*copy_count, 0);
-
-  BackendManager::register_backend(DeviceType::VULKAN, [](Device) {
-    return std::make_shared<HostBackend>();
-  });
-}
 TEST(InferenceTest, LoadSerializedReconstructsDeployModuleInCpp) {
-  Tensor weight({2, 2}, Device{DeviceType::VULKAN, 0}, DataType::Float32, false);
+  Tensor weight({2, 2}, Device{DeviceType::VULKAN, 0}, DataType::Float32,
+                false);
   Tensor bias({2}, Device{DeviceType::VULKAN, 0}, DataType::Float32, false);
   auto *w = static_cast<float *>(weight.data());
   auto *b = static_cast<float *>(bias.data());
@@ -761,9 +537,8 @@ TEST(InferenceTest, LoadSerializedSupportsRMSNormConfig) {
 
   const std::string config =
       R"({"type":"RMSNorm","normalized_shape":4,"eps":1e-5,"dtype":"float32"})";
-  const auto path =
-      write_npz_artifact("munet_cpp_load_serialized_rmsnorm", config,
-                         {{"weight", weight}});
+  const auto path = write_npz_artifact("munet_cpp_load_serialized_rmsnorm",
+                                       config, {{"weight", weight}});
 
   auto module = inference::load_serialized(path.string());
   ASSERT_TRUE(module);
@@ -801,7 +576,8 @@ TEST(InferenceTest, LoadSerializedRejectsCustomPythonConfigArtifacts) {
 }
 
 TEST(InferenceTest, EngineLoadCanAcceptSerializedArtifactPath) {
-  Tensor weight({2, 2}, Device{DeviceType::VULKAN, 0}, DataType::Float32, false);
+  Tensor weight({2, 2}, Device{DeviceType::VULKAN, 0}, DataType::Float32,
+                false);
   Tensor bias({2}, Device{DeviceType::VULKAN, 0}, DataType::Float32, false);
   auto *w = static_cast<float *>(weight.data());
   auto *b = static_cast<float *>(bias.data());
@@ -836,7 +612,8 @@ TEST(InferenceTest, EngineLoadCanAcceptSerializedArtifactPath) {
 
 TEST(InferenceTest,
      LoadWeightsSerializedRestoresExistingModuleAndSetsEvalMode) {
-  Tensor weight({2, 2}, Device{DeviceType::VULKAN, 0}, DataType::Float32, false);
+  Tensor weight({2, 2}, Device{DeviceType::VULKAN, 0}, DataType::Float32,
+                false);
   Tensor bias({2}, Device{DeviceType::VULKAN, 0}, DataType::Float32, false);
   auto *w = static_cast<float *>(weight.data());
   auto *b = static_cast<float *>(bias.data());

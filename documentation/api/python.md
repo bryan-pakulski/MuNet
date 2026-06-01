@@ -110,40 +110,31 @@ Module management:
 
 ## `munet.inference` API
 
-### Types
+Lean Vulkan inference API:
 
 - `inference.EngineConfig`
+  - `device` (defaults to `DeviceType.VULKAN`)
+  - `strict_shape_check`
+  - `allow_autograd_inputs`
 - `inference.EngineStats`
-- `inference.EngineEvent`
-- `inference.EngineEventType`
-
-### Engine
-
-- `Engine(config=EngineConfig())`
-- lifecycle/configuration:
-  - `set_device`, `device`
-  - `set_warmup_runs`
-  - `set_strict_shape_check`
-  - `set_allow_autograd_inputs`, `allow_autograd_inputs`
-  - `set_capture_profiler_memory`, `capture_profiler_memory`
-  - `set_lean_mode`, `lean_mode`
-  - `set_prepared_input_cache_entries`, `prepared_input_cache_entries_limit`
-  - `set_prepared_input_cache_max_bytes`, `prepared_input_cache_max_bytes_limit`
-  - `clear_prepared_input_cache`
-  - `set_observer`, `clear_observer`
-- model flow:
-  - `load(module)`
-  - `compile(example_input, expected_input_shape=None, expected_output_shape=None)`
-  - `prepare(example_input)`
-  - `prepare_batch(inputs)`
-  - `run(input)`
-  - `run_batch(inputs)`
-- status/metrics:
-  - `is_loaded`, `is_prepared`, `is_compiled`
+  - `loaded`, `prepared`, `compiled`
+  - `runs`, `batch_runs`
+  - `last_run_ms`, `compile_ms`
   - `compiled_input_shape`, `compiled_output_shape`
-  - `stats()`
+- `inference.Engine`
+  - `set_device(device)`, `device()`
+  - `set_strict_shape_check(enabled)`
+  - `set_allow_autograd_inputs(enabled)`, `allow_autograd_inputs()`
+  - `load(module)`
+  - `prepare(input)`
+  - `compile(example_input, expected_input_shape=None, expected_output_shape=None)`
+  - `run(input)`, `run_batch(inputs)`
+  - `is_loaded()`, `is_prepared()`, `is_compiled()`
+  - `compiled_input_shape()`, `compiled_output_shape()`, `stats()`
 
-`-1` in expected shapes is treated as a dynamic wildcard dimension.
+The engine intentionally excludes observer callbacks, warmup runners, trace IDs,
+and prepared-input caches. Keep those policies in application code around the
+small Vulkan execution loop.
 
 ## Serialization surface
 

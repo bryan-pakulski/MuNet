@@ -982,7 +982,7 @@ class TestBindings(unittest.TestCase):
         y2 = eng.run(x)
         self.assertEqual(y2.shape, [2, 2])
 
-    def test_inference_engine_defaults_to_low_overhead_mode_without_diagnostics(self):
+    def test_inference_engine_exposes_minimal_vulkan_stats(self):
         model = _sequential([
             munet.nn.Linear(4, 8),
             munet.nn.ReLU(),
@@ -990,69 +990,37 @@ class TestBindings(unittest.TestCase):
         ])
 
         eng = munet.inference.Engine()
-        self.assertFalse(eng.capture_profiler_memory())
-        self.assertFalse(eng.lean_mode())
-
         x = munet.Tensor([2, 4], requires_grad=False)
         np.array(x, copy=False)[:] = np.ones((2, 4), dtype=np.float32)
 
         eng.load(model)
+        prepared = eng.prepare(x)
+        self.assertEqual(prepared.shape, [2, 4])
+        self.assertTrue(eng.stats().loaded)
+        self.assertTrue(eng.stats().prepared)
+
         eng.compile(x)
         y = eng.run(x)
 
-        self.assertEqual(y.shape, [2, 2])
-        self.assertEqual(eng.stats().last_compile_trace_id, 0)
-        self.assertEqual(eng.stats().last_run_trace_id, 0)
-        self.assertEqual(eng.stats().current_memory_bytes, 0)
-        self.assertEqual(eng.stats().peak_memory_bytes, 0)
-
-    def test_inference_engine_lean_mode_disables_memory_capture(self):
-        cfg = munet.inference.EngineConfig()
-        cfg.lean_mode = True
-        eng = munet.inference.Engine(cfg)
-        self.assertTrue(eng.lean_mode())
-        self.assertFalse(eng.capture_profiler_memory())
-
-        model = _sequential([munet.nn.Linear(4, 2)])
-        x = munet.ones([1, 4], dtype=munet.DataType.Float32)
-        eng.load(model)
-        y = eng.run(x)
-
-        self.assertEqual(y.shape, [1, 2])
-        self.assertEqual(eng.stats().current_memory_bytes, 0)
-        self.assertEqual(eng.stats().peak_memory_bytes, 0)
-
-    def test_inference_engine_exposes_bounded_prepared_input_cache_policy(self):
-        cfg = munet.inference.EngineConfig()
-        cfg.prepared_input_cache_entries = 1
-        cfg.prepared_input_cache_max_bytes = 1024
-        eng = munet.inference.Engine(cfg)
-
-        self.assertEqual(eng.prepared_input_cache_entries_limit(), 1)
-        self.assertEqual(eng.prepared_input_cache_max_bytes_limit(), 1024)
-
-        model = _sequential([munet.nn.Linear(4, 2)])
-        eng.load(model)
-
-        a = munet.ones([1, 4], dtype=munet.DataType.Float32)
-        b = munet.ones([1, 4], dtype=munet.DataType.Float32)
-        eng.run_batch([a, b])
         stats = eng.stats()
+        self.assertEqual(y.shape, [2, 2])
+        self.assertTrue(stats.compiled)
+        self.assertEqual(stats.runs, 1)
+        self.assertEqual(stats.compiled_input_shape, [2, 4])
+        self.assertEqual(stats.compiled_output_shape, [2, 2])
 
-        self.assertLessEqual(stats.prepared_input_cache_entries, 1)
-        self.assertLessEqual(stats.prepared_input_cache_bytes, 1024)
-
-    def test_inference_engine_prepare_batch_prepopulates_cache(self):
-        cfg = munet.inference.EngineConfig()
-        cfg.prepared_input_cache_entries = 2
-        eng = munet.inference.Engine(cfg)
+    def test_inference_engine_run_batch_counts_simple_batches(self):
+        eng = munet.inference.Engine()
         model = _sequential([munet.nn.Linear(4, 2)])
         eng.load(model)
 
         a = munet.ones([1, 4], dtype=munet.DataType.Float32)
         b = munet.ones([1, 4], dtype=munet.DataType.Float32)
-        eng.prepare_batch([a, b])
-        self.assertEqual(eng.stats().prepared_input_cache_misses, 0)
+        outs = eng.run_batch([a, b])
+
+        self.assertEqual(len(outs), 2)
+        self.assertEqual(eng.stats().runs, 2)
+        self.assertEqual(eng.stats().batch_runs, 1)
 
     def test_inference_engine_from_serialized_model(self):
         model = _sequential([

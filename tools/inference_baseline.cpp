@@ -1,5 +1,4 @@
 #include "inference.hpp"
-#include "core/util/profiler.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -26,11 +25,6 @@ struct BenchmarkConfig {
   int single_run_iters = 50;
   int batch_run_inputs = 4;
   int batch_run_iters = 20;
-  bool capture_profiler_memory = false;
-  bool lean_mode = false;
-  int prepared_input_cache_entries = 8;
-  size_t prepared_input_cache_max_bytes = 64 * 1024 * 1024;
-  bool preallocate_batch_inputs = false;
 };
 
 class BenchmarkMLP : public inference::Module {
@@ -148,14 +142,6 @@ int parse_nonnegative_int(const std::string &name, const std::string &value) {
   return parsed;
 }
 
-bool parse_bool(const std::string &name, const std::string &value) {
-  if (value == "1" || value == "true")
-    return true;
-  if (value == "0" || value == "false")
-    return false;
-  throw std::runtime_error(name + " must be one of: 0, 1, false, true");
-}
-
 BenchmarkConfig parse_args(int argc, char **argv) {
   BenchmarkConfig cfg;
   for (int i = 1; i < argc; ++i) {
@@ -186,38 +172,19 @@ BenchmarkConfig parse_args(int argc, char **argv) {
       cfg.batch_run_inputs = parse_positive_int(arg, require_value(arg));
     } else if (arg == "--batch-run-iters") {
       cfg.batch_run_iters = parse_positive_int(arg, require_value(arg));
-    } else if (arg == "--capture-profiler-memory") {
-      cfg.capture_profiler_memory =
-          parse_bool(arg, require_value(arg));
-    } else if (arg == "--lean-mode") {
-      cfg.lean_mode = parse_bool(arg, require_value(arg));
-    } else if (arg == "--prepared-input-cache-entries") {
-      cfg.prepared_input_cache_entries =
-          parse_nonnegative_int(arg, require_value(arg));
-    } else if (arg == "--prepared-input-cache-max-bytes") {
-      cfg.prepared_input_cache_max_bytes =
-          static_cast<size_t>(std::stoull(require_value(arg)));
-    } else if (arg == "--preallocate-batch-inputs") {
-      cfg.preallocate_batch_inputs = parse_bool(arg, require_value(arg));
     } else if (arg == "--help") {
-      std::cout
-          << "MuNet inference baseline benchmark\n"
-          << "Usage: munet_inference_baseline [options]\n"
-          << "  --device <host|vulkan>\n"
-          << "  --dtype <float32|float16>\n"
-          << "  --batch <int>\n"
-          << "  --input-dim <int>\n"
-          << "  --hidden-dim <int>\n"
-          << "  --output-dim <int>\n"
-          << "  --warmup-runs <int>\n"
-          << "  --single-run-iters <int>\n"
-          << "  --batch-run-inputs <int>\n"
-          << "  --batch-run-iters <int>\n"
-          << "  --capture-profiler-memory <0|1|false|true>\n"
-          << "  --lean-mode <0|1|false|true>\n"
-          << "  --prepared-input-cache-entries <int>\n"
-          << "  --prepared-input-cache-max-bytes <int>\n"
-          << "  --preallocate-batch-inputs <0|1|false|true>\n";
+      std::cout << "MuNet inference baseline benchmark\n"
+                << "Usage: munet_inference_baseline [options]\n"
+                << "  --device <host|vulkan>\n"
+                << "  --dtype <float32|float16>\n"
+                << "  --batch <int>\n"
+                << "  --input-dim <int>\n"
+                << "  --hidden-dim <int>\n"
+                << "  --output-dim <int>\n"
+                << "  --warmup-runs <int>\n"
+                << "  --single-run-iters <int>\n"
+                << "  --batch-run-inputs <int>\n"
+                << "  --batch-run-iters <int>\n";
       std::exit(0);
     } else {
       throw std::runtime_error("Vulkan argument: " + arg);
@@ -239,25 +206,20 @@ void synchronize_tensor(const Tensor &tensor) {
   }
 }
 
-double elapsed_ms(
-    const std::chrono::high_resolution_clock::time_point &start_time) {
+double
+elapsed_ms(const std::chrono::high_resolution_clock::time_point &start_time) {
   return std::chrono::duration<double, std::milli>(
              std::chrono::high_resolution_clock::now() - start_time)
       .count();
 }
 
-std::string build_profile_hint(const Device &) {
-  return "vulkan_runtime";
-}
-
+std::string build_profile_hint(const Device &) { return "vulkan_runtime"; }
 
 } // namespace
 
 int main(int argc, char **argv) {
   try {
     const BenchmarkConfig cfg = parse_args(argc, argv);
-    Profiler::get().reset();
-
     TensorOptions options;
     options.device = Device{DeviceType::VULKAN, 0};
     options.dtype = cfg.dtype;
@@ -268,15 +230,8 @@ int main(int argc, char **argv) {
 
     inference::EngineConfig engine_cfg;
     engine_cfg.device = cfg.device;
-    engine_cfg.warmup_runs = cfg.warmup_runs;
     engine_cfg.strict_shape_check = true;
     engine_cfg.allow_autograd_inputs = false;
-    engine_cfg.capture_profiler_memory = cfg.capture_profiler_memory;
-    engine_cfg.lean_mode = cfg.lean_mode;
-    engine_cfg.prepared_input_cache_entries =
-        static_cast<size_t>(cfg.prepared_input_cache_entries);
-    engine_cfg.prepared_input_cache_max_bytes =
-        cfg.prepared_input_cache_max_bytes;
     inference::Engine engine(engine_cfg);
 
     const Tensor input = make_input(cfg);
@@ -289,8 +244,6 @@ int main(int argc, char **argv) {
     const auto load_start = std::chrono::high_resolution_clock::now();
     engine.load(module);
     const double load_wall_ms = elapsed_ms(load_start);
-    const auto load_stats = engine.stats();
-
     engine.compile(input, {-1, cfg.input_dim}, {-1, cfg.output_dim});
     const auto compile_stats = engine.stats();
 
@@ -301,9 +254,6 @@ int main(int argc, char **argv) {
 
     double single_wall_ms_total = 0.0;
     double single_engine_run_ms_total = 0.0;
-    double single_prepare_ms_total = 0.0;
-    double single_forward_ms_total = 0.0;
-    double single_validate_ms_total = 0.0;
 
     for (int i = 0; i < cfg.single_run_iters; ++i) {
       const auto iter_start = std::chrono::high_resolution_clock::now();
@@ -313,20 +263,12 @@ int main(int argc, char **argv) {
 
       const auto stats = engine.stats();
       single_engine_run_ms_total += stats.last_run_ms;
-      single_prepare_ms_total += stats.last_prepare_input_ms;
-      single_forward_ms_total += stats.last_forward_ms;
-      single_validate_ms_total += stats.last_output_validation_ms;
     }
 
     double batch_wall_ms_total = 0.0;
-    if (cfg.preallocate_batch_inputs) {
-      engine.prepare_batch(batch_inputs);
-    }
-    std::vector<Tensor> batch_outputs;
-    batch_outputs.reserve(batch_inputs.size());
     for (int i = 0; i < cfg.batch_run_iters; ++i) {
       const auto iter_start = std::chrono::high_resolution_clock::now();
-      engine.run_batch_into(batch_inputs, batch_outputs);
+      std::vector<Tensor> batch_outputs = engine.run_batch(batch_inputs);
       if (!batch_outputs.empty()) {
         synchronize_tensor(batch_outputs.back());
       }
@@ -334,7 +276,6 @@ int main(int argc, char **argv) {
     }
 
     const auto final_stats = engine.stats();
-    const auto profiler_snapshot = Profiler::get().snapshot();
 
     std::cout << std::fixed << std::setprecision(4);
     std::cout << "{\n";
@@ -342,16 +283,6 @@ int main(int argc, char **argv) {
     std::cout << "  \"dtype\": " << quote(dtype_name(cfg.dtype)) << ",\n";
     std::cout << "  \"build_profile_hint\": "
               << quote(build_profile_hint(cfg.device)) << ",\n";
-    std::cout << "  \"lean_mode\": "
-              << (cfg.lean_mode ? "true" : "false") << ",\n";
-    std::cout << "  \"memory_policy\": {\n";
-    std::cout << "    \"prepared_input_cache_entries\": "
-              << engine.prepared_input_cache_entries_limit() << ",\n";
-    std::cout << "    \"prepared_input_cache_max_bytes\": "
-              << engine.prepared_input_cache_max_bytes_limit() << ",\n";
-    std::cout << "    \"preallocate_batch_inputs\": "
-              << (cfg.preallocate_batch_inputs ? "true" : "false") << "\n";
-    std::cout << "  },\n";
     std::cout << "  \"shape_contract\": {\n";
     std::cout << "    \"compiled_input_shape\": "
               << to_json_array(compile_stats.compiled_input_shape) << ",\n";
@@ -359,32 +290,17 @@ int main(int argc, char **argv) {
               << to_json_array(compile_stats.compiled_output_shape) << "\n";
     std::cout << "  },\n";
     std::cout << "  \"cold_load\": {\n";
-    std::cout << "    \"wall_ms\": " << load_wall_ms << ",\n";
-    std::cout << "    \"to_device_ms\": " << load_stats.load_to_device_ms
-              << ",\n";
-    std::cout << "    \"eval_ms\": " << load_stats.load_eval_ms << "\n";
+    std::cout << "    \"wall_ms\": " << load_wall_ms << "\n";
     std::cout << "  },\n";
     std::cout << "  \"compile\": {\n";
-    std::cout << "    \"compile_ms\": " << compile_stats.compile_ms << ",\n";
-    std::cout << "    \"prepare_input_ms\": "
-              << compile_stats.compile_prepare_input_ms << ",\n";
-    std::cout << "    \"forward_ms\": " << compile_stats.compile_forward_ms
-              << ",\n";
-    std::cout << "    \"warmup_ms\": " << compile_stats.compile_warmup_ms
-              << "\n";
+    std::cout << "    \"compile_ms\": " << compile_stats.compile_ms << "\n";
     std::cout << "  },\n";
     std::cout << "  \"steady_single_run\": {\n";
     std::cout << "    \"iters\": " << cfg.single_run_iters << ",\n";
     std::cout << "    \"avg_wall_ms\": "
               << (single_wall_ms_total / cfg.single_run_iters) << ",\n";
     std::cout << "    \"avg_engine_run_ms\": "
-              << (single_engine_run_ms_total / cfg.single_run_iters) << ",\n";
-    std::cout << "    \"avg_prepare_input_ms\": "
-              << (single_prepare_ms_total / cfg.single_run_iters) << ",\n";
-    std::cout << "    \"avg_forward_ms\": "
-              << (single_forward_ms_total / cfg.single_run_iters) << ",\n";
-    std::cout << "    \"avg_output_validation_ms\": "
-              << (single_validate_ms_total / cfg.single_run_iters) << "\n";
+              << (single_engine_run_ms_total / cfg.single_run_iters) << "\n";
     std::cout << "  },\n";
     std::cout << "  \"steady_batch_run\": {\n";
     std::cout << "    \"iters\": " << cfg.batch_run_iters << ",\n";
@@ -396,25 +312,9 @@ int main(int argc, char **argv) {
                   (cfg.batch_run_iters * cfg.batch_run_inputs))
               << "\n";
     std::cout << "  },\n";
-    std::cout << "  \"memory_bytes\": {\n";
-    std::cout << "    \"engine_current\": " << final_stats.current_memory_bytes
-              << ",\n";
-    std::cout << "    \"engine_peak\": " << final_stats.peak_memory_bytes
-              << ",\n";
-    std::cout << "    \"prepared_input_cache_entries\": "
-              << final_stats.prepared_input_cache_entries << ",\n";
-    std::cout << "    \"prepared_input_cache_bytes\": "
-              << final_stats.prepared_input_cache_bytes << ",\n";
-    std::cout << "    \"prepared_input_cache_hits\": "
-              << final_stats.prepared_input_cache_hits << ",\n";
-    std::cout << "    \"prepared_input_cache_misses\": "
-              << final_stats.prepared_input_cache_misses << ",\n";
-    std::cout << "    \"prepared_input_cache_evictions\": "
-              << final_stats.prepared_input_cache_evictions << ",\n";
-    std::cout << "    \"profiler_current\": "
-              << profiler_snapshot.current_memory_bytes << ",\n";
-    std::cout << "    \"profiler_peak\": "
-              << profiler_snapshot.peak_memory_bytes << "\n";
+    std::cout << "  \"engine_stats\": {\n";
+    std::cout << "    \"runs\": " << final_stats.runs << ",\n";
+    std::cout << "    \"batch_runs\": " << final_stats.batch_runs << "\n";
     std::cout << "  }\n";
     std::cout << "}\n";
 

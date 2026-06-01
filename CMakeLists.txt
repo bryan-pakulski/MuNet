@@ -201,8 +201,6 @@ if(MUNET_BUILD_TOOLS)
                     --single-run-iters 1
                     --batch-run-inputs 2
                     --batch-run-iters 1
-                    --prepared-input-cache-entries 0
-                    --prepared-input-cache-max-bytes 0
         )
     endif()
 

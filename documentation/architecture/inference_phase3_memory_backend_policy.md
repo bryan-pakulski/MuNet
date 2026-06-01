@@ -1,83 +1,33 @@
-# Inference Runtime Phase 3 Memory and Backend Policy
+# Lean Vulkan inference memory policy
 
-This document starts **Phase 3 - Memory and backend policy optimization** for the inference/runtime separation effort.
+The inference engine now avoids owning memory policy.  It does not keep a
+prepared-input cache, pre-populate batches, or reuse caller-owned output
+containers.  The core engine is only responsible for moving the current input to
+the configured Vulkan device, running the loaded module with autograd disabled,
+and enforcing any compiled shape contract.
 
-The goal of this phase is to make inference memory use bounded and deployment-oriented while keeping backend startup proportional to the devices actually used.
+## Why this is simpler
 
-## Phase 3 status
+- The hot path has one transfer decision and one forward call.
+- Cache sizing and eviction do not sit inside the generic runtime.
+- Batch orchestration is a sequential loop over `run(...)`, making behavior easy
+  to reason about before adding optimized Vulkan-specific batching later.
+- Deployment-specific caches can live next to the serving code that understands
+  request reuse patterns and memory budgets.
 
-- [x] Phase 3 - Memory and backend policy optimization
-- [x] Prepared-input cache policy made configurable and bounded
-- [x] Repeat-run cache stats exposed for benchmark/test validation
-- [x] Backend initialization behavior reviewed
-- [x] Deploy-vs-training backend capability split documented in code and tests
-- [x] Constrained-system fallback policy documented in code and tests
-- [x] Hardware-tier recommendations documented
-- [x] Output/workspace reuse policy implemented
-- [x] Packaging/build reduction for unused backends evaluated
+## Current API boundary
 
-## Phase 3 changes landed so far
+Keep these responsibilities in the engine:
 
-### 1. Bounded prepared-input cache policy
+- `load(module)`: move module to the Vulkan device and set eval mode.
+- `prepare(input)`: validate and transfer one tensor to the engine device.
+- `compile(sample, ...)`: capture optional input/output shape contracts.
+- `run(input)` / `run_batch(inputs)`: execute with autograd disabled.
 
-`inference::Engine` now exposes a deployment-oriented prepared-input cache policy:
+Keep these responsibilities outside the engine:
 
-- `prepared_input_cache_entries`
-- `prepared_input_cache_max_bytes`
-
-This turns the transfer cache into an explicitly bounded memory feature instead of an unbounded convenience cache.
-
-Current behavior:
-
-- cache entries are capped by count and total bytes
-- oversized inputs are not cached
-- repeated `run_batch(...)` calls can still reuse transferred inputs when they fit inside the configured budget
-- constrained deployments can set the entry count to `0` or use a very small byte budget to keep temporary memory bounded
-- `prepare_batch(...)` can pre-populate reusable prepared-input buffers during compile/warmup flows
-- `run_batch_into(...)` allows callers to reuse the batch-output container across repeated runs instead of reallocating the output vector each time
-
-### 2. Runtime visibility
-
-`EngineStats` now reports:
-
-- prepared-input cache entry count
-- prepared-input cache bytes
-- cache hits / misses
-- cache evictions
-
-`munet_inference_baseline` also reports the active cache policy and cache statistics in its JSON output.
-
-This gives Phase 3 a concrete way to validate whether memory reuse is helping repeat-run behavior without guessing from wall time alone.
-
-### 3. Backend initialization review
-
-The current backend manager already defers **backend instance construction** until `BackendManager::get(device)` is called, so unused devices are not initialized at process start.
-
-The current evaluation is sufficient for Phase 3 because backend instance construction is lazy today, inference builds are already isolated from training headers/public APIs, and the remaining package-shape work has been pushed into later rollout/packaging phases rather than blocking the runtime-policy milestone.
-
-### 4. Deploy-vs-training backend capability split
-
-The backend feature surface now explicitly distinguishes deploy-runtime versus training-only features:
-
-- deploy/runtime: math, activation, reduction, random fill, shape, loss, and spatial inference features
-- training-only: `OptimizerStep`
-
-This keeps the deploy/runtime classification visible in code and test coverage instead of leaving it implicit.
-
-### 5. Constrained fallback policy
-
-MuNet now has an explicit constrained-system policy encoded in backend fallback helpers:
-
-- `ExplicitUnsupported` for deploy-safe math/activation/reduction/random features where Vulkan execution is acceptable
-- `ExplicitUnsupported` for features where silent fallback would violate runtime expectations or hide material capability gaps (for example convolution/spatial acceleration gaps or optimizer functionality in an inference runtime)
-
-### 6. Hardware-tier recommendations
-
-- **Edge / constrained Vulkan-only**: keep `prepared_input_cache_entries` small (or `0`), favor `lean_mode=True`, and rely on Vulkan fallback only for deploy-safe math/reduction features.
-- **Workstation / selective Vulkan backend**: use bounded prepared-input cache plus `prepare_batch(...)` when repeated Vulkan transfer transfers dominate request setup.
-- **Enterprise / Vulkan backend-heavy serving**: keep cache policy sized to the active request working set, use `run_batch_into(...)` to avoid repeat batch-output container allocations, and treat unsupported spatial/optimizer features as explicit deployment configuration errors rather than silent fallback.
-
-## Current follow-on work
-
-- carry deploy/runtime capability classes into later packaging/rollout work if the project introduces slimmer distribution targets
-- deepen true tensor-storage reuse in future backend-specific work where operator APIs can safely accept caller-owned output storage
+- request tracing and logging correlation;
+- profiling collection policy;
+- warmup loops;
+- reusable staging/input caches;
+- custom batch scheduling and output-container reuse.

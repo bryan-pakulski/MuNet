@@ -1,158 +1,61 @@
-# Inference Engine Guide
+# Lean Vulkan inference engine
 
-## Goal
+The inference engine is intentionally small: it owns one loaded module, targets one
+Vulkan device, optionally records a shape contract, and runs tensors with autograd
+disabled.  It no longer has observer hooks, trace scopes, warmup orchestration, or
+prepared-input caches.  Those concerns belong outside the hot path so Vulkan
+execution can stay predictable and easy to optimize.
 
-Provide a stable deploy runtime with shape contracts, warmup/compile behavior, and diagnostics that stay separate from training/autograd internals.
+## Runtime model
 
-## Compile contracts
+1. Build or load a module.
+2. Create `munet.inference.Engine()`; the default device is `DeviceType.VULKAN`.
+3. `load(module)` moves the module to the configured Vulkan device and switches it
+   to eval mode.
+4. Optionally call `compile(sample, expected_input_shape=None,
+   expected_output_shape=None)` to capture a strict shape contract. Use `-1` in an
+   expected shape dimension to allow that dimension to vary.
+5. Call `run(tensor)` for one input or `run_batch([...])` for a simple sequential
+   batch.
 
-Use `compile(...)` with optional shape contracts:
+`prepare(tensor)` remains only as a convenience transfer/validation helper. It
+returns the tensor on the engine device and marks the engine prepared; it does not
+populate a cache or run warmup loops.
 
-- `expected_input_shape`
-- `expected_output_shape`
+## Shape checks
 
-Use `-1` for dynamic dims:
+`EngineConfig.strict_shape_check` defaults to `True`. After `compile(...)`, every
+`run(...)` validates the prepared input shape and output shape against the captured
+contracts. Disable strict checks only when the caller owns validation externally.
 
-- Dynamic batch MLP: `[-1, 4] -> [-1, 2]`
-- Dynamic resolution conv: `[-1, 3, -1, -1] -> [-1, 2, -1, -1]`
+## Autograd boundary
 
-## Inference/autograd boundary
+`EngineConfig.allow_autograd_inputs` defaults to `False`. Inputs with
+`requires_grad=True` are rejected before any device transfer, and forward execution
+runs under inference mode so outputs do not attach to the autograd graph.
 
-`munet.inference.Engine` now enforces an inference-first execution path:
-
-- `compile(...)` and `run(...)` temporarily disable `GradMode`, even if the loaded module still has trainable parameters.
-- Inputs with `requires_grad=True` are rejected by default with a targeted deployment error.
-- You can opt into `allow_autograd_inputs=True` only for debugging/inspection flows; MuNet still hard-fails if the resulting deployment path would surface a grad-tracked output.
-- If a deployment path somehow produces a gradient-tracked output, the engine raises an error instead of silently leaking training behavior into inference.
-
-## Low-overhead defaults and lean mode
-
-MuNet now defaults the inference runtime toward lower overhead:
-
-- `capture_profiler_memory` defaults to `False`
-- trace ids / scoped trace contexts are only activated when observers, profiler mode, or debug logging are enabled
-- `lean_mode=True` further favors predictable deploy execution by keeping Vulkan runtime diagnostics off and skipping non-essential load-time diagnostics
-
-For constrained devices, prefer:
-
-- `eng.set_lean_mode(True)` in Python, or `EngineConfig::lean_mode = true` in C++
-- `capture_profiler_memory=True` only when you are actively collecting memory diagnostics
-- a bounded prepared-input cache (`prepared_input_cache_entries`, `prepared_input_cache_max_bytes`) when repeated Vulkan transfer transfers must stay within a fixed memory budget
-- `prepare_batch([...])` during warmup when you want to pre-populate prepared-input buffers before steady-state batched inference
-- observers only when lifecycle event callbacks are required
-
-## Strict vs non-strict checks
-
-- strict mode validates compiled/expected shapes at runtime.
-- non-strict mode allows mismatches (for experimentation).
-
-## Observability hooks
-
-The engine exposes lightweight lifecycle hooks without coupling deployment code to training internals:
-
-- `set_observer(callback)` receives load / compile / run / error events.
-- Each event includes:
-  - event type
-  - device
-  - run index
-  - input/output shapes when available
-  - duration in milliseconds
-  - profiler current/peak memory snapshots when enabled
-  - a human-readable diagnostic message
-- `EngineStats` also records compile/run timings, compiled shapes, profiler memory
-  snapshots, per-run trace ids, and Vulkan-side phase timings for:
-  - module load transfer/eval
-  - compile input preparation / forward / warmup
-  - run input preparation / forward / output validation
-- `EngineEvent` now carries the active `trace_id` and `span` for compile/run
-  lifecycle callbacks, making it possible to join observer output with
-  profiler rows and debug logs from the same request.
-
-For production-like profiling, keep `capture_profiler_memory=True` and combine
-engine events with the process-level profiler (`MUNET_PROFILE=1`) when deeper
-backend timing is required. If you also enable `MUNET_DEBUG=1`, log lines will
-include the same `[trace_id=… span=…]` prefix used by profiler detail strings.
-
-
-MuNet now follows a strict native-conversion flow:
-
-2. If any node cannot be converted, conversion fails with a detailed unsupported-op report.
-
-There is no runtime fallback path in conversion.
-
-### Deploy packaging boundary
-
-- If conversion still requires the Python graph-runtime helper, the result remains **development tooling**: it is useful for validation and bring-up, but it is not serialized as a deploy package.
-
-### Foundation added for runtime conversion
-
-  - `lowered`: converted to MuNet layers today.
-  - `pass_through`: graph bookkeeping ops, no emitted layer.
-  - `planned` / `unsupported`: not yet lowered.
-- Lowering now uses a dispatch architecture (op -> lowering function), making it easier to add new operators without growing a single large conditional block.
-
-### Current native-lowered operators
-
-- `Gemm` -> `nn.Linear`
-- `MatMul` (constant RHS) -> `nn.Linear`
-- `Conv` (limited 2D case) -> `nn.Conv2d`
-- `MaxPool` (2D symmetric case) -> `nn.MaxPool2d`
-- `Relu` -> `nn.ReLU`
-- `LeakyRelu` -> `nn.LeakyReLU`
-- `Sigmoid` -> `nn.Sigmoid`
-- `Tanh` -> `nn.Tanh`
-- `Gelu` -> `nn.GELU`
-- `Flatten` -> `nn.Flatten`
-- `GlobalAveragePool` -> `nn.GlobalAvgPool2d`
-
-### Recently completed mappings
-
-- binary constant ops: `Add`, `Sub`, `Mul`, `Div`
-- layout ops: `Reshape`, `Transpose`
-- basic graph joins: `Concat`
-- shape/index ops: `Squeeze`, `Expand`, `Tile`, `ConstantOfShape`, `Gather`
-
-
+## Minimal Python example
 
 ```python
-import munet_nn as munet
-print(report["unique_ops"])
-print("unsupported:", report["coverage"]["unsupported"])
-print("unmapped:", report["coverage"]["unmapped"])
-print("native deployable:", report["native_deployable"])
-print("runtime role:", report["runtime_role"])
+import munet_nn as mn
+
+model = mn.nn.Sequential(mn.nn.Linear(4, 2), mn.nn.ReLU())
+engine = mn.inference.Engine()
+engine.load(model)
+
+x = mn.Tensor([1, 4], device=mn.Device(mn.DeviceType.VULKAN, 0))
+engine.compile(x, expected_input_shape=[-1, 4])
+y = engine.run(x)
+print(engine.stats().runs, y.shape())
 ```
 
-To fetch the reference model used by tests/utilities:
+## What moved out of the engine
 
-```python
-import munet_nn as munet
-```
+Diagnostics and orchestration should be layered around the engine instead of inside
+it:
 
-## Builder container for reproducible local builds
-
-If local pybind11/Python toolchain setup is problematic, use the builder image:
-
-```bash
-./tools/build_in_docker.sh
-```
-
-This builds `docker/Dockerfile.builder` and runs a release CMake build inside
-
-### YOLOv5n conversion status
-
-including:
-
-- `Add`, `Cast`, `Concat`, `Constant`, `Conv`, `Floor`, `MaxPool`, `Mul`,
-  `Pow`, `Reshape`, `Resize`, `Shape`, `Sigmoid`, `Slice`, `Split`,
-  `Transpose`, `Unsqueeze`.
-
-
-
-1. **Success**: model is fully converted to MuNet native graph module.
-2. **Failure**: conversion aborts and reports unsupported operators with:
-   - unique unsupported op names
-   - total unsupported node count
-   - full per-op node counts
-
-There is no runtime fallback during conversion.
+- profiling remains available through the global profiler utilities;
+- request tracing should be done by the application layer;
+- warmup loops should call `run(...)` explicitly;
+- repeated-input or staging caches should live in caller-owned code that can be
+  tuned for a specific deployment.

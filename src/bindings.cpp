@@ -15,7 +15,6 @@
 #include <stdexcept>
 #include <unordered_map>
 
-
 #ifdef MUNET_USE_VULKAN
 #include <vulkan/vulkan.h>
 #endif
@@ -44,8 +43,8 @@ DataType numpy_dtype_to_data_type(const py::buffer_info &buf) {
   if (buf.itemsize == 2 && buf.format.find('H') != std::string::npos) {
     return DataType::BFloat16;
   }
-  throw std::runtime_error(
-      "Unsupported NumPy dtype; expected float32, float16/bfloat16, int32, or int8");
+  throw std::runtime_error("Unsupported NumPy dtype; expected float32, "
+                           "float16/bfloat16, int32, or int8");
 }
 
 std::string numpy_format_for_dtype(DataType dtype) {
@@ -175,7 +174,8 @@ Tensor apply_index(const Tensor &t, py::object idx, int dim) {
       throw py::error_already_set();
     if (step != 1)
       throw std::runtime_error("Only step=1 slices are supported");
-    return t.narrow(dim, static_cast<int>(start), static_cast<int>(stop - start));
+    return t.narrow(dim, static_cast<int>(start),
+                    static_cast<int>(stop - start));
   } else if (idx.is_none()) {
     // None means keep the whole dimension
     return t;
@@ -189,17 +189,18 @@ Tensor apply_index(const Tensor &t, py::object idx, int dim) {
 Tensor tensor_getitem(const Tensor &t, py::object key) {
   if (!t.impl_)
     throw std::runtime_error("Cannot index an uninitialized tensor");
-  
+
   if (py::isinstance<py::tuple>(key)) {
     py::tuple indices = key.cast<py::tuple>();
     Tensor result = t;
     std::vector<int> new_shape;
-    
+
     for (size_t i = 0; i < indices.size(); ++i) {
       auto idx = indices[i];
       if (py::isinstance<py::int_>(idx)) {
         int i_val = idx.cast<int>();
-        if (i_val < 0) i_val += result.shape()[i];
+        if (i_val < 0)
+          i_val += result.shape()[i];
         result = result.narrow(static_cast<int>(i), i_val, 1);
       } else if (py::isinstance<py::slice>(idx)) {
         py::slice sl = idx.cast<py::slice>();
@@ -208,7 +209,8 @@ Tensor tensor_getitem(const Tensor &t, py::object key) {
           throw py::error_already_set();
         if (step != 1)
           throw std::runtime_error("Only step=1 slices are supported");
-        result = result.narrow(static_cast<int>(i), static_cast<int>(start), static_cast<int>(stop - start));
+        result = result.narrow(static_cast<int>(i), static_cast<int>(start),
+                               static_cast<int>(stop - start));
       }
     }
     return result;
@@ -218,7 +220,8 @@ Tensor tensor_getitem(const Tensor &t, py::object key) {
     Tensor result = apply_index(t, key, 0);
     if (is_int) {
       // Squeeze the first dimension for integer indexing
-      std::vector<int> new_shape(result.shape().begin() + 1, result.shape().end());
+      std::vector<int> new_shape(result.shape().begin() + 1,
+                                 result.shape().end());
       return result.reshape(new_shape);
     }
     return result;
@@ -261,8 +264,7 @@ ops::OpId parse_op_id_name(const std::string &name) {
   };
   auto it = kNameToOp.find(name);
   if (it == kNameToOp.end()) {
-    throw std::runtime_error("Debug dump op name was not registered: " +
-                             name);
+    throw std::runtime_error("Debug dump op name was not registered: " + name);
   }
   return it->second;
 }
@@ -313,9 +315,8 @@ PYBIND11_MODULE(_core, m) {
       .value("Reduction", BackendFeature::Reduction)
       .export_values();
 
-  py::class_<Device>(
-      m, "Device",
-      "Represents the Vulkan compute device and its index.")
+  py::class_<Device>(m, "Device",
+                     "Represents the Vulkan compute device and its index.")
       .def(py::init<DeviceType, int>(),
            py::arg_v("type", DeviceType::VULKAN, "munet.DeviceType.VULKAN"),
            py::arg("index") = 0, "Initializes a new Device.")
@@ -390,15 +391,15 @@ PYBIND11_MODULE(_core, m) {
       .def("__len__",
            [](const Tensor &t) {
              return (!t.impl_ || t.shape().empty()) ? 0 : t.shape()[0];
-          })
+           })
       .def("__getitem__", &tensor_getitem, py::arg("key"),
            "Get item or slice from tensor using Python-style indexing.")
-      .def("numel", [](const Tensor &t) { return t.impl_ ? t.size() : 0; },
+      .def(
+          "numel", [](const Tensor &t) { return t.impl_ ? t.size() : 0; },
           "Returns the total number of elements in the tensor.")
       .def("detach", &Tensor::detach,
            "Returns a new Tensor, detached from the current autograd graph.")
-      .def("clone", &Tensor::clone,
-           "Returns a deep copy of this tensor.")
+      .def("clone", &Tensor::clone, "Returns a deep copy of this tensor.")
       .def("__repr__",
            [](const Tensor &t) {
              if (!t.impl_)
@@ -415,10 +416,11 @@ PYBIND11_MODULE(_core, m) {
            py::overload_cast<const TensorOptions &>(&Tensor::to, py::const_),
            py::arg("options"),
            "Converts the tensor using explicit tensor options.")
-      .def("to_",
-           [](Tensor &t, Device device) { t.to_(device); },
-           py::arg("device"),
-           "Moves the tensor to the specified device in-place, preserving shared_ptr identity.")
+      .def(
+          "to_", [](Tensor &t, Device device) { t.to_(device); },
+          py::arg("device"),
+          "Moves the tensor to the specified device in-place, preserving "
+          "shared_ptr identity.")
       .def(
           "copy_from_numpy",
           [](Tensor &t, py::array input) {
@@ -475,16 +477,18 @@ PYBIND11_MODULE(_core, m) {
           "all_reduce",
           [](Tensor &t, std::optional<size_t> num_elements) {
             if (!t.impl_ || !t.impl_->storage) {
-              throw std::runtime_error("Cannot all_reduce an uninitialized tensor.");
+              throw std::runtime_error(
+                  "Cannot all_reduce an uninitialized tensor.");
             }
             if (t.storage_offset() != 0 ||
                 t.bytes() != t.impl_->storage->size_bytes()) {
-              throw std::runtime_error(
-                  "all_reduce currently requires a base tensor (no view/slice offset).");
+              throw std::runtime_error("all_reduce currently requires a base "
+                                       "tensor (no view/slice offset).");
             }
             const size_t elems = num_elements.value_or(t.size());
             if (elems > t.size()) {
-              throw std::runtime_error("all_reduce num_elements exceeds tensor size.");
+              throw std::runtime_error(
+                  "all_reduce num_elements exceeds tensor size.");
             }
             t.impl_->backend().all_reduce(*t.impl_->storage, elems);
             return t;
@@ -573,10 +577,12 @@ PYBIND11_MODULE(_core, m) {
       .def("cos", &Tensor::cos, "Applies cosine element-wise.")
       .def("softmax", &Tensor::softmax, py::arg("dim") = -1,
            "Applies softmax along a dimension.")
-      .def("__getitem__", &tensor_getitem, py::arg("key"),
-           "Returns a slice or element of the tensor. Supports integer indexing "
-           "and slicing (e.g., t[0], t[0:10], t[0:10, 5:20]).")
-      .def("narrow", &Tensor::narrow, py::arg("dim"), py::arg("start"), py::arg("length"))
+      .def(
+          "__getitem__", &tensor_getitem, py::arg("key"),
+          "Returns a slice or element of the tensor. Supports integer indexing "
+          "and slicing (e.g., t[0], t[0:10], t[0:10, 5:20]).")
+      .def("narrow", &Tensor::narrow, py::arg("dim"), py::arg("start"),
+           py::arg("length"))
       .def("contiguous", &Tensor::contiguous)
       .def("log_softmax", &Tensor::log_softmax, py::arg("dim") = -1,
            "Applies log-softmax along a dimension.")
@@ -652,7 +658,6 @@ PYBIND11_MODULE(_core, m) {
       py::arg("device"), py::arg("feature"), py::arg("dtype"),
       "Returns whether the selected backend advertises native support for a "
       "feature/dtype combination.");
-
 
   m.def(
       "list_available_backends",
@@ -737,7 +742,8 @@ PYBIND11_MODULE(_core, m) {
         }
         return devices;
       },
-      "Returns concrete available devices (Host plus detected accelerator devices).");
+      "Returns concrete available devices (Host plus detected accelerator "
+      "devices).");
 
   m.def(
       "zeros",
@@ -809,8 +815,9 @@ PYBIND11_MODULE(_core, m) {
       .def_readonly("warnings", &core::OffloadValidationReport::warnings)
       .def_readonly("estimated_boundaries",
                     &core::OffloadValidationReport::estimated_boundaries)
-      .def_readonly("estimated_ping_pong_boundaries",
-                    &core::OffloadValidationReport::estimated_ping_pong_boundaries);
+      .def_readonly(
+          "estimated_ping_pong_boundaries",
+          &core::OffloadValidationReport::estimated_ping_pong_boundaries);
   py::class_<core::OffloadTransferTelemetry>(m, "OffloadTransferTelemetry")
       .def_readonly("boundary_transfer_count",
                     &core::OffloadTransferTelemetry::boundary_transfer_count)
@@ -846,40 +853,51 @@ PYBIND11_MODULE(_core, m) {
       .def("train", &nn::Module::train, py::arg("mode") = true,
            "Sets the module in training mode.")
       .def("eval", &nn::Module::eval, "Sets the module in evaluation mode.")
-      .def("to",
-           [](nn::Module &self, Device device) -> nn::Module& {
-             self.to(device);
-             return self;
-           }, py::arg("device"),
-           "Moves all parameters and buffers to the specified device. Returns self.")
-      .def("to",
-           [](nn::Module &self, DataType dtype) -> nn::Module& {
-             self.to(dtype);
-             return self;
-          }, py::arg("dtype"),
-          "Converts all parameters and buffers to the specified dtype. Returns self.")
+      .def(
+          "to",
+          [](nn::Module &self, Device device) -> nn::Module & {
+            self.to(device);
+            return self;
+          },
+          py::arg("device"),
+          "Moves all parameters and buffers to the specified device. Returns "
+          "self.")
+      .def(
+          "to",
+          [](nn::Module &self, DataType dtype) -> nn::Module & {
+            self.to(dtype);
+            return self;
+          },
+          py::arg("dtype"),
+          "Converts all parameters and buffers to the specified dtype. Returns "
+          "self.")
       .def_property_readonly("is_training", &nn::Module::is_training,
-           "Returns whether the module is in training mode.")
-      .def("to_options",
-           [](nn::Module &self, const TensorOptions &options) -> nn::Module& {
-             self.to(options);
-             return self;
-           }, py::arg("options"),
-           "Converts all parameters and buffers using explicit tensor options. Returns self.")
+                             "Returns whether the module is in training mode.")
+      .def(
+          "to_options",
+          [](nn::Module &self, const TensorOptions &options) -> nn::Module & {
+            self.to(options);
+            return self;
+          },
+          py::arg("options"),
+          "Converts all parameters and buffers using explicit tensor options. "
+          "Returns self.")
       .def(
           "offload",
-          [](nn::Module &self, Device device, const std::vector<std::string> &layers)
-              -> nn::Module & {
+          [](nn::Module &self, Device device,
+             const std::vector<std::string> &layers) -> nn::Module & {
             self.offload(device, layers);
             return self;
           },
           py::arg("device"), py::arg("layers"),
-          "Assigns listed module paths to a device and moves their params/buffers.")
+          "Assigns listed module paths to a device and moves their "
+          "params/buffers.")
       .def("clear_offload", &nn::Module::clear_offload,
            "Clears current model offload placement plan.")
       .def("freeze_offload_plan", &nn::Module::freeze_offload_plan,
            "Returns a persistable layer-path -> device-string plan.")
-      .def("apply_offload_plan", &nn::Module::apply_offload_plan, py::arg("plan"),
+      .def("apply_offload_plan", &nn::Module::apply_offload_plan,
+           py::arg("plan"),
            "Applies a previously frozen layer-path -> device-string plan.")
       .def(
           "offload_plan",
@@ -910,7 +928,8 @@ PYBIND11_MODULE(_core, m) {
             return std::move(d);
           },
           py::arg("explain") = false,
-          "Returns current module-path -> device placement mapping. If explain=True, returns planner rationale.")
+          "Returns current module-path -> device placement mapping. If "
+          "explain=True, returns planner rationale.")
       .def("auto_offload", &nn::Module::auto_offload, py::arg("devices"),
            py::arg("strategy") = "balanced", py::arg("sample_input"),
            py::arg("memory_budgets_bytes") = std::map<std::string, size_t>{},
@@ -925,7 +944,8 @@ PYBIND11_MODULE(_core, m) {
            &nn::Module::set_offload_warning_threshold_bytes,
            py::arg("threshold_bytes"),
            "Sets warning threshold for small offload transfers.")
-      .def("offload_telemetry_snapshot", &nn::Module::offload_telemetry_snapshot,
+      .def("offload_telemetry_snapshot",
+           &nn::Module::offload_telemetry_snapshot,
            "Returns runtime offload transfer telemetry snapshot.")
       .def("reset_offload_telemetry", &nn::Module::reset_offload_telemetry,
            "Resets runtime offload transfer telemetry.")
@@ -997,9 +1017,10 @@ PYBIND11_MODULE(_core, m) {
       .def(py::init<>());
 
   py::class_<nn::Softmax, nn::Module, std::shared_ptr<nn::Softmax>>(
-     nn, "Softmax", "Applies the Softmax function over the specified dimension.")
-     .def(py::init<int>(), py::arg("dim") = -1)
-     .def_readonly("dim", &nn::Softmax::dim_);
+      nn, "Softmax",
+      "Applies the Softmax function over the specified dimension.")
+      .def(py::init<int>(), py::arg("dim") = -1)
+      .def_readonly("dim", &nn::Softmax::dim_);
 
   py::class_<nn::Tanh, nn::Module, std::shared_ptr<nn::Tanh>>(
       nn, "Tanh", "Applies the element-wise Tanh function.")
@@ -1089,31 +1110,33 @@ PYBIND11_MODULE(_core, m) {
            "Appends a module to the sequence.")
       .def(py::init([](py::args args, py::kwargs kwargs) {
              auto seq = std::make_shared<nn::Sequential>();
-             
+
              // Handle positional arguments: Sequential(layer1, layer2, ...)
              for (auto it : *args) {
                seq->add(it.cast<std::shared_ptr<nn::Module>>());
              }
-             
+
              // Handle keyword argument: Sequential(layers=[...])
              if (kwargs.contains("layers")) {
-               auto layers_list = kwargs["layers"].cast<std::vector<std::shared_ptr<nn::Module>>>();
+               auto layers_list =
+                   kwargs["layers"]
+                       .cast<std::vector<std::shared_ptr<nn::Module>>>();
                for (auto l : layers_list) {
                  seq->add(l);
                }
              }
-             
+
              return seq;
            }),
-           "Construct from layers: Sequential(layer1, layer2, ...) or Sequential(layers=[...])")
+           "Construct from layers: Sequential(layer1, layer2, ...) or "
+           "Sequential(layers=[...])")
       .def(py::init([](const std::vector<std::shared_ptr<nn::Module>> &layers) {
              auto seq = std::make_shared<nn::Sequential>();
              for (auto l : layers)
                seq->add(l);
              return seq;
            }),
-           py::arg("layers"),
-           "Construct from a list of layers.")
+           py::arg("layers"), "Construct from a list of layers.")
       .def(
           "__iter__",
           [](nn::Sequential &s) {
@@ -1125,125 +1148,40 @@ PYBIND11_MODULE(_core, m) {
   // ============================================================================
   // Inference (munet.inference)
   // ============================================================================
-  auto inf = m.def_submodule("inference", "Inference runtime APIs");
-
-  py::enum_<inference::EngineEventType>(inf, "EngineEventType")
-      .value("LoadStarted", inference::EngineEventType::LoadStarted)
-      .value("LoadCompleted", inference::EngineEventType::LoadCompleted)
-      .value("CompileStarted", inference::EngineEventType::CompileStarted)
-      .value("CompileCompleted", inference::EngineEventType::CompileCompleted)
-      .value("RunStarted", inference::EngineEventType::RunStarted)
-      .value("RunCompleted", inference::EngineEventType::RunCompleted)
-      .value("Error", inference::EngineEventType::Error);
-
-  py::class_<inference::EngineEvent>(inf, "EngineEvent")
-      .def(py::init<>())
-      .def_readonly("type", &inference::EngineEvent::type)
-      .def_readonly("device", &inference::EngineEvent::device)
-      .def_readonly("trace_id", &inference::EngineEvent::trace_id)
-      .def_readonly("run_index", &inference::EngineEvent::run_index)
-      .def_readonly("duration_ms", &inference::EngineEvent::duration_ms)
-      .def_readonly("input_shape", &inference::EngineEvent::input_shape)
-      .def_readonly("output_shape", &inference::EngineEvent::output_shape)
-      .def_readonly("current_memory_bytes",
-                    &inference::EngineEvent::current_memory_bytes)
-      .def_readonly("peak_memory_bytes",
-                    &inference::EngineEvent::peak_memory_bytes)
-      .def_readonly("span", &inference::EngineEvent::span)
-      .def_readonly("message", &inference::EngineEvent::message);
+  auto inf = m.def_submodule("inference", "Lean Vulkan inference runtime APIs");
 
   py::class_<inference::EngineConfig>(inf, "EngineConfig")
       .def(py::init<>())
       .def_readwrite("device", &inference::EngineConfig::device)
-      .def_readwrite("warmup_runs", &inference::EngineConfig::warmup_runs)
       .def_readwrite("strict_shape_check",
                      &inference::EngineConfig::strict_shape_check)
       .def_readwrite("allow_autograd_inputs",
-                     &inference::EngineConfig::allow_autograd_inputs)
-      .def_readwrite("capture_profiler_memory",
-                     &inference::EngineConfig::capture_profiler_memory)
-      .def_readwrite("lean_mode", &inference::EngineConfig::lean_mode)
-      .def_readwrite("prepared_input_cache_entries",
-                     &inference::EngineConfig::prepared_input_cache_entries)
-      .def_readwrite("prepared_input_cache_max_bytes",
-                     &inference::EngineConfig::prepared_input_cache_max_bytes);
+                     &inference::EngineConfig::allow_autograd_inputs);
 
   py::class_<inference::EngineStats>(inf, "EngineStats")
       .def(py::init<>())
+      .def_readonly("loaded", &inference::EngineStats::loaded)
+      .def_readonly("prepared", &inference::EngineStats::prepared)
+      .def_readonly("compiled", &inference::EngineStats::compiled)
       .def_readonly("runs", &inference::EngineStats::runs)
-      .def_readonly("last_compile_trace_id",
-                    &inference::EngineStats::last_compile_trace_id)
-      .def_readonly("last_run_trace_id",
-                    &inference::EngineStats::last_run_trace_id)
-      .def_readonly("load_to_device_ms",
-                    &inference::EngineStats::load_to_device_ms)
-      .def_readonly("load_eval_ms", &inference::EngineStats::load_eval_ms)
+      .def_readonly("batch_runs", &inference::EngineStats::batch_runs)
       .def_readonly("last_run_ms", &inference::EngineStats::last_run_ms)
-      .def_readonly("last_prepare_input_ms",
-                    &inference::EngineStats::last_prepare_input_ms)
-      .def_readonly("last_forward_ms", &inference::EngineStats::last_forward_ms)
-      .def_readonly("last_output_validation_ms",
-                    &inference::EngineStats::last_output_validation_ms)
       .def_readonly("compile_ms", &inference::EngineStats::compile_ms)
-      .def_readonly("compile_prepare_input_ms",
-                    &inference::EngineStats::compile_prepare_input_ms)
-      .def_readonly("compile_forward_ms",
-                    &inference::EngineStats::compile_forward_ms)
-      .def_readonly("compile_warmup_ms",
-                    &inference::EngineStats::compile_warmup_ms)
       .def_readonly("compiled_input_shape",
                     &inference::EngineStats::compiled_input_shape)
       .def_readonly("compiled_output_shape",
-                    &inference::EngineStats::compiled_output_shape)
-      .def_readonly("current_memory_bytes",
-                    &inference::EngineStats::current_memory_bytes)
-      .def_readonly("peak_memory_bytes",
-                    &inference::EngineStats::peak_memory_bytes)
-      .def_readonly("prepared_input_cache_entries",
-                    &inference::EngineStats::prepared_input_cache_entries)
-      .def_readonly("prepared_input_cache_bytes",
-                    &inference::EngineStats::prepared_input_cache_bytes)
-      .def_readonly("prepared_input_cache_hits",
-                    &inference::EngineStats::prepared_input_cache_hits)
-      .def_readonly("prepared_input_cache_misses",
-                    &inference::EngineStats::prepared_input_cache_misses)
-      .def_readonly("prepared_input_cache_evictions",
-                    &inference::EngineStats::prepared_input_cache_evictions);
+                    &inference::EngineStats::compiled_output_shape);
 
   py::class_<inference::Engine>(inf, "Engine")
       .def(py::init<inference::EngineConfig>(),
            py::arg("config") = inference::EngineConfig{})
       .def("set_device", &inference::Engine::set_device, py::arg("device"))
       .def("device", &inference::Engine::device)
-      .def("set_warmup_runs", &inference::Engine::set_warmup_runs,
-           py::arg("warmup_runs"))
       .def("set_strict_shape_check", &inference::Engine::set_strict_shape_check,
            py::arg("enabled"))
       .def("set_allow_autograd_inputs",
            &inference::Engine::set_allow_autograd_inputs, py::arg("enabled"))
       .def("allow_autograd_inputs", &inference::Engine::allow_autograd_inputs)
-      .def("set_capture_profiler_memory",
-           &inference::Engine::set_capture_profiler_memory, py::arg("enabled"))
-      .def("capture_profiler_memory",
-           &inference::Engine::capture_profiler_memory)
-      .def("set_lean_mode", &inference::Engine::set_lean_mode,
-           py::arg("enabled"))
-      .def("lean_mode", &inference::Engine::lean_mode)
-      .def("set_prepared_input_cache_entries",
-           &inference::Engine::set_prepared_input_cache_entries,
-           py::arg("entries"))
-      .def("prepared_input_cache_entries_limit",
-           &inference::Engine::prepared_input_cache_entries_limit)
-      .def("set_prepared_input_cache_max_bytes",
-           &inference::Engine::set_prepared_input_cache_max_bytes,
-           py::arg("bytes"))
-      .def("prepared_input_cache_max_bytes_limit",
-           &inference::Engine::prepared_input_cache_max_bytes_limit)
-      .def("clear_prepared_input_cache",
-           &inference::Engine::clear_prepared_input_cache)
-      .def("set_observer", &inference::Engine::set_observer,
-           py::arg("observer"))
-      .def("clear_observer", &inference::Engine::clear_observer)
       .def(
           "load",
           [](inference::Engine &self, py::object module) {
@@ -1262,9 +1200,7 @@ PYBIND11_MODULE(_core, m) {
           py::arg("example_input"),
           py::arg("expected_input_shape") = py::none(),
           py::arg("expected_output_shape") = py::none())
-      .def("prepare", &inference::Engine::prepare, py::arg("example_input"))
-      .def("prepare_batch", &inference::Engine::prepare_batch,
-           py::arg("inputs"))
+      .def("prepare", &inference::Engine::prepare, py::arg("input"))
       .def("run", &inference::Engine::run, py::arg("input"))
       .def("run_batch", &inference::Engine::run_batch, py::arg("inputs"))
       .def("is_loaded", &inference::Engine::is_loaded)
@@ -1325,9 +1261,8 @@ PYBIND11_MODULE(_core, m) {
       "reset_profiler", []() { Profiler::get().reset(); },
       "Clears all collected performance statistics and resets peak memory "
       "tracking.");
-  m.def(
-      "dispatch_policy_snapshot", &ops::dispatch_policy_snapshot,
-      "Returns the active dispatch fallback-rule matrix as a text snapshot.");
+  m.def("dispatch_policy_snapshot", &ops::dispatch_policy_snapshot,
+        "Returns the active dispatch fallback-rule matrix as a text snapshot.");
   m.def(
       "fallback_telemetry_snapshot",
       []() {
@@ -1340,9 +1275,8 @@ PYBIND11_MODULE(_core, m) {
         return out;
       },
       "Returns dispatch telemetry counters for Vulkan staging fallbacks.");
-  m.def(
-      "reset_fallback_telemetry", &ops::reset_fallback_telemetry,
-      "Clears dispatch telemetry counters for Vulkan staging fallbacks.");
+  m.def("reset_fallback_telemetry", &ops::reset_fallback_telemetry,
+        "Clears dispatch telemetry counters for Vulkan staging fallbacks.");
   m.def(
       "dispatch_decision_debug_dump",
       [](const std::string &op_name, const Tensor &tensor) {

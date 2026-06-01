@@ -1,149 +1,24 @@
-# Inference Runtime Phase 5 Validation and Rollout
+# Inference phase 5 validation rollout
 
-This document closes **Phase 5 - Validation, benchmarking, and rollout** for the inference/runtime separation effort.
+Phase 5 now validates the lean Vulkan inference boundary instead of comparing
+engine-owned policy toggles. The engine has no internal lean mode, warmup runner,
+prepared-input cache, or output-container reuse API.
 
-## Phase 5 status
+## Validation focus
 
-- [x] Focused automated validation covers the new separation guarantees
-- [x] Benchmark suites are defined for cold-start, warm run, memory-policy, and rollout scenarios
-- [x] Repository-side before/after or tradeoff notes are published in docs
-- [x] Migration notes for deploy-facing inference APIs are documented
-- [x] Phase status in the main runtime plan is updated
+1. `load(module)` moves the model to Vulkan and leaves it in eval mode.
+2. Optional `compile(sample, ...)` records shape contracts and rejects mismatches.
+3. `run(input)` rejects autograd inputs by default and executes with autograd
+   disabled.
+4. `run_batch(inputs)` is a transparent sequential wrapper over `run(...)`.
+5. Profiling, request tracing, warmup loops, and staging caches are measured in
+   external harnesses rather than inside `Engine`.
 
-## Validation coverage landed
+## Rollout guidance
 
-### 1. Inference-only build/link coverage
-
-- `munet_inference_boundary_check` is now exercised directly by CTest.
-- `munet_inference_baseline_vulkan_smoke` is also exercised by CTest so the benchmark/tooling path stays build- and run-valid in CI.
-
-### 2. Autograd isolation guarantees
-
-The inference test suite already covers:
-
-- gradients disabled during `Engine::compile(...)` / `run(...)`
-- autograd-tracked inputs rejected by default
-- grad-tracked outputs rejected from deploy execution paths
-
-### 3. Shape / dtype / device contract enforcement
-
-Focused tests cover:
-
-- compile-time expected input/output shape contracts
-- float16 preservation through engine/device flows
-- deploy serialization manifest validation and runtime-only payload enforcement
-- deploy-first `load_for_inference(...)` round-trips
-
-### 4. Backend fallback behavior on minimal builds
-
-The backend manager tests now remain part of the Phase 5 validation story:
-
-- deploy-vs-training backend feature role checks
-- constrained fallback policy assertions
-- dispatch fallback reason/profile coverage
-
-### 5. Deploy workflow coverage
-
-Deploy serialization + run workflow is now validated by:
-
-- `munet.load_for_inference(...)` tests
-- `munet.inference.load_serialized(...)` tests
-- serialized-model -> `inference.Engine` run coverage
-
-## Benchmark suites
-
-Phase 5 standardizes the following benchmark scenarios around `munet_inference_baseline`:
-
-### A. Vulkan-only edge / cold-start
-
-```bash
-./build/munet_inference_baseline \
-  --device vulkan --dtype float32 \
-  --batch 8 --input-dim 32 --hidden-dim 64 --output-dim 16 \
-  --warmup-runs 0 \
-  --single-run-iters 20 \
-  --batch-run-inputs 2 --batch-run-iters 10 \
-  --prepared-input-cache-entries 0 \
-  --prepared-input-cache-max-bytes 0
-```
-
-Observed in this environment:
-
-- cold load wall: **0.0645 ms**
-- compile: **0.8170 ms**
-- steady single-run avg wall: **0.7350 ms**
-- steady batch per-input wall: **1.1161 ms**
-
-### B. Vulkan-only edge / lean-mode tradeoff
-
-```bash
-./build/munet_inference_baseline \
-  --device vulkan --dtype float32 \
-  --batch 8 --input-dim 32 --hidden-dim 64 --output-dim 16 \
-  --warmup-runs 0 \
-  --single-run-iters 20 \
-  --batch-run-inputs 2 --batch-run-iters 10 \
-  --lean-mode true \
-  --prepared-input-cache-entries 0 \
-  --prepared-input-cache-max-bytes 0
-```
-
-Observed in this environment:
-
-- cold load wall: **0.0264 ms**
-- compile: **0.7036 ms**
-- steady single-run avg wall: **0.9463 ms**
-- steady batch per-input wall: **0.6016 ms**
-
-Tradeoff note:
-
-- lean mode improved cold-start and batched per-input cost in this Vulkan-only run
-- the steady single-run average was slightly worse here, so the rollout guidance is to treat `lean_mode` as a deploy-policy knob rather than an unconditional throughput win
-
-### C. Memory-policy / batch reuse scenario
-
-```bash
-./build/munet_inference_baseline \
-  --device vulkan --dtype float32 \
-  --batch 8 --input-dim 32 --hidden-dim 64 --output-dim 16 \
-  --warmup-runs 0 \
-  --single-run-iters 20 \
-  --batch-run-inputs 2 --batch-run-iters 10 \
-  --prepared-input-cache-entries 8 \
-  --prepared-input-cache-max-bytes 67108864 \
-  --preallocate-batch-inputs true
-```
-
-Observed in this environment:
-
-- cold load wall: **0.1427 ms**
-- compile: **1.1040 ms**
-- steady single-run avg wall: **0.7975 ms**
-- steady batch per-input wall: **0.5921 ms**
-
-Tradeoff note:
-
-- this Vulkan-only environment showed the biggest benefit on repeated batched runs
-- prepared-input cache counters remained zero because no Vulkan transfer transfer cache is needed on Vulkan-only execution, so this scenario mostly reflects preallocated repeated-batch setup rather than transfer reuse
-
-### D. Vulkan backend rollout suites
-
-Use the same benchmark with deployment-target hardware for:
-
-- `--device vulkan --dtype float16`
-
-Phase 5 keeps these suites documented even when the current validation environment is Vulkan-only; Vulkan backend comparisons remain intentionally opt-in and hardware-specific.
-
-## Migration notes
-
-- **Deploy loading:** use `munet.load_for_inference(...)` or `munet.inference.load_serialized(...)` for deployment code; use `munet.load_checkpoint(...)` for training/checkpoint reconstruction.
-- **Deploy artifacts:** serialized `.npz` artifacts are now validated as **runtime-only** payloads, and training/checkpoint-style keys are rejected during deploy loading.
-
-## Rollout conclusion
-
-Phase 5 closes with:
-
-- automated coverage for separation guarantees
-- benchmark workflows that can be rerun on Vulkan-only and Vulkan backend hardware
-- explicit tradeoff documentation instead of assuming every runtime knob is a universal win
-- a stable, intentionally minimal deploy boundary for future inference work
+- Keep the default runtime path small and deterministic.
+- Add deployment-specific caches or warmup loops in serving code only when a
+  benchmark proves the need.
+- Use the global profiler and workload harnesses for optimization experiments;
+  do not expand the engine API for speculative diagnostics.
+- Treat any unsupported Vulkan behavior as an explicit deployment error.
