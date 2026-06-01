@@ -10,7 +10,7 @@ BUILD_DEBUG := $(BUILD_ROOT)/debug
 BUILD_RELEASE := $(BUILD_ROOT)/release
 BUILD_ASAN := $(BUILD_ROOT)/asan
 BUILD_VK := $(BUILD_ROOT)/vk-debug
-PYTEST ?= pytest
+PYTEST ?= python -m pytest
 PYPI_PACKAGE ?= munet-nn
 
 .DEFAULT_GOAL := help
