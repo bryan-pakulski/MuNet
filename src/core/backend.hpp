@@ -29,11 +29,6 @@ enum class BackendFeature {
   Reduction,
 };
 
-enum class BackendFallbackPolicy {
-  ExplicitUnsupported,
-  ConversionFallback,
-};
-
 enum class BackendFeatureRuntimeRole {
   DeployRuntime,
   TrainingOnly,
@@ -41,8 +36,6 @@ enum class BackendFeatureRuntimeRole {
 
 struct BackendSupport {
   bool available = false;
-  BackendFallbackPolicy fallback_policy =
-      BackendFallbackPolicy::ExplicitUnsupported;
   DataType preferred_accumulation_dtype = DataType::Float32;
 };
 
@@ -107,17 +100,6 @@ inline const char *backend_feature_name(BackendFeature feature) {
   }
 }
 
-inline const char *backend_fallback_policy_name(BackendFallbackPolicy policy) {
-  switch (policy) {
-  case BackendFallbackPolicy::ExplicitUnsupported:
-    return "explicit_unsupported";
-  case BackendFallbackPolicy::ConversionFallback:
-    return "conversion_fallback";
-  default:
-    return "vulkan";
-  }
-}
-
 inline BackendFeatureRuntimeRole
 backend_feature_runtime_role(BackendFeature feature) {
   switch (feature) {
@@ -159,11 +141,6 @@ inline DataType default_backend_accumulation_dtype(BackendFeature feature,
   default:
     return dtype;
   }
-}
-
-inline BackendFallbackPolicy
-backend_feature_default_fallback_policy(BackendFeature) {
-  return BackendFallbackPolicy::ExplicitUnsupported;
 }
 
 class BackendAllocationTransferCapability {
@@ -399,7 +376,6 @@ public:
                         supports_backend_feature_shape(feature, dtype, shape);
     support.preferred_accumulation_dtype =
         preferred_accumulation_dtype(feature, dtype);
-    support.fallback_policy = preferred_fallback_policy(feature, dtype);
     return support;
   }
 
@@ -415,12 +391,6 @@ public:
   virtual DataType preferred_accumulation_dtype(BackendFeature feature,
                                                 DataType dtype) const {
     return default_backend_accumulation_dtype(feature, dtype);
-  }
-
-  virtual BackendFallbackPolicy
-  preferred_fallback_policy(BackendFeature feature, DataType dtype) const {
-    (void)dtype;
-    return backend_feature_default_fallback_policy(feature);
   }
 
   void *allocate(size_t bytes) {
@@ -767,10 +737,6 @@ struct BackendRuntimeStatus {
   bool active = false;
   std::string reason_code;
   std::string detail;
-  std::string plugin_path;
-  uint32_t plugin_abi_version = 0;
-  uint32_t core_abi_version = 0;
-  uint64_t capability_flags = 0;
 };
 
 class BackendManager {

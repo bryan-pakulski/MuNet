@@ -13,20 +13,7 @@ using namespace munet::ops;
 namespace {
 
 std::vector<Device> discover_devices() {
-  std::vector<Device> devices;
-  devices.push_back(Device{DeviceType::VULKAN, 0});
-
-
-#ifdef MUNET_USE_VULKAN
-  try {
-    Tensor probe({1}, Device{DeviceType::VULKAN, 0}, DataType::Float32, false);
-    (void)probe;
-    devices.push_back(Device{DeviceType::VULKAN, 0});
-  } catch (...) {
-  }
-#endif
-
-  return devices;
+  return {Device{DeviceType::VULKAN, 0}};
 }
 
 Shape shape_for_op(OpId id) {
@@ -63,7 +50,7 @@ int main() {
 
   std::vector<Device> devices = discover_devices();
 
-  std::cout << "backend,dtype,op,feature,backend_support,fallback_policy,dispatch_backend,dispatch_host_fallback,status,error\n";
+  std::cout << "backend,dtype,op,feature,backend_support,dispatch_backend,dispatch_reference_path,status,error\n";
 
   for (const auto &dev : devices) {
     for (DataType dtype : dtypes) {
@@ -75,9 +62,8 @@ int main() {
                                        ? backend_feature_name(*meta.feature)
                                        : "none";
         std::string backend_support = "n/a";
-        std::string fallback_policy = "n/a";
         std::string dispatch_backend = "no";
-        std::string dispatch_host_fallback = "no";
+        std::string dispatch_reference_path = "no";
         std::string status = "ok";
         std::string error;
 
@@ -87,13 +73,11 @@ int main() {
             BackendSupport support =
                 t.impl_->backend().query_support(*meta.feature, dtype, &shape);
             backend_support = bool_text(support.available);
-            fallback_policy =
-                backend_fallback_policy_name(support.fallback_policy);
           }
 
           DispatchDecision decision = resolve_dispatch(id, t);
           dispatch_backend = bool_text(decision.use_backend);
-          dispatch_host_fallback = bool_text(decision.use_host_fallback);
+          dispatch_reference_path = bool_text(decision.use_reference_path);
         } catch (const std::exception &ex) {
           status = "error";
           error = ex.what();
@@ -101,8 +85,8 @@ int main() {
 
         std::cout << dev.to_string() << "," << dtype_name(dtype) << ","
                   << meta.name << "," << feature_name << ","
-                  << backend_support << "," << fallback_policy << ","
-                  << dispatch_backend << "," << dispatch_host_fallback << ","
+                  << backend_support << "," << dispatch_backend << ","
+                  << dispatch_reference_path << ","
                   << status << ",\"" << error << "\"\n";
       }
     }

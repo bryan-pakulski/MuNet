@@ -20,17 +20,7 @@ struct OperationCase {
 };
 
 std::vector<Device> discover_devices() {
-  std::vector<Device> devices;
-  devices.push_back(Device{DeviceType::VULKAN, 0});
-#ifdef MUNET_USE_VULKAN
-  try {
-    Tensor probe({1}, Device{DeviceType::VULKAN, 0}, DataType::Float32, false);
-    (void)probe;
-    devices.push_back(Device{DeviceType::VULKAN, 0});
-  } catch (...) {
-  }
-#endif
-  return devices;
+  return {Device{DeviceType::VULKAN, 0}};
 }
 
 Shape dispatch_shape_for_op(OpId id) {
@@ -130,9 +120,9 @@ int main() {
           Tensor probe(dispatch_shape_for_op(op_case.id), dev, dtype, false);
           const auto decision = resolve_dispatch(op_case.id, probe);
           dispatch_path = decision.use_backend
-                              ? "backend"
-                              : (decision.use_host_fallback ? "fallback"
-                                                           : "none");
+                              ? "vulkan_runtime"
+                              : (decision.use_reference_path ? "reference_path"
+                                                             : "none");
         } catch (const std::exception &ex) {
           dispatch_path = "error";
           runtime_status = "fail";

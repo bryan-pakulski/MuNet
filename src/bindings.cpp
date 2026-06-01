@@ -685,10 +685,6 @@ PYBIND11_MODULE(_core, m) {
           entry["active"] = py::cast(status.active);
           entry["reason_code"] = py::cast(status.reason_code);
           entry["detail"] = py::cast(status.detail);
-          entry["plugin_path"] = py::cast(status.plugin_path);
-          entry["plugin_abi_version"] = py::cast(status.plugin_abi_version);
-          entry["core_abi_version"] = py::cast(status.core_abi_version);
-          entry["capability_flags"] = py::cast(status.capability_flags);
           statuses.append(std::move(entry));
 
           if (status.name == "vulkan" && status.active) {
@@ -704,7 +700,7 @@ PYBIND11_MODULE(_core, m) {
                 : std::string("No Vulkan backend is active."));
         return out;
       },
-      "Returns backend diagnostics including plugin discovery and ABI status.");
+      "Returns Vulkan runtime diagnostics.");
 
   m.def(
       "available_accelerators",
@@ -1262,21 +1258,7 @@ PYBIND11_MODULE(_core, m) {
       "Clears all collected performance statistics and resets peak memory "
       "tracking.");
   m.def("dispatch_policy_snapshot", &ops::dispatch_policy_snapshot,
-        "Returns the active dispatch fallback-rule matrix as a text snapshot.");
-  m.def(
-      "fallback_telemetry_snapshot",
-      []() {
-        const auto snapshot = ops::fallback_telemetry_snapshot();
-        py::dict out;
-        out["accelerator_host_fallback_total"] =
-            py::int_(snapshot.accelerator_host_fallback_total);
-        out["accelerator_host_fallback_counters"] =
-            py::cast(snapshot.accelerator_host_fallback_counters);
-        return out;
-      },
-      "Returns dispatch telemetry counters for Vulkan staging fallbacks.");
-  m.def("reset_fallback_telemetry", &ops::reset_fallback_telemetry,
-        "Clears dispatch telemetry counters for Vulkan staging fallbacks.");
+        "Returns the active Vulkan dispatch policy as a text snapshot.");
   m.def(
       "dispatch_decision_debug_dump",
       [](const std::string &op_name, const Tensor &tensor) {
@@ -1978,7 +1960,7 @@ def _normalize_loaded_module_for_inference(module, device=None):
 def load_checkpoint(arg, filename=None, device=None, trusted=False):
     """
     Load checkpoint artifact.
-    trusted=False forbids executing embedded source fallback for custom classes.
+    trusted=False forbids executing embedded source reference path for custom classes.
     """
     import json
     import numpy as np

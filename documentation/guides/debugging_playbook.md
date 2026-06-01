@@ -98,15 +98,14 @@ your probe range exceeds actual device count.
 3. **One “available” Vulkan is not actually healthy for autograd kernels.**
    - Use the real forward+backward health probe in section 2.
 
-4. **Silent fallback masking backend behavior.**
-   - Temporarily enable fail-fast fallback:
+4. **Silent reference path masking backend behavior.**
+   - Temporarily enable fail-fast reference path:
      ```bash
-     MUNET_FAIL_FAST_VULKAN_UNSUPPORTED=1 python ...
      ```
 
 ---
 
-## 4) Unexpected Vulkan backend→Vulkan fallback
+## 4) Unexpected Vulkan backend→Vulkan reference path
 
 Use both programmatic telemetry and log dumps:
 
@@ -118,21 +117,16 @@ Python helpers:
 
 - `munet.dispatch_policy_snapshot()`
 - `munet.dispatch_decision_debug_dump(op_name, tensor)`
-- `munet.fallback_telemetry_snapshot()`
-- `munet.reset_fallback_telemetry()`
 
 Suggested workflow:
 
-1. `munet.reset_fallback_telemetry()`
 2. Run a minimal repro
-3. Inspect `munet.fallback_telemetry_snapshot()`
-4. Enable `MUNET_FAIL_FAST_VULKAN_UNSUPPORTED=1` to catch first unexpected fallback with a stack trace
 
 ---
 
-## 5) Multi-device all-reduce issues (vulkan fallback mode)
+## 5) Multi-device all-reduce issues (vulkan reference path mode)
 
-For backend all-reduce vulkan fallback, ensure rendezvous env knobs are set for
+For backend all-reduce vulkan reference path, ensure rendezvous env knobs are set for
 the current run:
 
 ```bash
@@ -198,11 +192,10 @@ Please include:
 
 1. Exact command run.
 2. Full traceback/log output.
-4. Output of fallback telemetry snapshot (if relevant).
+4. Output of dispatch decision dump (if relevant).
 
 ---
 
-## 9) Offload plan troubleshooting (Phase 1)
 
 If using `model.offload(device, layers=[...])`:
 
@@ -212,9 +205,7 @@ If using `model.offload(device, layers=[...])`:
    (e.g. `0`, `1`, `encoder.block0`, etc.).
 4. For boundary-transfer debugging, run with:
    - `MUNET_DISPATCH_DECISION_DUMP=1`
-   - optional `MUNET_FAIL_FAST_VULKAN_UNSUPPORTED=1`
 
-## 10) Offload plan validation and transfer hotspots (Phase 2)
 
 For plan validation and transfer-cost insight:
 

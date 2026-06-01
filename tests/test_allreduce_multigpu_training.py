@@ -172,7 +172,7 @@ def test_multigpu_e2e_complex_training_scenarios(scenario_name, device_specs):
 
 def test_python_all_reduce_binding_host_smoke():
     os.environ["MUNET_ALLREDUCE_WORLD_SIZE"] = "2"
-    os.environ["MUNET_ALLREDUCE_MODE"] = "host_fallback"
+    os.environ["MUNET_ALLREDUCE_MODE"] = "vulkan_staging"
     os.environ["MUNET_ALLREDUCE_GROUP"] = "pytest_python_binding_vulkan"
 
     a = munet.from_numpy(np.array([1.0, 2.0], dtype=np.float32))

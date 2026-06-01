@@ -7,7 +7,6 @@ through the global profiler and lower-level Vulkan/backend instrumentation.
 ## Reading profiler output
 
 Profiler rows are grouped by operation label (for example module forwards,
-transfers, and Vulkan backend phases). Use these rows to identify expensive
 kernels or transfers, then add application-level request identifiers in your own
 serving layer if you need per-request correlation.
 
@@ -38,7 +37,7 @@ Each operator baseline reports:
 
 - `min_us`, `avg_us`, and `max_us` for measured wall-clock execution.
 - A profiler breakdown keyed by the existing MuNet profiler labels, including
-  host-side timing, Vulkan timing fields, call counts, and processed bytes.
+  staging timing, Vulkan timing fields, call counts, and processed bytes.
 - GTest record properties with the same values so CI can archive the numbers as
   test metadata when desired.
 

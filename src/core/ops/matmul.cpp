@@ -22,9 +22,9 @@ static bool is_batched_matmul_shape(const Shape& a_shape, const Shape& b_shape) 
 
 // Helper to perform matmul on Host with dtype conversion
 // This is used when the target backend doesn't support the dtype (e.g., Float16)
-static Tensor matmul_host_fallback(const Tensor& a, const Tensor& b, bool transA = false, bool transB = false) {
+static Tensor matmul_reference(const Tensor& a, const Tensor& b, bool transA = false, bool transB = false) {
   if (a.dtype() != DataType::Float32 && a.dtype() != DataType::Float16) {
-    return detail::matmul_host_fallback(a, b, transA, transB);
+    return detail::matmul_reference(a, b, transA, transB);
   }
   Device host{DeviceType::VULKAN, 0};
   
@@ -43,11 +43,11 @@ static Tensor matmul_host_fallback(const Tensor& a, const Tensor& b, bool transA
   Shape a_shape = a_host.shape();
   Shape b_shape = b_host.shape();
   
-  // Get Host backend's BLAS capability
+  // Get host staging runtime's BLAS capability
   Backend* backend = &a_host.impl_->backend();
   auto* blas = backend->blas_capability();
   if (!blas) {
-    MUNET_ERROR << "matmul_host_fallback: Host backend does not support BLAS operations" << std::endl;
+    MUNET_ERROR << "matmul_reference: host staging runtime does not support BLAS operations" << std::endl;
     return Tensor();
   }
   
@@ -63,7 +63,7 @@ static Tensor matmul_host_fallback(const Tensor& a, const Tensor& b, bool transA
   int N = transB ? b_k : b_n;
 
   if (K_a != K_b) {
-    MUNET_ERROR << "matmul_host_fallback: dimension mismatch after transpose handling: "
+    MUNET_ERROR << "matmul_reference: dimension mismatch after transpose handling: "
                 << "K_a=" << K_a << ", K_b=" << K_b << std::endl;
     return Tensor();
   }
@@ -92,9 +92,9 @@ Tensor matmul_2d(const Tensor &a, const Tensor &b) {
 
   const auto dispatch = resolve_dispatch(OpId::Matmul, a);
 
-  // Use Host fallback if needed (backend doesn't support this dtype)
-  if (dispatch.use_host_fallback) {
-    return matmul_host_fallback(a, b, false, false);
+  // Use Reference path if needed (backend doesn't support this dtype)
+  if (dispatch.use_reference_path) {
+    return matmul_reference(a, b, false, false);
   }
 
   // Get shapes
@@ -128,10 +128,10 @@ Tensor matmul_2d(const Tensor &a, const Tensor &b) {
   return out;
 }
 
-// Helper for batched matmul with Host fallback
-static Tensor batched_matmul_host_fallback(const Tensor &a, const Tensor &b, bool transA, bool transB) {
+// Helper for batched matmul with Reference path
+static Tensor batched_matmul_reference(const Tensor &a, const Tensor &b, bool transA, bool transB) {
   if (a.dtype() != DataType::Float32 && a.dtype() != DataType::Float16) {
-    return detail::batched_matmul_host_fallback(a, b, transA, transB);
+    return detail::batched_matmul_reference(a, b, transA, transB);
   }
   Device host{DeviceType::VULKAN, 0};
   
@@ -171,7 +171,7 @@ static Tensor batched_matmul_host_fallback(const Tensor &a, const Tensor &b, boo
     Backend* backend = &a_host.impl_->backend();
     auto* blas = backend->blas_capability();
     if (!blas) {
-      MUNET_ERROR << "batched_matmul_host_fallback: Host backend does not support BLAS" << std::endl;
+      MUNET_ERROR << "batched_matmul_reference: host staging runtime does not support BLAS" << std::endl;
       return Tensor();
     }
     
@@ -207,11 +207,11 @@ static Tensor batched_matmul_host_fallback(const Tensor &a, const Tensor &b, boo
   
   Tensor out(out_shape, host, a_host.dtype());
   
-  // Get Host backend's BLAS
+  // Get host staging runtime's BLAS
   Backend* backend = &a_host.impl_->backend();
   auto* blas = backend->blas_capability();
   if (!blas) {
-    MUNET_ERROR << "batched_matmul_host_fallback: Host backend does not support BLAS" << std::endl;
+    MUNET_ERROR << "batched_matmul_reference: host staging runtime does not support BLAS" << std::endl;
     return Tensor();
   }
   
@@ -247,9 +247,9 @@ Tensor batched_matmul_internal(const Tensor &a, const Tensor &b, bool transA, bo
   // Resolve dispatch to check for dtype support
   const auto dispatch = resolve_dispatch(OpId::Matmul, a);
   
-  // Use Host fallback if needed
-  if (dispatch.use_host_fallback) {
-    return batched_matmul_host_fallback(a, b, transA, transB);
+  // Use Reference path if needed
+  if (dispatch.use_reference_path) {
+    return batched_matmul_reference(a, b, transA, transB);
   }
 
   int K_a = a_shape[a_shape.size() - 1];
@@ -351,9 +351,9 @@ Tensor matmul_internal(const Tensor &a, const Tensor &b, bool transA, bool trans
   // Resolve dispatch to check for dtype support
   const auto dispatch = resolve_dispatch(OpId::Matmul, a);
   
-  // Use Host fallback if needed
-  if (dispatch.use_host_fallback) {
-    return matmul_host_fallback(a, b);
+  // Use Reference path if needed
+  if (dispatch.use_reference_path) {
+    return matmul_reference(a, b);
   }
   
   // 2D matmul with transpose-aware dimension bookkeeping.

@@ -47,7 +47,6 @@ auto output = engine.run(input);
 
 ## Training ergonomics
 
-- `munet::core::Module::default_options()` exposes module device/dtype defaults used during construction and migration.
 - `munet::optim::ParameterGroup` groups parameters with per-group learning-rate and optimizer-state policies.
 - `munet::optim::OptimizerStatePolicy` makes model, master-weight, and optimizer-state dtypes explicit.
 - `munet::amp::GradScaler` and `munet::amp::AutocastGuard` provide additive AMP primitives without requiring module-level special cases.

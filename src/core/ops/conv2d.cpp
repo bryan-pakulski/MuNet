@@ -20,7 +20,7 @@ Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
   }
 
   const auto dispatch = resolve_dispatch(OpId::Conv2D, in);
-  const bool use_host_fallback = dispatch.use_host_fallback;
+  const bool use_reference_path = dispatch.use_reference_path;
 
   if (in.shape().size() != 4 || weight.shape().size() != 4) {
     MUNET_ERROR << "conv2d: inputs must be 4D, in.shape: "
@@ -47,7 +47,7 @@ Tensor conv2d(const Tensor &in, const Tensor &weight, const Tensor &bias,
   const int oH = (iH + 2 * padding - kH) / stride + 1;
   const int oW = (iW + 2 * padding - kW) / stride + 1;
   Tensor out({B, oC, oH, oW}, in.device(), in.dtype());
-  if (use_host_fallback) {
+  if (use_reference_path) {
     Device host{DeviceType::VULKAN, 0};
     Tensor in_exec = in.to(host);
     Tensor weight_exec = weight.to(host);

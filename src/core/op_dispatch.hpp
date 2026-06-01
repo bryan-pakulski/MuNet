@@ -50,28 +50,19 @@ struct OpMetadata {
   const char *trace_name;
   std::optional<BackendFeature> feature;
   bool requires_floating = false;
-  BackendFallbackPolicy fallback_policy =
-      BackendFallbackPolicy::ExplicitUnsupported;
 };
 
 struct DispatchDecision {
   const OpMetadata &metadata;
   bool use_backend = false;
-  bool use_host_fallback = false;
+  bool use_reference_path = false;
   BackendSupport backend_support;
-};
-
-struct FallbackTelemetrySnapshot {
-  uint64_t accelerator_host_fallback_total = 0;
-  std::unordered_map<std::string, uint64_t> accelerator_host_fallback_counters;
 };
 
 const OpMetadata &op_metadata(OpId id);
 DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor);
 std::string dispatch_policy_snapshot();
 std::string dispatch_decision_debug_dump(OpId id, const Tensor &tensor);
-FallbackTelemetrySnapshot fallback_telemetry_snapshot();
-void reset_fallback_telemetry();
 void record_registered_trace(
     OpId id, Tensor &out, const std::vector<Tensor> &inputs,
     const std::unordered_map<std::string, std::vector<int>> &int_attrs = {},

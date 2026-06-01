@@ -10,7 +10,7 @@ Tensor mse_loss(const Tensor &pred, const Tensor &target) {
   detail::require_same_dtype(op_metadata(OpId::MSELoss).name, pred, target);
   if (pred.shape() == target.shape()) {
     Tensor out({1}, pred.device(), pred.dtype());
-    if (dispatch.use_host_fallback) {
+    if (dispatch.use_reference_path) {
       Device host{DeviceType::VULKAN, 0};
       Tensor pred_exec = pred.to(host);
       Tensor target_exec = target.to(host);
@@ -86,7 +86,7 @@ Tensor cross_entropy(const Tensor &logits, const Tensor &targets) {
   }
 
   Tensor out({1}, logits.device(), logits.dtype());
-  if (dispatch.use_host_fallback) {
+  if (dispatch.use_reference_path) {
     Device host{DeviceType::VULKAN, 0};
     Tensor logits_exec = logits.to(host);
     Tensor targets_exec = targets.to(host);

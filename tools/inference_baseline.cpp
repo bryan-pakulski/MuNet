@@ -111,12 +111,10 @@ std::string to_json_array(const std::vector<int> &values) {
 }
 
 Device parse_device(const std::string &value) {
-  if (value == "host")
-    return Device{DeviceType::VULKAN, 0};
   if (value == "vulkan")
     return Device{DeviceType::VULKAN, 0};
   throw std::runtime_error("Vulkan device '" + value +
-                           "'. Expected one of: host, vulkan");
+                           "'. Expected: vulkan");
 }
 
 DataType parse_dtype(const std::string &value) {
@@ -175,7 +173,7 @@ BenchmarkConfig parse_args(int argc, char **argv) {
     } else if (arg == "--help") {
       std::cout << "MuNet inference baseline benchmark\n"
                 << "Usage: munet_inference_baseline [options]\n"
-                << "  --device <host|vulkan>\n"
+                << "  --device <vulkan>\n"
                 << "  --dtype <float32|float16>\n"
                 << "  --batch <int>\n"
                 << "  --input-dim <int>\n"

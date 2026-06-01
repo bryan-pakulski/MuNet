@@ -13,7 +13,6 @@ option(MUNET_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(MUNET_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(MUNET_BUILD_TESTS "Build C++ test targets" ON)
 option(MUNET_BUILD_TOOLS "Build CLI/report tools" ON)
-option(MUNET_BUILD_RUNTIME_PLUGINS "Build runtime backend plugin shared libraries" ON)
 
 # --- Dependencies ---
 FetchContent_Declare(
@@ -36,7 +35,6 @@ endif()
 set(MUNET_SOURCES
     src/tensor.cpp
     src/backend/backend_manager.cpp
-    src/backend/plugin_loader.cpp
     src/core/op_dispatch.cpp
     src/core/ops/add.cpp
     src/core/ops/elementwise.cpp
@@ -152,17 +150,6 @@ install(TARGETS _core
 )
 
 
-if(MUNET_BUILD_RUNTIME_PLUGINS)
-    add_library(munet_backend_vk SHARED src/backend/plugins/plugin_vk.cpp)
-    target_include_directories(munet_backend_vk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    set_target_properties(munet_backend_vk PROPERTIES OUTPUT_NAME "munet_backend_vk")
-    install(TARGETS munet_backend_vk
-        LIBRARY DESTINATION munet_nn/plugins
-        RUNTIME DESTINATION munet_nn/plugins
-        ARCHIVE DESTINATION munet_nn/plugins
-    )
-
-endif()
 
 # --- Unit Tests ---
 if(MUNET_BUILD_TESTS)
@@ -190,9 +177,9 @@ if(MUNET_BUILD_TOOLS)
 
     if(MUNET_BUILD_TESTS)
         add_test(
-            NAME munet_inference_baseline_host_smoke
+            NAME munet_inference_baseline_vulkan_smoke
             COMMAND munet_inference_baseline
-                    --device host
+                    --device vulkan
                     --dtype float32
                     --batch 4
                     --input-dim 16

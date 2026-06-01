@@ -114,7 +114,7 @@ TEST(TensorDTypeTest, MatmulRejectsDTypeMismatch) {
   EXPECT_THROW((void)a.matmul(b), std::runtime_error);
 }
 
-TEST(TensorDTypeTest, HostBackendCopyRejectsNullPointers) {
+TEST(TensorDTypeTest, HostStagingRuntimeCopyRejectsNullPointers) {
   Device vk{DeviceType::VULKAN, 0};
   Tensor src({2}, vk, DataType::Float32);
   Tensor dst({2}, vk, DataType::Float32);

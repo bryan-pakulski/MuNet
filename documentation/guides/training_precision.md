@@ -1,8 +1,6 @@
 # Training precision and AMP flows
 
-Phase 5 of the architecture refactor adds three training-facing building blocks that align with the dtype/backend work from earlier phases:
 
-1. modules retain explicit default `TensorOptions` so construction and migration use predictable device/dtype behavior
 2. optimizers accept parameter groups and explicit optimizer-state dtype policies
 3. AMP primitives are surfaced through `munet::amp::GradScaler` and `munet::amp::AutocastGuard`
 

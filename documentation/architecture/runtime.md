@@ -1,37 +1,34 @@
-# Runtime Architecture
+# Current Runtime Architecture
+
+MuNet's runtime is intentionally small and Vulkan-only.
 
 ## Core components
 
-- `Tensor` / `TensorImpl`: user-facing tensor + internal metadata/storage links.
-- `Storage`: backend allocation ownership + raw handle lifetime.
-- `Backend` implementations: kernel and transfer execution.
-- `BackendManager` / `BackendRegistry`: backend factory and cache lifecycle.
-- `ops::resolve_dispatch(...)`: op metadata + capability + fallback policy gate.
-- Autograd engine: backward graph execution when grad mode is enabled.
+- `Tensor` / `TensorImpl`: tensor metadata, storage ownership, and optional
+  training/autograd metadata.
+- `Storage`: owns the allocation returned by the runtime for a Vulkan device.
+- `BackendManager`: returns the single built-in Vulkan runtime registration.
+- `ops::resolve_dispatch(...)`: validates op metadata and decides between a
+  supported Vulkan runtime call or a small reference metadata path for view-like
+  tensor operations.
+- `inference::Engine`: inference-only wrapper that disables autograd graph
+  construction while running loaded modules.
 
 ## Execution flow
 
-1. High-level tensor/op API selects op metadata.
-2. Dispatch resolves backend vs Vulkan fallback via capability query + policy.
-3. Runtime executes selected path.
-4. Optional autograd node wiring and tracing/profiling metadata are recorded.
+1. Tensor/op API selects operation metadata.
+2. Dispatch validates dtype/shape support against the Vulkan runtime.
+3. Supported ops execute through the Vulkan runtime contract.
+4. Metadata-only ops such as reshape/narrow/transpose use direct reference paths.
+5. Unsupported dtype/shape/feature combinations throw explicit errors.
 
-## Dispatch fallback behavior
+## Training split
 
-Fallback is explicit and observable:
+Training/autograd remains available through `munet_training` and Python training
+APIs, but inference execution is isolated by `munet_inference` and
+`inference::Engine` guards that disable grad recording during runs.
 
-- fallback reason classification (`dtype`, `shape`, `feature`, `policy`)
-- structured fallback logs
-- profiler rows for fallback decision paths
-- Vulkan backend fallback telemetry counters
-- optional fail-fast (`MUNET_FAIL_FAST_VULKAN_UNSUPPORTED=1`)
+## Profiling
 
-This is intended to expose hidden fallback-induced flakiness/perf drift early.
-
-## Layering
-
-- `munet_core`: tensor/storage/backend/autograd/dispatch infrastructure.
-- `munet_training`: training modules (`nn`, `optim`) over core.
-- `munet_inference`: inference API surface over core with deployment-oriented
-  flow (`load`, `compile`, `run`).
-
+The profiler records dispatch stages and runtime operation labels. Use
+`make perf-test` for operator min/avg/max baselines and profiler breakdowns.

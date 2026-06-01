@@ -67,7 +67,7 @@ Tensor sub(const Tensor &a, const Tensor &b) {
   Tensor out =
       dispatch.use_backend
           ? Tensor(info.out_shape, a.device(), a.dtype())
-          : detail::binary_broadcast_host_fallback(
+          : detail::binary_broadcast_reference(
                 a, b, info, [](double lhs, double rhs) { return lhs - rhs; });
   if (dispatch.use_backend) {
     a.impl_->backend().sub(*a.impl_->storage, *b.impl_->storage,
@@ -98,7 +98,7 @@ Tensor mul(const Tensor &a, const Tensor &b) {
   Tensor out =
       dispatch.use_backend
           ? Tensor(info.out_shape, a.device(), a.dtype())
-          : detail::binary_broadcast_host_fallback(
+          : detail::binary_broadcast_reference(
                 a, b, info, [](double lhs, double rhs) { return lhs * rhs; });
   if (dispatch.use_backend) {
     a.impl_->backend().mul(*a.impl_->storage, *b.impl_->storage,
@@ -128,7 +128,7 @@ Tensor div(const Tensor &a, const Tensor &b) {
   Tensor out =
       dispatch.use_backend
           ? Tensor(info.out_shape, a.device(), a.dtype())
-          : detail::binary_broadcast_host_fallback(
+          : detail::binary_broadcast_reference(
                 a, b, info, [](double lhs, double rhs) { return lhs / rhs; });
   if (dispatch.use_backend) {
     a.impl_->backend().div(*a.impl_->storage, *b.impl_->storage,

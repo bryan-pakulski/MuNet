@@ -58,7 +58,7 @@ inline AllReduceExecutionMode configured_all_reduce_mode() {
     return AllReduceExecutionMode::DeviceNative;
   }
   const std::string mode(env);
-  if (mode == "host_fallback" || mode == "vulkan_staging") {
+  if (mode == "vulkan_staging" || mode == "vulkan_staging") {
     return AllReduceExecutionMode::HostFallback;
   }
   return AllReduceExecutionMode::DeviceNative;

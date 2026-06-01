@@ -1,7 +1,7 @@
 #include "vulkan_backend.hpp"
 #include "core/all_reduce_runtime.hpp"
 #include "core/util.hpp"
-#include "host_backend.hpp"
+#include "host_staging_runtime.hpp"
 #include "storage.hpp"
 #include <algorithm>
 #include <atomic>
@@ -3019,7 +3019,7 @@ void VulkanBackend::mean_last_dim(const Storage &in, Storage &out,
   Storage host_in(in.size_bytes(), Device{DeviceType::VULKAN, 0}, in.dtype());
   Storage host_out(out.size_bytes(), Device{DeviceType::VULKAN, 0}, out.dtype());
   copy(in.data(), host_in.data(), in.size_bytes(), in.device(), host_in.device());
-  HostBackend().mean_last_dim(host_in, host_out, outer_size, dim_size);
+  HostStagingRuntime().mean_last_dim(host_in, host_out, outer_size, dim_size);
   copy(host_out.data(), out.data(), out.size_bytes(), host_out.device(),
        out.device());
 }

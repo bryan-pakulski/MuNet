@@ -46,14 +46,14 @@ Checkpoint-only values:
 
 Custom-checkpoint hybrid payload marker:
 
-- `__format__ = "munet_hybrid_v1"` (+ `__shell__`) when class/source fallback payload is embedded.
+- `__format__ = "munet_hybrid_v1"` (+ `__shell__`) when class/source reference path payload is embedded.
 
 ## 3) Behavioral guarantees matrix
 
 | Flow | Artifact kind | Supported? | Notes |
 |---|---|---|---|
 | Python full load (`load_deploy`) | Deploy | ✅ | Built-in module configs only; strict runtime metadata validation. |
-| Python full load (`load_checkpoint`) | Checkpoint | ✅ | Supports built-ins and custom classes (custom fallback depends on trust policy). |
+| Python full load (`load_checkpoint`) | Checkpoint | ✅ | Supports built-ins and custom classes (custom reference path depends on trust policy). |
 | Python weights-only (`load_weights_deploy` / `load_weights_checkpoint`) | Deploy / Checkpoint | ✅ | Existing in-code model definition required. |
 | Python inference normalize (`load_for_inference`) | Deploy | ✅ | Enforces eval mode and optional device move. |
 | C++ `inference::load_serialized` | Deploy | ✅ | Strict deploy contract. |
@@ -63,8 +63,8 @@ Custom-checkpoint hybrid payload marker:
 
 Checkpoint custom-class reconstruction may require executing embedded source.
 
-- `munet.load_checkpoint(..., trusted=False)` (**default**) does **not** execute embedded source fallback.
-- `munet.load_checkpoint(..., trusted=True)` allows source execution fallback for custom classes when import resolution fails.
+- `munet.load_checkpoint(..., trusted=False)` (**default**) does **not** execute embedded source reference path.
+- `munet.load_checkpoint(..., trusted=True)` allows source execution reference path for custom classes when import resolution fails.
 
 Use `trusted=True` only for artifacts from trusted producers.
 

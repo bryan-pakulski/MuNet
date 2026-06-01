@@ -19,13 +19,10 @@ This guide summarizes the currently exposed Python surface in `munet`.
 - `munet.supports(device, feature, dtype)`
 - `munet.dispatch_policy_snapshot()`
 - `munet.dispatch_decision_debug_dump(op_name, tensor)`
-- `munet.fallback_telemetry_snapshot()`
-- `munet.reset_fallback_telemetry()`
 
 Related env flags:
 
 - `MUNET_DISPATCH_DECISION_DUMP=1`
-- `MUNET_FAIL_FAST_VULKAN_UNSUPPORTED=1`
 
 ### Profiling helpers
 

@@ -1,10 +1,7 @@
-#include "backend/host_backend.hpp"
 #include "backend/debug_backend.hpp"
-#include "backend/plugin_loader.hpp"
+#include "backend/host_staging_runtime.hpp"
 #include "core/backend.hpp"
 #include "core/util.hpp"
-
-#include "backend/vulkan_backend.hpp"
 
 #include <algorithm>
 #include <mutex>
@@ -12,44 +9,41 @@
 namespace munet {
 namespace {
 
-bool backend_probe_ok(DeviceType type, const char *backend_name,
-                      BackendRegistry::BackendFactory factory) {
+bool vulkan_probe_ok(Device device, BackendRegistry::BackendFactory factory,
+                     std::string *detail = nullptr) {
   try {
-    auto backend = factory(Device{type, 0});
+    auto backend = factory(device);
     if (backend) {
       backend->synchronize();
     }
+    if (detail) {
+      *detail = "Vulkan runtime probe succeeded using built-in host staging.";
+    }
     return true;
   } catch (const std::exception &e) {
-    MUNET_WARNING << backend_name
-                  << " backend compiled but unavailable at runtime; disabling "
-                     "acceleration for this backend. Reason: "
-                  << e.what() << std::endl;
+    if (detail) {
+      *detail = e.what();
+    }
+    MUNET_WARNING << "Vulkan runtime unavailable: " << e.what() << std::endl;
     return false;
   } catch (...) {
-    MUNET_WARNING << backend_name
-                  << " backend compiled but unavailable at runtime; disabling "
-                     "acceleration for this backend due to vulkan error."
+    if (detail) {
+      *detail = "Vulkan runtime probe failure.";
+    }
+    MUNET_WARNING << "Vulkan runtime unavailable due to unknown Vulkan error."
                   << std::endl;
     return false;
   }
 }
 
-void register_default_backends(BackendRegistry &registry) {
+BackendRegistry::BackendFactory vulkan_factory() {
+  return [](Device) { return std::make_shared<HostStagingRuntime>(); };
+}
+
+void register_default_runtime(BackendRegistry &registry) {
   static std::once_flag once;
   std::call_once(once, [&registry]() {
-    registry.register_backend(
-        DeviceType::VULKAN, [](Device) { return std::make_shared<HostBackend>(); });
-
-    if (plugin::has_active_plugin_for_device("vulkan")) {
-      BackendRegistry::BackendFactory vulkan_factory = [](Device device) {
-        return std::make_shared<VulkanBackend>(device.index);
-      };
-      if (backend_probe_ok(DeviceType::VULKAN, "Vulkan", vulkan_factory)) {
-        registry.register_backend(DeviceType::VULKAN, std::move(vulkan_factory));
-      }
-    }
-
+    registry.register_backend(DeviceType::VULKAN, vulkan_factory());
     registry.set_decorator([](std::shared_ptr<Backend> backend) {
       if (is_debug_enabled() || is_profile_enabled()) {
         return wrap_with_debug_backend(std::move(backend));
@@ -59,25 +53,14 @@ void register_default_backends(BackendRegistry &registry) {
   });
 }
 
-int backend_cache_key(Device device) {
-  return static_cast<int>(device.type) * 1000 + device.index;
-}
+int backend_cache_key(Device device) { return device.index; }
 
 } // namespace
 
-void BackendRegistry::register_backend(DeviceType type,
-                                       BackendFactory factory) {
+void BackendRegistry::register_backend(DeviceType type, BackendFactory factory) {
   std::lock_guard<std::mutex> lock(mutex_);
   factories_[type] = std::move(factory);
-
-  for (auto it = cache_.begin(); it != cache_.end();) {
-    const int cached_type = it->first / 1000;
-    if (cached_type == static_cast<int>(type)) {
-      it = cache_.erase(it);
-    } else {
-      ++it;
-    }
-  }
+  cache_.clear();
 }
 
 std::shared_ptr<Backend> BackendRegistry::get(Device device) {
@@ -91,7 +74,7 @@ std::shared_ptr<Backend> BackendRegistry::get(Device device) {
 
   auto factory_it = factories_.find(device.type);
   if (factory_it == factories_.end()) {
-    throw std::runtime_error("Requested backend not compiled or registered.");
+    throw std::runtime_error("Vulkan runtime is not registered.");
   }
 
   auto backend = factory_it->second(device);
@@ -103,16 +86,9 @@ std::shared_ptr<Backend> BackendRegistry::get(Device device) {
   return backend;
 }
 
-void BackendRegistry::clear_cache(DeviceType type) {
+void BackendRegistry::clear_cache(DeviceType) {
   std::lock_guard<std::mutex> lock(mutex_);
-  for (auto it = cache_.begin(); it != cache_.end();) {
-    const int cached_type = it->first / 1000;
-    if (cached_type == static_cast<int>(type)) {
-      it = cache_.erase(it);
-    } else {
-      ++it;
-    }
-  }
+  cache_.clear();
 }
 
 void BackendRegistry::clear_all() {
@@ -135,7 +111,7 @@ BackendRegistry &default_backend_registry() {
 
 BackendRegistry &BackendManager::registry() {
   auto &registry = default_backend_registry();
-  register_default_backends(registry);
+  register_default_runtime(registry);
   return registry;
 }
 
@@ -147,104 +123,32 @@ std::shared_ptr<Backend> BackendManager::get(Device device) {
   return registry().get(device);
 }
 
-
 std::vector<std::string> BackendManager::list_available_backends() {
-  std::vector<std::string> out;
-
-  if (plugin::has_active_plugin_for_device("vulkan") &&
-      backend_probe_ok(DeviceType::VULKAN, "Vulkan", [](Device device) {
-        return std::make_shared<VulkanBackend>(device.index);
-      })) {
-    out.push_back("vulkan");
+  std::string detail;
+  if (vulkan_probe_ok(Device{DeviceType::VULKAN, 0}, vulkan_factory(), &detail)) {
+    return {"vulkan"};
   }
-
-  for (const auto &plugin_status : plugin::discover_backend_plugins()) {
-    if (plugin_status.active) {
-      out.push_back(plugin_status.name);
-    }
-  }
-
-  std::sort(out.begin(), out.end());
-  out.erase(std::unique(out.begin(), out.end()), out.end());
-  return out;
+  return {};
 }
 
 std::vector<BackendRuntimeStatus> BackendManager::backend_status() {
-  std::vector<BackendRuntimeStatus> statuses;
+  BackendRuntimeStatus status;
+  status.name = "vulkan";
+  status.source = "builtin";
+  status.discovered = true;
 
-  auto add_builtin_status = [&](const std::string &name, bool compiled,
-                                DeviceType type,
-                                BackendRegistry::BackendFactory factory,
-                                const std::string &plugin_device) {
-    BackendRuntimeStatus status;
-    status.name = name;
-    status.source = "builtin";
-    status.discovered = compiled;
-    if (!compiled) {
-      status.reason_code = "not_compiled";
-      status.detail = "Backend not compiled into this build.";
-      statuses.push_back(std::move(status));
-      return;
-    }
-
-    if (!plugin::has_active_plugin_for_device(plugin_device)) {
-      status.reason_code = "plugin_not_found";
-      std::string detail = "No active runtime plugin discovered for this backend device.";
-      const auto candidates = plugin::plugins_for_device(plugin_device);
-      if (!candidates.empty()) {
-        detail += " Candidates: ";
-        for (size_t i = 0; i < candidates.size(); ++i) {
-          detail += candidates[i].name + "(" + candidates[i].reason_code + ")";
-          if (i + 1 < candidates.size()) {
-            detail += ", ";
-          }
-        }
-      }
-      status.detail = detail;
-      statuses.push_back(std::move(status));
-      return;
-    }
-
-    try {
-      auto backend = factory(Device{type, 0});
-      backend->synchronize();
-      status.loadable = true;
-      status.active = true;
-      status.reason_code = "ok";
-      status.detail = "Backend compiled and runtime probe succeeded.";
-    } catch (const std::exception &e) {
-      status.reason_code = "runtime_dependency_missing";
-      status.detail = e.what();
-    } catch (...) {
-      status.reason_code = "runtime_dependency_missing";
-      status.detail = "Vulkan runtime probe failure.";
-    }
-    statuses.push_back(std::move(status));
-  };
-
-  add_builtin_status("vulkan", true, DeviceType::VULKAN,
-                     [](Device device) {
-                       return std::make_shared<VulkanBackend>(device.index);
-                     },
-                     "vulkan");
-
-  for (const auto &plugin_status : plugin::discover_backend_plugins()) {
-    BackendRuntimeStatus status;
-    status.name = plugin_status.name;
-    status.source = "plugin";
-    status.discovered = plugin_status.discovered;
-    status.loadable = plugin_status.loadable;
-    status.active = plugin_status.active;
-    status.reason_code = plugin_status.reason_code;
-    status.detail = plugin_status.detail;
-    status.plugin_path = plugin_status.path;
-    status.plugin_abi_version = plugin_status.plugin_abi_version;
-    status.core_abi_version = plugin::kBackendPluginAbiVersion;
-    status.capability_flags = plugin_status.capability_flags;
-    statuses.push_back(std::move(status));
+  std::string detail;
+  if (vulkan_probe_ok(Device{DeviceType::VULKAN, 0}, vulkan_factory(), &detail)) {
+    status.loadable = true;
+    status.active = true;
+    status.reason_code = "ok";
+    status.detail = detail;
+  } else {
+    status.reason_code = "runtime_dependency_missing";
+    status.detail = detail;
   }
 
-  return statuses;
+  return {std::move(status)};
 }
 
 } // namespace munet

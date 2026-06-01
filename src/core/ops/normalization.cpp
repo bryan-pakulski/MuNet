@@ -11,7 +11,7 @@ Tensor batch_norm(const Tensor &in, Tensor &running_mean, Tensor &running_var,
   detail::require_same_dtype(op_metadata(OpId::BatchNorm).name, in, weight);
   detail::require_same_dtype(op_metadata(OpId::BatchNorm).name, in, bias);
   const auto dispatch = resolve_dispatch(OpId::BatchNorm, in);
-  const bool use_host_fallback = dispatch.use_host_fallback;
+  const bool use_reference_path = dispatch.use_reference_path;
 
   const int B = in.shape()[0];
   const int C = in.shape()[1];
@@ -28,7 +28,7 @@ Tensor batch_norm(const Tensor &in, Tensor &running_mean, Tensor &running_var,
   Tensor backward_save_mean = save_mean;
   Tensor backward_save_var = save_var;
 
-  if (use_host_fallback) {
+  if (use_reference_path) {
     Device host{DeviceType::VULKAN, 0};
     Tensor in_exec = in.to(host);
     Tensor weight_exec = weight.to(host);
@@ -103,7 +103,7 @@ Tensor batch_norm(const Tensor &in, Tensor &running_mean, Tensor &running_var,
   if (GradMode::is_enabled() && training &&
       (in.requires_grad() || weight.requires_grad() || bias.requires_grad())) {
     std::shared_ptr<autograd_nodes::BatchNormBackward> fn;
-    if (use_host_fallback) {
+    if (use_reference_path) {
       fn = std::make_shared<autograd_nodes::BatchNormBackward>(
           backward_in, backward_weight, backward_save_mean, backward_save_var,
           eps, in.shape(), in.device(), in.dtype(), weight.shape(),
@@ -127,8 +127,8 @@ Tensor layer_norm(const Tensor &x, const Tensor &weight, const Tensor &bias,
   detail::require_same_dtype(op_metadata(OpId::LayerNorm).name, x, weight);
   detail::require_same_dtype(op_metadata(OpId::LayerNorm).name, x, bias);
   const auto dispatch = resolve_dispatch(OpId::LayerNorm, x);
-  const bool use_host_fallback = dispatch.use_host_fallback;
-  if (!use_host_fallback) {
+  const bool use_reference_path = dispatch.use_reference_path;
+  if (!use_reference_path) {
     throw std::runtime_error(
         "LayerNorm: backend execution path is not implemented for backend '" +
         std::string(x.impl_->backend().name()) + "'");

@@ -74,7 +74,7 @@ private:
   bool stop;
 };
 
-class HostBackend : public Backend,
+class HostStagingRuntime : public Backend,
                    public BackendAllocationTransferCapability,
                    public BackendElementwiseCapability,
                    public BackendReductionCapability,
@@ -175,7 +175,7 @@ public:
     return this;
   }
 
-  ~HostBackend() override {
+  ~HostStagingRuntime() override {
     for (auto &kv : free_blocks_) {
       for (void *ptr : kv.second) {
         std::free(ptr);
@@ -400,7 +400,7 @@ public:
     const float *bp = (const float *)b.data();
     float *cp = (float *)out.data();
     for (int b_idx = 0; b_idx < batch_size; ++b_idx) {
-      ops::detail::batched_matmul_host_fallback(
+      ops::detail::batched_matmul_reference(
           ap + b_idx * stride_a, bp + b_idx * stride_b, cp + b_idx * stride_out,
           M, K, N, transA, transB);
     }
@@ -666,7 +666,7 @@ public:
     float *out = (float *)out_loss.data();
 
     // Sum reduction requires lock or atomic. We use a thread-local accumulation
-    // strategy via sequential loop for simplicity in this fallback backend.
+    // strategy via sequential loop for simplicity in this reference runtime.
     double total_loss = 0.0;
 
     // Iterate over N samples

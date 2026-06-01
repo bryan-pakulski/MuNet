@@ -14,7 +14,7 @@ Tensor max_pool2d(const Tensor &in, int kernel_size, int stride, int padding) {
   const int oH = (iH + 2 * padding - kernel_size) / stride + 1;
   const int oW = (iW + 2 * padding - kernel_size) / stride + 1;
   Tensor out({B, C, oH, oW}, in.device(), in.dtype());
-  if (dispatch.use_host_fallback) {
+  if (dispatch.use_reference_path) {
     Device host{DeviceType::VULKAN, 0};
     Tensor in_exec = in.to(host);
     if (in_exec.dtype() != DataType::Float32) {
@@ -56,7 +56,7 @@ Tensor upsample2d(const Tensor &in, int scale_factor) {
   const int iW = in.shape()[3];
   Tensor out({B, C, iH * scale_factor, iW * scale_factor}, in.device(),
              in.dtype());
-  if (dispatch.use_host_fallback) {
+  if (dispatch.use_reference_path) {
     Device host{DeviceType::VULKAN, 0};
     Tensor in_exec = in.to(host);
     if (in_exec.dtype() != DataType::Float32) {

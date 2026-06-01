@@ -44,7 +44,7 @@ inline void require_backend_support(const std::string &op, const Tensor &tensor,
 }
 
 template <typename Fn>
-inline Tensor binary_broadcast_host_fallback(const Tensor &a, const Tensor &b,
+inline Tensor binary_broadcast_reference(const Tensor &a, const Tensor &b,
                                             const BroadcastInfo &info,
                                             Fn &&fn) {
   Device host{DeviceType::VULKAN, 0};
@@ -84,7 +84,7 @@ inline Tensor binary_broadcast_host_fallback(const Tensor &a, const Tensor &b,
                                               : out_host.to(a.device());
 }
 
-inline Tensor sum_to_shape_host_fallback(const Tensor &t,
+inline Tensor sum_to_shape_reference(const Tensor &t,
                                         const Shape &target_shape) {
   Device host{DeviceType::VULKAN, 0};
   Tensor t_host = t.to(host);
@@ -125,7 +125,7 @@ inline Tensor sum_to_shape_host_fallback(const Tensor &t,
                                               : out_host.to(t.device());
 }
 
-inline Tensor matmul_host_fallback(const Tensor &a, const Tensor &b, bool transA,
+inline Tensor matmul_reference(const Tensor &a, const Tensor &b, bool transA,
                                   bool transB) {
   Device host{DeviceType::VULKAN, 0};
   Tensor a_host = a.to(host);
@@ -164,7 +164,7 @@ inline Tensor matmul_host_fallback(const Tensor &a, const Tensor &b, bool transA
                                               : out_host.to(a.device());
 }
 
-inline Tensor batched_matmul_host_fallback(const Tensor &a, const Tensor &b,
+inline Tensor batched_matmul_reference(const Tensor &a, const Tensor &b,
                                           bool transA, bool transB) {
   Device host{DeviceType::VULKAN, 0};
   Tensor a_host = a.to(host);
@@ -256,7 +256,7 @@ inline Tensor batched_matmul_host_fallback(const Tensor &a, const Tensor &b,
 }
 
 template <typename Fn>
-inline Tensor unary_host_fallback(const Tensor &input, Fn &&fn) {
+inline Tensor unary_reference(const Tensor &input, Fn &&fn) {
   Device host{DeviceType::VULKAN, 0};
   Tensor in_host = input.to(host);
   Tensor out_host(input.shape(), host, input.dtype());
@@ -272,8 +272,8 @@ inline Tensor unary_host_fallback(const Tensor &input, Fn &&fn) {
                                                   : out_host.to(input.device());
 }
 
-// Low-level batched matmul fallback for backends (works with raw pointers)
-inline void batched_matmul_host_fallback(const float *a, const float *b, float *out,
+// Low-level batched matmul reference helper for runtime code (works with raw pointers)
+inline void batched_matmul_reference(const float *a, const float *b, float *out,
                                          int M, int K, int N, bool transA, bool transB) {
   for (int m = 0; m < M; ++m) {
     for (int n = 0; n < N; ++n) {
@@ -369,8 +369,8 @@ inline Tensor sum_to_shape(const Tensor &t, const Shape &target_shape) {
   }
 
   const auto dispatch = resolve_dispatch(OpId::SumToShape, t);
-  if (dispatch.use_host_fallback) {
-    return detail::sum_to_shape_host_fallback(t, target_shape);
+  if (dispatch.use_reference_path) {
+    return detail::sum_to_shape_reference(t, target_shape);
   }
 
   Tensor out(target_shape, t.device(), t.dtype());
