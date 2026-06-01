@@ -36,10 +36,13 @@ performance data.
 Each operator baseline reports:
 
 - `min_us`, `avg_us`, and `max_us` for measured wall-clock execution.
-- A profiler breakdown keyed by the existing MuNet profiler labels, including
-  staging timing, Vulkan timing fields, call counts, and processed bytes.
-- GTest record properties with the same values so CI can archive the numbers as
-  test metadata when desired.
+- A machine-readable JSON profiler breakdown keyed by the existing MuNet profiler
+  labels, including staging timing, Vulkan timing fields, call counts, and
+  processed bytes.
+- A human-readable `PERF_BREAKDOWN` table with sorted profiler rows and ASCII
+  contribution bars so regressions are easier to spot in terminal logs.
+- GTest record properties with the same JSON and visual values so CI can archive
+  the numbers as test metadata when desired.
 
 Use these baselines as a starting point for optimization work: track per-operator
 min/avg/max changes over time, then use the profiler breakdown to identify

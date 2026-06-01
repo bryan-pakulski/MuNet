@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <gtest/gtest.h>
@@ -141,6 +142,87 @@ OperatorBaseline benchmark_operator(const std::string &name,
   return baseline;
 }
 
+struct ProfileBreakdownRow {
+  std::string label;
+  const ProfileAggregate *stats = nullptr;
+  double total_us = 0.0;
+  double avg_us = 0.0;
+  double percent = 0.0;
+};
+
+std::string truncate_label(const std::string &label, size_t width) {
+  if (label.size() <= width) {
+    return label;
+  }
+  if (width <= 3) {
+    return label.substr(0, width);
+  }
+  return label.substr(0, width - 3) + "...";
+}
+
+std::string scaled_bar(double percent, size_t width = 28) {
+  const size_t filled =
+      static_cast<size_t>(std::round((percent / 100.0) * width));
+  return std::string(std::min(filled, width), '#') +
+         std::string(width - std::min(filled, width), '.');
+}
+
+std::vector<ProfileBreakdownRow>
+profile_breakdown_rows(const OperatorBaseline &baseline) {
+  std::vector<ProfileBreakdownRow> rows;
+  rows.reserve(baseline.profile.size());
+
+  double total_profile_us = 0.0;
+  for (const auto &[label, stats] : baseline.profile) {
+    total_profile_us += stats.host_us + stats.gpu_us;
+  }
+
+  for (const auto &[label, stats] : baseline.profile) {
+    const double total_us = stats.host_us + stats.gpu_us;
+    const double avg_us = stats.count > 0 ? total_us / stats.count : 0.0;
+    const double percent = total_profile_us > 0.0
+                               ? (total_us / total_profile_us) * 100.0
+                               : 0.0;
+    rows.push_back(
+        ProfileBreakdownRow{label, &stats, total_us, avg_us, percent});
+  }
+
+  std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) {
+    if (a.total_us == b.total_us) {
+      return a.label < b.label;
+    }
+    return a.total_us > b.total_us;
+  });
+  return rows;
+}
+
+std::string profile_breakdown_visual(const OperatorBaseline &baseline) {
+  std::ostringstream out;
+  out << std::fixed << std::setprecision(3);
+  const auto rows = profile_breakdown_rows(baseline);
+
+  out << "\nPERF_BREAKDOWN operator=" << baseline.name << "\n";
+  out << "  " << std::left << std::setw(38) << "label" << std::right
+      << std::setw(8) << "calls" << std::setw(12) << "total_us"
+      << std::setw(12) << "avg_us" << std::setw(10) << "share"
+      << "  visual\n";
+  out << "  " << std::string(38, '-') << " " << std::string(7, '-') << " "
+      << std::string(11, '-') << " " << std::string(11, '-') << " "
+      << std::string(9, '-') << "  " << std::string(28, '-') << "\n";
+
+  for (const auto &row : rows) {
+    out << "  " << std::left << std::setw(38)
+        << truncate_label(row.label, 38) << std::right << std::setw(8)
+        << row.stats->count << std::setw(12) << row.total_us << std::setw(12)
+        << row.avg_us << std::setw(9) << row.percent << "%  "
+        << scaled_bar(row.percent) << "\n";
+  }
+
+  out << "  wall_us min/avg/max = " << baseline.min_us << " / "
+      << baseline.avg_us << " / " << baseline.max_us << "\n";
+  return out.str();
+}
+
 std::string profile_breakdown_json(const OperatorBaseline &baseline) {
   std::ostringstream out;
   out << "[";
@@ -179,7 +261,7 @@ void print_operator_baseline(const OperatorBaseline &baseline) {
             << " min_us=" << baseline.min_us << " avg_us=" << baseline.avg_us
             << " max_us=" << baseline.max_us
             << " profile_breakdown=" << profile_breakdown_json(baseline)
-            << std::endl;
+            << profile_breakdown_visual(baseline) << std::endl;
 }
 
 void expect_valid_baseline(const OperatorBaseline &baseline) {
@@ -242,5 +324,7 @@ TEST(PerformanceTest, OperatorBaselineMinAvgMaxAndProfilerBreakdown) {
     RecordProperty((baseline.name + "_max_us").c_str(), baseline.max_us);
     RecordProperty((baseline.name + "_profile_breakdown").c_str(),
                    profile_breakdown_json(baseline));
+    RecordProperty((baseline.name + "_profile_visual").c_str(),
+                   profile_breakdown_visual(baseline));
   }
 }
