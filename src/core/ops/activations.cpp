@@ -8,13 +8,13 @@ namespace munet {
 namespace ops {
 namespace {
 
-template <typename BackendFn, typename HostFn>
+template <typename BackendFn, typename ReferenceFn>
 Tensor unary_activation_op(OpId op_id, const Tensor &a, BackendFn &&backend_fn,
-                           HostFn &&host_fn) {
+                           ReferenceFn &&reference_fn) {
   const auto dispatch = resolve_dispatch(op_id, a);
   Tensor out = dispatch.use_backend
                    ? Tensor(a.shape(), a.device(), a.dtype())
-                   : detail::unary_reference(a, std::forward<HostFn>(host_fn));
+                   : detail::unary_reference(a, std::forward<ReferenceFn>(reference_fn));
   if (dispatch.use_backend) {
     backend_fn(*a.impl_->storage, *out.impl_->storage, a.size());
   }

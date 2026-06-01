@@ -12,7 +12,7 @@
 
 namespace munet {
 
-enum class DeviceType { VULKAN };
+enum class DeviceType { VULKAN, EXTERNAL };
 enum class DataType { Float32, Float16, BFloat16, Int32, Int8 };
 enum class AccumulationOp {
   Elementwise,
@@ -140,11 +140,17 @@ struct Device {
   bool operator!=(const Device &other) const { return !(*this == other); }
 
   std::string to_string() const {
-    return "vulkan:" + std::to_string(index);
+    if (type == DeviceType::VULKAN) {
+      return "vulkan:" + std::to_string(index);
+    }
+    return "external:" + std::to_string(index);
   }
 };
 
-inline const char *transfer_profile_name(Device, Device) {
+inline const char *transfer_profile_name(Device src, Device dst) {
+  if (src.type == DeviceType::EXTERNAL || dst.type == DeviceType::EXTERNAL) {
+    return "transfer.external_vulkan_staging";
+  }
   return "transfer.vulkan";
 }
 

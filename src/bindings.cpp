@@ -79,7 +79,8 @@ Tensor tensor_from_numpy_array(py::array input) {
   std::vector<int> shape(buf.shape.begin(), buf.shape.end());
   DataType dtype = numpy_dtype_to_data_type(buf);
   Tensor t(shape, Device{DeviceType::VULKAN, 0}, dtype, false);
-  std::memcpy(t.data(), buf.ptr, t.bytes());
+  t.impl_->backend().copy(buf.ptr, t.data(), t.bytes(),
+                          Device{DeviceType::EXTERNAL, 0}, t.device());
   return t;
 }
 
@@ -95,7 +96,8 @@ void copy_numpy_array_into_tensor(Tensor &tensor, py::array input) {
 
   Tensor converted =
       (source.dtype() == tensor.dtype()) ? source : source.to(tensor.dtype());
-  std::memcpy(tensor.data(), converted.data(), tensor.bytes());
+  tensor.impl_->backend().copy(converted.data(), tensor.data(), tensor.bytes(),
+                               converted.device(), tensor.device());
 }
 
 Tensor make_scalar_tensor(Device device, DataType dtype, float value) {
@@ -545,7 +547,7 @@ PYBIND11_MODULE(_core, m) {
       .def(
           "numpy", [](py::object self) { return py::cast<py::array>(self); },
           "Returns the tensor as a NumPy ndarray. The returned array and the "
-          "tensor will share their storage (Host only).")
+          "tensor exposes the Vulkan allocation through a mapped staging view.")
       .def("item", &Tensor::item,
            "Returns the value of this tensor as a standard Python number. Only "
            "works for tensors with one element.")
@@ -738,7 +740,7 @@ PYBIND11_MODULE(_core, m) {
         }
         return devices;
       },
-      "Returns concrete available devices (Host plus detected accelerator "
+      "Returns concrete available Vulkan devices ("
       "devices).");
 
   m.def(
@@ -788,7 +790,7 @@ PYBIND11_MODULE(_core, m) {
   m.def(
       "from_numpy",
       [](py::array input) { return tensor_from_numpy_array(input); },
-      py::arg("input"), "Creates a Host Tensor from a NumPy array.");
+      py::arg("input"), "Creates a Vulkan Tensor from a NumPy array via explicit upload.");
 
   // Alias copy_from_numpy to module level as well
   m.def(
@@ -802,7 +804,7 @@ PYBIND11_MODULE(_core, m) {
         }
       },
       py::arg("tensor"), py::arg("input"),
-      "Copies data from a NumPy array into the given Host tensor.");
+      "Copies data from a NumPy array into the given Vulkan tensor via explicit upload.");
 
   py::class_<core::Module, std::shared_ptr<core::Module>>(m, "_CoreModule");
   py::class_<core::OffloadValidationReport>(m, "OffloadValidationReport")

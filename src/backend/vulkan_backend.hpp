@@ -1,7 +1,7 @@
 #pragma once
 #include "../backend.hpp"
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -211,6 +211,7 @@ private:
 
     std::unordered_map<size_t, std::vector<uint64_t>> free_pool;
     std::unordered_map<uint64_t, size_t> allocation_sizes;
+    std::unordered_map<uint64_t, VkBuffer> allocation_buffers;
     std::unordered_map<uint64_t, VkDeviceMemory> allocation_memory;
     std::array<std::vector<uint64_t>, 2> deferred_frees;
 
@@ -223,6 +224,7 @@ private:
   };
   std::unique_ptr<VulkanRuntimeState> runtime_;
 
+  VkBuffer resolve_buffer_handle(const void *ptr) const;
   void dispatch_kernel(VkPipeline pipeline, const std::vector<void *> &buffers,
                        void *pc, size_t pcSize, int x, int y, int z);
   void reset_runtime_state();

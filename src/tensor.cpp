@@ -12,19 +12,6 @@
 #include <vector>
 
 namespace munet {
-namespace {
-
-Tensor convert_tensor_dtype_host(const Tensor &input, DataType target_dtype) {
-  NoGradGuard guard;
-  Tensor out(input.shape(), Device{DeviceType::VULKAN, 0}, target_dtype,
-             input.requires_grad());
-
-  convert_buffer_dtype(input.data(), input.dtype(), out.data(), target_dtype,
-                       input.size());
-  return out;
-}
-
-} // namespace
 
 // --- Autograd ---
 void Tensor::backward(const Tensor &grad) { backward(grad, false); }
@@ -39,15 +26,12 @@ void Tensor::backward(bool retain_graph) {
     throw std::runtime_error("backward() requires a floating-point tensor");
   }
 
-  // Create the root gradient without tracking history
+  // Create the root gradient without tracking history.
   Tensor root_grad;
   {
     NoGradGuard guard;
     root_grad = Tensor(shape(), device(), dtype());
-    Tensor root_host(shape(), Device{DeviceType::VULKAN, 0}, dtype());
-    write_scalar_to_buffer(root_host.data(), dtype(), 1.0);
-    impl_->backend().copy(root_host.data(), root_grad.data(), root_grad.bytes(),
-                          root_host.device(), device());
+    root_grad.fill_(1.0f);
   }
 
   backward(root_grad, retain_graph);
@@ -133,47 +117,19 @@ Tensor Tensor::to(Device dev) const {
     return *this;
 
   if (!is_contiguous()) {
-    // To avoid recursion, we perform the Host-based packs/moves manually
-    // or ensure contiguous() doesn't call back into this check.
-    // If we are moving to another device, pack it on Host first.
-    if (device().type != DeviceType::VULKAN) {
-      // Create a temporary Host tensor and manually pack into it
-      Tensor host_contig(shape(), Device{DeviceType::VULKAN, 0}, dtype());
-      Tensor host_view = this->to(Device{
-          DeviceType::VULKAN, 0}); // This calls back, but 'this' is non-contiguous
-      // We need a way to move the raw bytes to Host regardless of contiguity
-    }
     return this->contiguous().to(dev);
   }
 
   Tensor out(shape(), dev, dtype(), requires_grad());
   size_t byte_count = bytes();
 
-  const bool src_non_host = device().type != DeviceType::VULKAN;
-  const bool dst_non_host = dev.type != DeviceType::VULKAN;
-  const bool cross_backend_non_host =
-      src_non_host && dst_non_host && device().type != dev.type;
-  const bool cross_vulkan_device_non_host =
-      src_non_host && dst_non_host && device().type == DeviceType::VULKAN &&
-      dev.type == DeviceType::VULKAN && device().index != dev.index;
-
-  if (cross_backend_non_host || cross_vulkan_device_non_host) {
-    // Route heterogeneous/non-peer Vulkan transfers through Host staging to avoid
-    // backend-specific direct-copy assumptions and multi-device Vulkan buffer
-    // ownership constraints.
-    Tensor host_stage(shape(), Device{DeviceType::VULKAN, 0}, dtype(), false);
-    BackendManager::get(device())->copy(data(), host_stage.data(), byte_count,
-                                        device(), host_stage.device());
-    BackendManager::get(dev)->copy(host_stage.data(), out.data(), byte_count,
-                                   host_stage.device(), dev);
-  } else if (device().type == DeviceType::VULKAN ||
-             dev.type == DeviceType::VULKAN) {
-    Device vk_dev = (device().type == DeviceType::VULKAN) ? device() : dev;
-    BackendManager::get(vk_dev)->copy(data(), out.data(), byte_count, device(),
-                                      dev);
-  } else {
-    impl_->backend().copy(data(), out.data(), byte_count, device(), dev);
+  if (device().type != DeviceType::VULKAN || dev.type != DeviceType::VULKAN) {
+    throw std::runtime_error(
+        "Tensor::to only supports Vulkan tensors; external transfers must use "
+        "from_numpy/copy_from_numpy/numpy explicitly.");
   }
+
+  impl_->backend().copy(data(), out.data(), byte_count, device(), dev);
 
   if (GradMode::is_enabled() && requires_grad()) {
     if (impl_->grad_fn) {
@@ -194,7 +150,8 @@ Tensor Tensor::to(Device dev) const {
 }
 
 void Tensor::to_(Device dev) {
-  // In-place device transfer: preserve TensorImpl identity for optimizer references
+  // In-place device transfer: preserve TensorImpl identity for optimizer
+  // references
   Tensor moved = this->to(dev);
   // Swap storage within the existing TensorImpl
   impl_->storage = std::move(moved.impl_->storage);
@@ -204,19 +161,20 @@ Tensor Tensor::to(DataType target_dtype) const {
   if (dtype() == target_dtype)
     return *this;
 
-  Device host{DeviceType::VULKAN, 0};
-  Tensor host_src = (device().type == DeviceType::VULKAN) ? *this : to(host);
-  Tensor host_out;
-  if (is_profile_enabled()) {
-    Timer timer;
-    host_out = convert_tensor_dtype_host(host_src, target_dtype);
-    Profiler::get().record("transfer.dtype_convert", timer.elapsed_us(), 0.0,
-                           host_src.bytes(), to_string(host_src.shape()));
-  } else {
-    host_out = convert_tensor_dtype_host(host_src, target_dtype);
+  if (target_dtype != DataType::Float32) {
+    throw std::runtime_error(
+        "Vulkan dtype conversion currently supports float32 runtime tensors "
+        "only; use from_numpy with the desired dtype at ingestion.");
   }
-  Tensor out =
-      (device().type == DeviceType::VULKAN) ? host_out : host_out.to(device());
+
+  Tensor out(shape(), device(), target_dtype, requires_grad());
+  if (dtype() == DataType::Float32) {
+    impl_->backend().copy(data(), out.data(), bytes(), device(), out.device());
+  } else {
+    throw std::runtime_error(
+        "Vulkan dtype conversion from non-float32 tensors is not implemented "
+        "without an explicit Vulkan conversion kernel.");
+  }
 
   if (GradMode::is_enabled() && requires_grad()) {
     if (impl_->grad_fn) {
@@ -352,22 +310,19 @@ void Tensor::fill_(const ScalarValue &value) {
   if (size() == 0)
     return;
 
-  Device host{DeviceType::VULKAN, 0};
-  Tensor host_out(shape(), host, dtype(), requires_grad());
-  char *host_bytes = static_cast<char *>(host_out.data());
+  if (device().type != DeviceType::VULKAN) {
+    throw std::runtime_error("fill_ only supports Vulkan tensors.");
+  }
+
+  std::vector<char> external_bytes(bytes());
   const size_t element_size = dtype_size(dtype());
   for (size_t i = 0; i < size(); ++i) {
-    write_scalar_to_buffer(host_bytes + i * element_size, dtype(), value.value);
+    write_scalar_to_buffer(external_bytes.data() + i * element_size, dtype(),
+                           value.value);
   }
 
-  if (device().type == DeviceType::VULKAN) {
-    impl_->backend().copy(host_out.data(), data(), bytes(), host, device());
-    impl_->bump_version();
-    return;
-  }
-
-  BackendManager::get(device())->copy(host_out.data(), data(), bytes(), host,
-                                      device());
+  impl_->backend().copy(external_bytes.data(), data(), bytes(),
+                        Device{DeviceType::EXTERNAL, 0}, device());
   impl_->bump_version();
 }
 

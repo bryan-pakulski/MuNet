@@ -1,5 +1,5 @@
 #include "backend/debug_backend.hpp"
-#include "backend/host_staging_runtime.hpp"
+#include "backend/vulkan_backend.hpp"
 #include "core/backend.hpp"
 #include "core/util.hpp"
 
@@ -17,7 +17,8 @@ bool vulkan_probe_ok(Device device, BackendRegistry::BackendFactory factory,
       backend->synchronize();
     }
     if (detail) {
-      *detail = "Vulkan runtime probe succeeded using built-in host staging.";
+      *detail =
+          "Vulkan runtime probe succeeded using accelerated Vulkan backend.";
     }
     return true;
   } catch (const std::exception &e) {
@@ -37,7 +38,9 @@ bool vulkan_probe_ok(Device device, BackendRegistry::BackendFactory factory,
 }
 
 BackendRegistry::BackendFactory vulkan_factory() {
-  return [](Device) { return std::make_shared<HostStagingRuntime>(); };
+  return [](Device device) {
+    return std::make_shared<VulkanBackend>(device.index);
+  };
 }
 
 void register_default_runtime(BackendRegistry &registry) {
@@ -57,7 +60,8 @@ int backend_cache_key(Device device) { return device.index; }
 
 } // namespace
 
-void BackendRegistry::register_backend(DeviceType type, BackendFactory factory) {
+void BackendRegistry::register_backend(DeviceType type,
+                                       BackendFactory factory) {
   std::lock_guard<std::mutex> lock(mutex_);
   factories_[type] = std::move(factory);
   cache_.clear();
@@ -125,7 +129,8 @@ std::shared_ptr<Backend> BackendManager::get(Device device) {
 
 std::vector<std::string> BackendManager::list_available_backends() {
   std::string detail;
-  if (vulkan_probe_ok(Device{DeviceType::VULKAN, 0}, vulkan_factory(), &detail)) {
+  if (vulkan_probe_ok(Device{DeviceType::VULKAN, 0}, vulkan_factory(),
+                      &detail)) {
     return {"vulkan"};
   }
   return {};
@@ -138,7 +143,8 @@ std::vector<BackendRuntimeStatus> BackendManager::backend_status() {
   status.discovered = true;
 
   std::string detail;
-  if (vulkan_probe_ok(Device{DeviceType::VULKAN, 0}, vulkan_factory(), &detail)) {
+  if (vulkan_probe_ok(Device{DeviceType::VULKAN, 0}, vulkan_factory(),
+                      &detail)) {
     status.loadable = true;
     status.active = true;
     status.reason_code = "ok";

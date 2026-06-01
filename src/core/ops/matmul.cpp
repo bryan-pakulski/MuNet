@@ -20,38 +20,37 @@ static bool is_batched_matmul_shape(const Shape& a_shape, const Shape& b_shape) 
   return true;
 }
 
-// Helper to perform matmul on Host with dtype conversion
-// This is used when the target backend doesn't support the dtype (e.g., Float16)
+// Reference matmul helper retained only for metadata/debug paths.
+// Vulkan dispatch throws before reaching this helper for unsupported dtypes.
 static Tensor matmul_reference(const Tensor& a, const Tensor& b, bool transA = false, bool transB = false) {
   if (a.dtype() != DataType::Float32 && a.dtype() != DataType::Float16) {
     return detail::matmul_reference(a, b, transA, transB);
   }
-  Device host{DeviceType::VULKAN, 0};
+  Device vulkan{DeviceType::VULKAN, 0};
   
-  // Convert to Host if needed
-  Tensor a_host = a.device() == host ? a : a.to(host);
-  Tensor b_host = b.device() == host ? b : b.to(host);
+  Tensor a_vulkan = a.device() == vulkan ? a : a.to(vulkan);
+  Tensor b_vulkan = b.device() == vulkan ? b : b.to(vulkan);
   
-  // For Float16, convert to Float32 for computation since Host may not support Float16 matmul
+  // For Float16, convert to Float32 for computation since the Vulkan matmul kernel expects Float32
   DataType orig_dtype = a.dtype();
   if (orig_dtype == DataType::Float16) {
-    a_host = a_host.to(DataType::Float32);
-    b_host = b_host.to(DataType::Float32);
+    a_vulkan = a_vulkan.to(DataType::Float32);
+    b_vulkan = b_vulkan.to(DataType::Float32);
   }
   
   // Get shapes
-  Shape a_shape = a_host.shape();
-  Shape b_shape = b_host.shape();
+  Shape a_shape = a_vulkan.shape();
+  Shape b_shape = b_vulkan.shape();
   
-  // Get host staging runtime's BLAS capability
-  Backend* backend = &a_host.impl_->backend();
+  // Get Vulkan runtime BLAS capability
+  Backend* backend = &a_vulkan.impl_->backend();
   auto* blas = backend->blas_capability();
   if (!blas) {
-    MUNET_ERROR << "matmul_reference: host staging runtime does not support BLAS operations" << std::endl;
+    MUNET_ERROR << "matmul_reference: Vulkan runtime does not support BLAS operations" << std::endl;
     return Tensor();
   }
   
-  // Perform 2D matmul on Host
+  // Perform 2D matmul through the Vulkan runtime
   int a_m = static_cast<int>(a_shape[0]);
   int a_k = static_cast<int>(a_shape[1]);
   int b_k = static_cast<int>(b_shape[0]);
@@ -69,9 +68,9 @@ static Tensor matmul_reference(const Tensor& a, const Tensor& b, bool transA = f
   }
   
   Shape out_shape{static_cast<size_t>(M), static_cast<size_t>(N)};
-  Tensor out(out_shape, host, a_host.dtype());
+  Tensor out(out_shape, vulkan, a_vulkan.dtype());
   
-  blas->matmul(*a_host.impl_->storage, *b_host.impl_->storage, *out.impl_->storage,
+  blas->matmul(*a_vulkan.impl_->storage, *b_vulkan.impl_->storage, *out.impl_->storage,
                M, K_a, N, transA, transB);
   
   // Convert back to original dtype if we converted
@@ -133,22 +132,21 @@ static Tensor batched_matmul_reference(const Tensor &a, const Tensor &b, bool tr
   if (a.dtype() != DataType::Float32 && a.dtype() != DataType::Float16) {
     return detail::batched_matmul_reference(a, b, transA, transB);
   }
-  Device host{DeviceType::VULKAN, 0};
+  Device vulkan{DeviceType::VULKAN, 0};
   
-  // Convert to Host if needed
-  Tensor a_host = a.device() == host ? a : a.to(host);
-  Tensor b_host = b.device() == host ? b : b.to(host);
+  Tensor a_vulkan = a.device() == vulkan ? a : a.to(vulkan);
+  Tensor b_vulkan = b.device() == vulkan ? b : b.to(vulkan);
   
   // For Float16, convert to Float32 for computation
   DataType orig_dtype = a.dtype();
   if (orig_dtype == DataType::Float16) {
-    a_host = a_host.to(DataType::Float32);
-    b_host = b_host.to(DataType::Float32);
+    a_vulkan = a_vulkan.to(DataType::Float32);
+    b_vulkan = b_vulkan.to(DataType::Float32);
   }
   
   // Get shapes
-  Shape a_shape = a_host.shape();
-  Shape b_shape = b_host.shape();
+  Shape a_shape = a_vulkan.shape();
+  Shape b_shape = b_vulkan.shape();
   
   // Handle transposition
   int K_a = a_shape[a_shape.size() - 1];
@@ -167,17 +165,17 @@ static Tensor batched_matmul_reference(const Tensor &a, const Tensor &b, bool tr
   size_t b_batch_dims = b_shape.size() - 2;
   
   if (a_batch_dims == 0) {
-    // Convert to 2D matmul - call Host BLAS directly
-    Backend* backend = &a_host.impl_->backend();
+    // Convert to 2D matmul through Vulkan BLAS
+    Backend* backend = &a_vulkan.impl_->backend();
     auto* blas = backend->blas_capability();
     if (!blas) {
-      MUNET_ERROR << "batched_matmul_reference: host staging runtime does not support BLAS" << std::endl;
+      MUNET_ERROR << "batched_matmul_reference: Vulkan runtime does not support BLAS" << std::endl;
       return Tensor();
     }
     
     Shape out_shape{static_cast<size_t>(M), static_cast<size_t>(N)};
-    Tensor out(out_shape, host, a_host.dtype());
-    blas->matmul(*a_host.impl_->storage, *b_host.impl_->storage, *out.impl_->storage,
+    Tensor out(out_shape, vulkan, a_vulkan.dtype());
+    blas->matmul(*a_vulkan.impl_->storage, *b_vulkan.impl_->storage, *out.impl_->storage,
                  M, K, N, transA, transB);
     
     if (orig_dtype == DataType::Float16) {
@@ -205,18 +203,18 @@ static Tensor batched_matmul_reference(const Tensor &a, const Tensor &b, bool tr
   out_shape_vec.push_back(static_cast<size_t>(N));
   Shape out_shape(out_shape_vec.begin(), out_shape_vec.end());
   
-  Tensor out(out_shape, host, a_host.dtype());
+  Tensor out(out_shape, vulkan, a_vulkan.dtype());
   
-  // Get host staging runtime's BLAS
-  Backend* backend = &a_host.impl_->backend();
+  // Get Vulkan runtime BLAS
+  Backend* backend = &a_vulkan.impl_->backend();
   auto* blas = backend->blas_capability();
   if (!blas) {
-    MUNET_ERROR << "batched_matmul_reference: host staging runtime does not support BLAS" << std::endl;
+    MUNET_ERROR << "batched_matmul_reference: Vulkan runtime does not support BLAS" << std::endl;
     return Tensor();
   }
   
   // Call backend batched_matmul
-  blas->batched_matmul(*a_host.impl_->storage, *b_host.impl_->storage, *out.impl_->storage,
+  blas->batched_matmul(*a_vulkan.impl_->storage, *b_vulkan.impl_->storage, *out.impl_->storage,
                        batch, M, K, N, transA, transB, stride_a, stride_b, stride_out);
   
   // Convert back to original dtype
