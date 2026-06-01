@@ -18,10 +18,6 @@ scope to practical examples.
 ## Serialization
 
 - `serialization/munet/serialization_roundtrip_demo.py` — MuNet save/load roundtrip.
-- `serialization/framework_interop/` — framework interoperability examples:
-  - `pytorch_export_demo.py`
-  - `pytorch_import_demo.py`
-  - `test_torch.py`
 
 ## Inference
 

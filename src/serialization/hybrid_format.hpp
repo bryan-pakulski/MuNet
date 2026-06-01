@@ -38,7 +38,7 @@ namespace serialization {
 //     [N bytes]  Raw tensor data
 //
 // This format allows:
-//   - Saving custom Python modules without registration (like PyTorch)
+//   - Saving custom extension modules without runtime registration
 //   - Efficient binary tensor storage (C++ backend)
 //   - Cross-device tensor restoration
 //   - Backward compatibility with NPZ format

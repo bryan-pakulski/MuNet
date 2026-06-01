@@ -105,7 +105,7 @@ class TestBindings(unittest.TestCase):
         loss = logits.cross_entropy(targets)
         loss_val = loss.item()
 
-        # CE Forward Check (Matches PyTorch F.cross_entropy)
+        # CE forward check against the fixed reference value.
         self.assertTrue(np.isclose(loss_val, 0.417022, atol=1e-4))
 
         loss.backward()

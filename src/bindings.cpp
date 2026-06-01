@@ -647,7 +647,7 @@ PYBIND11_MODULE(_core, m) {
   // Factory Functions
   // ============================================================================
   m.def("matmul", &ops::matmul, py::arg("a"), py::arg("b"),
-        "Matrix multiply two tensors. Mirrors `torch.matmul(a, b)`.");
+        "Matrix multiply two tensors.");
   m.def("cat", &ops::cat, py::arg("tensors"), py::arg("dim") = 1,
         "Concatenates a sequence of tensors along the specified dimension.");
   m.def(

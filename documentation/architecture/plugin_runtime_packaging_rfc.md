@@ -41,7 +41,6 @@ Core wheel ships:
 
 - `munet_nn/__init__.py`
 - `munet_nn/_core*.so`
-- `munet_nn/_helpers/*`
 
 Vulkan plugin binaries may be:
 

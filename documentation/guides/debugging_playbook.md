@@ -34,7 +34,7 @@ loss = pred.mse_loss(target)
 
 ### Symptom: `AttributeError: 'munet.Tensor' object has no attribute 'matmul'`
 
-MuNet now supports all PyTorch-style forms:
+MuNet supports these matmul forms:
 
 - `a @ b`
 - `a.matmul(b)`

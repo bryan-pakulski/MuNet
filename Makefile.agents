@@ -19,8 +19,7 @@ BUILD_GPU := $(BUILD_ROOT)/gpu-debug
 	unit-test test-debug test-release test-asan ctest-debug ctest-release ctest-asan \
 	mem-test gpu-mem-test perf-test py-test \
 	format doc clean clean-debug clean-release clean-asan clean-gpu \
-	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-gpu \
-	docker-build
+	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-gpu
 
 help:
 	@echo "Targets:"
@@ -112,7 +111,7 @@ perf-test: build-release
 	MUNET_RUN_PERF_TESTS=1 ./$(BUILD_RELEASE)/munet_tests --gtest_filter=PerformanceTest.*
 
 py-test: build-debug
-	cd tests && python3 test_python.py && python3 test_pytorch_interop.py
+	cd tests && python3 test_python.py
 
 format:
 	find src tests -regex '.*\.\(cpp\|hpp\|cc\|cxx\|c\|h\|cu\)' -exec clang-format -style=file -i {} \;
@@ -143,6 +142,3 @@ reconfigure-debug: clean-debug build-debug
 reconfigure-release: clean-release build-release
 reconfigure-asan: clean-asan build-asan
 reconfigure-gpu: clean-gpu build-gpu
-
-docker-build:
-	./tools/build_in_docker.sh

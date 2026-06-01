@@ -22,8 +22,7 @@ PYPI_PACKAGE ?= munet-nn
 	mem-test vk-mem-test perf-test py-test pip-dev pip-release wheel-local wheel-local-strip wheel-local-size-check \
 	dtype-coverage-report \
 	format doc clean clean-debug clean-release clean-asan clean-vk \
-	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-vk \
-	docker-build 
+	reconfigure-debug reconfigure-release reconfigure-asan reconfigure-vk
 
 help:
 	@echo "Targets:"
@@ -193,6 +192,3 @@ reconfigure-debug: clean-debug build-debug
 reconfigure-release: clean-release build-release
 reconfigure-asan: clean-asan build-asan
 reconfigure-vk: clean-vk build-vk
-
-docker-build:
-	./tools/build_in_docker.sh
