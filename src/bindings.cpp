@@ -1106,26 +1106,36 @@ PYBIND11_MODULE(_core, m) {
            "Appends a module to the sequence.")
       .def(py::init([](py::args args, py::kwargs kwargs) {
              auto seq = std::make_shared<nn::Sequential>();
+             auto add_layer = [&seq](py::handle layer) {
+               seq->add(layer.cast<std::shared_ptr<nn::Module>>());
+             };
+             auto add_layer_or_sequence = [&](py::handle value) {
+               if (py::isinstance<py::list>(value) ||
+                   py::isinstance<py::tuple>(value)) {
+                 for (auto layer :
+                      py::reinterpret_borrow<py::sequence>(value)) {
+                   add_layer(layer);
+                 }
+                 return;
+               }
+               add_layer(value);
+             };
 
-             // Handle positional arguments: Sequential(layer1, layer2, ...)
-             for (auto it : *args) {
-               seq->add(it.cast<std::shared_ptr<nn::Module>>());
+             // Handle positional arguments: Sequential(layer1, layer2, ...) and
+             // the Python-common Sequential([layer1, layer2, ...]) form.
+             for (auto arg : *args) {
+               add_layer_or_sequence(arg);
              }
 
-             // Handle keyword argument: Sequential(layers=[...])
+             // Handle keyword argument: Sequential(layers=[...]).
              if (kwargs.contains("layers")) {
-               auto layers_list =
-                   kwargs["layers"]
-                       .cast<std::vector<std::shared_ptr<nn::Module>>>();
-               for (auto l : layers_list) {
-                 seq->add(l);
-               }
+               add_layer_or_sequence(kwargs["layers"]);
              }
 
              return seq;
            }),
-           "Construct from layers: Sequential(layer1, layer2, ...) or "
-           "Sequential(layers=[...])")
+           "Construct from layers: Sequential(layer1, layer2, ...), "
+           "Sequential([layer1, layer2, ...]), or Sequential(layers=[...]).")
       .def(py::init([](const std::vector<std::shared_ptr<nn::Module>> &layers) {
              auto seq = std::make_shared<nn::Sequential>();
              for (auto l : layers)

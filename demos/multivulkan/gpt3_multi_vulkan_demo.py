@@ -13,7 +13,8 @@ import os
 import numpy as np
 
 import munet_nn as munet
-from munet import nn
+
+nn = munet.nn
 
 
 def parse_device_spec(spec: str) -> list:

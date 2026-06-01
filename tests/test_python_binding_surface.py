@@ -93,3 +93,15 @@ def test_vulkan_gpu_smoke_if_available():
     if not available:
         pytest.skip(f"Vulkan accelerator not active in this environment: {reason}")
     _gpu_smoke_matmul(munet.DeviceType.VULKAN)
+
+
+def test_sequential_accepts_python_list_forms():
+    layers = [munet.nn.Linear(2, 3), munet.nn.ReLU(), munet.nn.Linear(3, 1)]
+
+    positional_list = munet.nn.Sequential(layers)
+    keyword_list = munet.nn.Sequential(layers=layers)
+    positional_args = munet.nn.Sequential(*layers)
+
+    assert len(list(positional_list)) == 3
+    assert len(list(keyword_list)) == 3
+    assert len(list(positional_args)) == 3
