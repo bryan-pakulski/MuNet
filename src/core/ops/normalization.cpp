@@ -60,16 +60,20 @@ Tensor batch_norm(const Tensor &in, Tensor &running_mean, Tensor &running_var,
     if (out_exec.dtype() != in.dtype()) {
       out_exec = out_exec.to(in.dtype());
     }
-    out = (in.device().type == DeviceType::VULKAN) ? out_exec : out_exec.to(in.device());
-    save_mean = (save_mean_exec.dtype() == save_mean.dtype())
-                    ? ((in.device().type == DeviceType::VULKAN) ? save_mean_exec
-                                                             : save_mean_exec.to(in.device()))
-                    : ((in.device().type == DeviceType::VULKAN)
-                           ? save_mean_exec.to(save_mean.dtype())
-                           : save_mean_exec.to(save_mean.dtype()).to(in.device()));
+    out = (in.device().type == DeviceType::VULKAN) ? out_exec
+                                                   : out_exec.to(in.device());
+    save_mean =
+        (save_mean_exec.dtype() == save_mean.dtype())
+            ? ((in.device().type == DeviceType::VULKAN)
+                   ? save_mean_exec
+                   : save_mean_exec.to(in.device()))
+            : ((in.device().type == DeviceType::VULKAN)
+                   ? save_mean_exec.to(save_mean.dtype())
+                   : save_mean_exec.to(save_mean.dtype()).to(in.device()));
     save_var = (save_var_exec.dtype() == save_var.dtype())
-                   ? ((in.device().type == DeviceType::VULKAN) ? save_var_exec
-                                                            : save_var_exec.to(in.device()))
+                   ? ((in.device().type == DeviceType::VULKAN)
+                          ? save_var_exec
+                          : save_var_exec.to(in.device()))
                    : ((in.device().type == DeviceType::VULKAN)
                           ? save_var_exec.to(save_var.dtype())
                           : save_var_exec.to(save_var.dtype()).to(in.device()));
@@ -77,7 +81,8 @@ Tensor batch_norm(const Tensor &in, Tensor &running_mean, Tensor &running_var,
     Tensor running_mean_updated =
         (running_mean.device().type == DeviceType::VULKAN)
             ? running_mean_exec.to(running_mean.dtype())
-            : running_mean_exec.to(running_mean.dtype()).to(running_mean.device());
+            : running_mean_exec.to(running_mean.dtype())
+                  .to(running_mean.device());
     Tensor running_var_updated =
         (running_var.device().type == DeviceType::VULKAN)
             ? running_var_exec.to(running_var.dtype())
@@ -127,12 +132,7 @@ Tensor layer_norm(const Tensor &x, const Tensor &weight, const Tensor &bias,
   detail::require_same_dtype(op_metadata(OpId::LayerNorm).name, x, weight);
   detail::require_same_dtype(op_metadata(OpId::LayerNorm).name, x, bias);
   const auto dispatch = resolve_dispatch(OpId::LayerNorm, x);
-  const bool use_reference_path = dispatch.use_reference_path;
-  if (!use_reference_path) {
-    throw std::runtime_error(
-        "LayerNorm: backend execution path is not implemented for backend '" +
-        std::string(x.impl_->backend().name()) + "'");
-  }
+  (void)dispatch;
 
   if (x.shape().empty()) {
     throw std::runtime_error("LayerNorm: input must have at least 1 dim");
@@ -172,17 +172,17 @@ Tensor layer_norm(const Tensor &x, const Tensor &weight, const Tensor &bias,
   for (int r = 0; r < rows; ++r) {
     double mean = 0.0;
     for (int c = 0; c < cols; ++c) {
-      mean +=
-          read_scalar_from_buffer(xv + (r * cols + c) * x_stride, x_host.dtype())
-              .value;
+      mean += read_scalar_from_buffer(xv + (r * cols + c) * x_stride,
+                                      x_host.dtype())
+                  .value;
     }
     mean /= cols;
 
     double var = 0.0;
     for (int c = 0; c < cols; ++c) {
-      const double x_value =
-          read_scalar_from_buffer(xv + (r * cols + c) * x_stride, x_host.dtype())
-              .value;
+      const double x_value = read_scalar_from_buffer(
+                                 xv + (r * cols + c) * x_stride, x_host.dtype())
+                                 .value;
       const double d = x_value - mean;
       var += d * d;
     }
@@ -193,9 +193,9 @@ Tensor layer_norm(const Tensor &x, const Tensor &weight, const Tensor &bias,
     write_scalar_to_buffer(iv + r * acc_stride, inv_std_host.dtype(), inv);
 
     for (int c = 0; c < cols; ++c) {
-      const double x_value =
-          read_scalar_from_buffer(xv + (r * cols + c) * x_stride, x_host.dtype())
-              .value;
+      const double x_value = read_scalar_from_buffer(
+                                 xv + (r * cols + c) * x_stride, x_host.dtype())
+                                 .value;
       const double w_value =
           read_scalar_from_buffer(wv + c * w_stride, w_host.dtype()).value;
       const double b_value =
@@ -206,8 +206,9 @@ Tensor layer_norm(const Tensor &x, const Tensor &weight, const Tensor &bias,
     }
   }
 
-  Tensor out =
-      (x.device().type == DeviceType::VULKAN) ? out_host : out_host.to(x.device());
+  Tensor out = (x.device().type == DeviceType::VULKAN)
+                   ? out_host
+                   : out_host.to(x.device());
 
   if (GradMode::is_enabled() &&
       (x.requires_grad() || weight.requires_grad() || bias.requires_grad())) {

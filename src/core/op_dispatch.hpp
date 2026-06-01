@@ -60,6 +60,7 @@ struct DispatchDecision {
 };
 
 const OpMetadata &op_metadata(OpId id);
+std::vector<OpId> registered_op_ids();
 DispatchDecision resolve_dispatch(OpId id, const Tensor &tensor);
 std::string dispatch_policy_snapshot();
 std::string dispatch_decision_debug_dump(OpId id, const Tensor &tensor);

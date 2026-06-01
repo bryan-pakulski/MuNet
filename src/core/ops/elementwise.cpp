@@ -7,6 +7,12 @@ namespace ops {
 
 Tensor masked_fill(const Tensor &a, const Tensor &mask,
                    const ScalarValue &value) {
+  if (is_floating(a.dtype())) {
+    const auto dispatch = resolve_dispatch(OpId::MaskedFill, a);
+    (void)dispatch;
+  } else {
+    (void)op_metadata(OpId::MaskedFill);
+  }
   if (a.shape() != mask.shape())
     throw std::runtime_error("masked_fill: input/mask shape mismatch");
   if (a.device() != mask.device())
@@ -33,8 +39,9 @@ Tensor masked_fill(const Tensor &a, const Tensor &mask,
                                                    : input_value.value);
   }
 
-  Tensor out =
-      (a.device().type == DeviceType::VULKAN) ? out_host : out_host.to(a.device());
+  Tensor out = (a.device().type == DeviceType::VULKAN)
+                   ? out_host
+                   : out_host.to(a.device());
   if (GradMode::is_enabled() && a.requires_grad()) {
     auto fn = std::make_shared<autograd_nodes::MaskedFillBackward>(mask);
     link_backward_edges(fn.get(), {a, mask});

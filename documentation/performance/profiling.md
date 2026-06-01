@@ -33,6 +33,11 @@ binary. The target sets `MUNET_RUN_PERF_TESTS=1` and executes only
 `PerformanceTest.*`, so regular unit and CTest runs do not spend time collecting
 performance data.
 
+The performance test now builds a case for every registered `OpId`; if a new
+operator is registered without a matching perf case, the test fails. For every
+operator with a runtime feature, the same test also asserts that Vulkan dispatch
+resolves to a runtime kernel rather than a reference path.
+
 Each operator baseline reports:
 
 - `min_us`, `avg_us`, and `max_us` for measured wall-clock execution.
