@@ -161,20 +161,18 @@ Tensor Tensor::to(DataType target_dtype) const {
   if (dtype() == target_dtype)
     return *this;
 
-  if (target_dtype != DataType::Float32) {
-    throw std::runtime_error(
-        "Vulkan dtype conversion currently supports float32 runtime tensors "
-        "only; use from_numpy with the desired dtype at ingestion.");
-  }
-
   Tensor out(shape(), device(), target_dtype, requires_grad());
-  if (dtype() == DataType::Float32) {
-    impl_->backend().copy(data(), out.data(), bytes(), device(), out.device());
-  } else {
-    throw std::runtime_error(
-        "Vulkan dtype conversion from non-float32 tensors is not implemented "
-        "without an explicit Vulkan conversion kernel.");
-  }
+  const size_t src_bytes = bytes();
+  const size_t dst_bytes = out.bytes();
+  std::vector<char> src_external(src_bytes);
+  std::vector<char> dst_external(dst_bytes);
+
+  impl_->backend().copy(data(), src_external.data(), src_bytes, device(),
+                        Device{DeviceType::EXTERNAL, 0});
+  convert_buffer_dtype(src_external.data(), dtype(), dst_external.data(),
+                       target_dtype, size());
+  out.impl_->backend().copy(dst_external.data(), out.data(), dst_bytes,
+                            Device{DeviceType::EXTERNAL, 0}, out.device());
 
   if (GradMode::is_enabled() && requires_grad()) {
     if (impl_->grad_fn) {

@@ -3121,18 +3121,34 @@ void VulkanBackend::batch_norm_backward(const Storage &grad_out,
 
 void VulkanBackend::fill_uniform(Storage &out, float low, float high,
                                  size_t num_elements) {
-  if (out.dtype() != DataType::Float32) {
-    throw std::runtime_error(
-        "Vulkan fill_uniform currently supports only float32 tensors");
+  if (out.dtype() == DataType::Float32) {
+    struct {
+      uint32_t N;
+      float l;
+      float r;
+      uint32_t s;
+    } pc = {(uint32_t)num_elements, low, high - low, (uint32_t)rand()};
+    dispatch_kernel(uniformPipeline, {out.data()}, &pc, sizeof(pc),
+                    (num_elements + 255) / 256, 1, 1);
+    return;
   }
-  struct {
-    uint32_t N;
-    float l;
-    float r;
-    uint32_t s;
-  } pc = {(uint32_t)num_elements, low, high - low, (uint32_t)rand()};
-  dispatch_kernel(uniformPipeline, {out.data()}, &pc, sizeof(pc),
-                  (num_elements + 255) / 256, 1, 1);
+
+  if (!is_floating(out.dtype())) {
+    throw std::runtime_error(
+        "Vulkan fill_uniform only supports floating-point tensors");
+  }
+
+  std::vector<char> external(out.size_bytes());
+  const size_t stride = dtype_size(out.dtype());
+  const float range = high - low;
+  for (size_t i = 0; i < num_elements; ++i) {
+    const float unit = static_cast<float>(std::rand()) /
+                       static_cast<float>(RAND_MAX);
+    write_scalar_to_buffer(external.data() + i * stride, out.dtype(),
+                           low + unit * range);
+  }
+  copy(external.data(), out.data(), out.size_bytes(),
+       Device{DeviceType::EXTERNAL, 0}, out.device());
 }
 
 void VulkanBackend::sum(const Storage &in, Storage &out, size_t num_elements) {
