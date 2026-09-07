@@ -1,311 +1,222 @@
+# Keep this path: the existing munet-nn PyPI trusted publisher is bound to it.
 name: Wheels
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ["v*", "dev*"]
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  version:
+    name: Validate package and release identity
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install packaging
+      - run: python tools/release_version.py
+
+  correctness:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
   build_wheels:
-    name: Build wheels (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
+    name: Wheels (${{ matrix.arch }})
+    needs: version
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            cuda_major: "12"
-            variant: "cu12-vk"
-            manylinux_image: "sameli/manylinux_2_28_x86_64_cuda_12.3"
-            with_cuda: "true"
-            with_vk: "true"
-          - os: ubuntu-latest
-            cuda_major: "13"
-            variant: "cu13-vk"
-            manylinux_image: "pytorch/manylinux2_28-builder:cuda13.0-a2b77d7de21169739eec614c1fb151dd2391deba"
-            with_cuda: "true"
-            with_vk: "true"
-          - os: ubuntu-latest
-            cuda_major: ""
-            variant: "vk"
-            manylinux_image: "quay.io/pypa/manylinux_2_28_x86_64"
-            with_cuda: "false"
-            with_vk: "true"
-          - os: ubuntu-latest
-            cuda_major: ""
-            variant: "cpu"
-            manylinux_image: "quay.io/pypa/manylinux_2_28_x86_64"
-            with_cuda: "false"
-            with_vk: "false"
-
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Build wheels (CUDA + Vulkan variants)
-        if: matrix.with_cuda == 'true'
-        uses: pypa/cibuildwheel@v2.20.0
+      - name: Build and exercise installed CPU/Vulkan wheels
+        uses: pypa/cibuildwheel@v4.2.1
         env:
-          CIBW_BUILD: cp310-* cp311-* cp312-*
-          CIBW_SKIP: "*-musllinux_*"
-          CIBW_ARCHS_LINUX: x86_64
-          CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux_image }}
-          # cibuildwheel runs auditwheel repair on Linux; that process can vendor
-          # linked shared libs into the wheel and massively increase wheel size.
-          # Exclude CUDA runtime/driver libs so they are expected from the host.
-          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
-            auditwheel repair -w {dest_dir} {wheel}
-            --exclude libcuda.so.1
-            --exclude libcudart.so.12
-            --exclude libcudart.so.13
-            --exclude libnvrtc.so.12
-            --exclude libnvrtc.so.13
-            --exclude libnvJitLink.so.12
-            --exclude libnvJitLink.so.13
-            --exclude libcublas.so.12
-            --exclude libcublas.so.13
-            --exclude libcublasLt.so.12
-            --exclude libcublasLt.so.13
+          CIBW_ARCHS_LINUX: ${{ matrix.arch }}
+          CIBW_BEFORE_ALL_LINUX: dnf -y install vulkan-headers libcurl-devel openssl-devel
+          # A single runtime per Python/platform avoids colliding CPU/GPU filenames.
           CIBW_ENVIRONMENT_LINUX: >-
-            CUDA_HOME=/usr/local/cuda
-            MUNET_CUDA_MAJOR=${{ matrix.cuda_major }}
-            CUDACXX=/usr/local/cuda/bin/nvcc
-            CC=/opt/rh/gcc-toolset-12/root/usr/bin/gcc
-            CXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++
-            CUDAHOSTCXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++
-            CMAKE_CUDA_HOST_COMPILER=/opt/rh/gcc-toolset-12/root/usr/bin/g++
-            PATH=/opt/rh/gcc-toolset-12/root/usr/bin:/usr/local/cuda/bin:$PATH
-            LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-            CMAKE_ARGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DCMAKE_CUDA_HOST_COMPILER=/opt/rh/gcc-toolset-12/root/usr/bin/g++ -DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/lib64/libvulkan.so"
-          CIBW_BEFORE_ALL_LINUX: |
-            set -euxo pipefail
-
-            # Vulkan deps
-            dnf -y install vulkan-devel vulkan-tools
-
-            # Install a CUDA-supported host toolchain (gcc 12)
-            dnf -y install gcc-toolset-12-gcc gcc-toolset-12-gcc-c++
-
-            # Ensure canonical CUDA symlink exists
-            if [ -d /usr/local/cuda-12.3 ] && [ ! -e /usr/local/cuda ]; then
-              ln -s /usr/local/cuda-12.3 /usr/local/cuda
-            fi
-
-            # Optional shader tools
-            dnf -y install glslang-tools || true
-            dnf -y install shaderc-devel || true
-            dnf -y install shaderc || true
-
-            /opt/rh/gcc-toolset-12/root/usr/bin/g++ --version
-            nvcc --version
-            vulkaninfo --summary || true
-            glslc --version || true
-
-      - name: Build wheels (Vulkan-only variant)
-        if: matrix.with_cuda == 'false' && matrix.with_vk == 'true'
-        uses: pypa/cibuildwheel@v2.20.0
-        env:
-          CIBW_BUILD: cp310-* cp311-* cp312-*
-          CIBW_SKIP: "*-musllinux_*"
-          CIBW_ARCHS_LINUX: x86_64
-          CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux_image }}
-          CIBW_ENVIRONMENT_LINUX: >-
-            CMAKE_ARGS="-DVulkan_INCLUDE_DIR=/usr/include -DVulkan_LIBRARY=/lib64/libvulkan.so.1"
-          CIBW_BEFORE_ALL_LINUX: |
-            set -euxo pipefail
-            dnf -y install vulkan-devel vulkan-tools
-            dnf -y install glslang-tools || true
-            dnf -y install shaderc-devel || true
-            dnf -y install shaderc || true
-            vulkaninfo --summary || true
-            glslc --version || true
-
-      - name: Build wheels (CPU-only variant)
-        if: matrix.with_cuda == 'false' && matrix.with_vk == 'false'
-        uses: pypa/cibuildwheel@v2.20.0
-        env:
-          CIBW_BUILD: cp310-* cp311-* cp312-*
-          CIBW_SKIP: "*-musllinux_*"
-          CIBW_ARCHS_LINUX: x86_64
-          CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux_image }}
-      - name: Upload wheel artifacts
-        uses: actions/upload-artifact@v4
+            CMAKE_ARGS="-DMUNET_VULKAN=ON -DMUNET_SWARM_NODE=ON -DMUNET_INSTALL_SDK=OFF"
+          # libvulkan is loaded lazily from the host. auditwheel repairs the native
+          # worker and extension, including their libcurl/OpenSSL dependencies.
+      - uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.variant }}
+          name: wheels-linux-${{ matrix.arch }}
           path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  source:
+    name: Source distribution
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install build twine
+      - run: python -m build --sdist
+      - run: python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-dist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  native:
+    name: Node, server and SDK (${{ matrix.arch }})
+    needs: build_wheels
+    runs-on: ${{ matrix.runner }}
+    container: quay.io/pypa/manylinux_2_28_${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.arch }}
+          path: wheelhouse
+      - name: Install packaging tools and the actual CPython 3.12 wheel
+        shell: bash
+        run: |
+          # The /opt/python manylinux interpreters are static wheel builders.
+          # Freezing needs the distribution Python's shared libpython instead.
+          dnf -y install vulkan-headers python3.12 python3.12-pip python3.12-devel
+          /usr/bin/python3.12 -m venv /tmp/munet-freeze
+          /tmp/munet-freeze/bin/python -m pip install cmake pyinstaller==6.22.2 packaging
+          /tmp/munet-freeze/bin/python -m pip install wheelhouse/*cp312-cp312-*.whl
+      - name: Freeze server, package native node and SDK, and exercise all three
+        shell: bash
+        run: |
+          /tmp/munet-freeze/bin/python tools/build_release.py --wheel wheelhouse/*cp312-cp312-*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-linux-${{ matrix.arch }}
+          path: release-dist/*
+          if-no-files-found: error
 
   validate_wheels:
-    name: Validate wheel artifacts
-    needs: build_wheels
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    name: Validate all distributions
+    needs: [build_wheels, source, native, correctness]
+    runs-on: ubuntu-24.04
     steps:
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
         with:
-          path: dist
           pattern: wheels-*
-
-      - name: Flatten wheel artifacts
+          path: incoming
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-dist
+          path: incoming/source
+      - run: python -m pip install packaging twine
+      - run: python tools/validate_artifacts.py incoming
+      - name: Collect validated, uniquely named Python distributions
+        shell: python
         run: |
-          mkdir -p wheelhouse
-          find dist -name "*.whl" -exec cp {} wheelhouse/ \;
-
-      - name: Twine and metadata validation
-        run: |
-          set -euxo pipefail
-          python -m pip install --upgrade pip twine
-          twine check wheelhouse/*.whl
-
-      - name: Assert wheel package tree
-        run: |
-          set -euxo pipefail
-          python - <<'PY'
-          import zipfile
           from pathlib import Path
-
-          wheels = sorted(Path("wheelhouse").glob("*.whl"))
-          if not wheels:
-              raise SystemExit("No wheels found under wheelhouse/")
-
-          for wheel in wheels:
-              with zipfile.ZipFile(wheel) as zf:
-                  names = set(zf.namelist())
-              required = [
-                  "munet_nn/__init__.py",
-                  "munet_nn/_helpers/onnx_integration.py",
-              ]
-              for required_path in required:
-                  if required_path not in names:
-                      raise SystemExit(f"{wheel.name} missing required artifact: {required_path}")
-              if not any(name.startswith("munet_nn/_core") for name in names):
-                  raise SystemExit(f"{wheel.name} missing munet_nn/_core extension")
-          print("wheel package tree validation passed")
-          PY
-
-      - name: Dry-run clean-venv install smoke
-        run: |
-          set -euxo pipefail
-          python -m venv .venv-wheel-check
-          . .venv-wheel-check/bin/activate
-          python -m pip install --upgrade pip
-          python -m pip install --no-deps --no-index --find-links=wheelhouse munet-nn
-          python - <<'PY'
-          import munet_nn as munet
-          import munet_nn._helpers.onnx_integration as onnx_helper
-
-          status = munet.backend_status()
-          backends = munet.list_available_backends()
-          assert isinstance(status, dict) and "statuses" in status
-          assert isinstance(backends, list)
-          print("import/helper/probe smoke passed", onnx_helper.__name__)
-          PY
+          import shutil, subprocess, sys
+          target = Path('dist')
+          target.mkdir()
+          for p in Path('incoming').rglob('*'):
+              if p.is_file() and (p.name.endswith('.whl') or p.name.endswith('.tar.gz')):
+                  assert not (target / p.name).exists(), p.name
+                  shutil.copyfile(p, target / p.name)
+          subprocess.run([sys.executable, '-m', 'twine', 'check', *map(str, target.iterdir())], check=True)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/*
 
   publish_testpypi:
     name: Publish dev wheels to TestPyPI
     needs: validate_wheels
-    if: startsWith(github.ref, 'refs/tags/dev')
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/dev')
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: read
     steps:
-      - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
+          name: python-distributions
           path: dist
-          pattern: wheels-*
-
-      - name: Flatten wheel artifacts
-        run: |
-          mkdir -p wheelhouse
-          find dist -name "*.whl" -exec cp {} wheelhouse/ \;
-
-      - name: Check wheel file sizes
-        run: |
-          set -euxo pipefail
-          ls -lh wheelhouse/*.whl
-          python - <<'PY'
-          from pathlib import Path
-          limit = 100 * 1024 * 1024
-          too_large = []
-          for wheel in Path("wheelhouse").glob("*.whl"):
-            size = wheel.stat().st_size
-            print(f"{wheel.name}: {size / (1024 * 1024):.1f} MB")
-            if size > limit:
-              too_large.append((wheel.name, size))
-          if too_large:
-            names = ", ".join(name for name, _ in too_large)
-            raise SystemExit(
-              "Wheel exceeds TestPyPI/PyPI default 100 MB file limit: "
-              f"{names}. See https://docs.pypi.org/project-management/storage-limits/"
-            )
-          PY
-
-      - name: Publish
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: wheelhouse/
+          packages-dir: dist/
           repository-url: https://test.pypi.org/legacy/
-          verbose: true
 
   publish:
     name: Publish release wheels to PyPI
     needs: validate_wheels
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: read
     steps:
-      - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
+          name: python-distributions
           path: dist
-          pattern: wheels-*
-
-      - name: Flatten wheel artifacts
-        run: |
-          mkdir -p wheelhouse
-          find dist -name "*.whl" -exec cp {} wheelhouse/ \;
-
-      - name: Check wheel file sizes
-        run: |
-          set -euxo pipefail
-          ls -lh wheelhouse/*.whl
-          python - <<'PY'
-          from pathlib import Path
-          limit = 100 * 1024 * 1024
-          too_large = []
-          for wheel in Path("wheelhouse").glob("*.whl"):
-            size = wheel.stat().st_size
-            print(f"{wheel.name}: {size / (1024 * 1024):.1f} MB")
-            if size > limit:
-              too_large.append((wheel.name, size))
-          if too_large:
-            names = ", ".join(name for name, _ in too_large)
-            raise SystemExit(
-              "Wheel exceeds TestPyPI/PyPI default 100 MB file limit: "
-              f"{names}. See https://docs.pypi.org/project-management/storage-limits/"
-            )
-          PY
-
-      - name: Publish
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: wheelhouse/
-          verbose: true
+          packages-dir: dist/
+
+  release:
+    name: Publish standalone downloads
+    needs: [validate_wheels, publish]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-linux-*
+          path: release-dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: release-dist
+      - name: Detect prerelease version
+        id: version
+        shell: python
+        run: |
+          import os, re
+          tag = os.environ['GITHUB_REF_NAME']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('prerelease=' + str(bool(re.search(r'(?:a|b|rc)\d', tag))).lower() + '\n')
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.prerelease }}
