@@ -1,0 +1,52 @@
+name: native-and-vulkan-correctness
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  correctness:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [cpu, vulkan]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers glslang-tools vulkan-validationlayers libcurl4-openssl-dev libssl-dev
+      - run: python -m pip install cmake pybind11 pytest numpy onnx onnxruntime onnxscript scikit-build-core
+      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Build CPU only
+        if: matrix.backend == 'cpu'
+        run: python tools/build.py --cpu-only --cmake-arg=-DMUNET_SWARM_NODE=ON
+      - name: Build Vulkan
+        if: matrix.backend == 'vulkan'
+        run: python tools/build.py --cmake-arg=-DMUNET_SWARM_NODE=ON
+      - name: Select software Vulkan driver
+        if: matrix.backend == 'vulkan'
+        shell: python
+        run: |
+          import glob, os
+          paths = glob.glob('/usr/share/vulkan/icd.d/lvp_icd*.json')
+          assert paths, 'Mesa software Vulkan ICD is required'
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('VK_ICD_FILENAMES=' + paths[0] + '\nMUNET_TEST_VULKAN=1\n')
+      - name: CPU tests
+        if: matrix.backend == 'cpu'
+        run: python tools/test.py --swarm
+        env:
+          PYTHONPATH: python
+      - name: Vulkan numerical and synchronization validation
+        if: matrix.backend == 'vulkan'
+        run: python tools/test.py --vulkan-validation --swarm
+        env:
+          PYTHONPATH: python
+      - name: Save numerical and fault-recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: correctness-${{ matrix.backend }}
+          path: artifacts/validation/

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "reference": {
+    "repository": "https://github.com/lyuwenyu/RT-DETR",
+    "commit": "29320b6fd828f8e0987a71426cf2d961b09dfed7",
+    "config": "rtdetr_pytorch/configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
+  },
+  "current_scope": "static float32 dense-network training/inference and a small MSE/SGD training swarm",
+  "rtdetr_inference_supported": false,
+  "rtdetr_training_supported": false,
+  "multiple_gpu_training_supported": false,
+  "dense_swarm_training_supported": true,
+  "swarm_protocol": "munet-swarm-1",
+  "swarm_validation": ["native_cpu_replicas", "mixed_cpu_and_software_vulkan", "offline_outbox", "owner_restart", "lease_retry"],
+  "milestones": [
+    {"id": "M0", "name": "Dense network architecture proof", "status": "implemented"},
+    {"id": "M1", "name": "Detector primitives", "status": "planned"},
+    {"id": "M2", "name": "Attention and differentiable sampling", "status": "planned"},
+    {"id": "M3", "name": "Full RT-DETR inference", "status": "planned"},
+    {"id": "M4", "name": "Full RT-DETR training step", "status": "planned"},
+    {"id": "M5", "name": "Reproduced reference training", "status": "planned"},
+    {"id": "M6", "name": "Physical hardware portability and performance", "status": "planned"},
+    {"id": "M7", "name": "Multiple GPU training", "status": "planned"}
+  ],
+  "implemented_native_ops": ["add", "sub", "mul", "div", "neg", "relu", "relu_grad", "sigmoid", "exp", "log", "sqrt", "identity", "reshape", "broadcast", "sum", "transpose_rank2", "matmul_rank2"],
+  "critical_missing_families": ["conv2d_forward_backward", "pooling", "batchnorm_train_eval", "layernorm", "batched_matmul", "masked_softmax", "grid_sample_forward_backward", "gather_scatter_add", "topk", "concat_slice_resize", "integer_and_boolean_tensors", "detach_and_no_grad", "rng_dropout_denoising", "detection_losses", "exact_assignment", "adamw_parameter_groups", "mixed_precision_and_grad_scaling", "ema", "dynamic_shape_buckets"],
+  "physical_hardware_validation": []
+}
