@@ -107,4 +107,4 @@ cmake --build build-native -j
 cmake --install build-native --prefix /path/to/install
 ```
 
-To build standalone archives locally, use a clean Python 3.12 environment, install the newly built/repaired wheel plus `pyinstaller==6.22.2`, `cmake` and `packaging`, then run `python tools/build_release.py --wheel /path/to/wheel.whl`. For distributable Linux binaries, use the workflow's matching manylinux container; building on a newer host raises the minimum glibc requirement. Each archive records its build host, version and architecture in `manifest.json`.
+To build standalone archives locally, use a clean Python 3.12 environment with a shared `libpython`, install the newly built/repaired wheel plus `pyinstaller==6.22.2`, `cmake` and `packaging`, then run `python tools/build_release.py --wheel /path/to/wheel.whl`. For distributable Linux binaries, use the workflow's matching manylinux container and its distribution-provided Python 3.12. The static `/opt/python` interpreters build wheels but cannot freeze the server. Building on a newer host raises the minimum glibc requirement. Each archive records its build host, version and architecture in `manifest.json`.

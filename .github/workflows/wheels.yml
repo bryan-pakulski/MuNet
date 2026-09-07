@@ -101,13 +101,16 @@ jobs:
       - name: Install packaging tools and the actual CPython 3.12 wheel
         shell: bash
         run: |
-          dnf -y install vulkan-headers
-          /opt/python/cp312-cp312/bin/python -m pip install cmake pyinstaller==6.22.2 packaging
-          /opt/python/cp312-cp312/bin/python -m pip install wheelhouse/*cp312-cp312-*.whl
+          # The /opt/python manylinux interpreters are static wheel builders.
+          # Freezing needs the distribution Python's shared libpython instead.
+          dnf -y install vulkan-headers python3.12 python3.12-pip python3.12-devel
+          /usr/bin/python3.12 -m venv /tmp/munet-freeze
+          /tmp/munet-freeze/bin/python -m pip install cmake pyinstaller==6.22.2 packaging
+          /tmp/munet-freeze/bin/python -m pip install wheelhouse/*cp312-cp312-*.whl
       - name: Freeze server, package native node and SDK, and exercise all three
         shell: bash
         run: |
-          /opt/python/cp312-cp312/bin/python tools/build_release.py --wheel wheelhouse/*cp312-cp312-*.whl
+          /tmp/munet-freeze/bin/python tools/build_release.py --wheel wheelhouse/*cp312-cp312-*.whl
       - uses: actions/upload-artifact@v4
         with:
           name: native-linux-${{ matrix.arch }}
