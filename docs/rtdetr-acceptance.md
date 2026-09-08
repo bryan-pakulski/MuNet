@@ -12,17 +12,17 @@ Reproduce this baseline before modifying sampling, attention, losses, or the bac
 
 | Area | Required behavior | Current foundation |
 |---|---|---|
-| Tensor semantics | FP32; integer/bool indices and masks; views, broadcast, slice, concat, gather, scatter-add; detach/no-grad | FP32 static shapes and simple views/broadcast; remaining semantics missing |
-| Backbone | Conv2d, grouped convolution as needed, pooling, BatchNorm buffers and training gradients, activations | ReLU and sigmoid available; convolutions/pooling/BatchNorm missing |
-| Hybrid encoder | Multiscale projections, resize, concatenation, convolution blocks, position encodings, attention | Matrix multiplication primitives only |
-| Decoder self-attention | Batched GEMM, stable masked softmax, head reshape/transpose, LayerNorm, residuals | Rank-2 GEMM, pointwise operations, reductions available; dedicated attention coverage missing |
-| Deformable attention | Multiscale bilinear sampling and derivatives for values and sampling coordinates | Missing |
-| Query selection/refinement | TopK, gather, sigmoid, inverse sigmoid, explicit stop-gradient boundaries | Sigmoid/log/arithmetic available; selection and detach missing |
-| Denoising | Random label/box perturbation, embeddings, attention masks, variable target counts | Missing |
-| Criterion | Varifocal/focal/BCE behavior from the selected recipe, L1 boxes, GIoU, auxiliary/denoising losses, correct normalizers | MSE only at module level; elementary arithmetic/reductions available |
-| Matching | Exact rectangular linear assignment with empty-target handling and defined tie behavior | Missing |
-| Training state | AdamW, parameter groups, scheduler, clipping, AMP/loss scaling, EMA, checkpoint/RNG state | SGD without momentum and deterministic graph/parameter checkpoints |
-| Evaluation/deployment | Correct preprocessing, box conversion/scaling, class scores, top-k postprocessing, COCO evaluation | Native and ONNX interchange for dense-network subset |
+| Tensor semantics | FP32; indices/masks; view, broadcast, slice, concat, gather, accumulation; detach | Implemented; indices/masks use exact float32 integers, no general INT64 tensor arithmetic |
+| Backbone | Conv2d/groups, pooling, BatchNorm buffers/gradients, activations | Implemented and compared with PyTorch |
+| Hybrid encoder | Multiscale projections, resize, concat, FPN/PAN, positions, attention | Implemented native model |
+| Decoder self-attention | Batched GEMM, stable masked softmax, views, LayerNorm, residuals | Implemented and compared with PyTorch |
+| Deformable attention | Bilinear zeros/align_corners=False sampling and value/coordinate gradients | Implemented with portable gather-style adjoints |
+| Query selection/refinement | TopK, gather, sigmoid/inverse sigmoid, detach | Implemented; explicit reference detach locations retained |
+| Denoising | Fresh random label/box perturbations, embeddings, masks, target buckets | Implemented; host RNG is checkpointed |
+| Criterion | VFL/focal/BCE, L1, GIoU, auxiliary/DN losses and normalizers | Implemented; pinned VFL recipe values/gradients tested |
+| Matching | Rectangular linear assignment, empty targets | Native CPU/Vulkan Hungarian solver; float32 and bounded sizes |
+| Training state | AdamW groups, scheduler, clipping, EMA, checkpoint/RNG | Implemented; mixed precision/loss scaling remain open |
+| Evaluation/deployment | Preprocessing, box scaling, class top-k, COCO evaluation, model interchange | Implemented workflows; full COCO accuracy remains unmeasured |
 
 The canonical machine-readable milestone/coverage snapshot is [rtdetr-coverage.json](rtdetr-coverage.json). This is a progress inventory, not a claim that an ONNX model containing one listed name is supported under every attribute/dtype.
 
@@ -47,7 +47,7 @@ Its backward pass accumulates contributions to shared feature pixels. Float atom
 | M6 — portable release | Device-specific validation and optimized kernels | Desktop vendor matrix plus Adreno/Mali, Apple/MoltenVK and Pi tests; resource/precision capabilities reported; honest inference/training support matrix |
 | M7 — multiple GPUs | Explicit data parallelism and gradient collectives | Single-/multi-device gradient equivalence, scaling measurements, bounded transfer/memory overhead, mixed-device behavior tested |
 
-M1 and the standalone sampling spike are the next detector implementation priorities. M7 follows reliable single-device RT-DETR. The 0.2.0 [training swarm](swarm.md) already validates leased work and gradient aggregation for a small MSE/SGD dense model; it does not satisfy M7's RT-DETR, hardware, scaling or collective gates. Distributed detection losses need explicit global normalization, and BatchNorm needs a defined frozen/local/synchronized policy.
+The 0.3 implementation supplies M1–M4 functionality, with explicit float32/index restrictions; see [the detector guide](rtdetr.md) for implemented and tested coverage. Full COCO recipe/AP reproduction (M5) and hardware performance (M6) remain open. M7 follows reliable single-device RT-DETR. The 0.2.0 [training swarm](swarm.md) already validates leased work and gradient aggregation for a small MSE/SGD dense model; it does not satisfy M7's RT-DETR, hardware, scaling or collective gates. Distributed detection losses need explicit global normalization, and BatchNorm needs a defined frozen/local/synchronized policy.
 
 ## Numerical and training protocol
 
@@ -69,4 +69,4 @@ Use PyTorch's appropriate native backend and at least one mature Vulkan inferenc
 
 The resident-training gate allows input uploads and requested results/checkpoints. Intermediate activations, gradients, and optimizer state must remain on the GPU. A CPU matcher or an unsupported operator is a recorded boundary, not an invisible fallback.
 
-No physical-hardware throughput target is claimed by this initial package. It proves the architecture with software Vulkan; the performance work and full-model coverage remain ahead.
+No physical-hardware throughput target is claimed. Full-model functionality now runs, while full COCO accuracy and physical-hardware performance remain separate acceptance gates.

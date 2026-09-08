@@ -4,10 +4,10 @@ MuNet keeps the existing **`munet-nn` PyPI project**. `pip install munet_nn` and
 
 ## Install the library, node and server together
 
-After a 0.2.0 release has been published:
+After a 0.3.0 release has been published:
 
 ```bash
-python -m pip install --upgrade 'munet-nn>=0.2.0'
+python -m pip install --upgrade 'munet-nn>=0.3.0'
 munet-node --version
 munet-server --version
 ```
@@ -23,9 +23,9 @@ For compiling new Vulkan graphs or preparing Vulkan swarm jobs, install `glslang
 Optional Python tooling:
 
 ```bash
-python -m pip install 'munet-nn[interop]>=0.2.0' # ONNX conversion
-python -m pip install 'munet-nn[torch]>=0.2.0'   # PyTorch export/import tooling
-python -m pip install 'munet-nn[vk]>=0.2.0'      # Retained ONNX/ONNX Runtime extra
+python -m pip install 'munet-nn[interop]>=0.3.0' # ONNX conversion
+python -m pip install 'munet-nn[torch]>=0.3.0'   # PyTorch export/import tooling
+python -m pip install 'munet-nn[vk]>=0.3.0'      # Retained ONNX/ONNX Runtime extra
 ```
 
 The `vk` extra retains its previous tooling meaning; it does not install a GPU driver or select a different wheel. The old `cu12-vk` and `cu13-vk` extras are removed because this implementation has no CUDA backend.
@@ -94,6 +94,67 @@ Tags must match the canonical package version exactly. The prior `v0.1.2a`/`0.1.
 
 ## Source builds
 
+### Local development with Make
+
+The root Makefile wraps the existing build, reference-fetch and validation scripts.
+Use GNU Make and Python 3.10+ on Linux. On Debian/Ubuntu, install system prerequisites:
+
+```bash
+sudo apt-get install build-essential python3-dev python3-venv libcurl4-openssl-dev libssl-dev
+# Additional Vulkan build, shader and validation tools:
+sudo apt-get install libvulkan-dev glslang-tools vulkan-validationlayers
+```
+
+Install your GPU's Vulkan driver separately, or `mesa-vulkan-drivers` for software
+testing. CPU-only setup needs only the first package group.
+
+```bash
+make setup                 # .venv + development dependencies + native library/node + pinned reference
+make test                  # CPU tests, including native swarm integration
+make test-vulkan           # CPU/Vulkan tests with API and synchronization validation
+make smoke DEVICE=vulkan   # Short MLP training example
+
+# On a machine without Vulkan development headers:
+make setup VULKAN=0
+make test VULKAN=0
+```
+
+Setup installs CPU PyTorch for numerical reference tests; MuNet's Vulkan execution
+does not require CUDA PyTorch. The first setup needs network access for Python
+packages and the checksum-verified upstream RT-DETR test source. Later builds use
+the existing environment and incremental CMake build; reference fetches reuse
+matching cached files. Test logs and JUnit results go to `artifacts/validation`.
+
+`make build` updates the extension under `python/` and the worker under
+`build/local/`. Python source edits take effect on the next invocation of a Make
+test/example target. For custom commands against the source tree:
+
+```bash
+PYTHONPATH=python .venv/bin/python your_script.py
+PYTEST_ADDOPTS='-k grid_sample' make test
+```
+
+For a regular installation that can be imported outside this checkout, run
+`make install` (or `make install VULKAN=0`), then activate `.venv/bin/activate`.
+This installs `munet-node` and `munet-server` as well. Rerun `make install` after
+edits to update that installed copy; the Make test targets always use the source
+tree. `make clean` cleans native build outputs while retaining the virtual
+environment, downloaded reference, datasets, checkpoints and test reports.
+
+Override `PYTHON`, `VENV`, `BUILD_DIR`, `VULKAN`, `TORCH_INDEX_URL` or `CMAKE_ARGS`
+as needed, and use the same overrides on subsequent commands. For example:
+
+```bash
+make setup PYTHON=python3.12
+make build CMAKE_ARGS='--cmake-arg=-DVulkan_INCLUDE_DIR=/opt/vulkan/include'
+```
+
+The default build includes CPU and Vulkan; `VULKAN=0` explicitly disables Vulkan.
+`make test-vulkan VULKAN=0` fails with guidance instead of testing another backend.
+Neither setup nor any Make target installs system packages or changes GPU drivers.
+
+### Manual source builds
+
 ```bash
 sudo apt-get install build-essential cmake libvulkan-dev glslang-tools libcurl4-openssl-dev libssl-dev
 python -m pip install .
@@ -108,3 +169,7 @@ cmake --install build-native --prefix /path/to/install
 ```
 
 To build standalone archives locally, use a clean Python 3.12 environment with a shared `libpython`, install the newly built/repaired wheel plus `pyinstaller==6.22.2`, `cmake` and `packaging`, then run `python tools/build_release.py --wheel /path/to/wheel.whl`. For distributable Linux binaries, use the workflow's matching manylinux container and its distribution-provided Python 3.12. The static `/opt/python` interpreters build wheels but cannot freeze the server. Building on a newer host raises the minimum glibc requirement. Each archive records its build host, version and architecture in `manifest.json`.
+
+## Detector extras
+
+Version 0.3 adds `munet-nn[detection]` (Pillow preprocessing), `munet-nn[coco]` (COCO evaluation), and the existing `interop`/`torch` extras for model conversion. The base library and node/server command installation stay under the same `munet-nn` PyPI project and trusted-publisher workflow. See [the detector guide](rtdetr.md).

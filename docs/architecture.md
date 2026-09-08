@@ -8,7 +8,7 @@ Build a small C++ graph compiler and runtime, with Python as the model-authoring
 
 Vulkan is the sole accelerator API. Maintain an explicit CPU backend as a numerical reference and debugging tool. The production GPU path must report unsupported operations before execution instead of silently moving tensors to the CPU.
 
-The 0.2 implementation retains the `munet-nn` package identity and `munet_nn` import, with installable node/server commands and a CMake SDK; see [installation and releases](install.md). It proves this arrangement on a small dense network. It does not implement RT-DETR or establish competitive performance on physical GPUs.
+The 0.3 implementation retains the `munet-nn` package identity and `munet_nn` import, with installable node/server commands and a CMake SDK; see [installation and releases](install.md). It now implements single-device RT-DETR training and inference; see the [detector guide](rtdetr.md). Competitive performance on physical GPUs has not been established.
 
 ## Lessons from the reference project
 
@@ -43,7 +43,7 @@ Lowering selects kernel families. Fuse compatible pointwise operations and produ
 
 Compilation should be cached by semantic graph, shapes, layouts, dtype/precision policy, compiler revision/options, capability profile, and selected kernel variants. A driver pipeline cache additionally needs device/driver compatibility, including the Vulkan pipeline cache UUID. Portable SPIR-V and driver-specific pipelines are different cache layers.
 
-The current prototype implements static shape inference, reverse-mode rules, dead-code elimination, single-consumer expression fusion, liveness-based buffer reuse, GLSL generation, SPIR-V disk caching, and per-plan pipeline/command-buffer reuse. It does not yet implement a cost model, automatic differentiation of arbitrary custom kernels, dynamic specialization caches, or persistent driver pipeline caches.
+The current prototype implements static shape inference, reverse-mode rules, dead-code elimination, single-consumer expression fusion, liveness-based buffer reuse, GLSL generation, SPIR-V disk caching, and per-plan pipeline/command-buffer reuse. It does not yet implement a cost model, automatic differentiation of arbitrary custom kernels, general dynamic specialization, or persistent driver pipeline caches. RT-DETR has an explicit bounded static-shape cache.
 
 ## Portability is a capability contract
 
@@ -70,9 +70,9 @@ On discrete GPUs, allocate device-local memory and use reusable host staging rin
 
 The initial executor records input copies, dispatches, barriers, and parameter-update copies once. It submits one command buffer per invocation. It waits for the previous replay before reusing its staging/output storage, so it supports one in-flight step. This is a correctness foundation, not the final asynchronous scheduler.
 
-The next runtime iteration needs bounded staging rings, asynchronous result objects, timeline-based reclamation where supported, arena splitting/suballocation, and overlap of data preparation/transfer with compute. The current full-arena staging mirror and single storage-buffer range are unsuitable for large models. Activation checkpointing, gradient accumulation, and explicit memory budgets should precede ambitious device offloading.
+The next runtime iteration needs bounded staging rings, asynchronous result objects, timeline-based reclamation where supported, arena splitting/suballocation, and overlap of data preparation/transfer with compute. The current full-arena staging mirror still doubles the allocation budget. Tensor-sized descriptors now remove the total-arena storage-descriptor range restriction. Activation checkpointing, gradient accumulation, and explicit memory budgets should precede ambitious device offloading.
 
-An all-device-resident training step also needs matching and optimizer logic to remain on the device. RT-DETR's CPU Hungarian matcher is an explicit early integration exception; it must be measured and visible, and eventually removed to meet that final contract.
+An all-device-resident training step also needs matching and optimizer logic to remain on the device. The current RT-DETR matcher uses a rectangular Hungarian solver directly on Vulkan; host preparation is limited to images, targets and fresh denoising inputs.
 
 ## Kernel strategy
 
@@ -90,13 +90,13 @@ Before making the compiler more sophisticated, benchmark a fixed RT-DETR subgrap
 
 Expose familiar model composition, parameters, losses, optimizers, gradient control, and state dictionaries. The initial training example retains `zero_grad()`, `loss.backward()`, and `optimizer.step()` inside a compiled function. That is an API resemblance, not full PyTorch compatibility.
 
-The next authoring layer should add eager execution sharing the same op registry, explicit train/eval state, non-trainable buffers, no-grad/detach, stable parameter naming, and useful operator-specific diagnostics. Capture only supported static Python control flow; never silently freeze data-dependent conditions.
+Train/eval state, buffers, detach, stable parameter names and detector diagnostics are now implemented. General eager execution remains future work. Capture only supported static Python control flow; never silently freeze data-dependent conditions.
 
 Treat PyTorch interoperability as three separate deliverables:
 
 | Route | Initial implementation | Later scope |
 |---|---|---|
-| State dictionaries | Matching native layers can load PyTorch tensors through explicit CPU copies | Validated checkpoint mapping for RT-DETR, tied parameters and buffers |
+| State dictionaries | Matching native layers can load PyTorch tensors through explicit CPU copies | RT-DETR mapping is tested; general tied/view semantics remain future work |
 | Model graph import | Eval model → modern PyTorch ONNX exporter → native graph for the supported subset | Direct `torch.export` normalized graph lowering with metadata and training semantics |
 | Runtime tensor interchange | Explicit NumPy/CPU transfers | Capability-checked external-memory interop; never assume a CUDA pointer is a Vulkan allocation |
 
@@ -126,4 +126,4 @@ Cross-device collectives are a separate scope from running the same graph on dif
 
 RT-DETR is a strong vertical acceptance target because it exercises convolution, normalization, attention, sampling, indexing, losses, matching, autodiff, and optimizer state. Passing it would not establish complete coverage of every deep-learning workload, but it would validate the central design far more effectively than disconnected operator demos.
 
-The next implementation priority is convolution/normalization plus a standalone deformable-attention forward/backward test. Keep a machine-readable operator coverage matrix and block unsupported models before execution. Add platform claims only after running that matrix and representative inference/training workloads on the named hardware.
+Convolution/normalization and deformable-attention forward/backward are implemented and tested. The next priorities are full COCO accuracy reproduction, optimized kernels and physical-device measurements. Keep a machine-readable operator coverage matrix and block unsupported models before execution. Add platform claims only after running that matrix and representative inference/training workloads on the named hardware.

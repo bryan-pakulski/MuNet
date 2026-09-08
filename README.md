@@ -2,31 +2,31 @@
 
 A greenfield, experimental C++17 graph compiler for Vulkan training and inference, with a small PyTorch-style Python interface.
 
-**This is a working foundation, not a complete deep learning framework. RT-DETR is the acceptance target and is not implemented yet.** Version 0.2.0 replaces the previous implementation while retaining the `munet-nn` PyPI project and `munet_nn` import name. The new API also uses `import munet`; this is a breaking rewrite of the 0.1 API.
+**Version 0.3.0 adds native RT-DETR v1 training and inference.** It includes the R50-vd model, detection losses, AdamW/EMA, resumable training and model interchange. This remains an experimental correctness baseline; full COCO convergence and physical-device performance are not yet established. The greenfield runtime retains the `munet-nn` PyPI project and `munet_nn` import name. The new API also uses `import munet`; this is a breaking rewrite of the 0.1 API.
 
 The C++ core owns graph validation, shape inference, symbolic reverse-mode differentiation, fusion, temporary-buffer planning, CPU reference execution, GLSL generation, and Vulkan execution. Python constructs models, captures a static graph once, invokes the shader compiler on cache misses, and exposes model conversion and serialization.
 
 ## What runs today
 
 - Float32 tensors with positive static dimensions, rank up to eight.
-- Broadcast arithmetic, ReLU, sigmoid, exp/log/sqrt, reductions, reshape, rank-2 transpose and matrix multiplication.
-- `nn.Module`, `Linear`, `Sequential`, `ReLU`, `Sigmoid`, MSE loss, parameters/state dictionaries, and SGD without momentum.
-- A compiled forward/backward/SGD step. Parameters remain in Vulkan memory between calls; `.item()`, `.numpy()`, saving, and explicit interop perform readbacks.
+- Convolution and pooling with backward, batched matrix multiplication, normalization, attention, differentiable bilinear sampling, indexing, TopK and broadcast arithmetic.
+- PyTorch-style modules, persistent train/eval buffers, SGD, AdamW parameter groups, gradient clipping and EMA.
+- A compiled forward/loss/backward/optimizer/EMA step, including native Hungarian assignment and RT-DETR denoising and auxiliary losses. Parameters remain in Vulkan memory between calls; `.item()`, `.numpy()`, saving, and explicit interop perform readbacks.
 - Single-consumer scalar-operation fusion, including view expressions feeding matrix multiplication; temporary buffers reused after their final consumers.
 - GLSL → SPIR-V compilation on demand, a persistent SPIR-V cache, Vulkan pipeline creation, and recorded command-buffer replay.
-- Data-only `.mnet` save/load, including deterministic SGD-step state; native graph → ONNX → native graph conversion for the supported subset.
-- Import of small eval-mode PyTorch modules through the modern ONNX exporter. Matching native layers accept PyTorch state dictionaries.
+- Data-only `.mnet` save/load, including training state; native graph → ONNX → native graph conversion for the supported subset.
+- Import of supported eval-mode PyTorch modules, including the pinned RT-DETR reference, through the modern ONNX exporter. Matching native layers accept PyTorch state dictionaries.
 - An explicit CPU reference backend. Selecting Vulkan never silently runs native operators on the CPU.
 - A disconnect-tolerant training swarm: one durable owner, C++ worker binaries, capability-based leases, cached offline computation, result retries, and sample-weighted MSE/SGD rounds.
 
-Read [installation and releases](docs/install.md), [the architecture and decisions](docs/architecture.md), [training swarm guide](docs/swarm.md), [RT-DETR acceptance plan](docs/rtdetr-acceptance.md), and [validation report](docs/validation.md).
+Read the [RT-DETR guide and runnable examples](docs/rtdetr.md), [installation and releases](docs/install.md), [the architecture and decisions](docs/architecture.md), [training swarm guide](docs/swarm.md), [RT-DETR acceptance plan](docs/rtdetr-acceptance.md), and [validation report](docs/validation.md).
 
 ## Install
 
-After 0.2.0 is published, the existing PyPI project installs the library and both swarm commands:
+After 0.3.0 is published, the existing PyPI project installs the library and both swarm commands:
 
 ```bash
-python -m pip install --upgrade 'munet-nn>=0.2.0'
+python -m pip install --upgrade 'munet-nn>=0.3.0'
 munet-node --version
 munet-server --version
 ```
@@ -34,6 +34,23 @@ munet-server --version
 Release workflows build Linux x86-64/aarch64 wheels, standalone node/server archives, and a CMake SDK. Preview artifacts are available from the PR's `Wheels` run. See [installation and release details](docs/install.md).
 
 ## Build and run
+
+For local development and testing, use the Makefile (Linux, Python 3.10+):
+
+```bash
+sudo apt-get install build-essential python3-dev python3-venv libvulkan-dev glslang-tools vulkan-validationlayers libcurl4-openssl-dev libssl-dev
+make setup
+make test
+make test-vulkan
+```
+
+Use `make setup VULKAN=0` and `make test VULKAN=0` for a CPU-only build.
+`make build` rebuilds native code after edits; `make smoke` runs a short training
+example. Commands use `.venv` and the source tree automatically, without shell
+activation. `make install` also installs the library and node/server commands
+into `.venv` for use outside the checkout. See `make help` and the
+[local development instructions](docs/install.md#local-development-with-make)
+for prerequisites, targeted tests and configuration overrides.
 
 On Ubuntu with a working Vulkan driver:
 
@@ -58,7 +75,8 @@ python examples/train_mlp.py --device cpu
 For editable development without rebuilding a wheel:
 
 ```bash
-python -m pip install cmake pybind11 numpy pytest onnx onnxruntime
+python -m pip install cmake pybind11 numpy pytest onnx onnxruntime scipy Pillow torch onnxscript
+python tools/fetch_rtdetr_reference.py
 python tools/build.py                  # add --cpu-only when needed
 PYTHONPATH=python python -m pytest -q
 MUNET_TEST_VULKAN=1 PYTHONPATH=python python -m pytest -q
@@ -99,7 +117,7 @@ for step in range(100):
 print(train_step.stats())
 ```
 
-The first call captures Python control flow and compiles the whole step. Subsequent calls replay the C++ execution plan. Python side effects inside the function happen only while tracing. Tensor-dependent Python branches are rejected. Input shapes and float32 dtype are guarded. Model structure, closure constants, and optimizer settings are static: create a new compiled function after changing them.
+The first call captures Python control flow and compiles the whole step. Subsequent calls replay the C++ execution plan. Python side effects inside the function happen only while tracing. Tensor-dependent Python branches are rejected. Input shapes and float32 dtype are guarded. Model structure and closure constants are static: create a new compiled function after changing them. Train/eval changes recapture automatically; AdamW group settings remain live between replays.
 
 This initial API is tracing-only; it does not yet provide general eager tensor execution. Each compiled object has one specialization and one in-flight execution. A returned result borrows output storage: call `.numpy()` before the next invocation if you need to retain a copy. Stale results raise an error. Compiled calls are serialized; concurrent mutation of parameters shared across compiled objects is unsupported.
 
@@ -121,11 +139,11 @@ mu.save(imported, "roundtrip.mnet")
 # imported = from_torch(torch_model.eval(), (example_torch_tensor,), device="vulkan")
 ```
 
-ONNX support is **default-domain opsets 13–18**, static float32 computation, and the operators listed in `munet.interop.SUPPORTED_ONNX`. Integer constants are allowed for shapes/axes. Rank-2 restrictions still apply to MatMul/Transpose. Unsupported nodes, dynamic inputs, external tensor data, functions, sparse tensors, and ONNX training metadata raise explicit errors.
+ONNX support is **default-domain opsets 13–18**, static float32 computation, and the operators listed in `munet.interop.SUPPORTED_ONNX`. Integer constants are allowed for shapes/axes; bounded indices/masks use exact float32 storage. Batched MatMul and general permutations are supported. Local functions are inlined. Unsupported nodes/modes, dynamic inputs, external tensor data, sparse tensors and ONNX training metadata raise explicit errors. See the detector guide for the precise contract.
 
 Export produces a standard inference graph and preserves supported computation, not original Python classes or exact graph topology. Native training programs must be exported by compiling their trained model separately. A supported inference graph does not reconstruct the original training behavior of an arbitrary PyTorch model.
 
-`mu.save(train_step, "step.mnet")` and `mu.load(...)` preserve this prototype's deterministic SGD computation and current parameter values. Optimizer hyperparameters are graph constants. This is a new versioned archive format; no reader for the previous MuNet format is included.
+`mu.save(train_step, "step.mnet")` and `mu.load(...)` preserve compiled computation and current device state. Use `DetectorTrainer.save/load` for model, optimizer, EMA, scheduler and host RNG resume. This is a new versioned archive format; no reader for the previous MuNet format is included.
 
 ## Training swarm
 
@@ -159,9 +177,9 @@ The worker needs no Python or shader compiler. SPIR-V is prepared on the owner, 
 
 This version uses baseline float32 kernels, not tuned GEMM/convolution kernels. Matrix multiplication is a simple dot-product kernel; reductions are serial within each output invocation. Do not infer competitive throughput from the correctness results.
 
-One device-local buffer holds the entire planned arena, with a host staging mirror. Graph/weight metadata also consumes host memory. `arena_bytes` reports only the planned device arena, not total process memory. The arena must fit `maxStorageBufferRange`; dispatch sizes must fit the device limits. Host input arrays are copied into staging. One replay can be in flight, with a fence wait before its storage is reused. No CPU wait occurs between individual kernels.
+One device-local buffer holds the entire planned arena, with a host staging mirror. Graph/weight metadata also consumes host memory. `arena_bytes` reports only the planned device arena, not total process memory. Tensor-sized descriptors allow the total arena to exceed `maxStorageBufferRange`; individual tensors must fit it. Two-dimensional dispatches respect device workgroup limits. Host input arrays are copied into staging. One replay can be in flight, with a fence wait before its storage is reused. No CPU wait occurs between individual kernels.
 
-Missing: convolution, batched GEMM, normalization, attention, GridSample, TopK/gather/scatter, AdamW, mixed precision, RNG/dropout, dynamic-shape specialization caches, tiled/cooperative-matrix kernels, autotuning, general-purpose AOT deployment and native `.mnet` loading, fast multi-GPU collectives, and hardware platform validation. The swarm has its own narrow native program loader. These boundaries are tracked in the acceptance plan; no placeholder operators claim to implement them.
+Remaining work includes mixed precision, tiled/cooperative-matrix kernels, autotuning, general eager execution, asynchronous staging, fast multi-GPU collectives and physical platform validation. The detector has a bounded shape-specialization cache; switching cached programs synchronizes shared state through the host. The swarm still implements its narrow MSE/SGD contract, and does not yet train RT-DETR across workers. See the [detector guide](docs/rtdetr.md) and [coverage inventory](docs/rtdetr-coverage.json).
 
 ## Configuration
 

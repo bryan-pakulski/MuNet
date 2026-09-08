@@ -1,0 +1,46 @@
+{
+  "repository": "https://github.com/lyuwenyu/RT-DETR",
+  "commit": "29320b6fd828f8e0987a71426cf2d961b09dfed7",
+  "files": {
+    "rtdetr_decoder.py": {
+      "path": "rtdetr_pytorch/src/zoo/rtdetr/rtdetr_decoder.py",
+      "sha256": "c2837740cb66f128b72e802463db57ee3653e15d964baa3b9cf58cc27a817588"
+    },
+    "hybrid_encoder.py": {
+      "path": "rtdetr_pytorch/src/zoo/rtdetr/hybrid_encoder.py",
+      "sha256": "3dff40011e125107fd1de2606429f04bc05d52a3d88e742b7ed655c5a07742c5"
+    },
+    "rtdetr_criterion.py": {
+      "path": "rtdetr_pytorch/src/zoo/rtdetr/rtdetr_criterion.py",
+      "sha256": "54e0f25364bf5c52ae60f8f9363dd2df7d9274657d97a881a2757b7805b739df"
+    },
+    "matcher.py": {
+      "path": "rtdetr_pytorch/src/zoo/rtdetr/matcher.py",
+      "sha256": "7e364fbba500b0ab23e3e33b7430780cd8dcf4738bd3b961118a3b1f8acd020e"
+    },
+    "denoising.py": {
+      "path": "rtdetr_pytorch/src/zoo/rtdetr/denoising.py",
+      "sha256": "2254d6b781879f54684e5726ada5e9c99414873398cf0a42c2e11d691bece595"
+    },
+    "presnet.py": {
+      "path": "rtdetr_pytorch/src/nn/backbone/presnet.py",
+      "sha256": "1faef37155a38d504e2ce3d569e09d8fbbf737c549d1fbb125cee9111fc7bc28"
+    },
+    "utils.py": {
+      "path": "rtdetr_pytorch/src/zoo/rtdetr/utils.py",
+      "sha256": "dc7f50339c308651b24a236718789e1575e7fc6a4c9f2915b15470bfc393c1ad"
+    },
+    "common.py": {
+      "path": "rtdetr_pytorch/src/nn/backbone/common.py",
+      "sha256": "29ca34ee34f53ccab66e4a1d985df08ede3df9a686d4f84f861010b8f7513d44"
+    },
+    "box_ops.py": {
+      "path": "rtdetr_pytorch/src/zoo/rtdetr/box_ops.py",
+      "sha256": "a670ce02bce95c3b2304a6708c7c609f281237a7bbe8d63bcef56393a80baa4c"
+    },
+    "rtdetr_postprocessor.py": {
+      "path": "rtdetr_pytorch/src/zoo/rtdetr/rtdetr_postprocessor.py",
+      "sha256": "a33a3afbc955866eb08587fdc77da0ae446153af952f42b721abc981f413444c"
+    }
+  }
+}

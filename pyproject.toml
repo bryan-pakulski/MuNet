@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "munet-nn"
-version = "0.2.0"
+version = "0.3.0"
 description = "Experimental C++ graph compiler for portable Vulkan training and inference"
 readme = "README.md"
 license = { text = "Proprietary" }
@@ -23,7 +23,9 @@ munet-server = "munet.swarm.__main__:main"
 [project.optional-dependencies]
 interop = ["onnx>=1.16"]
 vk = ["onnx>=1.16", "onnxruntime>=1.18"]
-test = ["pytest>=8", "onnx>=1.16", "onnxruntime>=1.18"]
+test = ["pytest>=8", "onnx>=1.16", "onnxruntime>=1.18", "scipy>=1.10", "Pillow>=10"]
+detection = ["Pillow>=10"]
+coco = ["Pillow>=10", "pycocotools>=2.0.7"]
 torch = ["torch>=2.6", "onnx>=1.16", "onnxscript>=0.3"]
 
 [tool.scikit-build]
@@ -31,7 +33,7 @@ wheel.packages = ["python/munet", "python/munet_nn"]
 cmake.build-type = "Release"
 cmake.define.MUNET_SWARM_NODE = "ON"
 cmake.define.MUNET_INSTALL_SDK = "OFF"
-sdist.include = ["cpp/**", "cmake/**", "tools/**", "tests/**", "docs/**", "examples/**"]
+sdist.include = ["Makefile", "cpp/**", "cmake/**", "tools/**", "tests/**", "docs/**", "examples/**"]
 
 [tool.cibuildwheel]
 build = "cp310-manylinux_* cp311-manylinux_* cp312-manylinux_* cp313-manylinux_* cp314-manylinux_*"

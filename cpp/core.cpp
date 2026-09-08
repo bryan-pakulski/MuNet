@@ -1,4 +1,5 @@
 #include "core.hpp"
+#include "ops.hpp"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -85,7 +86,8 @@ Id Graph::op(const std::string& kind,const std::vector<Id>& args,const Shape& at
     arity(2);shape=broadcast_shape(at(args[0]).shape,at(args[1]).shape);
   } else if(kind=="matmul") {
     arity(2);auto a=at(args[0]).shape,b=at(args[1]).shape;
-    require(a.size()==2&&b.size()==2&&a[1]==b[0],"matmul requires compatible rank-2 tensors");shape={a[0],b[1]};
+    require(a.size()>=2&&b.size()>=2&&a.back()==b[b.size()-2],"matmul requires compatible matrices with optional batch dimensions");
+    shape=broadcast_shape(Shape(a.begin(),a.end()-2),Shape(b.begin(),b.end()-2));shape.push_back(a[a.size()-2]);shape.push_back(b.back());
   } else if(kind=="transpose") {
     arity(1);auto a=at(args[0]).shape;require(a.size()==2,"transpose requires rank 2");shape={a[1],a[0]};
   } else if(kind=="reshape") {
@@ -103,7 +105,10 @@ Id Graph::op(const std::string& kind,const std::vector<Id>& args,const Shape& at
     for(auto a:normalized) shape[a]=1;
   } else if(kind=="neg"||kind=="relu"||kind=="sigmoid"||kind=="exp"||kind=="log"||kind=="sqrt"||kind=="identity") {
     arity(1);shape=at(args[0]).shape;
-  } else throw std::invalid_argument("unsupported native op: "+kind);
+  } else {
+    if(!extended_shape(*this,kind,args,shape,normalized)) throw std::invalid_argument("unsupported native op: "+kind);
+    numel(shape);nodes.push_back({kind,"",args,shape,normalized,{}});return static_cast<Id>(nodes.size()-1);
+  }
   if(kind!="sum"&&kind!="reshape"&&kind!="broadcast") require(attrs.empty(),"unexpected attributes for "+kind);
   numel(shape);nodes.push_back({kind,"",args,shape,normalized,{}});return static_cast<Id>(nodes.size()-1);
 }
@@ -137,7 +142,10 @@ std::vector<Id> Graph::gradients(Id loss,const std::vector<Id>& wrt) {
     else if(n.op=="mul") {acc(a,op("mul",{g,b}));acc(b,op("mul",{g,a}));}
     else if(n.op=="div") {acc(a,op("div",{g,b}));acc(b,op("neg",{op("div",{op("mul",{g,a}),op("mul",{b,b})})}));}
     else if(n.op=="neg") acc(a,op("neg",{g}));
-    else if(n.op=="matmul") {acc(a,op("matmul",{g,op("transpose",{b})}));acc(b,op("matmul",{op("transpose",{a}),g}));}
+    else if(n.op=="matmul") {
+      auto tr=[&](Id x){Shape axes(at(x).shape.size());for(size_t d=0;d<axes.size();++d)axes[d]=d;std::swap(axes[axes.size()-1],axes[axes.size()-2]);return op("permute",{x},axes);};
+      acc(a,op("matmul",{g,tr(b)}));acc(b,op("matmul",{tr(a),g}));
+    }
     else if(n.op=="transpose") acc(a,op("transpose",{g}));
     else if(n.op=="reshape") acc(a,op("reshape",{g,},at(a).shape));
     else if(n.op=="broadcast"||n.op=="identity") acc(a,g);
@@ -147,7 +155,7 @@ std::vector<Id> Graph::gradients(Id loss,const std::vector<Id>& wrt) {
     else if(n.op=="exp") acc(a,op("mul",{g,id}));
     else if(n.op=="log") acc(a,op("div",{g,a}));
     else if(n.op=="sqrt") acc(a,op("div",{g,op("mul",{scalar(2.f),id})}));
-    else throw std::invalid_argument("no derivative rule for "+n.op+" (higher-order autodiff is not implemented)");
+    else if(!extended_gradient(*this,id,g,acc)) throw std::invalid_argument("no derivative rule for "+n.op+" (higher-order autodiff is not implemented)");
   }
   std::vector<Id> result;
   for(auto id:wrt) {if(grads[id]<0){Id zero=scalar(0.f);result.push_back(op("broadcast",{zero},at(id).shape));}else result.push_back(grads[id]);}
@@ -177,6 +185,12 @@ Plan::Plan(const Graph& g,const std::vector<Id>& result,const std::vector<std::p
       inline_[i]=fuse&&users[i]==1&&!roots.count(i)&&elementwise(graph.nodes[i].op);
     }
   }
+  // Keep fused kernels within Vulkan's baseline four storage bindings (output +
+  // three sources). Wider explicit operators still check actual device limits.
+  for(size_t i=n;i-->0;) if(live_[i]&&!is_leaf(graph.nodes[i])&&!inline_[i]) {
+    if(binding_ids(static_cast<Id>(i)).size()>4)
+      for(auto x:graph.nodes[i].inputs) inline_[x]=false;
+  }
   for(size_t i=0;i<n;++i) if(live_[i]&&!is_leaf(graph.nodes[i])&&!inline_[i])
     kernels.push_back({static_cast<Id>(i),numel(graph.nodes[i].shape),""});
   std::vector<int> last(n,-1);
@@ -201,13 +215,21 @@ Plan::Plan(const Graph& g,const std::vector<Id>& result,const std::vector<std::p
     if(found==slots.end()) {auto off=allocate(size);slots.push_back({off,((size+63)/64)*64,last[id]});offsets_[id]=off;}
     else {offsets_[id]=found->offset;found->last=last[id];}
   }
-  require(total<=UINT32_MAX/4,"arena exceeds v0 32-bit indexing limit");
-  arena_.resize(total,0.f);arena_floats_=total;
-  for(size_t i=0;i<n;++i) if(live_[i]&&is_leaf(graph.nodes[i])&&!graph.nodes[i].data.empty())
-    std::copy(graph.nodes[i].data.begin(),graph.nodes[i].data.end(),arena_.begin()+offsets_[i]);
-  for(auto& kernel:kernels) kernel.source=shader(kernel.root);
+  // Shader indices are relative to individual tensor descriptors. Arena offsets
+  // remain size_t/VkDeviceSize and are no longer limited to 32-bit byte offsets.
+  arena_floats_=total;
+  for(auto& kernel:kernels) {
+    kernel.source=shader(kernel.root);
+    for(auto id:binding_ids(kernel.root)) kernel.bindings.push_back({offsets_[id],numel(graph.at(id).shape)});
+  }
 }
 Plan::~Plan()=default;
+void Plan::initialize_arena() {
+  if(device_||!arena_.empty())return;
+  arena_.resize(arena_floats_,0.f);
+  for(size_t i=0;i<graph.nodes.size();++i) if(live_[i]&&is_leaf(graph.nodes[i])&&!graph.nodes[i].data.empty())
+    std::copy(graph.nodes[i].data.begin(),graph.nodes[i].data.end(),arena_.begin()+offsets_[i]);
+}
 float Plan::read_value(Id id,size_t index) const {
   return inline_[id]?calculate(id,index):arena_[offsets_[id]+index];
 }
@@ -228,6 +250,7 @@ float Plan::calculate(Id id,size_t i) const {
   if(n.op=="identity"||n.op=="reshape") return read_value(n.inputs[0],i);
   if(n.op=="broadcast") return get(0);
   if(n.op=="transpose") return read_value(n.inputs[0],(i%n.shape[1])*n.shape[0]+i/n.shape[1]);
+  if(n.op=="matmul"&&(graph.at(n.inputs[0]).shape.size()>2||graph.at(n.inputs[1]).shape.size()>2)) return extended_calculate(id,i);
   if(n.op=="matmul") {
     auto a=n.inputs[0],b=n.inputs[1];size_t K=graph.at(a).shape[1],N=n.shape[1];float v=0;
     for(size_t k=0;k<K;++k) v+=read_value(a,(i/N)*K+k)*read_value(b,k*N+i%N);
@@ -238,10 +261,10 @@ float Plan::calculate(Id id,size_t i) const {
     for(size_t k=0;k<count;++k) v+=read_value(a,reduction_index(i,k,n,graph.at(a).shape).first);
     return v;
   }
-  throw std::logic_error("missing CPU implementation: "+n.op);
+  return extended_calculate(id,i);
 }
 std::string Plan::expr(Id id,const std::string& i,bool force) const {
-  if(!force&&!inline_[id]) return "buf.v["+uint_lit(offsets_[id])+"+("+i+")]";
+  if(!force&&!inline_[id]) return "b"+std::to_string(id)+".v["+i+"]";
   const auto& n=graph.at(id);
   auto get=[&](size_t arg){auto x=n.inputs[arg];return expr(x,broadcast_expr(i,n.shape,graph.at(x).shape));};
   if(n.op=="add"||n.op=="sub"||n.op=="mul"||n.op=="div") {
@@ -258,10 +281,25 @@ std::string Plan::expr(Id id,const std::string& i,bool force) const {
   if(n.op=="transpose") return expr(n.inputs[0],"(("+i+")%"+uint_lit(n.shape[1])+"*"+uint_lit(n.shape[0])+"+("+i+")/"+uint_lit(n.shape[1])+")");
   throw std::logic_error("op is not a scalar expression: "+n.op);
 }
+std::vector<Id> Plan::binding_ids(Id root) const {
+  std::vector<Id> ids{root};std::set<Id> seen{root};
+  std::function<void(Id)> add=[&](Id id){
+    if(inline_[id]) {for(auto x:graph.at(id).inputs)add(x);}
+    else if(seen.insert(id).second)ids.push_back(id);
+  };
+  for(auto id:graph.at(root).inputs)add(id);return ids;
+}
+std::string Plan::shader_header(Id root) const {
+  std::ostringstream out;out<<"#version 450\nlayout(local_size_x=64) in;\n";
+  auto ids=binding_ids(root);
+  for(size_t k=0;k<ids.size();++k)out<<"layout(set=0,binding="<<k<<",std430) "<<(k?"readonly ":"")<<"buffer B"<<ids[k]<<" {float v[];} b"<<ids[k]<<";\n";
+  return out.str();
+}
 std::string Plan::shader(Id id) const {
   const auto& n=graph.at(id);
+  if((!elementwise(n.op)&&n.op!="sum"&&n.op!="matmul") || (n.op=="matmul"&&(graph.at(n.inputs[0]).shape.size()>2||graph.at(n.inputs[1]).shape.size()>2))) return extended_shader(id);
   std::ostringstream out;
-  out<<"#version 450\nlayout(local_size_x=64) in;\nlayout(set=0,binding=0,std430) buffer Arena {float v[];} buf;\nvoid main(){uint i=gl_GlobalInvocationID.x;if(i>="<<uint_lit(numel(n.shape))<<")return;\n";
+  out<<shader_header(id)<<"void main(){uint i=gl_GlobalInvocationID.x+gl_GlobalInvocationID.y*gl_NumWorkGroups.x*64u;if(i>="<<uint_lit(numel(n.shape))<<")return;\n";
   if(n.op=="matmul") {
     auto a=n.inputs[0],b=n.inputs[1];auto K=graph.at(a).shape[1],N=n.shape[1];
     out<<"float r=0.0;for(uint k=0u;k<"<<uint_lit(K)<<";++k)r+="
@@ -278,10 +316,11 @@ std::string Plan::shader(Id id) const {
     }
     out<<"float r=0.0;for(uint k=0u;k<"<<uint_lit(count)<<";++k)r+="<<expr(a,"("+index+")")<<";\n";
   } else out<<"float r="<<expr(id,"i",true)<<";\n";
-  out<<"buf.v["<<uint_lit(offsets_[id])<<"+i]=r;}\n";return out.str();
+  out<<"b"<<id<<".v[i]=r;}\n";return out.str();
 }
 void Plan::enable_vulkan(const std::vector<std::vector<uint32_t>>& spirv,unsigned index) {
   require(counters_.runs==0&&!device_,"select the device before first execution");
+  initialize_arena();
   std::vector<std::pair<size_t,size_t>> ranges;
   for(auto id:inputs) ranges.push_back({offsets_[id],numel(graph.at(id).shape)});
   std::vector<std::pair<size_t,std::pair<size_t,size_t>>> copies;
@@ -291,6 +330,7 @@ void Plan::enable_vulkan(const std::vector<std::vector<uint32_t>>& spirv,unsigne
 }
 void Plan::run(const std::vector<std::vector<float>>& feeds) {
   require(feeds.size()==inputs.size(),"wrong number of runtime inputs");
+  initialize_arena();
   std::vector<std::pair<size_t,std::vector<float>>> uploads;
   for(size_t i=0;i<inputs.size();++i) {
     auto id=inputs[i];require(feeds[i].size()==numel(graph.at(id).shape),"input element count mismatch");
@@ -308,6 +348,7 @@ std::vector<float> Plan::read(Id id) {
   graph.at(id);if(!live_[id]&&(graph.at(id).op=="parameter"||graph.at(id).op=="constant"))return graph.at(id).data;
   require(live_[id]&&!inline_[id],"value was removed or fused; expose it as an output to inspect it");
   require(is_leaf(graph.at(id))||std::find(outputs.begin(),outputs.end(),id)!=outputs.end(),"intermediate storage may have been reused; expose it as an output");
+  initialize_arena();
   auto size=numel(graph.at(id).shape),off=offsets_[id];
   if(device_) return device_->read(off,size);
   return {arena_.begin()+off,arena_.begin()+off+size};
@@ -316,6 +357,7 @@ void Plan::write(Id id,const std::vector<float>& data) {
   require(graph.at(id).op=="parameter","write requires a parameter");
   require(data.size()==numel(graph.at(id).shape),"parameter element count mismatch");
   if(!live_[id]){graph.nodes[id].data=data;return;}
+  initialize_arena();
   if(device_) device_->write(offsets_[id],data);
   else std::copy(data.begin(),data.end(),arena_.begin()+offsets_[id]);
 }

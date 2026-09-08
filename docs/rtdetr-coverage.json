@@ -1,28 +1,173 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "reference": {
     "repository": "https://github.com/lyuwenyu/RT-DETR",
     "commit": "29320b6fd828f8e0987a71426cf2d961b09dfed7",
     "config": "rtdetr_pytorch/configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
   },
-  "current_scope": "static float32 dense-network training/inference and a small MSE/SGD training swarm",
-  "rtdetr_inference_supported": false,
-  "rtdetr_training_supported": false,
+  "current_scope": "Native static float32 RT-DETR v1 R50-vd training/inference, checkpoint resume and ONNX interchange; MSE/SGD swarm retained",
+  "rtdetr_inference_supported": true,
+  "rtdetr_training_supported": true,
   "multiple_gpu_training_supported": false,
   "dense_swarm_training_supported": true,
   "swarm_protocol": "munet-swarm-1",
-  "swarm_validation": ["native_cpu_replicas", "mixed_cpu_and_software_vulkan", "offline_outbox", "owner_restart", "lease_retry"],
-  "milestones": [
-    {"id": "M0", "name": "Dense network architecture proof", "status": "implemented"},
-    {"id": "M1", "name": "Detector primitives", "status": "planned"},
-    {"id": "M2", "name": "Attention and differentiable sampling", "status": "planned"},
-    {"id": "M3", "name": "Full RT-DETR inference", "status": "planned"},
-    {"id": "M4", "name": "Full RT-DETR training step", "status": "planned"},
-    {"id": "M5", "name": "Reproduced reference training", "status": "planned"},
-    {"id": "M6", "name": "Physical hardware portability and performance", "status": "planned"},
-    {"id": "M7", "name": "Multiple GPU training", "status": "planned"}
+  "swarm_validation": [
+    "native_cpu_replicas",
+    "mixed_cpu_and_software_vulkan",
+    "offline_outbox",
+    "owner_restart",
+    "lease_retry"
   ],
-  "implemented_native_ops": ["add", "sub", "mul", "div", "neg", "relu", "relu_grad", "sigmoid", "exp", "log", "sqrt", "identity", "reshape", "broadcast", "sum", "transpose_rank2", "matmul_rank2"],
-  "critical_missing_families": ["conv2d_forward_backward", "pooling", "batchnorm_train_eval", "layernorm", "batched_matmul", "masked_softmax", "grid_sample_forward_backward", "gather_scatter_add", "topk", "concat_slice_resize", "integer_and_boolean_tensors", "detach_and_no_grad", "rng_dropout_denoising", "detection_losses", "exact_assignment", "adamw_parameter_groups", "mixed_precision_and_grad_scaling", "ema", "dynamic_shape_buckets"],
-  "physical_hardware_validation": []
+  "milestones": [
+    {
+      "id": "M0",
+      "name": "Dense network architecture proof",
+      "status": "implemented"
+    },
+    {
+      "id": "M1",
+      "name": "Detector primitives",
+      "status": "functionality_implemented_with_documented_validation_limits"
+    },
+    {
+      "id": "M2",
+      "name": "Attention and differentiable sampling",
+      "status": "functionality_implemented_with_documented_validation_limits"
+    },
+    {
+      "id": "M3",
+      "name": "Full RT-DETR inference",
+      "status": "functionality_implemented_with_documented_validation_limits"
+    },
+    {
+      "id": "M4",
+      "name": "Full RT-DETR training step",
+      "status": "functionality_implemented_with_documented_validation_limits"
+    },
+    {
+      "id": "M5",
+      "name": "Reproduced reference training",
+      "status": "tiny_batch_learning_validated_full_coco_recipe_not_run"
+    },
+    {
+      "id": "M6",
+      "name": "Physical hardware portability and performance",
+      "status": "planned"
+    },
+    {
+      "id": "M7",
+      "name": "Multiple GPU training",
+      "status": "planned"
+    }
+  ],
+  "implemented_native_ops": [
+    "abs",
+    "add",
+    "assignment",
+    "avg_pool2d",
+    "avg_pool2d_grad",
+    "broadcast",
+    "concat",
+    "conv2d",
+    "conv2d_dw",
+    "conv2d_dx",
+    "cos",
+    "detach",
+    "div",
+    "eq",
+    "erf",
+    "exp",
+    "floor",
+    "gather",
+    "gather_grad",
+    "ge",
+    "gelu",
+    "gelu_grad",
+    "grid_sample",
+    "grid_sample_dg",
+    "grid_sample_dx",
+    "gt",
+    "identity",
+    "le",
+    "log",
+    "lt",
+    "matmul",
+    "matmul_rank2",
+    "max",
+    "max_pool2d",
+    "max_pool2d_grad",
+    "maximum",
+    "minimum",
+    "mul",
+    "neg",
+    "permute",
+    "random_uniform",
+    "relu",
+    "relu_grad",
+    "reshape",
+    "resize_nearest",
+    "resize_nearest_grad",
+    "sigmoid",
+    "sign",
+    "sin",
+    "slice",
+    "slice_grad",
+    "softplus",
+    "sqrt",
+    "sub",
+    "sum",
+    "take",
+    "take_grad",
+    "tanh",
+    "topk_indices",
+    "topk_rank",
+    "transpose_rank2",
+    "where"
+  ],
+  "critical_missing_families": [
+    "general_integer_boolean_tensor_dtypes",
+    "mixed_precision_and_grad_scaling",
+    "full_coco_recipe_accuracy_reproduction",
+    "optimized_kernel_families",
+    "distributed_detection_normalization"
+  ],
+  "physical_hardware_validation": [],
+  "tensor_contract": {
+    "dtype": "float32",
+    "index_representation": "exact float32 integers <= 2**24",
+    "shapes": "positive static rank <= 8",
+    "matcher_max_queries": 1024,
+    "matcher_max_target_slots": 512
+  },
+  "implemented_components": [
+    "resnet_vd_18_50",
+    "hybrid_encoder_fpn_pan",
+    "multihead_self_attention",
+    "multiscale_bilinear_deformable_attention",
+    "iterative_detached_box_refinement",
+    "contrastive_denoising",
+    "native_hungarian_matching",
+    "vfl_focal_bce_l1_giou",
+    "encoder_decoder_denoising_aux_losses",
+    "adamw_parameter_groups_live_hyperparameters",
+    "batchnorm_train_eval_buffers",
+    "global_l2_gradient_clipping",
+    "ema_scheduler_rng_checkpoint",
+    "bounded_shape_specializations",
+    "coco_loader_preprocessing_postprocessing_evaluation",
+    "native_onnx_roundtrip",
+    "modern_torch_onnx_detector_import"
+  ],
+  "validation": {
+    "primitive_cpu_and_software_vulkan": true,
+    "full_r50_default_width_six_layer_inference": "batch 1, 32x64, 4 queries vs pinned PyTorch",
+    "full_r50_backbone_training_gradients": "batch 2, 64x64, reduced decoder vs pinned PyTorch",
+    "full_default_r50_training": "all 300 queries, six layers, 100 DN queries, batch 2 at 160x160, CPU",
+    "full_resolution_640_training_executed": false,
+    "coco_ap_measured": false,
+    "pretrained_weights_downloaded": false,
+    "checkpoint_resume": "AdamW/BN/EMA/scheduler/denoising RNG",
+    "onnx_detector_roundtrip": "standard ONNX export + reference evaluator + native import; ONNX Runtime additionally required in CI",
+    "native_torch_runtime_dependency": false
+  }
 }

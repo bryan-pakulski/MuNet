@@ -27,7 +27,8 @@ def check(directory, *, require_sdist=True):
         with zipfile.ZipFile(wheel) as z:
             files = set(z.namelist())
             for required in ("munet/__init__.py", "munet_nn/__init__.py", "munet/cli.py",
-                             "munet/swarm/__main__.py", "munet/swarm/owner.py", "munet/bin/munet-node"):
+                             "munet/swarm/__main__.py", "munet/swarm/owner.py", "munet/bin/munet-node",
+                             "munet/models/rtdetr/__init__.py", "munet/models/rtdetr/LICENSE-RT-DETR", "munet/checkpoint.py"):
                 if required not in files:
                     raise ValueError(f"{wheel.name} is missing {required}")
             if not any(n.startswith("munet/_native.") and n.endswith(".so") for n in files):
@@ -49,7 +50,8 @@ def check(directory, *, require_sdist=True):
         with tarfile.open(source) as archive:
             files = {str(Path(n).relative_to(Path(n).parts[0])) for n in archive.getnames()}
         for required in ("cpp/core.hpp", "cpp/swarm/node.cpp", "cpp/vulkan_loader.hpp", "CMakeLists.txt",
-                         "cmake/MuNetConfig.cmake.in", "cpp/third_party/nlohmann/LICENSE.MIT", "tools/smoke_install.py"):
+                         "cmake/MuNetConfig.cmake.in", "cpp/third_party/nlohmann/LICENSE.MIT", "tools/smoke_install.py",
+                         "cpp/ops.cpp", "cpp/kernels/grid.inc", "cmake/kernel_sources.hpp.in"):
             if required not in files:
                 raise ValueError(f"source distribution missing {required}")
     print(f"Validated {len(wheels)} munet-nn {version} wheels and {len(sources)} source distributions")

@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from . import _native
@@ -24,6 +25,8 @@ class _Trace:
     grads: dict = field(default_factory=dict)
     updates: list = field(default_factory=list)
     backward_called: bool = False
+    optimizer_stepped: bool = False
+    modules: dict = field(default_factory=dict)
 
 
 def _trace():
@@ -102,11 +105,136 @@ class Tensor:
         count = int(np.prod([self.shape[a] for a in axes]))
         return self.sum(dim, keepdim) / count
 
+    def contiguous(self): return self
+    def abs(self): return self._unary("abs")
+    def floor(self): return self._unary("floor")
+    def tanh(self): return self._unary("tanh")
+    def erf(self): return self._unary("erf")
+    def sin(self): return self._unary("sin")
+    def cos(self): return self._unary("cos")
+    def gelu(self): return self._unary("gelu")
+    def softplus(self): return self._unary("softplus")
+    def detach(self): return self._unary("detach")
+    def minimum(self, other): return self._binary("minimum", other)
+    def maximum(self, other): return self._binary("maximum", other)
+    def eq(self, other): return self._binary("eq", other)
+    def __lt__(self, other): return self._binary("lt", other)
+    def __le__(self, other): return self._binary("le", other)
+    def __gt__(self, other): return self._binary("gt", other)
+    def __ge__(self, other): return self._binary("ge", other)
+    def __pow__(self, power):
+        if power == 0: return self * 0 + 1
+        if isinstance(power, int) and power > 0:
+            result = self
+            for _ in range(power - 1): result = result * self
+            return result
+        return (self.log() * power).exp()
+
+    def clamp(self, min=None, max=None):
+        result = self
+        if min is not None: result = where(result < min, min, result)
+        if max is not None: result = where(result > max, max, result)
+        return result
+
+    def permute(self, *axes):
+        if len(axes) == 1 and isinstance(axes[0], (tuple, list)): axes = axes[0]
+        return self._unary("permute", [a % self.ndim for a in axes])
+
+    def transpose(self, dim0, dim1):
+        axes = list(range(self.ndim))
+        axes[dim0], axes[dim1] = axes[dim1], axes[dim0]
+        return self.permute(axes)
+
+    def unsqueeze(self, dim):
+        if dim < 0: dim += self.ndim + 1
+        if not 0 <= dim <= self.ndim: raise ValueError("unsqueeze axis out of range")
+        shape = list(self.shape); shape.insert(dim, 1)
+        return self.reshape(shape)
+
+    def squeeze(self, dim=None):
+        if dim is None: return self.reshape([s for s in self.shape if s != 1])
+        dim %= self.ndim
+        return self.reshape([s for d, s in enumerate(self.shape) if d != dim or s != 1])
+
+    def flatten(self, start_dim=0, end_dim=-1):
+        end_dim %= self.ndim
+        start_dim %= self.ndim
+        if start_dim > end_dim: raise ValueError("invalid flatten dimensions")
+        return self.reshape(self.shape[:start_dim] + (int(np.prod(self.shape[start_dim:end_dim+1])),) + self.shape[end_dim+1:])
+
+    def expand(self, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (list, tuple)): shape = tuple(shape[0])
+        if len(shape) < self.ndim: raise ValueError("expand rank is smaller than input")
+        old = (1,) * (len(shape)-self.ndim) + self.shape
+        return self._unary("broadcast", [old[i] if s == -1 else s for i, s in enumerate(shape)])
+
+    def repeat(self, *repeats):
+        if len(repeats) == 1 and isinstance(repeats[0], (list, tuple)): repeats = tuple(repeats[0])
+        if len(repeats) < self.ndim or any(r <= 0 for r in repeats): raise ValueError("invalid repeat factors")
+        old = (1,) * (len(repeats)-self.ndim) + self.shape
+        a = self.reshape([v for size in old for v in (1, size)])
+        a = a.expand([v for r, size in zip(repeats, old) for v in (r, size)])
+        return a.reshape([r*size for r, size in zip(repeats, old)])
+
+    def __getitem__(self, key):
+        if not isinstance(key, tuple): key = (key,)
+        if sum(k is Ellipsis for k in key) > 1: raise IndexError("multiple ellipses")
+        used = sum(k is not None and k is not Ellipsis for k in key)
+        if used > self.ndim: raise IndexError("too many indices")
+        expanded = []
+        for k in key:
+            expanded.extend([slice(None)] * (self.ndim-used) if k is Ellipsis else [k])
+        if not any(k is Ellipsis for k in key): expanded += [slice(None)] * (self.ndim-used)
+        starts, sizes, steps, result_shape = [], [], [], []
+        dim = 0
+        for k in expanded:
+            if k is None: result_shape.append(1); continue
+            size = self.shape[dim]; dim += 1
+            if isinstance(k, (int, np.integer)):
+                k = int(k); k = k + size if k < 0 else k
+                if not 0 <= k < size: raise IndexError("index out of range")
+                starts.append(k); sizes.append(1); steps.append(1)
+            elif isinstance(k, slice):
+                a, b, c = k.indices(size); length = len(range(a,b,c))
+                if not length: raise IndexError("empty slices are unsupported; use padded targets and masks")
+                starts.append(a); sizes.append(length); steps.append(c); result_shape.append(length)
+            else: raise TypeError("use gather/take for tensor indices")
+        return self._unary("slice", starts+sizes+steps).reshape(result_shape)
+
+    def split(self, sections, dim=0):
+        dim %= self.ndim
+        if isinstance(sections, int):
+            if sections <= 0: raise ValueError("split size must be positive")
+            sections = [min(sections,self.shape[dim]-i) for i in range(0,self.shape[dim],sections)]
+        if sum(sections) != self.shape[dim] or any(s <= 0 for s in sections): raise ValueError("split sizes do not cover dimension")
+        result, start = [], 0
+        for size in sections:
+            key = [slice(None)] * self.ndim; key[dim] = slice(start,start+size)
+            result.append(self[tuple(key)]); start += size
+        return tuple(result)
+
+    def amax(self, dim=None, keepdim=False):
+        axes = list(range(self.ndim)) if dim is None else [dim] if isinstance(dim,int) else list(dim)
+        axes = [a % self.ndim for a in axes]
+        result = self._unary("max", axes)
+        return result if keepdim else result.reshape([s for d,s in enumerate(self.shape) if d not in axes])
+
+    def softmax(self, dim=-1):
+        values = (self-self.amax(dim,keepdim=True).detach()).exp()
+        return values / values.sum(dim,keepdim=True).clamp(min=1e-30)
+
+    def gather(self, dim, index): return operation("gather", self, index, attrs=[dim])
+    def take(self, index, dim=0): return operation("take", self, index, attrs=[dim])
+    def topk(self, k, dim=-1):
+        ranks = self._unary("topk_rank", [dim, k])
+        indices = operation("topk_indices", self, ranks, attrs=[dim, k])
+        return self.gather(dim, indices), indices
+
     def backward(self):
         ctx = _trace()
         if ctx.backward_called:
             raise RuntimeError("v0 supports one first-order backward call per compiled step")
-        params = list(ctx.parameters)
+        params = [p for p in ctx.parameters if p.requires_grad]
         grads = ctx.graph.gradients(self._resolve().value, [ctx.parameters[p] for p in params])
         ctx.grads = {p: Tensor(ctx.graph, g) for p, g in zip(params, grads)}
         ctx.backward_called = True
@@ -121,7 +249,8 @@ class Tensor:
 
 
 class Parameter(Tensor):
-    def __init__(self, data):
+    def __init__(self, data, requires_grad=True):
+        self.requires_grad = bool(requires_grad)
         self._array = np.array(data, dtype=np.float32, order="C", copy=True)
         if any(d <= 0 for d in self._array.shape):
             raise ValueError("empty parameters are unsupported")
@@ -135,7 +264,7 @@ class Parameter(Tensor):
         ctx = _trace()
         if self not in ctx.parameters:
             data = self._snapshot()
-            ctx.parameters[self] = ctx.graph.leaf("parameter", f"p{len(ctx.parameters)}", self.shape, data.ravel().tolist())
+            ctx.parameters[self] = ctx.graph.leaf_array("parameter", f"p{len(ctx.parameters)}", data)
         return Tensor(ctx.graph, ctx.parameters[self])
 
     @property
@@ -168,8 +297,30 @@ def as_tensor(value):
         return value._resolve()
     ctx = _trace()
     data = np.asarray(value, dtype=np.float32)
-    ident = ctx.graph.leaf("constant", f"c{len(ctx.graph.nodes())}", data.shape, data.ravel().tolist())
+    ident = ctx.graph.leaf_array("constant", f"c{ctx.graph.size}", np.ascontiguousarray(data) if data.ndim else data)
     return Tensor(ctx.graph, ident)
+
+
+class Buffer(Parameter):
+    """Persistent, non-differentiable model state, updated by a compiled step."""
+    def __init__(self, data, persistent=True):
+        super().__init__(data, requires_grad=False)
+        self.persistent = bool(persistent)
+
+
+def update_state(parameter, value):
+    ctx = _trace()
+    dst, src = parameter._resolve().value, as_tensor(value).value
+    if parameter.shape != tuple(ctx.graph.shape(src)):
+        raise ValueError("state update shape mismatch")
+    ctx.updates[:] = [(d, s) for d, s in ctx.updates if d != dst]
+    ctx.updates.append((dst, src))
+
+
+def current_state(parameter):
+    ctx = _trace()
+    dst = parameter._resolve().value
+    return Tensor(ctx.graph, next((s for d, s in ctx.updates if d == dst), dst))
 
 
 def grad(loss, tensors):
@@ -177,6 +328,35 @@ def grad(loss, tensors):
     ctx = _trace()
     values = [t._resolve().value for t in tensors]
     return [Tensor(ctx.graph, g) for g in ctx.graph.gradients(loss._resolve().value, values)]
+
+
+def operation(kind, *values, attrs=()):
+    xs = [as_tensor(x) for x in values]
+    ctx = _trace()
+    return Tensor(ctx.graph, ctx.graph.op(kind, [x.value for x in xs], list(attrs)))
+
+
+def cat(tensors, dim=0): return operation("concat", *tensors, attrs=[dim])
+def stack(tensors, dim=0): return cat([x.unsqueeze(dim) for x in tensors], dim)
+def where(condition, a, b): return operation("where", condition, a, b)
+
+
+def _flatten_outputs(value, leaves):
+    if isinstance(value, Tensor):
+        leaves.append(value); return ["tensor", len(leaves)-1]
+    if isinstance(value, dict): return ["dict", [[k, _flatten_outputs(v,leaves)] for k,v in value.items()]]
+    if isinstance(value, (tuple,list)): return ["tuple" if isinstance(value,tuple) else "list", [_flatten_outputs(v,leaves) for v in value]]
+    if value is None or isinstance(value, (int,float,str,bool)): return ["constant", value]
+    raise TypeError("compiled outputs must contain tensors and JSON-compatible metadata")
+
+
+def _unflatten_outputs(tree, leaves):
+    kind, value = tree
+    if kind == "tensor": return leaves[value]
+    if kind == "constant": return value
+    if kind == "dict": return {k:_unflatten_outputs(v,leaves) for k,v in value}
+    values = [_unflatten_outputs(v,leaves) for v in value]
+    return tuple(values) if kind == "tuple" else values
 
 
 def _compile_shaders(sources):
@@ -187,8 +367,7 @@ def _compile_shaders(sources):
     version = subprocess.run([executable, "--version"], check=True, capture_output=True).stdout
     cache = Path(os.environ.get("MUNET_CACHE_DIR", Path.home() / ".cache" / "munet-next" / "spirv-v0"))
     cache.mkdir(parents=True, exist_ok=True)
-    result = []
-    for source in sources:
+    def compile_one(source):
         key = hashlib.sha256(b"munet-v0-vulkan1.1\0" + version + source.encode()).hexdigest()
         target = cache / f"{key}.spv"
         if not target.is_file():
@@ -202,8 +381,9 @@ def _compile_shaders(sources):
         data = target.read_bytes()
         if len(data) < 20 or len(data) % 4 or data[:4] != b"\x03\x02\x23\x07":
             raise RuntimeError(f"invalid shader cache entry: {target}; remove it and compile again")
-        result.append(np.frombuffer(data, dtype="<u4").tolist())
-    return result
+        return np.frombuffer(data, dtype="<u4").tolist()
+    with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as pool:
+        return list(pool.map(compile_one, sources))
 
 
 def _device(plan, name):
@@ -247,27 +427,33 @@ class Compiled:
         self._lock = threading.RLock()
 
     def _capture(self, args):
+        # A mode change replaces the plan; detach state owned by the previous plan first.
+        if self._plan is not None:
+            for p, value in self._parameters.items():
+                if p._owner is not None and p._owner[0] is self:
+                    p._array = self._plan.read(value)
+                    p._owner = None
         ctx = _Trace()
         token = _active.set(ctx)
         try:
             symbolic = [Tensor(ctx.graph, ctx.graph.leaf("input", f"input_{i}", a.shape)) for i, a in enumerate(args)]
             outputs = self.fn(*symbolic)
             self._single = isinstance(outputs, Tensor)
-            if not self._single and not isinstance(outputs, (tuple, list)):
-                raise TypeError("compiled functions must return a Tensor or a tuple/list of Tensors")
-            output_list = [outputs] if self._single else list(outputs)
-            if not all(isinstance(x, Tensor) for x in output_list):
-                raise TypeError("every compiled output must be a Tensor")
+            output_list = []
+            self._output_tree = _flatten_outputs(outputs, output_list)
+            if not output_list: raise TypeError("compiled function must return at least one Tensor")
             ids = [t._resolve().value for t in output_list]
         finally:
             _active.reset(token)
         self._plan = _native.Plan(ctx.graph, ids, ctx.updates, self.fuse)
         self._parameters = ctx.parameters
+        self._modules = ctx.modules
+        self._requires_grad = {p:p.requires_grad for p in ctx.parameters}
+        self._optimizers = getattr(ctx, "optimizers", [])
         self._seen_versions = {p: p._version for p in ctx.parameters}
         self._input_specs = [a.shape for a in args]
         # Dead inputs still have caller guards, but are not uploaded or executed.
-        nodes = ctx.graph.nodes()
-        self._feed_indices = [int(nodes[i]["name"].split("_")[1]) for i in self._plan.inputs]
+        self._feed_indices = [int(ctx.graph.name(i).split("_")[1]) for i in self._plan.inputs]
         try:
             _device(self._plan, self.device)
         except Exception:
@@ -286,10 +472,12 @@ class Compiled:
                 raise TypeError(f"v0 supports float32 inputs, received {a.dtype}")
             arrays.append(a if a.flags.c_contiguous else np.ascontiguousarray(a))
         with self._lock:
-            if self._plan is None:
+            if (self._plan is None or any(m.training != training for m, training in getattr(self, "_modules", {}).items())
+                    or any(p.requires_grad != flag for p,flag in getattr(self,"_requires_grad",{}).items())):
                 self._capture(arrays)
             if [a.shape for a in arrays] != self._input_specs:
                 raise ValueError(f"shape guard failed: expected {self._input_specs}, got {[a.shape for a in arrays]}; create a new compiled specialization")
+            for optimizer in getattr(self, "_optimizers", []): optimizer._sync_hyperparameters()
             for p, value in self._parameters.items():
                 if p._version != self._seen_versions[p]:
                     self._plan.write(value, np.ascontiguousarray(p.numpy()))
@@ -297,13 +485,14 @@ class Compiled:
             self._plan.run([arrays[i] for i in self._feed_indices])
             self._generation += 1
             updated = {dst for dst, _ in self._plan.updates}
+            for optimizer in getattr(self, "_optimizers", []): optimizer._sync_hyperparameters()
             for p, value in self._parameters.items():
                 if value in updated:
                     p._version += 1
                     p._owner = self, value
                     self._seen_versions[p] = p._version
             values = [Result(self, v) for v in self._plan.outputs]
-            return values[0] if self._single else tuple(values)
+            return _unflatten_outputs(self._output_tree, values) if hasattr(self, "_output_tree") else values[0] if self._single else tuple(values)
 
     def stats(self):
         if self._plan is None:

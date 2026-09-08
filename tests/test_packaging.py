@@ -8,6 +8,9 @@ import munet_nn as retained
 
 
 def test_retained_imports_share_runtime_types():
+    from munet_nn.models.rtdetr import RTDETR as RetainedDetector
+    from munet.models.rtdetr import RTDETR
+    assert RetainedDetector is RTDETR
     from munet_nn.core import Parameter
     from munet_nn.nn import Linear
     from munet_nn.swarm.owner import Owner

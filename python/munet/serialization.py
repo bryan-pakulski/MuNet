@@ -8,8 +8,31 @@ from . import _native
 from .core import Compiled, _device
 
 FORMAT_VERSION = 1
-MAX_BYTES = 256 * 1024 * 1024
+MAX_BYTES = 2 * 1024 * 1024 * 1024
 MAX_NODES = 100_000
+
+
+def validate_output_tree(tree, count):
+    """Validate metadata before using it to reconstruct public output containers."""
+    def visit(node, depth=0):
+        if depth>64 or not isinstance(node,list) or len(node)!=2: raise ValueError("invalid output tree")
+        kind,value=node
+        if kind=='tensor':
+            if type(value) is not int or not 0<=value<count: raise ValueError("invalid output tensor index")
+        elif kind=='constant':
+            if value is not None and type(value) not in (str,int,float,bool): raise ValueError("invalid output constant")
+        elif kind in ('tuple','list'):
+            if not isinstance(value,list): raise ValueError("invalid output sequence")
+            for v in value: visit(v,depth+1)
+        elif kind=='dict':
+            if not isinstance(value,list): raise ValueError("invalid output dictionary")
+            keys=set()
+            for pair in value:
+                if not isinstance(pair,list) or len(pair)!=2 or not isinstance(pair[0],str) or pair[0] in keys: raise ValueError("invalid output dictionary key")
+                keys.add(pair[0]);visit(pair[1],depth+1)
+        else: raise ValueError("unknown output container")
+    visit(tree)
+    return tree
 
 
 def _read_tensor(payload, declared_shape):
@@ -41,26 +64,24 @@ def save(program, path):
             if p._version != program._seen_versions[p]:
                 program._plan.write(value, np.ascontiguousarray(p.numpy()))
                 program._seen_versions[p] = p._version
-        nodes = program._plan.graph.nodes()
-        arrays = {}
+        nodes = program._plan.graph.nodes(data=False)
+        tensors = []
         for i, node in enumerate(nodes):
             node.pop("data")
             if node["op"] in ("parameter", "constant"):
-                data = program._plan.read(i)
-                buf = io.BytesIO()
-                np.save(buf, data.astype("<f4", copy=False), allow_pickle=False)
                 name = f"tensors/{i}.npy"
                 node["tensor"] = name
-                arrays[name] = buf.getvalue()
+                tensors.append((i,name))
         manifest = {
             "format": "munet-program", "version": FORMAT_VERSION, "dtype": "float32",
             "nodes": nodes, "outputs": program._plan.outputs, "updates": program._plan.updates,
             "input_specs": [list(s) for s in program._input_specs], "feed_indices": program._feed_indices,
             "single_output": program._single,
+            "output_tree": getattr(program, "_output_tree", None),
         }
         # Validate the producer against the same limits the loader applies.
         encoded = json.dumps(manifest, allow_nan=False, separators=(",", ":")).encode()
-        if len(nodes) > MAX_NODES or len(encoded) + sum(map(len, arrays.values())) > MAX_BYTES:
+        if len(nodes) > MAX_NODES or len(encoded) + sum(int(np.prod(nodes[i]["shape"]))*4+256 for i,_ in tensors) > MAX_BYTES:
             raise ValueError("program exceeds the v0 format size limit")
         path = Path(path)
         import os, tempfile
@@ -70,8 +91,9 @@ def save(program, path):
         try:
             with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as z:
                 z.writestr("manifest.json", encoded)
-                for name, data in arrays.items():
-                    z.writestr(name, data)
+                for i,name in tensors:
+                    with z.open(name,"w",force_zip64=True) as out:
+                        np.lib.format.write_array(out,program._plan.read(i).astype("<f4",copy=False),allow_pickle=False)
             os.replace(tmp, path)
         finally:
             if os.path.exists(tmp): os.unlink(tmp)
@@ -109,8 +131,9 @@ def load(path, *, device="vulkan", fuse=True):
                         raise ValueError("invalid tensor entry name")
                     expected.add(name)
                     array = _read_tensor(z.read(name), node["shape"])
-                    data = array.ravel().tolist()
-                graph.leaf(op, node["name"], node["shape"], data)
+                    graph.leaf_array(op, node["name"], array)
+                else:
+                    graph.leaf(op, node["name"], node["shape"], data)
             else:
                 if any(type(x) is not int or x < 0 or x >= i for x in node["inputs"]):
                     raise ValueError("graph is not topologically ordered")
@@ -119,9 +142,12 @@ def load(path, *, device="vulkan", fuse=True):
                     raise ValueError("declared node shape differs from inferred shape")
         if set(names) != expected:
             raise ValueError("unexpected entries in MuNet archive")
-    return from_graph(graph, manifest["outputs"], manifest["updates"],
+    program = from_graph(graph, manifest["outputs"], manifest["updates"],
                       manifest["input_specs"], manifest["feed_indices"],
                       manifest["single_output"], device=device, fuse=fuse)
+    if manifest.get("output_tree") is not None:
+        program._output_tree = validate_output_tree(manifest["output_tree"],len(manifest["outputs"]))
+    return program
 
 
 def from_graph(graph, outputs, updates, input_specs, feed_indices, single_output, *, device="vulkan", fuse=True):
