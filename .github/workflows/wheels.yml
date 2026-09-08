@@ -109,6 +109,11 @@ jobs:
           /tmp/munet-freeze/bin/python -m pip install wheelhouse/*cp312-cp312-*.whl
       - name: Freeze server, package native node and SDK, and exercise all three
         shell: bash
+        # This container has build headers but no Vulkan driver/compiler.
+        # Exercise headless CPU fallback here; correctness CI tests Vulkan deployment.
+        # The shipped SDK and binaries are still built with Vulkan enabled.
+        env:
+          MUNET_TEST_VULKAN: "0"
         run: |
           /tmp/munet-freeze/bin/python tools/build_release.py --wheel wheelhouse/*cp312-cp312-*.whl
       - uses: actions/upload-artifact@v4

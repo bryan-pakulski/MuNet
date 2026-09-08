@@ -83,7 +83,8 @@ def main():
     checksums = []
     for kind, stage in stages.items():
         docs = stage / "share/doc/munet"
-        docs.mkdir(parents=True)
+        # CMake already installs the SDK's API guides and example sources here.
+        docs.mkdir(parents=True, exist_ok=True)
         for source in ("README.md", "docs/install.md", "docs/swarm.md", "cpp/third_party/nlohmann/LICENSE.MIT"):
             shutil.copyfile(ROOT / source, docs / Path(source).name)
         (stage / "manifest.json").write_text(json.dumps({"version": version, "artifact": kind,
