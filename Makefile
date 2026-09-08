@@ -9,6 +9,9 @@ BUILD_DIR ?= build/local
 CMAKE_ARGS ?=
 TORCH_INDEX_URL ?= https://download.pytorch.org/whl/cpu
 DEVICE ?= $(if $(filter 0,$(VULKAN)),cpu,vulkan)
+SDK_PREFIX ?= artifacts/sdk
+SDK_BUILD_DIR ?= build/sdk-local
+SDK_CMAKE_ARGS ?=
 EXAMPLE_ARGS ?=
 
 VENV_PYTHON := $(abspath $(VENV))/bin/python
@@ -24,6 +27,7 @@ $(error VULKAN must be 0 or 1)
 endif
 
 .PHONY: help setup deps build test-deps rtdetr-deps setup-rtdetr reference test test-vulkan test-rtdetr test-rtdetr-vulkan smoke install clean
+.PHONY: sdk test-sdk demo-python-api demo-cpp
 .PHONY: example-deps setup-examples test-examples test-examples-vulkan demo-mnist demo-segmentation demo-language-model
 
 help:
@@ -31,6 +35,10 @@ help:
 	  'make setup           Create .venv and build Vulkan library/node (no PyTorch or model downloads)' \
 	  'make setup VULKAN=0  Explicit CPU fallback; no Vulkan headers or driver' \
 	  'make build           Rebuild native code after edits (incremental)' \
+	  'make sdk             Build/install the C++ SDK into artifacts/sdk (no Python runtime)' \
+	  'make test-sdk        Compile and run an application against the installed SDK' \
+	  'make demo-python-api Run the Python training/checkpoint/export API tour' \
+	  'make demo-cpp        Train/export in Python and run inference in a C++ application' \
 	  'make test            Install reference-test tools and run Vulkan/CPU/swarm tests' \
 	  'make test-vulkan     CPU + Vulkan tests with API/synchronization validation (VULKAN=1)' \
 	  'make setup-rtdetr    Set up the optional RT-DETR example and image dependencies' \
@@ -46,7 +54,7 @@ help:
 	  'make install         Install library and node/server commands into the virtual environment' \
 	  'make clean           Clean native build outputs; keep dependencies, data and checkpoints' \
 	  '' \
-	  'Overrides: PYTHON, VENV, VULKAN=0|1, BUILD_DIR, CMAKE_ARGS, TORCH_INDEX_URL, DEVICE, EXAMPLE_ARGS' \
+	  'Overrides: PYTHON, VENV, VULKAN=0|1, BUILD_DIR, CMAKE_ARGS, TORCH_INDEX_URL, DEVICE, EXAMPLE_ARGS, SDK_PREFIX, SDK_BUILD_DIR, SDK_CMAKE_ARGS' \
 	  'Use the same overrides for later commands. See docs/install.md for system prerequisites.'
 
 $(VENV_PYTHON):
@@ -82,6 +90,24 @@ setup-examples: build example-deps
 
 build: deps
 	"$(VENV_PYTHON)" tools/build.py $(BUILD_FLAGS) $(CMAKE_ARGS)
+
+# Standalone C++ build: no Python interface or swarm networking dependencies.
+sdk: deps
+	"$(VENV_PYTHON)" -m cmake -S . -B "$(SDK_BUILD_DIR)" -DCMAKE_BUILD_TYPE=Release -DMUNET_PYTHON=OFF -DMUNET_SWARM_NODE=OFF -DMUNET_INSTALL_SDK=ON -DMUNET_VULKAN=$(if $(filter 0,$(VULKAN)),OFF,ON) $(SDK_CMAKE_ARGS)
+	"$(VENV_PYTHON)" -m cmake --build "$(SDK_BUILD_DIR)" --parallel 4
+	"$(VENV_PYTHON)" -m cmake --install "$(SDK_BUILD_DIR)" --prefix "$(abspath $(SDK_PREFIX))"
+
+test-sdk: build sdk
+	MUNET_TEST_VULKAN=$(TEST_VULKAN) $(RUN) tools/smoke_sdk.py "$(SDK_PREFIX)"
+
+demo-python-api: build
+	$(RUN) examples/python_api.py --device "$(DEVICE)"
+
+demo-cpp: build sdk
+	$(RUN) examples/cpp_inference/export_model.py --device "$(DEVICE)" $(if $(filter vulkan%,$(DEVICE)),--include-vulkan,)
+	"$(VENV_PYTHON)" -m cmake -S examples/cpp_inference -B build/cpp-inference -UMuNet_DIR -DCMAKE_PREFIX_PATH="$(abspath $(SDK_PREFIX))"
+	"$(VENV_PYTHON)" -m cmake --build build/cpp-inference --parallel 2
+	build/cpp-inference/infer artifacts/cpp-inference/model.mnet "$(DEVICE)"
 
 reference: $(VENV_PYTHON)
 	"$(VENV_PYTHON)" examples/rtdetr/fetch_reference.py

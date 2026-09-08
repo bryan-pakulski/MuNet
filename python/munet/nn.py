@@ -8,6 +8,11 @@ _initialization_rng=ContextVar("munet_initialization_rng",default=None)
 def _get_rng(rng):
     return rng if rng is not None else _initialization_rng.get() or np.random.default_rng()
 
+
+def manual_seed(seed):
+    """Seed subsequent MuNet layer initialization and dropout; NumPy data RNGs are separate."""
+    _initialization_rng.set(np.random.default_rng(seed))
+
 from .core import Parameter, Buffer, Tensor, _active, _trace, as_tensor, operation, cat, where, update_state, current_state
 
 
@@ -22,8 +27,31 @@ class Module:
 
     def __call__(self, *args, **kwargs):
         ctx = _active.get()
-        if ctx is not None: ctx.modules[self] = self.training
+        if ctx is None:
+            raise RuntimeError("MuNet models run inside a compiled function. For inference use model.eval().compile().predict(inputs); for training use munet.train_step or @munet.compile.")
+        ctx.modules[self] = self.training
         return self.forward(*args, **kwargs)
+
+    def compile(self, *, device="vulkan", fuse=True):
+        """Create a compiled callable; preserves the current train/eval mode."""
+        from .core import compile
+        return compile(self, device=device, fuse=fuse)
+
+    def export(self, path, example_inputs, **options):
+        """Export inference in eval mode; see munet.export for naming/shader options."""
+        from .api import export
+        return export(self, path, example_inputs, **options)
+
+    def __repr__(self):
+        children = list(self.named_children())
+        if not children:
+            details = ", ".join(f"{k}={v!r}" for k, v in vars(self).items()
+                                if not k.startswith("_") and k != "training" and isinstance(v, (int, float, str, tuple)))
+            return f"{type(self).__name__}({details})"
+        lines = [f"{type(self).__name__}("]
+        for name, child in children:
+            lines.append(f"  ({name}): " + repr(child).replace("\n", "\n  "))
+        return "\n".join([*lines, ")"])
 
     def _named_children(self): return vars(self).items()
     def named_children(self): return ((n,v) for n,v in self._named_children() if isinstance(v,Module))
@@ -141,6 +169,28 @@ class GELU(Module):
     def forward(self,x): return x.gelu()
 class MSELoss(Module):
     def forward(self,prediction,target): return (prediction-target).square().mean()
+
+
+class Flatten(Module):
+    def __init__(self, start_dim=1, end_dim=-1): self.start_dim, self.end_dim = start_dim, end_dim
+    def forward(self, x): return x.flatten(self.start_dim, self.end_dim)
+
+
+class CrossEntropyLoss(Module):
+    """Class-index cross entropy; use dim=-1 for (batch, sequence, classes)."""
+    def __init__(self, dim=1, reduction="mean"):
+        if reduction not in ("none", "mean", "sum"): raise ValueError("invalid loss reduction")
+        self.dim, self.reduction = dim, reduction
+    def forward(self, logits, targets):
+        return functional.cross_entropy(logits, targets, self.dim, self.reduction)
+
+
+class BCEWithLogitsLoss(Module):
+    def __init__(self, reduction="mean"):
+        if reduction not in ("none", "mean", "sum"): raise ValueError("invalid loss reduction")
+        self.reduction = reduction
+    def forward(self, logits, targets):
+        return functional.binary_cross_entropy_with_logits(logits, targets, self.reduction)
 
 
 class Conv2d(Module):
@@ -281,6 +331,19 @@ class MultiheadAttention(Module):
 
 
 class functional:
+    @staticmethod
+    def cross_entropy(logits, targets, dim=1, reduction="mean"):
+        if not -logits.ndim <= dim < logits.ndim: raise ValueError("class dimension out of range")
+        dim %= logits.ndim
+        if targets.shape != logits.shape[:dim] + logits.shape[dim + 1:]:
+            raise ValueError("cross entropy targets must match logits with the class axis removed")
+        shifted = logits - logits.amax(dim, keepdim=True).detach()
+        logp = shifted - shifted.exp().sum(dim, keepdim=True).log()
+        loss = -logp.gather(dim, targets.unsqueeze(dim)).squeeze(dim)
+        if reduction == "none": return loss
+        if reduction == "sum": return loss.sum()
+        if reduction == "mean": return loss.mean()
+        raise ValueError("invalid loss reduction")
     @staticmethod
     def mse_loss(prediction,target): return (prediction-target).square().mean()
     @staticmethod

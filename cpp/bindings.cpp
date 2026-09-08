@@ -1,4 +1,5 @@
 #include "core.hpp"
+#include "inference.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
@@ -7,6 +8,21 @@ using namespace munet;
 PYBIND11_MODULE(_native,m) {
   m.def("vulkan_built",&vulkan_built);
   m.def("devices",&vulkan_devices);
+  // Internal test/interop bridge. Applications use the installed C++ Model API directly.
+  py::class_<Model>(m,"InferenceModel")
+    .def(py::init([](const std::string& path,const std::string& device,uint64_t limit){
+      py::gil_scoped_release release;return std::make_unique<Model>(path,ModelOptions{device,limit});
+    }),py::arg("path"),py::arg("device")="vulkan",py::arg("max_memory_bytes")=uint64_t{2}*1024*1024*1024)
+    .def("inputs",[](const Model& model){py::list out;for(const auto& s:model.inputs()){py::dict d;d["name"]=s.name;d["shape"]=s.shape;out.append(d);}return out;})
+    .def("outputs",[](const Model& model){py::list out;for(const auto& s:model.outputs()){py::dict d;d["name"]=s.name;d["shape"]=s.shape;out.append(d);}return out;})
+    .def("run",[](Model& model,const std::vector<py::array_t<float,py::array::c_style>>& inputs){
+      std::vector<munet::Tensor> values;
+      for(const auto& a:inputs)values.push_back({Shape(a.shape(),a.shape()+a.ndim()),std::vector<float>(a.data(),a.data()+a.size())});
+      std::vector<munet::Tensor> outputs;{py::gil_scoped_release release;outputs=model.run(values);}
+      py::list result;for(const auto& value:outputs){py::array_t<float> a(value.shape);std::copy(value.data.begin(),value.data.end(),a.mutable_data());result.append(a);}return result;
+    })
+    .def("stats",&Model::stats)
+    .def("device_name",&Model::device_name);
   py::class_<Graph>(m,"Graph")
     .def(py::init<>())
     .def("leaf",&Graph::leaf,py::arg("kind"),py::arg("name"),py::arg("shape"),py::arg("data")=std::vector<float>{})

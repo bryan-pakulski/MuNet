@@ -4,6 +4,10 @@ A greenfield, experimental C++17 graph compiler for Vulkan training and inferenc
 
 **MuNet is the building blocks for creating neural networks:** tensors, layers, automatic differentiation, optimizers, graph compilation, device execution and model interchange. The installed library has NumPy as its only Python runtime dependency. Model architectures, datasets and training recipes belong in examples or applications.
 
+**Start here:** [Python API guide](docs/api/python.md) · [C++ inference API guide](docs/api/cpp.md) · [Install/setup](docs/install.md).
+Use `make demo-python-api` for a complete training/export tour, or
+`make demo-cpp` to train in Python and run the exported model in C++.
+
 Version 0.3.0 adds the operations needed to build and train the [RT-DETR example](examples/rtdetr/README.md). That model is an acceptance test and reference application under `examples/rtdetr/`; it is not packaged in the library. Full COCO convergence and physical-device performance are not yet established. The runtime retains the `munet-nn` PyPI project and `munet_nn` import name; `import munet` is also supported. This is a breaking rewrite of the 0.1 API.
 
 The C++ core owns graph validation, shape inference, symbolic reverse-mode differentiation, fusion, temporary-buffer planning, CPU reference execution, GLSL generation, and Vulkan execution. Python constructs models, captures a static graph once, invokes the shader compiler on cache misses, and exposes model conversion and serialization.
@@ -97,7 +101,7 @@ make test-examples      # Offline learning, resume and inference checks
 ```
 
 Each saves a resumable checkpoint, a native inference graph and validation metrics.
-Use `VULKAN=1 DEVICE=vulkan` for a Vulkan build and GPU execution. The examples
+Vulkan is the default; use `DEVICE=cpu` for explicit CPU fallback. The examples
 also provide explicit offline data modes. Model code and image dependencies stay
 under `examples/`; the installed core continues to require only NumPy.
 
@@ -131,14 +135,7 @@ model = mu.nn.Sequential(
     mu.nn.Linear(16, 2, rng=rng),
 )
 optimizer = mu.optim.SGD(model.parameters(), lr=0.03)
-
-@mu.compile(device="vulkan:0")
-def train_step(x, target):
-    optimizer.zero_grad()
-    loss = mu.nn.functional.mse_loss(model(x), target)
-    loss.backward()
-    optimizer.step()
-    return loss
+train_step = mu.train_step(model, optimizer, mu.nn.MSELoss())
 
 x = rng.normal(size=(32, 4)).astype(np.float32)
 y = rng.normal(size=(32, 2)).astype(np.float32)
@@ -147,11 +144,39 @@ for step in range(100):
     if step % 20 == 0:
         print(loss.item())             # Explicit scalar readback.
 print(train_step.stats())
+
+predict = model.eval().compile()
+print(predict.predict(x))             # Owned NumPy outputs.
+model.export("model.mnet", x[:1])     # Fixed batch-one inference artifact.
+print(mu.load("model.mnet").predict(x[:1]))
 ```
+
+Vulkan is the default across Python compile/train/load/import, C++ inference and
+examples. Select `device="cpu"` explicitly for the CPU reference fallback. Use `@mu.compile` for custom training steps;
+see the [Python guide](docs/api/python.md) for losses, layers, tensors, checkpoints,
+named exports and a troubleshooting table.
 
 The first call captures Python control flow and compiles the whole step. Subsequent calls replay the C++ execution plan. Python side effects inside the function happen only while tracing. Tensor-dependent Python branches are rejected. Input shapes and float32 dtype are guarded. Model structure and closure constants are static: create a new compiled function after changing them. Train/eval changes recapture automatically; AdamW group settings remain live between replays.
 
 This initial API is tracing-only; it does not yet provide general eager tensor execution. Each compiled object has one specialization and one in-flight execution. A returned result borrows output storage: call `.numpy()` before the next invocation if you need to retain a copy. Stale results raise an error. Compiled calls are serialized; concurrent mutation of parameters shared across compiled objects is unsupported.
+
+## C++ application inference
+
+Export your trained Python model, then use the installed SDK directly:
+
+```cpp
+#include <munet/inference.hpp>
+
+munet::Model model("model.mnet");
+auto outputs = model.run({munet::Tensor{{1, 4}, {1.f, 2.f, 3.f, 4.f}}});
+// outputs[0].data owns its FP32 values and survives later inference calls.
+```
+
+Link `MuNet::inference` through `find_package(MuNet CONFIG REQUIRED)`.
+`make sdk` installs a local SDK; `make demo-cpp` builds and runs
+the complete example. Model export embeds precompiled shaders by default, so the C++ deployment host needs neither Python nor a
+shader compiler. See the [C++ guide](docs/api/cpp.md) for named inputs, device
+selection, ownership, concurrency and compatibility limits.
 
 ## Conversion
 

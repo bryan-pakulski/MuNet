@@ -29,7 +29,7 @@ def check(directory, *, require_sdist=True):
             files = set(z.namelist())
             for required in ("munet/__init__.py", "munet_nn/__init__.py", "munet/cli.py",
                              "munet/swarm/__main__.py", "munet/swarm/owner.py", "munet/bin/munet-node",
-                             "munet/nn.py", "munet/optim.py", "munet/checkpoint.py"):
+                             "munet/nn.py", "munet/optim.py", "munet/checkpoint.py", "munet/api.py"):
                 if required not in files:
                     raise ValueError(f"{wheel.name} is missing {required}")
             if any(n.startswith(("munet/models/", "munet_nn/models/", "examples/")) for n in files):
@@ -60,6 +60,8 @@ def check(directory, *, require_sdist=True):
                          "cpp/ops.cpp", "cpp/kernels/grid.inc", "cmake/kernel_sources.hpp.in", "conftest.py",
                          "examples/rtdetr/__init__.py", "examples/rtdetr/LICENSE-RT-DETR", "examples/rtdetr/NOTICE",
                          "examples/rtdetr/requirements.txt", "examples/rtdetr/train.py",
+                         "cpp/inference.hpp", "cpp/inference.cpp", "docs/api/python.md", "docs/api/cpp.md",
+                         "examples/cpp_inference/main.cpp", "examples/cpp_inference/CMakeLists.txt",
                          "examples/common.py", "examples/datasets.json", "examples/requirements.txt",
                          "examples/mnist/train.py", "examples/segmentation/train.py",
                          "examples/language_model/train.py", "examples/tests/test_learning.py"):
