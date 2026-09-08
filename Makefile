@@ -9,6 +9,7 @@ BUILD_DIR ?= build/local
 CMAKE_ARGS ?=
 TORCH_INDEX_URL ?= https://download.pytorch.org/whl/cpu
 DEVICE ?= cpu
+EXAMPLE_ARGS ?=
 
 VENV_PYTHON := $(abspath $(VENV))/bin/python
 RUN := env PYTHONPATH="$(CURDIR)/python" MUNET_SWARM_NODE="$(abspath $(BUILD_DIR))/munet-node" "$(VENV_PYTHON)"
@@ -21,6 +22,7 @@ $(error VULKAN must be 0 or 1)
 endif
 
 .PHONY: help setup deps build test-deps rtdetr-deps setup-rtdetr reference test test-vulkan test-rtdetr test-rtdetr-vulkan smoke install clean
+.PHONY: example-deps setup-examples test-examples test-examples-vulkan demo-mnist demo-segmentation demo-language-model
 
 help:
 	@printf '%s\n' \
@@ -32,11 +34,17 @@ help:
 	  'make setup-rtdetr    Set up the optional RT-DETR example and image dependencies' \
 	  'make test-rtdetr     Run RT-DETR example acceptance tests on CPU' \
 	  'make test-rtdetr-vulkan  Run example acceptance tests with Vulkan validation' \
+	  'make setup-examples  Build and install optional image dependencies for the small examples' \
+	  'make demo-mnist      Train a CNN on automatically downloaded MNIST' \
+	  'make demo-segmentation  Train a small U-Net on generated shapes and masks (offline)' \
+	  'make demo-language-model  Train a causal Transformer on downloaded Tiny Shakespeare' \
+	  'make test-examples   Test small examples, checkpoint resume and inference (offline)' \
+	  'make test-examples-vulkan  Run small example tests with Vulkan validation' \
 	  'make smoke           Run the small MLP training example (DEVICE=cpu or vulkan)' \
 	  'make install         Install library and node/server commands into the virtual environment' \
 	  'make clean           Clean native build outputs; keep dependencies, data and checkpoints' \
 	  '' \
-	  'Overrides: PYTHON, VENV, VULKAN=0|1, BUILD_DIR, CMAKE_ARGS, TORCH_INDEX_URL, DEVICE' \
+	  'Overrides: PYTHON, VENV, VULKAN=0|1, BUILD_DIR, CMAKE_ARGS, TORCH_INDEX_URL, DEVICE, EXAMPLE_ARGS' \
 	  'Use the same overrides for later commands. See docs/install.md for system prerequisites.'
 
 $(VENV_PYTHON):
@@ -57,12 +65,18 @@ $(VENV)/.munet-rtdetr-deps: examples/rtdetr/requirements.txt | deps
 	"$(VENV_PYTHON)" -m pip install -r examples/rtdetr/requirements.txt
 	touch "$@"
 
+$(VENV)/.munet-example-deps: examples/requirements.txt | deps
+	"$(VENV_PYTHON)" -m pip install -r examples/requirements.txt
+	touch "$@"
+
 deps: $(VENV)/.munet-deps
 test-deps: $(VENV)/.munet-test-deps
 rtdetr-deps: $(VENV)/.munet-rtdetr-deps
+example-deps: $(VENV)/.munet-example-deps
 
 setup: build
 setup-rtdetr: build rtdetr-deps
+setup-examples: build example-deps
 
 build: deps
 	"$(VENV_PYTHON)" tools/build.py $(BUILD_FLAGS) $(CMAKE_ARGS)
@@ -85,6 +99,23 @@ test-rtdetr-vulkan:
 	@test "$(VULKAN)" = 1 || { printf '%s\n' 'Use make test-rtdetr-vulkan VULKAN=1.'; exit 1; }
 	$(MAKE) build test-deps rtdetr-deps reference
 	$(RUN) tools/test.py --vulkan-validation examples/rtdetr/tests
+
+test-examples: build example-deps
+	MUNET_TEST_VULKAN=0 $(RUN) tools/test.py examples/tests
+
+test-examples-vulkan:
+	@test "$(VULKAN)" = 1 || { printf '%s\n' 'Use make test-examples-vulkan VULKAN=1.'; exit 1; }
+	$(MAKE) build example-deps
+	$(RUN) tools/test.py --vulkan-validation examples/tests
+
+demo-mnist: setup-examples
+	$(RUN) -m examples.mnist.train --device "$(DEVICE)" $(EXAMPLE_ARGS)
+
+demo-segmentation: setup-examples
+	$(RUN) -m examples.segmentation.train --device "$(DEVICE)" $(EXAMPLE_ARGS)
+
+demo-language-model: build
+	$(RUN) -m examples.language_model.train --device "$(DEVICE)" $(EXAMPLE_ARGS)
 
 smoke: build
 	$(RUN) examples/train_mlp.py --device "$(DEVICE)" --steps 20

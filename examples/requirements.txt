@@ -1,0 +1,2 @@
+# Optional image previews and image input for the MNIST/segmentation examples.
+Pillow>=10

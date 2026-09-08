@@ -140,6 +140,21 @@ checksum-verified cached reference files. Use `VULKAN=0` for CPU-only builds.
 The model is not included in `munet-nn` wheels. See [the example](../examples/rtdetr/README.md)
 for application commands and optional COCO evaluation dependencies.
 
+The [small learning examples](../examples/README.md) use MuNet/NumPy directly,
+with Pillow for image input/output. No PyTorch or dataset framework is needed:
+
+```bash
+make setup-examples VULKAN=0
+make demo-mnist VULKAN=0          # Downloads and caches MNIST
+make demo-segmentation VULKAN=0   # Generates training images and masks locally
+make demo-language-model VULKAN=0 # Downloads and caches Tiny Shakespeare
+make test-examples VULKAN=0      # Offline tests, including resume and inference
+```
+
+Pass training options through `EXAMPLE_ARGS='--steps 10 --batch-size 4'`. Use
+`VULKAN=1 DEVICE=vulkan` for GPU demos and `make test-examples-vulkan VULKAN=1`
+for Vulkan validation. `make demo-language-model` needs no image dependency.
+
 `make build` updates the extension under `python/` and the worker under
 `build/local/`. Python source edits take effect on the next invocation of a Make
 test/example target. For custom commands against the source tree:
@@ -194,3 +209,8 @@ checkout. Install `examples/rtdetr/requirements.txt` for image handling or
 `examples/rtdetr/requirements-eval.txt` for COCO AP evaluation. The model-specific
 `detection` and `coco` library extras have been removed. Node/server installation
 and the existing PyPI project/publishing identity are unchanged.
+
+MNIST, segmentation and the tiny language model are also source examples, with
+their shared image requirement in `examples/requirements.txt`. They and their
+datasets are not installed inside the library wheel. The source distribution
+includes the example code and dataset download manifest.

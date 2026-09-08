@@ -57,12 +57,12 @@ jobs:
               f.write('VK_ICD_FILENAMES=' + paths[0] + '\nMUNET_TEST_VULKAN=1\n')
       - name: CPU tests
         if: matrix.backend == 'cpu'
-        run: python tools/test.py --swarm tests examples/rtdetr/tests
+        run: python tools/test.py --swarm tests examples/rtdetr/tests examples/tests
         env:
           PYTHONPATH: python
       - name: Vulkan numerical and synchronization validation
         if: matrix.backend == 'vulkan'
-        run: python tools/test.py --vulkan-validation --swarm tests examples/rtdetr/tests
+        run: python tools/test.py --vulkan-validation --swarm tests examples/rtdetr/tests examples/tests
         env:
           PYTHONPATH: python
       - name: Full default R50-vd training state advancement

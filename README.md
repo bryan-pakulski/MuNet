@@ -87,6 +87,22 @@ PYTHONPATH=python python tools/test.py --vulkan-validation
 
 The opted-in Vulkan tests fail when the driver/compiler is unavailable. They do not skip or select the CPU instead. `tools/build.py --cmake-arg=-DVulkan_INCLUDE_DIR=...` accepts custom SDK paths.
 
+## Model examples
+
+Build and train a model using the [example collection](examples/README.md):
+
+```bash
+make demo-mnist VULKAN=0          # CNN; automatically downloads MNIST
+make demo-segmentation VULKAN=0   # Small U-Net; generates RGB images and masks
+make demo-language-model VULKAN=0 # Causal Transformer; downloads Tiny Shakespeare
+make test-examples VULKAN=0      # Offline learning, resume and inference checks
+```
+
+Each saves a resumable checkpoint, a native inference graph and validation metrics.
+Use `VULKAN=1 DEVICE=vulkan` for a Vulkan build and GPU execution. The examples
+also provide explicit offline data modes. Model code and image dependencies stay
+under `examples/`; the installed core continues to require only NumPy.
+
 ## RT-DETR example
 
 The model, matching/loss recipe, image and COCO handling, training loop, and

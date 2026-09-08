@@ -59,7 +59,10 @@ def check(directory, *, require_sdist=True):
                          "cmake/MuNetConfig.cmake.in", "cpp/third_party/nlohmann/LICENSE.MIT", "tools/smoke_install.py",
                          "cpp/ops.cpp", "cpp/kernels/grid.inc", "cmake/kernel_sources.hpp.in", "conftest.py",
                          "examples/rtdetr/__init__.py", "examples/rtdetr/LICENSE-RT-DETR", "examples/rtdetr/NOTICE",
-                         "examples/rtdetr/requirements.txt", "examples/rtdetr/train.py"):
+                         "examples/rtdetr/requirements.txt", "examples/rtdetr/train.py",
+                         "examples/common.py", "examples/datasets.json", "examples/requirements.txt",
+                         "examples/mnist/train.py", "examples/segmentation/train.py",
+                         "examples/language_model/train.py", "examples/tests/test_learning.py"):
             if required not in files:
                 raise ValueError(f"source distribution missing {required}")
     print(f"Validated {len(wheels)} munet-nn {version} wheels and {len(sources)} source distributions")
