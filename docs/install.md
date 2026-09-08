@@ -63,6 +63,13 @@ target_link_libraries(my_application PRIVATE MuNet::core)
 
 Include `<munet/core.hpp>`. Configure with `-DCMAKE_PREFIX_PATH=/path/to/munet-sdk-0.2.0-linux-x86_64`. The SDK is a C++ ABI package; consumers need a compatible target/toolchain and C++17. Build from source when that contract differs from your system. Release CI compiles and runs an independent consumer using only the installed SDK.
 
+For application inference, include `<munet/inference.hpp>` and link
+`MuNet::inference`. It loads Python-exported `.mnet` models directly, with named
+FP32 tensors, owned outputs and CPU/Vulkan execution. The
+[C++ API guide](api/cpp.md) includes a complete application and CMake setup;
+the [Python API guide](api/python.md) covers training and export. SDK bundles
+include both guides and the C++ example sources.
+
 ## Run a swarm
 
 Prepare a job using the Python API or `examples/swarm_mlp.py prepare JOB`. Set the same `MUNET_SWARM_TOKEN` of at least 32 characters in the owner and node environments, then:
@@ -113,6 +120,10 @@ make setup                 # .venv + build tools + native library/node
 make test                  # Reference-test dependencies + CPU library/swarm tests
 make test-vulkan           # CPU/Vulkan tests with API and synchronization validation
 make smoke DEVICE=vulkan   # Short MLP training example
+make demo-python-api       # Python training, checkpoint, export and reload tour
+make sdk                   # Install C++ headers/library/CMake package into artifacts/sdk
+make demo-cpp              # Python-trained model → standalone C++ inference
+make test-sdk              # Build and run an independent installed-SDK consumer
 
 # On a machine without Vulkan development headers:
 make setup VULKAN=0
@@ -162,6 +173,7 @@ as needed, and use the same overrides on subsequent commands. For example:
 ```bash
 make setup PYTHON=python3.12
 make build CMAKE_ARGS='--cmake-arg=-DVulkan_INCLUDE_DIR=/opt/vulkan/include'
+make sdk SDK_PREFIX=artifacts/my-sdk SDK_CMAKE_ARGS='-DVulkan_INCLUDE_DIR=/opt/vulkan/include'
 ```
 
 The default build includes CPU and Vulkan; `VULKAN=0` explicitly disables Vulkan.

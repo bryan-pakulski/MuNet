@@ -386,7 +386,7 @@ def _compile_shaders(sources):
         return list(pool.map(compile_one, sources))
 
 
-def _device(plan, name):
+def _device(plan, name, spirv=None):
     if name == "cpu":
         return
     if name != "vulkan" and not name.startswith("vulkan:"):
@@ -396,16 +396,17 @@ def _device(plan, name):
     index = 0 if name == "vulkan" else int(name.split(":", 1)[1])
     if index < 0:
         raise ValueError("device index must be nonnegative")
-    plan.enable_vulkan(_compile_shaders(plan.shaders()), index)
+    plan.enable_vulkan(_compile_shaders(plan.shaders()) if spirv is None else spirv, index)
 
 
 class Result:
     def __init__(self, compiled, value):
         self._compiled, self._value = compiled, value
         self._generation = compiled._generation
+        self._shape = tuple(compiled._plan.graph.shape(value))
 
     @property
-    def shape(self): return tuple(self._compiled._plan.graph.shape(self._value))
+    def shape(self): return self._shape
 
     def numpy(self):
         with self._compiled._lock:
@@ -415,10 +416,28 @@ class Result:
 
     def item(self): return self.numpy().item()
 
+    def __array__(self, dtype=None, copy=None):
+        if copy is False:
+            raise ValueError("MuNet results require a host copy; use result.numpy()")
+        return np.asarray(self.numpy(), dtype=dtype)
+
+
+@dataclass(frozen=True)
+class TensorSpec:
+    """A named, fixed-shape FP32 input or flattened tensor output."""
+    name: str
+    shape: tuple
+    dtype: str = "float32"
+
 
 class Compiled:
     """One guarded static-shape specialization, with persistent device state."""
-    def __init__(self, fn=None, *, device="vulkan", fuse=True):
+    def __init__(self, fn=None, *, device="cpu", fuse=True):
+        if fn is not None and not callable(fn):
+            raise TypeError("compile expects a callable or nn.Module")
+        if not isinstance(device, str) or not (device in ("cpu", "vulkan") or
+                device.startswith("vulkan:") and device[7:].isascii() and device[7:].isdigit()):
+            raise ValueError("device must be cpu, vulkan, or vulkan:<nonnegative index>")
         self.fn, self.device, self.fuse = fn, device, fuse
         self._plan = None
         self._generation = 0
@@ -463,20 +482,9 @@ class Compiled:
     def __call__(self, *args):
         if _active.get() is not None:
             raise RuntimeError("nested compiled calls are not supported; call the underlying model while tracing")
-        arrays = []
-        for a in args:
-            if hasattr(a, "detach"):
-                raise TypeError("convert torch inputs explicitly with .detach().cpu().numpy(); zero-copy GPU interop is not implemented")
-            a = np.asarray(a)
-            if a.dtype != np.float32:
-                raise TypeError(f"v0 supports float32 inputs, received {a.dtype}")
-            arrays.append(a if a.flags.c_contiguous else np.ascontiguousarray(a))
+        arrays = self._arrays(args)
         with self._lock:
-            if (self._plan is None or any(m.training != training for m, training in getattr(self, "_modules", {}).items())
-                    or any(p.requires_grad != flag for p,flag in getattr(self,"_requires_grad",{}).items())):
-                self._capture(arrays)
-            if [a.shape for a in arrays] != self._input_specs:
-                raise ValueError(f"shape guard failed: expected {self._input_specs}, got {[a.shape for a in arrays]}; create a new compiled specialization")
+            self._prepare(arrays)
             for optimizer in getattr(self, "_optimizers", []): optimizer._sync_hyperparameters()
             for p, value in self._parameters.items():
                 if p._version != self._seen_versions[p]:
@@ -494,6 +502,65 @@ class Compiled:
             values = [Result(self, v) for v in self._plan.outputs]
             return _unflatten_outputs(self._output_tree, values) if hasattr(self, "_output_tree") else values[0] if self._single else tuple(values)
 
+    @staticmethod
+    def _arrays(args):
+        arrays = []
+        for index, a in enumerate(args):
+            if hasattr(a, "detach"):
+                raise TypeError("convert torch inputs explicitly with .detach().cpu().numpy(); zero-copy GPU interop is not implemented")
+            a = np.asarray(a)
+            if a.dtype != np.float32:
+                raise TypeError(f"input {index} requires float32, received {a.dtype}; use np.asarray(value, dtype=np.float32)")
+            arrays.append(a if a.flags.c_contiguous else np.ascontiguousarray(a))
+        return arrays
+
+    def _prepare(self, arrays):
+        if (self._plan is None or any(m.training != training for m, training in getattr(self, "_modules", {}).items())
+                    or any(p.requires_grad != flag for p,flag in getattr(self,"_requires_grad",{}).items())):
+            if self.fn is None:
+                raise RuntimeError("a loaded program cannot be recaptured; load an export with the required shape")
+            # Preparation can replace output storage even without executing a step.
+            self._generation += 1
+            self._capture(arrays)
+        if [a.shape for a in arrays] != self._input_specs:
+            raise ValueError(f"shape guard failed: expected {self._input_specs}, got {[a.shape for a in arrays]}; create a new compiled specialization")
+
+    def prepare(self, *example_inputs):
+        """Capture/compile without executing or applying optimizer updates; return self."""
+        if _active.get() is not None:
+            raise RuntimeError("cannot prepare a compiled program inside another trace")
+        with self._lock:
+            self._prepare(self._arrays(example_inputs))
+        return self
+
+    def predict(self, *inputs):
+        """Execute and copy all tensor outputs to NumPy, preserving output containers."""
+        def host(value):
+            if isinstance(value, Result): return value.numpy()
+            if isinstance(value, dict): return {k: host(v) for k, v in value.items()}
+            if isinstance(value, tuple): return tuple(host(v) for v in value)
+            if isinstance(value, list): return [host(v) for v in value]
+            return value
+        with self._lock:
+            return host(self(*inputs))
+
+    def save(self, path, *, include_vulkan=False):
+        """Save a prepared program; optionally embed deployment shaders."""
+        from .serialization import save
+        save(self, path, include_vulkan=include_vulkan)
+
+    @property
+    def inputs(self):
+        if self._plan is None: raise RuntimeError("call prepare(example_inputs) or execute the program first")
+        names = getattr(self, "_input_names", [f"input_{i}" for i in range(len(self._input_specs))])
+        return tuple(TensorSpec(n, tuple(s)) for n, s in zip(names, self._input_specs))
+
+    @property
+    def outputs(self):
+        if self._plan is None: raise RuntimeError("call prepare(example_inputs) or execute the program first")
+        names = getattr(self, "_output_names", [f"output_{i}" for i in range(len(self._plan.outputs))])
+        return tuple(TensorSpec(n, tuple(self._plan.graph.shape(i))) for n, i in zip(names, self._plan.outputs))
+
     def stats(self):
         if self._plan is None:
             return {"compiled": False}
@@ -505,7 +572,7 @@ class Compiled:
                 self._plan.synchronize()
 
 
-def compile(fn=None, *, device="vulkan", fuse=True):
+def compile(fn=None, *, device="cpu", fuse=True):
     if fn is None:
         return lambda f: Compiled(f, device=device, fuse=fuse)
     return Compiled(fn, device=device, fuse=fuse)

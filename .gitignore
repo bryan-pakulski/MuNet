@@ -16,4 +16,5 @@ incoming/
 python/bin/
 python/include/
 python/lib/
+python/share/
 python/munet/bin/

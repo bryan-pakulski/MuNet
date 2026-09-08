@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.20)
+project(munet_inference_example LANGUAGES CXX)
+find_package(MuNet CONFIG REQUIRED)
+add_executable(infer main.cpp)
+target_link_libraries(infer PRIVATE MuNet::inference)

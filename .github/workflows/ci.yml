@@ -70,6 +70,14 @@ jobs:
         run: python -m examples.rtdetr.validate_training --device cpu
         env:
           PYTHONPATH: python
+      - name: Python API guide example
+        run: python examples/python_api.py --device ${{ matrix.backend }}
+        env:
+          PYTHONPATH: python
+      - name: Installed C++ inference SDK
+        run: python tools/smoke_sdk.py python
+        env:
+          PYTHONPATH: python
       - name: Save numerical and fault-recovery evidence
         if: always()
         uses: actions/upload-artifact@v4

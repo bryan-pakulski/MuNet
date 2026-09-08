@@ -34,6 +34,7 @@ cmake.define.MUNET_INSTALL_SDK = "OFF"
 sdist.include = [
   "Makefile", "conftest.py", "cpp/**", "cmake/**", "tools/*.py", "tests/*.py", "tests/*.json", "docs/**",
   "examples/**/*.py", "examples/**/*.md", "examples/**/*.txt", "examples/**/*.json",
+  "examples/**/*.cpp", "examples/**/CMakeLists.txt",
   "examples/**/LICENSE*", "examples/**/NOTICE",
 ]
 sdist.exclude = ["**/__pycache__/**", "**/*.pyc"]

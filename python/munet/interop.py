@@ -27,7 +27,7 @@ SUPPORTED_ONNX = set(SIMPLE) | {'Constant','Gemm','Transpose','Reshape','Expand'
     'Shape','Size','Unsqueeze','Squeeze','Split','Flatten','Clip','Pow','Not','And','Or','ConstantOfShape','Tile'}
 
 
-def from_onnx(path, *, device='vulkan', fuse=True):
+def from_onnx(path, *, device='cpu', fuse=True):
     import onnx
     from onnx import helper, numpy_helper, TensorProto as T
     from onnx.reference import ReferenceEvaluator
@@ -272,7 +272,7 @@ def to_onnx(program,path):
         onnx.checker.check_model(model,full_check=True);onnx.save_model(model,str(path))
 
 
-def from_torch(model,example_inputs,*,device='vulkan',fuse=True):
+def from_torch(model,example_inputs,*,device='cpu',fuse=True):
     """Import an eval-mode torch module through modern ONNX export (no Torch runtime)."""
     import torch
     if model.training: raise ValueError('call model.eval() before importing an inference model')
