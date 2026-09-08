@@ -12,12 +12,12 @@ provide eager tensor math outside a trace.
 
 ## Setup and first inference
 
-From a checkout, use `make setup VULKAN=0`. For an installed wheel use
+From a checkout, use `make setup`. For an installed wheel use
 `python -m pip install /path/to/munet_nn-...whl`. See [installation](../install.md)
 for platform requirements, published versions and Vulkan drivers.
 
 Run source examples with `PYTHONPATH=python .venv/bin/python your_script.py`, or
-run `make install VULKAN=0` to install into `.venv` for use outside the checkout.
+run `make install` to install into `.venv` for use outside the checkout.
 Both `import munet` and `import munet_nn` expose the same public API.
 
 ```python
@@ -31,7 +31,7 @@ model = mu.nn.Sequential(
     mu.nn.Linear(16, 2),
 )
 x = np.ones((8, 4), dtype=np.float32)
-predict = model.eval().compile()  # CPU is the default; create this once.
+predict = model.eval().compile()  # Vulkan is the default; create this once.
 scores = predict.predict(x)      # Owned NumPy array, shape (8, 2).
 print(scores.argmax(axis=-1))
 print(model)                     # Readable layer structure.
@@ -39,10 +39,13 @@ print(model)                     # Readable layer structure.
 
 Do not recreate the compiled object inside your batch loop. Its first call
 captures the graph; later calls replay it with persistent parameter/device state.
-Use `device="vulkan"` or `"vulkan:1"` on `compile`, `train_step`, `load` or model
-imports to select a GPU. `mu.devices()` enumerates Vulkan device display names
+Vulkan is selected automatically. Use `device="vulkan:1"` on `compile`,
+`train_step`, `load` or model imports to select a different GPU. `mu.devices()` enumerates Vulkan device display names
 in index order; it raises if the Vulkan loader/build is unavailable. CPU execution
-and importing the library do not load a GPU driver.
+and importing the library do not load a GPU driver. Select `device="cpu"`
+explicitly for CPU fallback; a Vulkan failure never silently changes backends.
+For CPU-only setup use `make setup VULKAN=0`, then pass `device="cpu"` in Python.
+Make demos select CPU automatically when invoked with `VULKAN=0`.
 
 ## Train a classifier
 
@@ -74,7 +77,7 @@ Do not mutate or execute the same parameters concurrently across these objects.
 inputs, several losses, EMA, or other custom updates, write the step explicitly:
 
 ```python
-@mu.compile(device="cpu")
+@mu.compile(device="vulkan")
 def custom_step(x, target):
     optimizer.zero_grad()
     loss = mu.nn.functional.cross_entropy(model(x), target)
@@ -96,7 +99,7 @@ before BCE with logits. For sequence logits `(batch, tokens, classes)`, use
 `examples/python_api.py` is a complete runnable training/checkpoint/export tour:
 
 ```bash
-make demo-python-api VULKAN=0
+make demo-python-api
 ```
 
 ## Define your own model
@@ -133,16 +136,16 @@ an explicit `rng=np.random.default_rng(seed)` where listed below.
 
 | API | Behavior |
 |---|---|
-| `mu.compile(fn, *, device="cpu", fuse=True)` | Create a `Compiled`; also works as `@mu.compile(...)` |
-| `model.compile(*, device="cpu", fuse=True)` | Compile a module; retains its train/eval mode |
+| `mu.compile(fn, *, device="vulkan", fuse=True)` | Create a `Compiled`; also works as `@mu.compile(...)` |
+| `model.compile(*, device="vulkan", fuse=True)` | Compile a module; retains its train/eval mode |
 | `program.prepare(*example_inputs)` | Capture/compile without execution or optimizer updates; returns the program |
 | `program(*inputs)` | Execute; return `Result` tensors in the function's original output containers |
 | `program.predict(*inputs)` | Execute and immediately copy every tensor output to NumPy |
 | `program.inputs`, `program.outputs` | Tuples of `TensorSpec(name, shape, dtype="float32")`, available after prepare/execution/load |
 | `program.stats()` | Compilation state, device name, run/dispatch/transfer counters and memory planning statistics |
 | `program.synchronize()` | Wait for pending work on this program |
-| `program.save(path, *, include_vulkan=False)` | Save a prepared/executed program, optionally with deployment shaders |
-| `mu.train_step(model, optimizer, loss_fn, *, device="cpu", max_grad_norm=None, fuse=True)` | Return a compiled supervised update callable |
+| `program.save(path, *, include_vulkan=None)` | Save a prepared/executed program; Vulkan programs embed shaders by default |
+| `mu.train_step(model, optimizer, loss_fn, *, device="vulkan", max_grad_norm=None, fuse=True)` | Return a compiled supervised update callable |
 
 `prepare` performs capture (including Python side effects during capture), but
 does not execute the native graph. In particular, optimizer update counts and
@@ -207,7 +210,8 @@ strings; defaults are `input_0`, `output_0`, etc. Output names label flattened
 tensor leaves in traversal order, while Python load preserves the original
 container structure. `export` returns the destination `pathlib.Path`.
 
-For C++ Vulkan deployment, include the shaders during export:
+Export embeds shaders by default for C++ Vulkan deployment (equivalent to
+`include_vulkan=True`):
 
 ```python
 model.export("classifier-gpu.mnet", example, include_vulkan=True,
@@ -215,16 +219,19 @@ model.export("classifier-gpu.mnet", example, include_vulkan=True,
 ```
 
 The authoring machine needs `glslangValidator` (`glslang-tools` on Debian/Ubuntu),
-or set `MUNET_GLSLANG` to its executable. Export itself runs on CPU and can prepare
-Vulkan shaders without a GPU. The deployment application needs a Vulkan-enabled
+or set `MUNET_GLSLANG` to its executable. Export captures a host graph without
+executing the model and can prepare Vulkan shaders without a GPU. For an explicit
+CPU-only export without a shader compiler, pass `include_vulkan=False`. The deployment application needs a Vulkan-enabled
 SDK and a working driver, but no Python or shader compiler. Embedded kernels are
 checked against the runtime's generated source; re-export after incompatible
 compiler changes. See the [C++ guide](cpp.md).
 
-`mu.save(program, path, *, include_vulkan=False)` is the function form of
-`program.save`. It preserves whatever the compiled program does, including
+`mu.save(program, path, *, include_vulkan=None)` is the function form of
+`program.save`. With `include_vulkan=None`, Vulkan programs embed shaders and
+CPU programs omit them; pass `True` or `False` to override. It preserves whatever
+the compiled program does, including
 training updates. `mu.export` is the inference-only path and rejects updates.
-`mu.load(path, *, device="cpu", fuse=None)` returns a `Compiled`. With `fuse=None`
+`mu.load(path, *, device="vulkan", fuse=None)` returns a `Compiled`. With `fuse=None`
 it preserves the artifact's fusion setting (legacy files use `True`). Explicitly
 changing fusion may require shader recompilation on Vulkan.
 
@@ -264,8 +271,8 @@ Optional ONNX/PyTorch graph conversion:
 ```python
 from munet.interop import from_onnx, from_torch, to_onnx
 
-# imported = from_onnx("source.onnx", device="cpu")
-# imported = from_torch(torch_model.eval(), (torch_example,), device="cpu")
+# imported = from_onnx("source.onnx", device="vulkan")
+# imported = from_torch(torch_model.eval(), (torch_example,), device="vulkan")
 # imported.save("for-cpp.mnet", include_vulkan=True)
 # to_onnx(inference, "classifier.onnx")
 ```

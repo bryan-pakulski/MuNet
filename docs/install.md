@@ -117,9 +117,9 @@ testing. CPU-only setup needs only the first package group.
 
 ```bash
 make setup                 # .venv + build tools + native library/node
-make test                  # Reference-test dependencies + CPU library/swarm tests
+make test                  # Reference tools + Vulkan/CPU library/swarm tests with validation
 make test-vulkan           # CPU/Vulkan tests with API and synchronization validation
-make smoke DEVICE=vulkan   # Short MLP training example
+make smoke                 # Short MLP training example
 make demo-python-api       # Python training, checkpoint, export and reload tour
 make sdk                   # Install C++ headers/library/CMake package into artifacts/sdk
 make demo-cpp              # Python-trained model → standalone C++ inference
@@ -142,7 +142,7 @@ RT-DETR is an optional source example, with its own setup and acceptance tests:
 
 ```bash
 make setup-rtdetr           # Build MuNet and install the example's Pillow requirement
-make test-rtdetr            # Fetch the pinned upstream reference and test the example on CPU
+make test-rtdetr            # Fetch pinned reference and test with Vulkan validation
 make test-rtdetr-vulkan     # Test the example with Vulkan validation
 ```
 
@@ -150,6 +150,21 @@ The example test targets install numerical reference tools as needed and reuse
 checksum-verified cached reference files. Use `VULKAN=0` for CPU-only builds.
 The model is not included in `munet-nn` wheels. See [the example](../examples/rtdetr/README.md)
 for application commands and optional COCO evaluation dependencies.
+
+The [small learning examples](../examples/README.md) use MuNet/NumPy directly,
+with Pillow for image input/output. No PyTorch or dataset framework is needed:
+
+```bash
+make setup-examples
+make demo-mnist          # Downloads and caches MNIST
+make demo-segmentation   # Generates training images and masks locally
+make demo-language-model # Downloads and caches Tiny Shakespeare
+make test-examples      # Offline tests, including resume and inference
+```
+
+Pass training options through `EXAMPLE_ARGS='--steps 10 --batch-size 4'`. Use
+`DEVICE=cpu` for explicit CPU fallback. Demo and test targets use Vulkan by
+default, including synchronization validation in `make test-examples`. `make demo-language-model` needs no image dependency.
 
 `make build` updates the extension under `python/` and the worker under
 `build/local/`. Python source edits take effect on the next invocation of a Make
@@ -161,7 +176,7 @@ PYTEST_ADDOPTS='-k grid_sample' make test
 ```
 
 For a regular installation that can be imported outside this checkout, run
-`make install` (or `make install VULKAN=0`), then activate `.venv/bin/activate`.
+`make install`, then activate `.venv/bin/activate`.
 This installs `munet-node` and `munet-server` as well. Rerun `make install` after
 edits to update that installed copy; the Make test targets always use the source
 tree. `make clean` cleans native build outputs while retaining the virtual
@@ -176,7 +191,12 @@ make build CMAKE_ARGS='--cmake-arg=-DVulkan_INCLUDE_DIR=/opt/vulkan/include'
 make sdk SDK_PREFIX=artifacts/my-sdk SDK_CMAKE_ARGS='-DVulkan_INCLUDE_DIR=/opt/vulkan/include'
 ```
 
-The default build includes CPU and Vulkan; `VULKAN=0` explicitly disables Vulkan.
+The default build and execution backend are Vulkan. `make test`, `make test-rtdetr`,
+and the demo targets use Vulkan; the tests also check CPU reference results.
+`DEVICE=cpu` explicitly selects CPU execution in a Vulkan-enabled build.
+`VULKAN=0` disables Vulkan at build time and makes Make targets select CPU.
+For direct Python/C++ calls in a CPU-only build, pass `device="cpu"` explicitly.
+For direct pytest runs, set `MUNET_TEST_VULKAN=0` to test only the CPU backend.
 `make test-vulkan VULKAN=0` fails with guidance instead of testing another backend.
 Neither setup nor any Make target installs system packages or changes GPU drivers.
 
@@ -206,3 +226,8 @@ checkout. Install `examples/rtdetr/requirements.txt` for image handling or
 `examples/rtdetr/requirements-eval.txt` for COCO AP evaluation. The model-specific
 `detection` and `coco` library extras have been removed. Node/server installation
 and the existing PyPI project/publishing identity are unchanged.
+
+MNIST, segmentation and the tiny language model are also source examples, with
+their shared image requirement in `examples/requirements.txt`. They and their
+datasets are not installed inside the library wheel. The source distribution
+includes the example code and dataset download manifest.

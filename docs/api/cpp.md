@@ -2,7 +2,7 @@
 
 Include `<munet/inference.hpp>` and link `MuNet::inference`. `munet::Model` loads
 the same `.mnet` inference graph exported by Python, validates its signature,
-and runs it on CPU or Vulkan. The application does not embed Python, NumPy,
+and runs it on Vulkan by default, with an explicit CPU fallback. The application does not embed Python, NumPy,
 PyTorch or ONNX Runtime. JSON/archive support is compiled into the SDK; its
 third-party header is not part of your application's API.
 
@@ -17,15 +17,15 @@ Installed SDKs include these guides under `share/doc/munet/docs/api` and the
 example sources under `share/doc/munet/examples/cpp_inference`.
 
 ```bash
-# Standalone CPU SDK: no Python or swarm/network dependencies.
+# Standalone Vulkan SDK: no Python or swarm/network dependencies.
 cmake -S . -B build/sdk -DCMAKE_BUILD_TYPE=Release \
-  -DMUNET_PYTHON=OFF -DMUNET_SWARM_NODE=OFF -DMUNET_VULKAN=OFF
+  -DMUNET_PYTHON=OFF -DMUNET_SWARM_NODE=OFF -DMUNET_VULKAN=ON
 cmake --build build/sdk --parallel 4
 cmake --install build/sdk --prefix "$PWD/artifacts/sdk"
 ```
 
-For Vulkan, set `-DMUNET_VULKAN=ON` and provide Vulkan development headers when
-building. The deployed application needs the host Vulkan loader/driver. On Linux
+Vulkan is enabled by default; provide Vulkan development headers when building.
+For a CPU-only SDK, explicitly set `-DMUNET_VULKAN=OFF`. The deployed application needs the host Vulkan loader/driver. On Linux
 the loader is opened on demand: CPU execution does not require a driver even
 when the SDK was built with Vulkan enabled. The SDK is a C++ ABI package; use a
 compatible compiler/standard library, or build it for your target toolchain.
@@ -33,9 +33,9 @@ compatible compiler/standard library, or build it for your target toolchain.
 The Make convenience targets use the project's development environment:
 
 ```bash
-make sdk VULKAN=0       # Installs to artifacts/sdk; SDK_PREFIX can override it.
-make test-sdk VULKAN=0  # Exports a fixture, compiles and runs an installed-SDK consumer.
-make demo-cpp VULKAN=0  # Full Python-training → export → C++ inference example.
+make sdk       # Installs to artifacts/sdk; SDK_PREFIX can override it.
+make test-sdk  # Exports a fixture, compiles and runs an installed-SDK consumer.
+make demo-cpp  # Full Python-training → export → C++ inference example.
 ```
 
 ## Train/export in Python, run in C++
@@ -48,7 +48,7 @@ PYTHONPATH=python .venv/bin/python examples/cpp_inference/export_model.py
 cmake -S examples/cpp_inference -B build/cpp-inference \
   -DCMAKE_PREFIX_PATH="$PWD/artifacts/sdk"
 cmake --build build/cpp-inference --parallel 2
-./build/cpp-inference/infer artifacts/cpp-inference/model.mnet cpu
+./build/cpp-inference/infer artifacts/cpp-inference/model.mnet
 cat artifacts/cpp-inference/model.expected.txt
 ```
 
@@ -85,7 +85,7 @@ target_link_libraries(my_application PRIVATE MuNet::inference)
 
 int main() {
     try {
-        munet::Model model("model.mnet");  // CPU by default; load once.
+        munet::Model model("model.mnet");  // Vulkan by default; load once.
         munet::Tensor features{{1, 4}, {1.f, 2.f, 3.f, 4.f}};
         auto outputs = model.run_named({{"features", features}});
         for (float value : outputs.at("prediction").data)
@@ -111,7 +111,7 @@ All public inference types live in namespace `munet`.
 | `Shape` | `std::vector<int64_t>`; positive dimensions, rank ≤ 8; `{}` for a scalar |
 | `Tensor` | Aggregate with `Shape shape` and `std::vector<float> data`; contiguous row-major FP32 |
 | `TensorInfo` | `std::string name` and `Shape shape`; signature metadata |
-| `ModelOptions::device` | `"cpu"` (default), `"vulkan"`, or `"vulkan:N"` |
+| `ModelOptions::device` | `"vulkan"` (default), `"vulkan:N"`, or explicit `"cpu"` fallback |
 | `ModelOptions::max_memory_bytes` | Default 2 GiB; independently bounds archive bytes and planned arena bytes, not total process memory |
 | `Model(path, options={})` | Load/validate a model and initialize its selected backend; throws on error |
 | `inputs() const`, `outputs() const` | `const std::vector<TensorInfo>&`; immutable signature metadata owned by the model |
@@ -168,10 +168,11 @@ unnecessary after it.
 Generate a deployment artifact on the authoring machine:
 
 ```bash
-PYTHONPATH=python .venv/bin/python examples/cpp_inference/export_model.py --include-vulkan
+PYTHONPATH=python .venv/bin/python examples/cpp_inference/export_model.py
 ```
 
-Then use a Vulkan-enabled SDK and select the device in your application:
+The default `munet::Model("model.mnet")` selects Vulkan device 0. To select a
+specific GPU with a Vulkan-enabled SDK:
 
 ```cpp
 munet::ModelOptions options;
@@ -179,7 +180,7 @@ options.device = "vulkan:0";
 munet::Model model("model.mnet", options);
 ```
 
-`include_vulkan=True` bundles SPIR-V and matching kernel sources in the `.mnet`.
+Export defaults to `include_vulkan=True`, which bundles SPIR-V and matching kernel sources in the `.mnet`.
 Export needs `glslangValidator`; deployment does not invoke an external compiler.
 The same artifact can run on CPU. For GPU execution, the generated sources must
 match the SDK compiler's plan exactly; an incompatible SDK reports that the model
@@ -188,7 +189,11 @@ GPU's descriptor, buffer, workgroup and memory limits. The backend checks device
 capabilities and reports unsupported workloads; it never silently runs them on CPU.
 
 Use `munet::vulkan_built()` and `munet::vulkan_devices()` from `<munet/core.hpp>`
-for explicit capability discovery. The latter may throw when the loader/driver
+for explicit capability discovery. To run the CPU fallback, set
+`options.device = "cpu"`; this also works with a Vulkan-enabled SDK.
+`make demo-cpp DEVICE=cpu` selects CPU training and inference; `VULKAN=0` also
+disables Vulkan in the build. Set `include_vulkan=False` on Python export to omit
+shaders when authoring solely for CPU. The latter may throw when the loader/driver
 is unavailable. Linux `MUNET_VULKAN_LIBRARY` can select the loader before first
 GPU use. Backend/device selection is per model.
 
@@ -217,7 +222,9 @@ no dynamic dimensions or mixed precision. See [the file contract](model-format.m
 
 Advanced callers can construct graphs directly using `<munet/core.hpp>` and
 `MuNet::core`. This exposes compiler primitives rather than a C++ neural-network
-layer hierarchy. For example:
+layer hierarchy. The following shows host graph construction and explicit CPU
+reference execution. Unlike `Model`, a raw `Plan` has no deployment loader; a
+Vulkan caller supplies compiled SPIR-V with `enable_vulkan` before `run`:
 
 ```cpp
 munet::Graph graph;
@@ -225,6 +232,9 @@ auto x = graph.leaf("input", "features", {2});
 auto bias = graph.leaf("constant", "bias", {2}, {0.5f, 1.f});
 auto y = graph.op("add", {x, bias});
 munet::Plan plan(graph, {y}, {}, true);
+// Advanced Vulkan use: plan.enable_vulkan(spirv, 0), where spirv contains
+// one compiled SPIR-V vector for each plan.kernels[i].source, in order.
+// Omitting enable_vulkan here explicitly exercises the CPU reference plan.
 plan.run({{2.f, 3.f}});
 auto values = plan.read(y);  // {2.5f, 4.f}, owned vector.
 ```

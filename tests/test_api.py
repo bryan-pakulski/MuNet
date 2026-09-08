@@ -33,7 +33,7 @@ def test_export_modes_names_and_owned_predictions(device, tmp_path):
     model.train(); model[0].eval()  # Preserve intentionally mixed modes on export.
     x = np.ones((1, 2, 2, 2), np.float32)
     state = {k: v.copy() for k, v in model.state_dict().items()}
-    path = model.export(tmp_path / "model.mnet", x, input_names=["image"], output_names=["logits"])
+    path = model.export(tmp_path / "model.mnet", x, input_names=["image"], output_names=["logits"], include_vulkan=device != "cpu")
     assert model.training and not model[0].training
     for k, v in state.items(): np.testing.assert_array_equal(model.state_dict()[k], v)
     restored = mu.load(path, device=device)
@@ -98,7 +98,7 @@ def test_prepare_recapture_invalidates_data_but_preserves_result_shape():
     class DifferentOutput(mu.nn.Module):
         def forward(self, x): return x if self.training else x.mean()
     model = DifferentOutput()
-    f = model.compile()
+    f = model.compile(device="cpu")
     x = np.ones((2, 3), np.float32)
     result = f(x)
     model.eval()

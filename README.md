@@ -5,8 +5,8 @@ A greenfield, experimental C++17 graph compiler for Vulkan training and inferenc
 **MuNet is the building blocks for creating neural networks:** tensors, layers, automatic differentiation, optimizers, graph compilation, device execution and model interchange. The installed library has NumPy as its only Python runtime dependency. Model architectures, datasets and training recipes belong in examples or applications.
 
 **Start here:** [Python API guide](docs/api/python.md) · [C++ inference API guide](docs/api/cpp.md) · [Install/setup](docs/install.md).
-Use `make demo-python-api VULKAN=0` for a complete training/export tour, or
-`make demo-cpp VULKAN=0` to train in Python and run the exported model in C++.
+Use `make demo-python-api` for a complete training/export tour, or
+`make demo-cpp` to train in Python and run the exported model in C++.
 
 Version 0.3.0 adds the operations needed to build and train the [RT-DETR example](examples/rtdetr/README.md). That model is an acceptance test and reference application under `examples/rtdetr/`; it is not packaged in the library. Full COCO convergence and physical-device performance are not yet established. The runtime retains the `munet-nn` PyPI project and `munet_nn` import name; `import munet` is also supported. This is a breaking rewrite of the 0.1 API.
 
@@ -46,8 +46,7 @@ For local development and testing, use the Makefile (Linux, Python 3.10+):
 ```bash
 sudo apt-get install build-essential python3-dev python3-venv libvulkan-dev glslang-tools vulkan-validationlayers libcurl4-openssl-dev libssl-dev
 make setup
-make test
-make test-vulkan
+make test                  # Vulkan + CPU reference tests, including validation
 ```
 
 Use `make setup VULKAN=0` and `make test VULKAN=0` for a CPU-only build.
@@ -83,13 +82,28 @@ For manual source development without rebuilding a wheel:
 ```bash
 python -m pip install cmake pybind11 numpy pytest onnx onnxruntime scipy torch onnxscript
 python tools/build.py                  # add --cpu-only when needed
-PYTHONPATH=python python -m pytest -q
-MUNET_TEST_VULKAN=1 PYTHONPATH=python python -m pytest -q
+PYTHONPATH=python python -m pytest -q  # Vulkan + CPU reference tests
 # With vulkan-validationlayers installed:
 PYTHONPATH=python python tools/test.py --vulkan-validation
 ```
 
-The opted-in Vulkan tests fail when the driver/compiler is unavailable. They do not skip or select the CPU instead. `tools/build.py --cmake-arg=-DVulkan_INCLUDE_DIR=...` accepts custom SDK paths.
+Vulkan tests run by default and fail when the driver/compiler is unavailable. Use `MUNET_TEST_VULKAN=0` for explicit CPU-only testing. `tools/build.py --cmake-arg=-DVulkan_INCLUDE_DIR=...` accepts custom SDK paths.
+
+## Model examples
+
+Build and train a model using the [example collection](examples/README.md):
+
+```bash
+make demo-mnist          # CNN; automatically downloads MNIST
+make demo-segmentation   # Small U-Net; generates RGB images and masks
+make demo-language-model # Causal Transformer; downloads Tiny Shakespeare
+make test-examples      # Offline learning, resume and inference checks
+```
+
+Each saves a resumable checkpoint, a native inference graph and validation metrics.
+Vulkan is the default; use `DEVICE=cpu` for explicit CPU fallback. The examples
+also provide explicit offline data modes. Model code and image dependencies stay
+under `examples/`; the installed core continues to require only NumPy.
 
 ## RT-DETR example
 
@@ -121,7 +135,7 @@ model = mu.nn.Sequential(
     mu.nn.Linear(16, 2, rng=rng),
 )
 optimizer = mu.optim.SGD(model.parameters(), lr=0.03)
-train_step = mu.train_step(model, optimizer, mu.nn.MSELoss(), device="cpu")
+train_step = mu.train_step(model, optimizer, mu.nn.MSELoss())
 
 x = rng.normal(size=(32, 4)).astype(np.float32)
 y = rng.normal(size=(32, 2)).astype(np.float32)
@@ -137,9 +151,8 @@ model.export("model.mnet", x[:1])     # Fixed batch-one inference artifact.
 print(mu.load("model.mnet").predict(x[:1]))
 ```
 
-CPU is the default across Python compile/load/import and C++ inference. Select
-`device="vulkan"` explicitly to execute on a GPU. This changes the prototype's
-previous implicit Vulkan default. Use `@mu.compile` for custom training steps;
+Vulkan is the default across Python compile/train/load/import, C++ inference and
+examples. Select `device="cpu"` explicitly for the CPU reference fallback. Use `@mu.compile` for custom training steps;
 see the [Python guide](docs/api/python.md) for losses, layers, tensors, checkpoints,
 named exports and a troubleshooting table.
 
@@ -160,9 +173,8 @@ auto outputs = model.run({munet::Tensor{{1, 4}, {1.f, 2.f, 3.f, 4.f}}});
 ```
 
 Link `MuNet::inference` through `find_package(MuNet CONFIG REQUIRED)`.
-`make sdk VULKAN=0` installs a local SDK; `make demo-cpp VULKAN=0` builds and runs
-the complete example. Vulkan exports can embed precompiled shaders with
-`include_vulkan=True`, so the C++ deployment host needs neither Python nor a
+`make sdk` installs a local SDK; `make demo-cpp` builds and runs
+the complete example. Model export embeds precompiled shaders by default, so the C++ deployment host needs neither Python nor a
 shader compiler. See the [C++ guide](docs/api/cpp.md) for named inputs, device
 selection, ownership, concurrency and compatibility limits.
 

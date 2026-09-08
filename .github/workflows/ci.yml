@@ -14,12 +14,12 @@ jobs:
         standard: [17, 20, 23]
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libssl-dev
+      - run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libssl-dev libvulkan-dev
       # cxx_std_17 is a minimum: newer compiler defaults can select C++20 or later.
       - name: Configure standalone worker
         run: >-
           cmake -S . -B build-worker -DCMAKE_BUILD_TYPE=Release
-          -DMUNET_PYTHON=OFF -DMUNET_VULKAN=OFF -DMUNET_SWARM_NODE=ON
+          -DMUNET_PYTHON=OFF -DMUNET_VULKAN=ON -DMUNET_SWARM_NODE=ON
           -DCMAKE_CXX_STANDARD=${{ matrix.standard }} -DCMAKE_CXX_STANDARD_REQUIRED=ON
       - run: cmake --build build-worker --parallel 2
       - run: ./build-worker/munet-node --version
@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [cpu, vulkan]
+        backend: [vulkan, cpu]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -57,12 +57,13 @@ jobs:
               f.write('VK_ICD_FILENAMES=' + paths[0] + '\nMUNET_TEST_VULKAN=1\n')
       - name: CPU tests
         if: matrix.backend == 'cpu'
-        run: python tools/test.py --swarm tests examples/rtdetr/tests
+        run: python tools/test.py --swarm tests examples/rtdetr/tests examples/tests
         env:
           PYTHONPATH: python
+          MUNET_TEST_VULKAN: "0"
       - name: Vulkan numerical and synchronization validation
         if: matrix.backend == 'vulkan'
-        run: python tools/test.py --vulkan-validation --swarm tests examples/rtdetr/tests
+        run: python tools/test.py --vulkan-validation --swarm tests examples/rtdetr/tests examples/tests
         env:
           PYTHONPATH: python
       - name: Full default R50-vd training state advancement
@@ -78,6 +79,7 @@ jobs:
         run: python tools/smoke_sdk.py python
         env:
           PYTHONPATH: python
+          MUNET_TEST_VULKAN: ${{ matrix.backend == 'vulkan' && '1' || '0' }}
       - name: Save numerical and fault-recovery evidence
         if: always()
         uses: actions/upload-artifact@v4

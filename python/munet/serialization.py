@@ -65,9 +65,12 @@ def _read_tensor(payload, declared_shape):
     return np.frombuffer(payload, dtype="<f4", offset=buf.tell()).reshape(shape)
 
 
-def save(program, path, *, include_vulkan=False):
+def save(program, path, *, include_vulkan=None):
+    """Save a prepared graph; embed shaders by default for a Vulkan program."""
     if not isinstance(program, Compiled) or program._plan is None:
         raise ValueError("save requires a prepared program; call program.prepare(*example_inputs), execute it, or use munet.export(model, path, example_inputs)")
+    if include_vulkan is None:
+        include_vulkan = program.device.startswith("vulkan")
     with program._lock:
         for p, value in program._parameters.items():
             if p._version != program._seen_versions[p]:
@@ -123,7 +126,7 @@ def save(program, path, *, include_vulkan=False):
             if os.path.exists(tmp): os.unlink(tmp)
 
 
-def load(path, *, device="cpu", fuse=None):
+def load(path, *, device="vulkan", fuse=None):
     with zipfile.ZipFile(path) as z:
         infos = z.infolist()
         names = [i.filename for i in infos]
@@ -181,6 +184,7 @@ def load(path, *, device="cpu", fuse=None):
             raise ValueError("unexpected entries in MuNet archive")
     fuse = manifest.get("fuse", True) if fuse is None else fuse
     if type(fuse) is not bool: raise ValueError("fuse must be a boolean")
+    # Construct the host plan before attaching the requested device and embedded kernels.
     program = from_graph(graph, manifest["outputs"], manifest["updates"],
                       manifest["input_specs"], manifest["feed_indices"],
                       manifest["single_output"], device="cpu", fuse=fuse)
@@ -198,7 +202,7 @@ def load(path, *, device="cpu", fuse=None):
     return program
 
 
-def from_graph(graph, outputs, updates, input_specs, feed_indices, single_output, *, device="cpu", fuse=True):
+def from_graph(graph, outputs, updates, input_specs, feed_indices, single_output, *, device="vulkan", fuse=True):
     program = Compiled(device=device, fuse=fuse)
     program._plan = _native.Plan(graph, outputs, updates, fuse)
     program._single = bool(single_output)

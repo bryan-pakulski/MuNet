@@ -49,10 +49,10 @@ def test_cpp_loads_existing_save_and_rejects_training(tmp_path):
     f.save(path)
     # Legacy v1 files have no names, fusion setting or Vulkan deployment metadata.
     rewrite(path, lambda m, e: [m.pop(k) for k in ("input_names", "output_names", "fuse")])
-    np.testing.assert_allclose(_native.InferenceModel(str(path)).run([x])[0], expected)
-    step = mu.train_step(model, mu.optim.SGD(model.parameters()), mu.nn.MSELoss())
+    np.testing.assert_allclose(_native.InferenceModel(str(path), "cpu").run([x])[0], expected)
+    step = mu.train_step(model, mu.optim.SGD(model.parameters()), mu.nn.MSELoss(), device="cpu")
     step.prepare(x, np.ones((1, 1), np.float32)).save(path)
-    with pytest.raises(RuntimeError, match="training/state-update"): _native.InferenceModel(str(path))
+    with pytest.raises(RuntimeError, match="training/state-update"): _native.InferenceModel(str(path), "cpu")
 
 
 @pytest.mark.parametrize("mutation,match", [
@@ -67,13 +67,13 @@ def test_cpp_loads_existing_save_and_rejects_training(tmp_path):
     (lambda m, e: m.update(output_tree=["tensor", 50]), "output tensor index"),
 ])
 def test_cpp_rejects_malformed_artifacts(tmp_path, mutation, match):
-    path = mu.export(lambda x: x + 1, tmp_path / "bad.mnet", np.ones((2,), np.float32))
+    path = mu.export(lambda x: x + 1, tmp_path / "bad.mnet", np.ones((2,), np.float32), include_vulkan=False)
     rewrite(path, mutation)
-    with pytest.raises(RuntimeError, match=match): _native.InferenceModel(str(path))
+    with pytest.raises(RuntimeError, match=match): _native.InferenceModel(str(path), "cpu")
 
 
 def test_cpp_archive_crc_memory_limit_and_missing_shaders(tmp_path):
-    path = mu.export(lambda x: x + 1, tmp_path / "model.mnet", np.ones((2,), np.float32))
+    path = mu.export(lambda x: x + 1, tmp_path / "model.mnet", np.ones((2,), np.float32), include_vulkan=False)
     with pytest.raises(RuntimeError, match="oversized model"): _native.InferenceModel(str(path), "cpu", 32)
     with pytest.raises(RuntimeError, match="include_vulkan=True"): _native.InferenceModel(str(path), "vulkan")
     data = bytearray(path.read_bytes())
@@ -83,12 +83,12 @@ def test_cpp_archive_crc_memory_limit_and_missing_shaders(tmp_path):
     size_extra = int.from_bytes(data[at + 28:at + 30], "little")
     data[at + 30 + size_name + size_extra + 20] ^= 1
     path.write_bytes(data)
-    with pytest.raises(RuntimeError, match="checksum mismatch"): _native.InferenceModel(str(path))
+    with pytest.raises(RuntimeError, match="checksum mismatch"): _native.InferenceModel(str(path), "cpu")
 
 
 def test_cpp_arena_limit_and_zip64_directory(tmp_path):
     import struct
-    path = mu.export(lambda x: x + 1, tmp_path / "model.mnet", np.ones((10000,), np.float32))
+    path = mu.export(lambda x: x + 1, tmp_path / "model.mnet", np.ones((10000,), np.float32), include_vulkan=False)
     with pytest.raises(RuntimeError, match="planned arena"):
         _native.InferenceModel(str(path), "cpu", 10000)
     data = path.read_bytes()
@@ -101,7 +101,7 @@ def test_cpp_arena_limit_and_zip64_directory(tmp_path):
     struct.pack_into("<HH", footer, 8, 65535, 65535)
     path.write_bytes(data[:end] + record + locator + footer)
     x = np.arange(10000, dtype=np.float32)
-    np.testing.assert_array_equal(_native.InferenceModel(str(path)).run([x])[0], x + 1)
+    np.testing.assert_array_equal(_native.InferenceModel(str(path), "cpu").run([x])[0], x + 1)
 
 
 def test_shared_model_returns_each_callers_outputs(tmp_path, device):

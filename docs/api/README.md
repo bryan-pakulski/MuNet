@@ -9,8 +9,8 @@
 Run the guides' complete examples from the repository root:
 
 ```bash
-make demo-python-api VULKAN=0
-make demo-cpp VULKAN=0
+make demo-python-api
+make demo-cpp
 ```
 
 MuNet supplies general tensors, layers, gradients, optimizers and native execution.
@@ -18,7 +18,8 @@ Architectures and data pipelines belong to applications/examples. The Python
 library requires NumPy; a C++ application does not require Python, NumPy, ONNX
 Runtime or PyTorch.
 
-This usability pass makes **CPU the default** for Python compile/load/import and
-the C++ `Model` API. Earlier prototype releases defaulted to Vulkan. Existing
-explicit `device="vulkan"` / `"vulkan:N"` calls retain their behavior, including
-an error if Vulkan cannot run. There is no automatic backend fallback.
+**Vulkan is the default** for Python compile/train/load/import, the C++ `Model`
+API, examples and Make targets. Export embeds deployment shaders by default.
+Select `device="cpu"` (or `DEVICE=cpu` for Make) for an explicit reference fallback.
+Use `VULKAN=0` only for a CPU-only build. Vulkan failures remain visible; there
+is no silent backend switch.

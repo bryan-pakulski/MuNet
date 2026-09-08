@@ -25,9 +25,11 @@ target_link_libraries(consumer PRIVATE MuNet::inference)
 #include <iostream>
 #include <utility>
 int main(int argc, char** argv) {
-  if(argc!=3)return 2;
+  if(argc<2 || argc>3)return 2;
   try {
-  munet::Model loaded(argv[1], munet::ModelOptions{argv[2]});
+  munet::ModelOptions options;
+  if(argc==3)options.device=argv[2];
+  munet::Model loaded(argv[1], options);
   if(loaded.inputs().at(0).name!="features" || loaded.outputs().at(0).name!="prediction")return 3;
   auto first=loaded.run_named({{"features",{{1,2},{2.f,3.f}}}});
   auto second=loaded.run({{{1,2},{4.f,5.f}}});
@@ -53,13 +55,13 @@ int main(int argc, char** argv) {
 ''')
         model_path = root / "model.mnet"
         import os
-        vulkan = os.environ.get("MUNET_TEST_VULKAN") == "1"
+        vulkan = os.environ.get("MUNET_TEST_VULKAN", "1") == "1"
         mu.export(lambda x: x * 2 + 1, model_path, np.ones((1, 2), np.float32),
                   input_names=["features"], output_names=["prediction"], include_vulkan=vulkan)
         subprocess.run([cmake, "-S", str(root), "-B", str(root / "build"), "-DCMAKE_PREFIX_PATH=" + str(prefix)], check=True)
         subprocess.run([cmake, "--build", str(root / "build"), "--parallel", "2"], check=True)
         subprocess.run([str(root / "build/consumer"), str(model_path), "cpu"], check=True)
-        if vulkan: subprocess.run([str(root / "build/consumer"), str(model_path), "vulkan"], check=True)
+        if vulkan: subprocess.run([str(root / "build/consumer"), str(model_path)], check=True)
     print("Installed MuNet::inference model loading and MuNet::core graph consumer passed")
 
 

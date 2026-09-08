@@ -12,7 +12,7 @@ PYBIND11_MODULE(_native,m) {
   py::class_<Model>(m,"InferenceModel")
     .def(py::init([](const std::string& path,const std::string& device,uint64_t limit){
       py::gil_scoped_release release;return std::make_unique<Model>(path,ModelOptions{device,limit});
-    }),py::arg("path"),py::arg("device")="cpu",py::arg("max_memory_bytes")=uint64_t{2}*1024*1024*1024)
+    }),py::arg("path"),py::arg("device")="vulkan",py::arg("max_memory_bytes")=uint64_t{2}*1024*1024*1024)
     .def("inputs",[](const Model& model){py::list out;for(const auto& s:model.inputs()){py::dict d;d["name"]=s.name;d["shape"]=s.shape;out.append(d);}return out;})
     .def("outputs",[](const Model& model){py::list out;for(const auto& s:model.outputs()){py::dict d;d["name"]=s.name;d["shape"]=s.shape;out.append(d);}return out;})
     .def("run",[](Model& model,const std::vector<py::array_t<float,py::array::c_style>>& inputs){

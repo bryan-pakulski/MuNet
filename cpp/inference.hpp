@@ -17,8 +17,9 @@ struct TensorInfo {
 };
 
 struct ModelOptions {
-  /// "cpu", "vulkan", or "vulkan:N". Vulkan never silently falls back to CPU.
-  std::string device = "cpu";
+  /// "vulkan" (default), "vulkan:N", or explicit "cpu" fallback.
+  /// Vulkan never silently falls back to CPU.
+  std::string device = "vulkan";
   /// Bound both archive bytes and the planned device/CPU arena (separately).
   /// This is not a total process-memory limit; graph/tensor/driver storage is additional.
   uint64_t max_memory_bytes = uint64_t{2} * 1024 * 1024 * 1024;

@@ -6,7 +6,7 @@ from .nn import Module
 from . import optim
 
 
-def train_step(model, optimizer, loss_fn, *, device="cpu", max_grad_norm=None, fuse=True):
+def train_step(model, optimizer, loss_fn, *, device="vulkan", max_grad_norm=None, fuse=True):
     """Compile supervised (inputs, targets) -> scalar loss and one optimizer update.
 
     Sets model training mode when capturing. Use @munet.compile for multiple model
@@ -27,12 +27,13 @@ def train_step(model, optimizer, loss_fn, *, device="cpu", max_grad_norm=None, f
     return Compiled(update, device=device, fuse=fuse)
 
 
-def export(model, path, example_inputs, *, input_names=None, output_names=None, include_vulkan=False, fuse=True):
+def export(model, path, example_inputs, *, input_names=None, output_names=None, include_vulkan=True, fuse=True):
     """Export a callable/Module for Python or C++ inference without executing it.
 
     A single NumPy array means one input; a tuple/list means positional inputs.
     Module export temporarily selects eval mode and restores every module's mode.
-    include_vulkan embeds precompiled SPIR-V and requires glslangValidator only here.
+    Export embeds precompiled SPIR-V by default and requires glslangValidator here.
+    Set include_vulkan=False for a CPU-only artifact without a shader compiler.
     Returns the destination Path. Training updates are rejected.
     """
     from .serialization import save, validate_names
@@ -42,6 +43,8 @@ def export(model, path, example_inputs, *, input_names=None, output_names=None, 
     modes = [(m, m.training) for m in model.modules()] if isinstance(model, Module) else []
     try:
         if modes: model.eval()
+        # Host-only graph capture: no model execution or Vulkan device allocation.
+        # Deployment shaders are compiled by save() below.
         program = Compiled(model, device="cpu", fuse=fuse).prepare(*args)
         if program._plan.updates:
             raise ValueError("inference export cannot contain state/optimizer updates; export an eval-mode forward function")

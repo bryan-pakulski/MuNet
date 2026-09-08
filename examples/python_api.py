@@ -8,7 +8,7 @@ from munet.checkpoint import save_state, load_state
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="vulkan")
     parser.add_argument("--output", type=Path, default=Path("artifacts/python-api"))
     args = parser.parse_args()
     mu.manual_seed(7)
@@ -29,7 +29,8 @@ def main():
     rng.bit_generator.state = state["rng"]
     features = np.array([[1., 1.], [-1., -1.]], np.float32)
     model.export(args.output / "classifier.mnet", features,
-                 input_names=["features"], output_names=["logits"])
+                 input_names=["features"], output_names=["logits"],
+                 include_vulkan=args.device.startswith("vulkan"))
     inference = mu.load(args.output / "classifier.mnet", device=args.device)
     print(model)
     print("Input signature:", inference.inputs)

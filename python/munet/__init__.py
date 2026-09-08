@@ -9,10 +9,10 @@ __all__ = ["Tensor", "Parameter", "Buffer", "Result", "Compiled", "TensorSpec", 
 
 __version__ = "0.3.0"
 
-def save(program, path, *, include_vulkan=False):
+def save(program, path, *, include_vulkan=None):
     from .serialization import save
     return save(program, path, include_vulkan=include_vulkan)
 
-def load(path, *, device="cpu", fuse=None):
+def load(path, *, device="vulkan", fuse=None):
     from .serialization import load
     return load(path, device=device, fuse=fuse)

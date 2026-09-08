@@ -432,7 +432,7 @@ class TensorSpec:
 
 class Compiled:
     """One guarded static-shape specialization, with persistent device state."""
-    def __init__(self, fn=None, *, device="cpu", fuse=True):
+    def __init__(self, fn=None, *, device="vulkan", fuse=True):
         if fn is not None and not callable(fn):
             raise TypeError("compile expects a callable or nn.Module")
         if not isinstance(device, str) or not (device in ("cpu", "vulkan") or
@@ -544,8 +544,8 @@ class Compiled:
         with self._lock:
             return host(self(*inputs))
 
-    def save(self, path, *, include_vulkan=False):
-        """Save a prepared program; optionally embed deployment shaders."""
+    def save(self, path, *, include_vulkan=None):
+        """Save a prepared program; Vulkan programs embed deployment shaders by default."""
         from .serialization import save
         save(self, path, include_vulkan=include_vulkan)
 
@@ -572,7 +572,7 @@ class Compiled:
                 self._plan.synchronize()
 
 
-def compile(fn=None, *, device="cpu", fuse=True):
+def compile(fn=None, *, device="vulkan", fuse=True):
     if fn is None:
         return lambda f: Compiled(f, device=device, fuse=fuse)
     return Compiled(fn, device=device, fuse=fuse)

@@ -3,7 +3,7 @@
 From the repository root:
 
 ```bash
-make demo-cpp VULKAN=0
+make demo-cpp
 ```
 
 This trains a tiny four-feature regressor, exports
@@ -11,9 +11,11 @@ This trains a tiny four-feature regressor, exports
 builds `main.cpp` against `MuNet::inference`, and runs the standalone executable.
 Compare its two printed values with `artifacts/cpp-inference/model.expected.txt`.
 
-For Vulkan, install the build headers, shader compiler and a driver, then run
-`make demo-cpp VULKAN=1 DEVICE=vulkan`. The authoring step embeds shaders;
+Vulkan is the default. Install Vulkan headers, a shader compiler and a driver.
+The authoring step embeds shaders;
 the C++ application needs the driver, but no Python runtime or shader compiler.
+For the explicit CPU fallback use `make demo-cpp DEVICE=cpu`, or
+`make demo-cpp VULKAN=0` to also disable Vulkan in the build.
 
 `export_model.py` demonstrates training with `munet.train_step` and named model
 export. `main.cpp` demonstrates loading once, supplying an owned FP32 tensor,

@@ -4,12 +4,12 @@
 
 int main(int argc, char** argv) {
   if (argc < 2 || argc > 3) {
-    std::cerr << "Usage: infer MODEL.mnet [cpu|vulkan|vulkan:N]\n";
+    std::cerr << "Usage: infer MODEL.mnet [vulkan|vulkan:N|cpu]\n";
     return 2;
   }
   try {
     munet::ModelOptions options;
-    options.device = argc == 3 ? argv[2] : "cpu";
+    if (argc == 3) options.device = argv[2];
     munet::Model model(argv[1], options);
     std::cerr << "Device: " << model.device_name() << '\n';
     // Preprocessing belongs to the application. This model takes one row of four features.

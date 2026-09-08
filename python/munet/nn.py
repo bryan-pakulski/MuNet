@@ -28,11 +28,11 @@ class Module:
     def __call__(self, *args, **kwargs):
         ctx = _active.get()
         if ctx is None:
-            raise RuntimeError("MuNet models run inside a compiled function. For inference use model.eval().compile(device='cpu').predict(inputs); for training use munet.train_step or @munet.compile.")
+            raise RuntimeError("MuNet models run inside a compiled function. For inference use model.eval().compile().predict(inputs); for training use munet.train_step or @munet.compile.")
         ctx.modules[self] = self.training
         return self.forward(*args, **kwargs)
 
-    def compile(self, *, device="cpu", fuse=True):
+    def compile(self, *, device="vulkan", fuse=True):
         """Create a compiled callable; preserves the current train/eval mode."""
         from .core import compile
         return compile(self, device=device, fuse=fuse)

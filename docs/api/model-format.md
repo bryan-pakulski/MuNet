@@ -20,6 +20,10 @@ Optional signature/deployment metadata added by the usability API:
 | `fuse` | Fusion setting used to generate the saved plan |
 | `vulkan` | Ordered list of `{source: "shaders/N.comp", spirv: "shaders/N.spv"}` entries |
 
+`munet.export` embeds Vulkan shaders by default. `program.save` follows its
+execution device unless `include_vulkan` is specified: Vulkan embeds shaders,
+CPU omits them. Python load and C++ `Model` both default to Vulkan.
+
 Legacy version-1 files without names use `input_N`/`output_N`; without `fuse`
 they use fusion. Ordinary inference files remain CPU-loadable in C++. Missing
 `vulkan` is an explicit GPU deployment error for C++; Python may JIT compile

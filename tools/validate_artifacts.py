@@ -61,7 +61,10 @@ def check(directory, *, require_sdist=True):
                          "examples/rtdetr/__init__.py", "examples/rtdetr/LICENSE-RT-DETR", "examples/rtdetr/NOTICE",
                          "examples/rtdetr/requirements.txt", "examples/rtdetr/train.py",
                          "cpp/inference.hpp", "cpp/inference.cpp", "docs/api/python.md", "docs/api/cpp.md",
-                         "examples/cpp_inference/main.cpp", "examples/cpp_inference/CMakeLists.txt"):
+                         "examples/cpp_inference/main.cpp", "examples/cpp_inference/CMakeLists.txt",
+                         "examples/common.py", "examples/datasets.json", "examples/requirements.txt",
+                         "examples/mnist/train.py", "examples/segmentation/train.py",
+                         "examples/language_model/train.py", "examples/tests/test_learning.py"):
             if required not in files:
                 raise ValueError(f"source distribution missing {required}")
     print(f"Validated {len(wheels)} munet-nn {version} wheels and {len(sources)} source distributions")
