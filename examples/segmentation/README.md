@@ -6,7 +6,7 @@ binary cross entropy with soft Dice loss. This is binary semantic segmentation:
 all shapes share a foreground class, including overlapping shapes.
 
 ```bash
-make demo-segmentation VULKAN=0
+make demo-segmentation
 ```
 
 The default run generates 256 training and 64 independent validation images at
@@ -23,10 +23,10 @@ PYTHONPATH=python .venv/bin/python -m examples.segmentation.infer \
   --checkpoint artifacts/segmentation/training.mnet \
   --image artifacts/segmentation/sample.png --output artifacts/segmentation/prediction
 
-make demo-segmentation VULKAN=0 EXAMPLE_ARGS='--resume artifacts/segmentation/training.mnet --steps 150'
+make demo-segmentation EXAMPLE_ARGS='--resume artifacts/segmentation/training.mnet --steps 150'
 
 # A different dataset/model shape, saved separately:
-make demo-segmentation VULKAN=0 EXAMPLE_ARGS='--size 64 --width 8 --samples 512 --output artifacts/segmentation-64'
+make demo-segmentation EXAMPLE_ARGS='--size 64 --width 8 --samples 512 --output artifacts/segmentation-64'
 ```
 
 Inference resizes the input to the training resolution and writes `probability.png`
@@ -35,5 +35,6 @@ image dimensions. Binary masks use nearest-neighbor resizing. The trained demo
 recognizes its generated shape distribution; natural-image segmentation requires
 replacing the generator with paired RGB images/masks and retraining.
 
-Use `VULKAN=1 DEVICE=vulkan` for Vulkan demo execution. See the
+Vulkan is the default. Select `DEVICE=cpu` on Make commands or `--device cpu`
+on Python commands for the explicit CPU fallback. See the
 [example overview](../README.md) for setup, checkpoint rules and export contracts.

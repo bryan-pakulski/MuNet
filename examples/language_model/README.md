@@ -10,7 +10,7 @@ It is not a pretrained assistant. The default short run learns character pattern
 fluent text is not an acceptance criterion.
 
 ```bash
-make demo-language-model VULKAN=0
+make demo-language-model
 ```
 
 The [Tiny Shakespeare corpus](../DATASETS.md) downloads automatically (~1.1 MB).
@@ -27,13 +27,13 @@ PYTHONPATH=python .venv/bin/python -m examples.language_model.generate \
   --checkpoint artifacts/language-model/training.mnet \
   --prompt 'First Citizen:' --tokens 200 --temperature 0.8 --top-k 20
 
-make demo-language-model VULKAN=0 EXAMPLE_ARGS='--resume artifacts/language-model/training.mnet --steps 1000'
+make demo-language-model EXAMPLE_ARGS='--resume artifacts/language-model/training.mnet --steps 1000'
 
 # Use your own UTF-8 file, with enough characters for both splits:
-make demo-language-model VULKAN=0 EXAMPLE_ARGS='--text my-corpus.txt --steps 500 --output artifacts/my-language-model'
+make demo-language-model EXAMPLE_ARGS='--text my-corpus.txt --steps 500 --output artifacts/my-language-model'
 
 # Small offline smoke run:
-make demo-language-model VULKAN=0 EXAMPLE_ARGS='--synthetic --steps 10 --context 8 --width 8 --heads 2 --layers 1 --sample-tokens 32 --output artifacts/language-model-synthetic'
+make demo-language-model EXAMPLE_ARGS='--synthetic --steps 10 --context 8 --width 8 --heads 2 --layers 1 --sample-tokens 32 --output artifacts/language-model-synthetic'
 ```
 
 Generation samples with a seeded NumPy RNG, temperature and optional top-k filtering
@@ -49,5 +49,5 @@ the current MuNet indexing contract. Outputs are `N x context x vocabulary` logi
 Width must be divisible by the number of heads. Increasing width, context and
 layers increases CPU work and Vulkan graph/shader compilation cost.
 
-Use `VULKAN=1 DEVICE=vulkan` on Make demo commands or `--device vulkan` on the
-generator. See the [example overview](../README.md) for setup and checkpoint rules.
+Vulkan is the default. Select `DEVICE=cpu` on Make commands or `--device cpu`
+on Python commands for the explicit CPU fallback. See the [example overview](../README.md) for setup and checkpoint rules.

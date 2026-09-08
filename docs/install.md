@@ -110,9 +110,9 @@ testing. CPU-only setup needs only the first package group.
 
 ```bash
 make setup                 # .venv + build tools + native library/node
-make test                  # Reference-test dependencies + CPU library/swarm tests
+make test                  # Reference tools + Vulkan/CPU library/swarm tests with validation
 make test-vulkan           # CPU/Vulkan tests with API and synchronization validation
-make smoke DEVICE=vulkan   # Short MLP training example
+make smoke                 # Short MLP training example
 
 # On a machine without Vulkan development headers:
 make setup VULKAN=0
@@ -131,7 +131,7 @@ RT-DETR is an optional source example, with its own setup and acceptance tests:
 
 ```bash
 make setup-rtdetr           # Build MuNet and install the example's Pillow requirement
-make test-rtdetr            # Fetch the pinned upstream reference and test the example on CPU
+make test-rtdetr            # Fetch pinned reference and test with Vulkan validation
 make test-rtdetr-vulkan     # Test the example with Vulkan validation
 ```
 
@@ -144,16 +144,16 @@ The [small learning examples](../examples/README.md) use MuNet/NumPy directly,
 with Pillow for image input/output. No PyTorch or dataset framework is needed:
 
 ```bash
-make setup-examples VULKAN=0
-make demo-mnist VULKAN=0          # Downloads and caches MNIST
-make demo-segmentation VULKAN=0   # Generates training images and masks locally
-make demo-language-model VULKAN=0 # Downloads and caches Tiny Shakespeare
-make test-examples VULKAN=0      # Offline tests, including resume and inference
+make setup-examples
+make demo-mnist          # Downloads and caches MNIST
+make demo-segmentation   # Generates training images and masks locally
+make demo-language-model # Downloads and caches Tiny Shakespeare
+make test-examples      # Offline tests, including resume and inference
 ```
 
 Pass training options through `EXAMPLE_ARGS='--steps 10 --batch-size 4'`. Use
-`VULKAN=1 DEVICE=vulkan` for GPU demos and `make test-examples-vulkan VULKAN=1`
-for Vulkan validation. `make demo-language-model` needs no image dependency.
+`DEVICE=cpu` for explicit CPU fallback. Demo and test targets use Vulkan by
+default, including synchronization validation in `make test-examples`. `make demo-language-model` needs no image dependency.
 
 `make build` updates the extension under `python/` and the worker under
 `build/local/`. Python source edits take effect on the next invocation of a Make
@@ -165,7 +165,7 @@ PYTEST_ADDOPTS='-k grid_sample' make test
 ```
 
 For a regular installation that can be imported outside this checkout, run
-`make install` (or `make install VULKAN=0`), then activate `.venv/bin/activate`.
+`make install`, then activate `.venv/bin/activate`.
 This installs `munet-node` and `munet-server` as well. Rerun `make install` after
 edits to update that installed copy; the Make test targets always use the source
 tree. `make clean` cleans native build outputs while retaining the virtual
@@ -179,7 +179,12 @@ make setup PYTHON=python3.12
 make build CMAKE_ARGS='--cmake-arg=-DVulkan_INCLUDE_DIR=/opt/vulkan/include'
 ```
 
-The default build includes CPU and Vulkan; `VULKAN=0` explicitly disables Vulkan.
+The default build and execution backend are Vulkan. `make test`, `make test-rtdetr`,
+and the demo targets use Vulkan; the tests also check CPU reference results.
+`DEVICE=cpu` explicitly selects CPU execution in a Vulkan-enabled build.
+`VULKAN=0` disables Vulkan at build time and makes Make targets select CPU.
+For direct Python/C++ calls in a CPU-only build, pass `device="cpu"` explicitly.
+For direct pytest runs, set `MUNET_TEST_VULKAN=0` to test only the CPU backend.
 `make test-vulkan VULKAN=0` fails with guidance instead of testing another backend.
 Neither setup nor any Make target installs system packages or changes GPU drivers.
 

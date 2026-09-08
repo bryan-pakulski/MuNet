@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--invert", action="store_true", help="use for a dark digit on a light background")
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="vulkan")
     args = parser.parse_args()
     state = read_checkpoint(args.checkpoint, "mnist")
     model = DigitCNN(**state["config"]["model"]).eval()

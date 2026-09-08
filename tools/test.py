@@ -15,6 +15,7 @@ root = Path(__file__).resolve().parents[1]
 logs = root / "artifacts" / "validation"
 logs.mkdir(parents=True, exist_ok=True)
 env = os.environ.copy()
+env.setdefault("MUNET_TEST_VULKAN", "1")
 if args.swarm:
     env["MUNET_TEST_SWARM"] = "1"
 if args.vulkan_validation:

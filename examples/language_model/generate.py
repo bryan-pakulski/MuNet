@@ -8,7 +8,7 @@ from .data import encode
 from .model import TinyGPT
 
 
-def sample(model, vocabulary, prompt, *, tokens=100, temperature=.8, top_k=20, seed=17, device="cpu"):
+def sample(model, vocabulary, prompt, *, tokens=100, temperature=.8, top_k=20, seed=17, device="vulkan"):
     if not prompt or tokens < 0 or not np.isfinite(temperature) or temperature <= 0 or top_k < 0:
         raise ValueError("use a nonempty prompt, nonnegative token count/top-k and positive finite temperature")
     generated = encode(prompt, vocabulary).astype(int).tolist()
@@ -43,7 +43,7 @@ def main():
     parser.add_argument("--temperature", type=float, default=.8)
     parser.add_argument("--top-k", type=int, default=20, help="0 samples from the full vocabulary")
     parser.add_argument("--seed", type=int, default=17)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="vulkan")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     state = read_checkpoint(args.checkpoint, "language_model")

@@ -8,11 +8,13 @@ VULKAN ?= 1
 BUILD_DIR ?= build/local
 CMAKE_ARGS ?=
 TORCH_INDEX_URL ?= https://download.pytorch.org/whl/cpu
-DEVICE ?= cpu
+DEVICE ?= $(if $(filter 0,$(VULKAN)),cpu,vulkan)
 EXAMPLE_ARGS ?=
 
 VENV_PYTHON := $(abspath $(VENV))/bin/python
 RUN := env PYTHONPATH="$(CURDIR)/python" MUNET_SWARM_NODE="$(abspath $(BUILD_DIR))/munet-node" "$(VENV_PYTHON)"
+TEST_VULKAN := $(if $(filter vulkan%,$(DEVICE)),1,0)
+TEST_FLAGS := $(if $(filter 1,$(TEST_VULKAN)),--vulkan-validation,)
 BUILD_FLAGS := --build-dir="$(BUILD_DIR)" --cmake-arg=-DMUNET_SWARM_NODE=ON --cmake-arg=-DMUNET_INSTALL_SDK=OFF
 ifeq ($(VULKAN),0)
 BUILD_FLAGS += --cpu-only
@@ -26,13 +28,13 @@ endif
 
 help:
 	@printf '%s\n' \
-	  'make setup           Create .venv and build the library/node (no PyTorch or model downloads)' \
-	  'make setup VULKAN=0  Set up without Vulkan headers or a GPU driver' \
+	  'make setup           Create .venv and build Vulkan library/node (no PyTorch or model downloads)' \
+	  'make setup VULKAN=0  Explicit CPU fallback; no Vulkan headers or driver' \
 	  'make build           Rebuild native code after edits (incremental)' \
-	  'make test            Install reference-test tools and run library CPU/swarm tests' \
+	  'make test            Install reference-test tools and run Vulkan/CPU/swarm tests' \
 	  'make test-vulkan     CPU + Vulkan tests with API/synchronization validation (VULKAN=1)' \
 	  'make setup-rtdetr    Set up the optional RT-DETR example and image dependencies' \
-	  'make test-rtdetr     Run RT-DETR example acceptance tests on CPU' \
+	  'make test-rtdetr     Run RT-DETR example acceptance tests with Vulkan validation' \
 	  'make test-rtdetr-vulkan  Run example acceptance tests with Vulkan validation' \
 	  'make setup-examples  Build and install optional image dependencies for the small examples' \
 	  'make demo-mnist      Train a CNN on automatically downloaded MNIST' \
@@ -40,7 +42,7 @@ help:
 	  'make demo-language-model  Train a causal Transformer on downloaded Tiny Shakespeare' \
 	  'make test-examples   Test small examples, checkpoint resume and inference (offline)' \
 	  'make test-examples-vulkan  Run small example tests with Vulkan validation' \
-	  'make smoke           Run the small MLP training example (DEVICE=cpu or vulkan)' \
+	  'make smoke           Run the small MLP training example (Vulkan default; DEVICE=cpu fallback)' \
 	  'make install         Install library and node/server commands into the virtual environment' \
 	  'make clean           Clean native build outputs; keep dependencies, data and checkpoints' \
 	  '' \
@@ -85,7 +87,7 @@ reference: $(VENV_PYTHON)
 	"$(VENV_PYTHON)" examples/rtdetr/fetch_reference.py
 
 test: build test-deps
-	MUNET_TEST_VULKAN=0 $(RUN) tools/test.py --swarm
+	MUNET_TEST_VULKAN=$(TEST_VULKAN) $(RUN) tools/test.py $(TEST_FLAGS) --swarm
 
 test-vulkan:
 	@test "$(VULKAN)" = 1 || { printf '%s\n' 'Use make test-vulkan VULKAN=1 to build and test the Vulkan runtime.'; exit 1; }
@@ -93,7 +95,7 @@ test-vulkan:
 	$(RUN) tools/test.py --vulkan-validation --swarm
 
 test-rtdetr: build test-deps rtdetr-deps reference
-	MUNET_TEST_VULKAN=0 $(RUN) tools/test.py examples/rtdetr/tests
+	MUNET_TEST_VULKAN=$(TEST_VULKAN) $(RUN) tools/test.py $(TEST_FLAGS) examples/rtdetr/tests
 
 test-rtdetr-vulkan:
 	@test "$(VULKAN)" = 1 || { printf '%s\n' 'Use make test-rtdetr-vulkan VULKAN=1.'; exit 1; }
@@ -101,7 +103,7 @@ test-rtdetr-vulkan:
 	$(RUN) tools/test.py --vulkan-validation examples/rtdetr/tests
 
 test-examples: build example-deps
-	MUNET_TEST_VULKAN=0 $(RUN) tools/test.py examples/tests
+	MUNET_TEST_VULKAN=$(TEST_VULKAN) $(RUN) tools/test.py $(TEST_FLAGS) examples/tests
 
 test-examples-vulkan:
 	@test "$(VULKAN)" = 1 || { printf '%s\n' 'Use make test-examples-vulkan VULKAN=1.'; exit 1; }

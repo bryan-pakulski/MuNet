@@ -67,7 +67,7 @@ def cross_entropy(logits, labels):
 
 
 class Trainer:
-    def __init__(self, model, loss, *, example, config, device="cpu", lr=0.003, seed=7):
+    def __init__(self, model, loss, *, example, config, device="vulkan", lr=0.003, seed=7):
         if not np.isfinite(lr) or lr <= 0:
             raise ValueError("learning rate must be positive and finite")
         self.model, self.example, self.config = model, example, config
@@ -145,7 +145,7 @@ def image_grid(images, labels, path, columns=4):
 
 
 def add_training_args(parser, *, output, steps=200, batch_size=16, lr=0.003):
-    parser.add_argument("--device", default="cpu", help="cpu, vulkan or vulkan:N")
+    parser.add_argument("--device", default="vulkan", help="cpu, vulkan or vulkan:N")
     parser.add_argument("--steps", type=positive_int, default=steps, help="additional optimizer updates")
     parser.add_argument("--batch-size", type=positive_int, default=batch_size)
     parser.add_argument("--lr", type=float, default=lr)

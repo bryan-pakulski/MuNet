@@ -20,15 +20,16 @@ Install the [system prerequisites](../docs/install.md#local-development-with-mak
 then choose an example:
 
 ```bash
-make setup-examples VULKAN=0
-make demo-mnist VULKAN=0
-make demo-segmentation VULKAN=0
-make demo-language-model VULKAN=0
+make setup-examples
+make demo-mnist
+make demo-segmentation
+make demo-language-model
 ```
 
-These defaults use the CPU reference backend and intentionally small models.
-For a Vulkan build and GPU execution, use `VULKAN=1 DEVICE=vulkan` consistently
-on setup and demo commands. The first execution compiles the graph and, on
+These defaults build and execute on Vulkan using intentionally small models.
+Select `DEVICE=cpu` for explicit CPU fallback, or `VULKAN=0` for a CPU-only build
+and execution. Direct Python commands default to Vulkan; pass `--device cpu`
+when using the CPU fallback. The first execution compiles the graph and, on
 Vulkan, shaders. Kernel performance and physical GPU support are separate from
 these learning examples. Select smaller `--steps`, `--batch-size` or `--width`
 through `EXAMPLE_ARGS` for a shorter run.
@@ -38,10 +39,10 @@ is downloaded during `make setup-examples` apart from build/Python dependencies.
 See [dataset sources and caching](DATASETS.md). Offline smoke runs after setup:
 
 ```bash
-make demo-mnist VULKAN=0 EXAMPLE_ARGS='--synthetic --steps 5 --limit 64 --eval-samples 16'
-make demo-segmentation VULKAN=0 EXAMPLE_ARGS='--steps 5 --samples 32 --eval-samples 8'
-make demo-language-model VULKAN=0 EXAMPLE_ARGS='--synthetic --steps 5 --context 8 --width 8 --heads 2 --layers 1 --sample-tokens 16'
-make test-examples VULKAN=0
+make demo-mnist EXAMPLE_ARGS='--synthetic --steps 5 --limit 64 --eval-samples 16'
+make demo-segmentation EXAMPLE_ARGS='--steps 5 --samples 32 --eval-samples 8'
+make demo-language-model EXAMPLE_ARGS='--synthetic --steps 5 --context 8 --width 8 --heads 2 --layers 1 --sample-tokens 16'
+make test-examples
 ```
 
 Synthetic digits are seven-segment renderings, **not MNIST**. Generated text is
@@ -80,12 +81,12 @@ from PIL import Image
 import munet as mu
 
 image = np.asarray(Image.open('artifacts/mnist/sample.png'), np.float32)[None, None] / 255
-model = mu.load('artifacts/mnist/inference.mnet', device='cpu')
+model = mu.load('artifacts/mnist/inference.mnet')
 print('Predicted digit:', model(image).numpy().argmax(-1).item())
 PY
 ```
 
-The new examples also have optional Vulkan tests via
-`make test-examples-vulkan VULKAN=1`, and are included in CPU/Vulkan CI. Tests
+`make test-examples` runs Vulkan validation and CPU reference checks by default,
+as does `make test-examples-vulkan`. They are also included in CPU/Vulkan CI. Tests
 cover learning, checkpoint continuation, native export, causal masking, dataset
 integrity and offline command workflows. See [measured example results](VALIDATION.md).
