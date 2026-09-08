@@ -94,6 +94,67 @@ Tags must match the canonical package version exactly. The prior `v0.1.2a`/`0.1.
 
 ## Source builds
 
+### Local development with Make
+
+The root Makefile wraps the existing build, reference-fetch and validation scripts.
+Use GNU Make and Python 3.10+ on Linux. On Debian/Ubuntu, install system prerequisites:
+
+```bash
+sudo apt-get install build-essential python3-dev python3-venv libcurl4-openssl-dev libssl-dev
+# Additional Vulkan build, shader and validation tools:
+sudo apt-get install libvulkan-dev glslang-tools vulkan-validationlayers
+```
+
+Install your GPU's Vulkan driver separately, or `mesa-vulkan-drivers` for software
+testing. CPU-only setup needs only the first package group.
+
+```bash
+make setup                 # .venv + development dependencies + native library/node + pinned reference
+make test                  # CPU tests, including native swarm integration
+make test-vulkan           # CPU/Vulkan tests with API and synchronization validation
+make smoke DEVICE=vulkan   # Short MLP training example
+
+# On a machine without Vulkan development headers:
+make setup VULKAN=0
+make test VULKAN=0
+```
+
+Setup installs CPU PyTorch for numerical reference tests; MuNet's Vulkan execution
+does not require CUDA PyTorch. The first setup needs network access for Python
+packages and the checksum-verified upstream RT-DETR test source. Later builds use
+the existing environment and incremental CMake build; reference fetches reuse
+matching cached files. Test logs and JUnit results go to `artifacts/validation`.
+
+`make build` updates the extension under `python/` and the worker under
+`build/local/`. Python source edits take effect on the next invocation of a Make
+test/example target. For custom commands against the source tree:
+
+```bash
+PYTHONPATH=python .venv/bin/python your_script.py
+PYTEST_ADDOPTS='-k grid_sample' make test
+```
+
+For a regular installation that can be imported outside this checkout, run
+`make install` (or `make install VULKAN=0`), then activate `.venv/bin/activate`.
+This installs `munet-node` and `munet-server` as well. Rerun `make install` after
+edits to update that installed copy; the Make test targets always use the source
+tree. `make clean` cleans native build outputs while retaining the virtual
+environment, downloaded reference, datasets, checkpoints and test reports.
+
+Override `PYTHON`, `VENV`, `BUILD_DIR`, `VULKAN`, `TORCH_INDEX_URL` or `CMAKE_ARGS`
+as needed, and use the same overrides on subsequent commands. For example:
+
+```bash
+make setup PYTHON=python3.12
+make build CMAKE_ARGS='--cmake-arg=-DVulkan_INCLUDE_DIR=/opt/vulkan/include'
+```
+
+The default build includes CPU and Vulkan; `VULKAN=0` explicitly disables Vulkan.
+`make test-vulkan VULKAN=0` fails with guidance instead of testing another backend.
+Neither setup nor any Make target installs system packages or changes GPU drivers.
+
+### Manual source builds
+
 ```bash
 sudo apt-get install build-essential cmake libvulkan-dev glslang-tools libcurl4-openssl-dev libssl-dev
 python -m pip install .

@@ -33,7 +33,7 @@ wheel.packages = ["python/munet", "python/munet_nn"]
 cmake.build-type = "Release"
 cmake.define.MUNET_SWARM_NODE = "ON"
 cmake.define.MUNET_INSTALL_SDK = "OFF"
-sdist.include = ["cpp/**", "cmake/**", "tools/**", "tests/**", "docs/**", "examples/**"]
+sdist.include = ["Makefile", "cpp/**", "cmake/**", "tools/**", "tests/**", "docs/**", "examples/**"]
 
 [tool.cibuildwheel]
 build = "cp310-manylinux_* cp311-manylinux_* cp312-manylinux_* cp313-manylinux_* cp314-manylinux_*"

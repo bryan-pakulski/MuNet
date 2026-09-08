@@ -35,6 +35,23 @@ Release workflows build Linux x86-64/aarch64 wheels, standalone node/server arch
 
 ## Build and run
 
+For local development and testing, use the Makefile (Linux, Python 3.10+):
+
+```bash
+sudo apt-get install build-essential python3-dev python3-venv libvulkan-dev glslang-tools vulkan-validationlayers libcurl4-openssl-dev libssl-dev
+make setup
+make test
+make test-vulkan
+```
+
+Use `make setup VULKAN=0` and `make test VULKAN=0` for a CPU-only build.
+`make build` rebuilds native code after edits; `make smoke` runs a short training
+example. Commands use `.venv` and the source tree automatically, without shell
+activation. `make install` also installs the library and node/server commands
+into `.venv` for use outside the checkout. See `make help` and the
+[local development instructions](docs/install.md#local-development-with-make)
+for prerequisites, targeted tests and configuration overrides.
+
 On Ubuntu with a working Vulkan driver:
 
 ```bash
