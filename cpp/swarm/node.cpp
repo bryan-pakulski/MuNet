@@ -236,7 +236,7 @@ Executable build(const json& program,const json& checkpoint,const Options& o,con
   require(plan->outputs.size()==program.at("parameters").size()+1&&numel(graph.at(plan->outputs[0]).shape)==1,"invalid gradient program outputs");
   require(plan->inputs.size()==program.at("feed_indices").size(),"program feed mapping mismatch");
   auto& hashes=program.at("shader_hashes");require(hashes.size()==plan->kernels.size(),"compiler kernel ABI mismatch");
-  for(size_t i=0;i<plan->kernels.size();++i)require(sha(plan->kernels[i].source)==hashes.at(i),"compiler shader ABI mismatch; use matching owner/node versions");
+  for(size_t i=0;i<plan->kernels.size();++i)require(sha(plan->kernels[i].source)==hashes.at(i).get<std::string>(),"compiler shader ABI mismatch; use matching owner/node versions");
   if(o.device!="cpu"){
     unsigned index=o.device=="vulkan"?0:std::stoul(o.device.substr(7));
     plan->enable_vulkan(program.at("spirv").get<std::vector<std::vector<uint32_t>>>(),index);

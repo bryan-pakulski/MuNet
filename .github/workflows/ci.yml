@@ -5,6 +5,25 @@ on:
 permissions:
   contents: read
 jobs:
+  worker-cxx-standards:
+    name: Native worker (C++${{ matrix.standard }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        standard: [17, 20, 23]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libssl-dev
+      # cxx_std_17 is a minimum: newer compiler defaults can select C++20 or later.
+      - name: Configure standalone worker
+        run: >-
+          cmake -S . -B build-worker -DCMAKE_BUILD_TYPE=Release
+          -DMUNET_PYTHON=OFF -DMUNET_VULKAN=OFF -DMUNET_SWARM_NODE=ON
+          -DCMAKE_CXX_STANDARD=${{ matrix.standard }} -DCMAKE_CXX_STANDARD_REQUIRED=ON
+      - run: cmake --build build-worker --parallel 2
+      - run: ./build-worker/munet-node --version
+
   correctness:
     runs-on: ubuntu-24.04
     strategy:
