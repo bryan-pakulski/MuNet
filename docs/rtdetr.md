@@ -65,6 +65,9 @@ cache is bounded (two programs by default). Switching programs copies shared
 state through the host; repeated execution of one shape keeps parameters,
 gradients, optimizer state and EMA in device memory. Reading metrics, checkpointing
 or exporting explicitly synchronizes and downloads the requested data.
+Denoising groups use the actual maximum object count, independently of matcher
+padding. Group/slot metadata also participates in the cache key: equal tensor
+shapes can describe different denoising assignments and attention masks.
 
 ## COCO scripts and pretrained weights
 

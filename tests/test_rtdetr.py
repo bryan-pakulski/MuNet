@@ -109,3 +109,10 @@ def test_empty_ground_truth_and_denoising_contract(device):
     losses,grads=mu.compile(f,device=device)(np.zeros((1,4,3),np.float32),np.full((1,4,4),.2,np.float32),p['labels'],p['boxes'],p['valid'])
     assert losses['loss_bbox'].item()==0 and losses['loss_giou'].item()==0
     assert np.all(grads[1].numpy()==0) and np.isfinite(grads[0].numpy()).all()
+
+
+def test_denoising_is_independent_of_matcher_padding_bucket():
+    targets=targets_example()
+    exact=prepare_denoising(pad_targets(targets,3),3,8,num_denoising=8,rng=np.random.default_rng(14))
+    padded=prepare_denoising(pad_targets(targets,3,slots=8),3,8,num_denoising=8,rng=np.random.default_rng(14))
+    for name in exact: np.testing.assert_array_equal(exact[name],padded[name])

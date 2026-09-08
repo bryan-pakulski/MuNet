@@ -31,6 +31,15 @@ def test_detector_checkpoint_resumes_adamw_rng_bn_ema_and_scheduler(device,tmp_p
         np.testing.assert_allclose(list(actual.values()),list(expected.values()),rtol=3e-4,atol=3e-5)
     for name,p in model.named_parameters(): np.testing.assert_allclose(p.numpy(),dict(other.named_parameters())[name].numpy(),rtol=2e-4,atol=3e-5)
     for name,p in trainer.ema.shadow.items(): np.testing.assert_allclose(p.numpy(),resumed.ema.shadow[name].numpy(),rtol=2e-4,atol=3e-5)
+    # One GT / four groups and two GT / two groups have identical array shapes.
+    # They need different static DN metadata, then must synchronize state when
+    # returning to the first cached program.
+    two=[{'labels':[1,0],'boxes':[[.32,.48,.17,.21],[.71,.61,.19,.11]]},raw[1]]
+    expected=trainer.step(image,two);actual=resumed.step(image,two)
+    np.testing.assert_allclose(list(actual.values()),list(expected.values()),rtol=3e-4,atol=3e-5)
+    assert len(trainer.programs)==2
+    expected=trainer.step(image,raw);actual=resumed.step(image,raw)
+    np.testing.assert_allclose(list(actual.values()),list(expected.values()),rtol=3e-4,atol=3e-5)
     inference=trainer.export(tmp_path/'detector.mnet',image[:1])
     loaded=mu.load(tmp_path/'detector.mnet',device=device)
     expected=inference(image[:1]);actual=loaded(image[:1])

@@ -27,11 +27,14 @@ def pad_targets(targets,num_classes,slots=None):
 def prepare_denoising(padded,num_classes,num_queries,*,num_denoising=100,label_noise_ratio=0.5,box_noise_scale=1.0,rng):
     if num_denoising<=0 or not np.any(padded['valid']): return None
     if not 0<=label_noise_ratio<=1 or box_noise_scale<0: raise ValueError("invalid denoising noise settings")
-    batch,slots=padded['labels'].shape
+    batch=padded['labels'].shape[0]
+    # Matcher buckets must not change the reference's denoising group count.
+    # pad_targets places valid entries first, so trim only trailing bucket padding.
+    slots=int(padded['valid'].sum(1).max())
     groups=max(num_denoising//slots,1)
-    labels=np.tile(padded['labels'],(1,2*groups))
-    boxes=np.tile(padded['boxes'],(1,2*groups,1))
-    valid=np.tile(padded['valid'],(1,2*groups)).astype(bool)
+    labels=np.tile(padded['labels'][:,:slots],(1,2*groups))
+    boxes=np.tile(padded['boxes'][:,:slots],(1,2*groups,1))
+    valid=np.tile(padded['valid'][:,:slots],(1,2*groups)).astype(bool)
     negative=np.tile(np.concatenate([np.zeros(slots),np.ones(slots)]),(batch,groups)).astype(np.float32)[...,None]
     if label_noise_ratio:
         noisy=rng.random(labels.shape)<label_noise_ratio*0.5

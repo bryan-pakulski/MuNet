@@ -84,8 +84,9 @@ class SetCriterion(nn.Module):
             add(out,targets,self.matcher(out,targets),normalizer,f'_aux_{i}')
         if 'dn_aux_outputs' in outputs:
             meta=outputs['dn_meta'];groups=meta['dn_num_group'];slots=meta['max_gt'];b=targets['valid'].shape[0]
-            if slots!=targets['valid'].shape[1]: raise ValueError("denoising target bucket mismatch")
-            truth={name:value.repeat(1,groups,*([1]*(value.ndim-2))) if groups>1 else value for name,value in targets.items()}
+            if not 1<=slots<=targets['valid'].shape[1]: raise ValueError("denoising target bucket mismatch")
+            truth={name:value[:,:slots] for name,value in targets.items()}
+            truth={name:value.repeat(1,groups,*([1]*(value.ndim-2))) if groups>1 else value for name,value in truth.items()}
             idx=np.concatenate([np.arange(slots,dtype=np.float32)+g*2*slots for g in range(groups)])
             indices=as_tensor(idx.reshape(1,-1)).expand(b,-1)
             for i,out in enumerate(outputs['dn_aux_outputs']): add(out,truth,indices,normalizer*groups,f'_dn_{i}')

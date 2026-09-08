@@ -33,6 +33,10 @@ remain the pinned upstream PyTorch code.
   the final detection loss below 65% of its initial value. It is not COCO training.
 - CPU training-state resume checks AdamW, BN, EMA, scheduler, host denoising RNG,
   trained-model export and `.mnet` reload over multiple subsequent steps.
+- Both additional software-Vulkan workflow cases passed, including training-state
+  resume and postprocessing, with no validation markers. A final CPU regression
+  also checks denoising independence from matcher padding and state synchronization
+  when switching between equal-shaped inputs with different group metadata.
 - Complete compact-detector native → ONNX → native → `.mnet` round trips and the
   modern exporter import of the pinned upstream detector pass. Local independent
   ONNX execution uses its reference evaluator; ONNX Runtime is additionally

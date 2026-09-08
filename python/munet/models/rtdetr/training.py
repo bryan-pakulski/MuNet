@@ -65,7 +65,7 @@ class DetectorTrainer:
                             num_denoising=self.model.config['num_denoising'],rng=self.rng)
         arrays=[images,padded['labels'],padded['boxes'],padded['valid']]
         if dn is not None: arrays.extend([dn['labels'],dn['boxes_unact'],dn['attn_mask']])
-        key=tuple(a.shape for a in arrays)
+        key=(tuple(a.shape for a in arrays),None if dn is None else (dn['max_gt'],dn['num_group']))
         if key not in self.programs:
             if len(self.programs)>=self.max_cached_shapes:
                 _,old=self.programs.popitem(last=False);self._detach_owners(old)
