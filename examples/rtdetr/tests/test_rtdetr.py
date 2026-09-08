@@ -3,8 +3,8 @@ import numpy as np
 import pytest
 import torch
 import munet as mu
-from munet.models.rtdetr import RTDETR,SetCriterion,pad_targets,prepare_denoising
-from rtdetr_reference import model_for,criterion_for,load_reference
+from examples.rtdetr import RTDETR,SetCriterion,pad_targets,prepare_denoising
+from .rtdetr_reference import model_for,criterion_for,load_reference
 
 
 def torch_targets(targets): return [{'labels':torch.tensor(t['labels'],dtype=torch.long),'boxes':torch.tensor(np.asarray(t['boxes'],np.float32))} for t in targets]
@@ -33,7 +33,7 @@ def test_criterion_upstream_losses_and_gradients(device):
 
 
 def test_deformable_attention_against_upstream(device):
-    from munet.models.rtdetr.utils import deformable_attention_core_func
+    from examples.rtdetr.utils import deformable_attention_core_func
     ref=load_reference().utils.deformable_attention_core_func
     rng=np.random.default_rng(7)
     arrays=[rng.normal(size=(2,9,2,3)),rng.uniform(-.2,1.2,size=(2,4,2,3,2,2)),rng.uniform(size=(2,4,2,3,2))]

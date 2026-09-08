@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 import urllib.request
 
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[2]
 
 def main():
-    manifest=json.loads((ROOT/'tests/rtdetr-reference.json').read_text())
+    manifest=json.loads((ROOT/'examples/rtdetr/tests/rtdetr-reference.json').read_text())
     output=ROOT/'artifacts/rtdetr-reference';output.mkdir(parents=True,exist_ok=True)
     for name,entry in manifest['files'].items():
         path=output/name

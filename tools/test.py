@@ -9,6 +9,7 @@ import sys
 parser = argparse.ArgumentParser()
 parser.add_argument("--vulkan-validation", action="store_true")
 parser.add_argument("--swarm", action="store_true", help="require the native swarm worker integration tests")
+parser.add_argument("paths", nargs="*", default=["tests"], help="test directories (default: library tests only)")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 logs = root / "artifacts" / "validation"
@@ -19,7 +20,7 @@ if args.swarm:
 if args.vulkan_validation:
     env.update(MUNET_TEST_VULKAN="1", VK_INSTANCE_LAYERS="VK_LAYER_KHRONOS_validation",
                VK_LAYER_ENABLES="VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT")
-proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "-s", "--junitxml=" + str(logs / "tests.xml")],
+proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "-s", "--junitxml=" + str(logs / "tests.xml"), *args.paths],
                       cwd=root, env=env, capture_output=True, text=True)
 output = proc.stdout + "\n" + proc.stderr
 (logs / "tests.log").write_text(output)

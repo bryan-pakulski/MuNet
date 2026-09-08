@@ -1,10 +1,39 @@
 # Validation report
 
+RT-DETR now lives under `examples/rtdetr/` with its own model, workflows,
+requirements and acceptance tests. The results below record the numerical work
+that established the example; historical references to detector modules inside
+the 0.3 wheel predate this separation. Current wheel validation requires generic
+MuNet APIs, no model/example code, and NumPy as the only required Python dependency.
+CI continues to execute both library and example tests.
+
+## Library/example separation validation
+
+- CPU library and relocated example tests: 72 passed, one expected Vulkan-only
+  skip, and two ONNX Runtime tests deselected after automatic approval review
+  blocked that dependency's telemetry request. Detector native/ONNX round trips
+  still passed using ONNX's independent reference evaluator. CI retains the full
+  ONNX Runtime checks.
+- The rebuilt wheel contains 17 Python files, no model/example package, and
+  NumPy as its sole required Python dependency. Source archives retain the
+  complete example and upstream attribution while excluding Python caches.
+- A fresh `make setup VULKAN=0` from the source archive built the library and
+  worker without PyTorch, Pillow, ONNX Runtime, SciPy, COCO tools or an upstream
+  model-reference download.
+- In that clean environment, the installed wheel passed node/server training and
+  recovery smoke checks. After separate example setup, the source RT-DETR example
+  trained a compact model, resumed its checkpoint, exported native and ONNX
+  inference, and reloaded native predictions using the installed wheel. PyTorch
+  remained absent.
+- All three example CLIs, reference checksum verification, package/source
+  validation and actionlint passed. No model mathematics or native kernels were
+  changed by this reorganization.
+
 ## RT-DETR 0.3 validation
 
 The additional implementation was checked on the same CPU/software-Vulkan host.
 The pinned official reference is fetched by SHA and each source file is checked
-against `tests/rtdetr-reference.json`. Reference adapters only remove registry/
+against `examples/rtdetr/tests/rtdetr-reference.json`. Reference adapters only remove registry/
 distributed scaffolding, an unused torchvision import, and replace its float32
 box-area helper with the same four-coordinate formula. Model/loss computations
 remain the pinned upstream PyTorch code.

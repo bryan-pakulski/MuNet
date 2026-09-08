@@ -1,4 +1,4 @@
-from ... import nn
+from munet import nn
 from .utils import get_activation
 
 

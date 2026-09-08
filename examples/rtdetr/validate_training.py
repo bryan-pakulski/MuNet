@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import time
 import numpy as np
-from munet.models.rtdetr import rtdetr_r50vd,DetectorTrainer,pad_targets,prepare_denoising
+from examples.rtdetr import rtdetr_r50vd,DetectorTrainer,pad_targets,prepare_denoising
 
 
 def main():

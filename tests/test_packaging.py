@@ -8,9 +8,6 @@ import munet_nn as retained
 
 
 def test_retained_imports_share_runtime_types():
-    from munet_nn.models.rtdetr import RTDETR as RetainedDetector
-    from munet.models.rtdetr import RTDETR
-    assert RetainedDetector is RTDETR
     from munet_nn.core import Parameter
     from munet_nn.nn import Linear
     from munet_nn.swarm.owner import Owner
@@ -18,6 +15,26 @@ def test_retained_imports_share_runtime_types():
     assert Parameter is mu.Parameter and Linear is mu.nn.Linear
     assert retained.Tensor is mu.Tensor and retained.nn is mu.nn
     assert retained.optim.SGD is mu.optim.SGD and Owner is CanonicalOwner
+
+
+def test_library_import_is_independent_of_models_and_optional_frameworks():
+    code = '''import importlib.abc
+import importlib.util
+import sys
+class BlockOptionalImports(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[0] in {"examples", "torch", "onnx", "onnxruntime", "PIL", "scipy", "pycocotools"}:
+            raise AssertionError("library imported optional application/tooling dependency: " + fullname)
+sys.meta_path.insert(0, BlockOptionalImports())
+import munet
+import munet_nn
+import numpy as np
+assert importlib.util.find_spec("munet.models") is None
+assert importlib.util.find_spec("munet_nn.models") is None
+model = munet_nn.nn.Sequential(munet_nn.nn.Linear(3, 4), munet_nn.nn.ReLU())
+assert munet.compile(model, device="cpu")(np.ones((2, 3), np.float32)).shape == (2, 4)
+'''
+    subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True)
 
 
 def test_cpu_import_and_execution_without_vulkan_loader():

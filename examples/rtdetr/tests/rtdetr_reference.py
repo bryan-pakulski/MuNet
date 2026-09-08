@@ -13,19 +13,19 @@ import sys
 import types
 import torch
 
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[3]
 _loaded=None
 
 
 def load_reference():
     global _loaded
     if _loaded is not None:return _loaded
-    manifest=json.loads((ROOT/'tests/rtdetr-reference.json').read_text())
+    manifest=json.loads((ROOT/'examples/rtdetr/tests/rtdetr-reference.json').read_text())
     folder=ROOT/'artifacts/rtdetr-reference'
     package=types.ModuleType('_munet_upstream_rtdetr');package.__path__=[str(folder)];sys.modules[package.__name__]=package
     for name in ['box_ops','utils','common','presnet','denoising','hybrid_encoder','rtdetr_decoder','matcher','rtdetr_criterion']:
         filename=name+'.py';path=folder/filename
-        if not path.is_file(): raise RuntimeError('Run python tools/fetch_rtdetr_reference.py before the required detector parity gate')
+        if not path.is_file(): raise RuntimeError('Run python examples/rtdetr/fetch_reference.py before the required detector parity gate')
         data=path.read_bytes()
         if hashlib.sha256(data).hexdigest()!=manifest['files'][filename]['sha256']: raise RuntimeError('upstream source checksum mismatch')
         text=data.decode().replace('from src.core import register','register = lambda cls: cls')

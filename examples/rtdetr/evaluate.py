@@ -2,7 +2,7 @@
 import argparse
 from munet import compile
 from munet.checkpoint import load_state
-from munet.models.rtdetr import RTDETR,PostProcessor,CocoDetection,coco_results,evaluate_coco
+from examples.rtdetr import RTDETR,PostProcessor,CocoDetection,coco_results,evaluate_coco
 
 
 def main():

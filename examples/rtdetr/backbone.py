@@ -4,18 +4,18 @@
 # See LICENSE-RT-DETR and NOTICE in this directory.
 '''by lyuwenyu
 '''
-from ... import nn
-from ...core import Tensor, as_tensor, cat, stack
+from munet import nn
+from munet.core import Tensor, as_tensor, cat, stack
 from .utils import get_activation, inverse_sigmoid, deformable_attention_core_func, bias_init_with_prob
 from . import initialization as init
 import numpy as np
 
-from ...nn import functional as F
+from munet.nn import functional as F
 
 from collections import OrderedDict
 
 from .backbone_common import ConvNormLayer
-from ...nn import FrozenBatchNorm2d
+from munet.nn import FrozenBatchNorm2d
 
 
 

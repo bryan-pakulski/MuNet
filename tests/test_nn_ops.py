@@ -1,4 +1,4 @@
-"""Independent forward/adjoint/state checks for the RT-DETR operator path."""
+"""Independent forward/adjoint/state checks for reusable neural-network operations."""
 import numpy as np
 import pytest
 import torch

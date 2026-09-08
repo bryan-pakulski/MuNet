@@ -3,9 +3,9 @@ import json
 import numpy as np
 import pytest
 import munet as mu
-from munet.models.rtdetr import RTDETR,DetectorTrainer,PostProcessor,CocoDetection,coco_results,preprocess
+from examples.rtdetr import RTDETR,DetectorTrainer,PostProcessor,CocoDetection,coco_results,preprocess
 from munet.interop import to_onnx,from_onnx,from_torch
-from rtdetr_reference import model_for
+from .rtdetr_reference import model_for
 
 
 def small_model():

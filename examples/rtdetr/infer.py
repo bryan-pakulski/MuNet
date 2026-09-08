@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from PIL import Image
 from munet.checkpoint import load_state
-from munet.models.rtdetr import RTDETR, Predictor
+from examples.rtdetr import RTDETR, Predictor
 
 
 def main():
