@@ -2,7 +2,7 @@
 import argparse
 import json
 from pathlib import Path
-from munet.models.rtdetr import rtdetr_r50vd, DetectorTrainer, CocoDetection, load_torch_checkpoint
+from examples.rtdetr import rtdetr_r50vd, DetectorTrainer, CocoDetection, load_torch_checkpoint
 
 
 def main():

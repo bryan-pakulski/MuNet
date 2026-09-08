@@ -109,8 +109,8 @@ Install your GPU's Vulkan driver separately, or `mesa-vulkan-drivers` for softwa
 testing. CPU-only setup needs only the first package group.
 
 ```bash
-make setup                 # .venv + development dependencies + native library/node + pinned reference
-make test                  # CPU tests, including native swarm integration
+make setup                 # .venv + build tools + native library/node
+make test                  # Reference-test dependencies + CPU library/swarm tests
 make test-vulkan           # CPU/Vulkan tests with API and synchronization validation
 make smoke DEVICE=vulkan   # Short MLP training example
 
@@ -119,11 +119,26 @@ make setup VULKAN=0
 make test VULKAN=0
 ```
 
-Setup installs CPU PyTorch for numerical reference tests; MuNet's Vulkan execution
-does not require CUDA PyTorch. The first setup needs network access for Python
-packages and the checksum-verified upstream RT-DETR test source. Later builds use
-the existing environment and incremental CMake build; reference fetches reuse
-matching cached files. Test logs and JUnit results go to `artifacts/validation`.
+Setup installs build/development tools, NumPy, pytest and ONNX for the small MLP
+example. It does not download PyTorch, image/COCO packages or a model reference.
+`make test` and `make test-vulkan` separately install numerical reference tools,
+including CPU PyTorch; MuNet's Vulkan execution does not require CUDA PyTorch.
+The first dependency installation needs network access. Later builds reuse the
+environment and incremental CMake build. Test logs and JUnit results go to
+`artifacts/validation`.
+
+RT-DETR is an optional source example, with its own setup and acceptance tests:
+
+```bash
+make setup-rtdetr           # Build MuNet and install the example's Pillow requirement
+make test-rtdetr            # Fetch the pinned upstream reference and test the example on CPU
+make test-rtdetr-vulkan     # Test the example with Vulkan validation
+```
+
+The example test targets install numerical reference tools as needed and reuse
+checksum-verified cached reference files. Use `VULKAN=0` for CPU-only builds.
+The model is not included in `munet-nn` wheels. See [the example](../examples/rtdetr/README.md)
+for application commands and optional COCO evaluation dependencies.
 
 `make build` updates the extension under `python/` and the worker under
 `build/local/`. Python source edits take effect on the next invocation of a Make
@@ -170,6 +185,12 @@ cmake --install build-native --prefix /path/to/install
 
 To build standalone archives locally, use a clean Python 3.12 environment with a shared `libpython`, install the newly built/repaired wheel plus `pyinstaller==6.22.2`, `cmake` and `packaging`, then run `python tools/build_release.py --wheel /path/to/wheel.whl`. For distributable Linux binaries, use the workflow's matching manylinux container and its distribution-provided Python 3.12. The static `/opt/python` interpreters build wheels but cannot freeze the server. Building on a newer host raises the minimum glibc requirement. Each archive records its build host, version and architecture in `manifest.json`.
 
-## Detector extras
+## Example dependencies
 
-Version 0.3 adds `munet-nn[detection]` (Pillow preprocessing), `munet-nn[coco]` (COCO evaluation), and the existing `interop`/`torch` extras for model conversion. The base library and node/server command installation stay under the same `munet-nn` PyPI project and trusted-publisher workflow. See [the detector guide](rtdetr.md).
+The installed library requires only NumPy. Generic ONNX/PyTorch tooling stays in
+the optional `interop` and `torch` extras. RT-DETR model code, image preprocessing,
+COCO workflows and their dependencies live under `examples/rtdetr/` in the source
+checkout. Install `examples/rtdetr/requirements.txt` for image handling or
+`examples/rtdetr/requirements-eval.txt` for COCO AP evaluation. The model-specific
+`detection` and `coco` library extras have been removed. Node/server installation
+and the existing PyPI project/publishing identity are unchanged.

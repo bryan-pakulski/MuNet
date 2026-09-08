@@ -1,7 +1,7 @@
 """Initialization runs on the authoring host; all model execution is native."""
 import math
 import numpy as np
-from ... import nn
+from munet import nn
 
 
 def constant_(parameter,value):

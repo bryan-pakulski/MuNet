@@ -8,7 +8,27 @@ Build a small C++ graph compiler and runtime, with Python as the model-authoring
 
 Vulkan is the sole accelerator API. Maintain an explicit CPU backend as a numerical reference and debugging tool. The production GPU path must report unsupported operations before execution instead of silently moving tensors to the CPU.
 
-The 0.3 implementation retains the `munet-nn` package identity and `munet_nn` import, with installable node/server commands and a CMake SDK; see [installation and releases](install.md). It now implements single-device RT-DETR training and inference; see the [detector guide](rtdetr.md). Competitive performance on physical GPUs has not been established.
+The 0.3 implementation retains the `munet-nn` package identity and `munet_nn` import, with installable node/server commands and a CMake SDK; see [installation and releases](install.md). Its reusable operations support the single-device [RT-DETR example](../examples/rtdetr/README.md). Competitive performance on physical GPUs has not been established.
+
+## Library and application boundary
+
+MuNet supplies reusable neural-network building blocks. Application code composes
+them into a model and owns its datasets, training recipe and task-specific outputs.
+
+| Location | Responsibility |
+|---|---|
+| `cpp/` | Tensor operations and gradients, graph compiler, CPU/Vulkan execution, native worker |
+| `python/munet/` | Tensor/module API, generic layers, optimizers, checkpoints, interchange and swarm services |
+| `python/munet_nn/` | Retained import name for the same library API |
+| `examples/rtdetr/` | RT-DETR architecture, detection criterion, denoising, COCO/image handling, training/inference/evaluation scripts and acceptance tests |
+| `tests/` | Model-independent primitive, runtime, interchange, packaging and swarm tests |
+
+Examples depend on MuNet. Library code never imports the examples. Wheels contain
+the runtime and generic Python APIs, with NumPy as the sole required Python
+dependency. Model code and its upstream licenses remain in the repository/source
+distribution, excluded from the installed wheel. Optional example requirements
+live with the example. CI checks this boundary and still exercises the complete
+RT-DETR example against the pinned upstream reference.
 
 ## Lessons from the reference project
 

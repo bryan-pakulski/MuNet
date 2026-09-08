@@ -1,6 +1,6 @@
 import math
-from ... import nn
-from ...core import cat, stack
+from munet import nn
+from munet.core import cat, stack
 
 
 def get_activation(act):

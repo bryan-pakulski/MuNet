@@ -2,6 +2,11 @@
 
 ## Fixed reference
 
+RT-DETR is an application-level acceptance example under `examples/rtdetr/`.
+It is excluded from the installed library; MuNet supplies the reusable layers,
+operations and runtime used to build it. Example tests run explicitly in CI and
+through `make test-rtdetr` / `make test-rtdetr-vulkan`.
+
 Start with the official **RT-DETR v1 R50-vd** implementation and its `rtdetr_r50vd_6x_coco.yml` recipe, pinned at commit `29320b6fd828f8e0987a71426cf2d961b09dfed7`. Resolve and retain the included dataset, optimizer, dataloader, model, and runtime settings before a training comparison. Record the checkpoint hash, dataset split, image transforms, image size, batch size, seed, and framework versions in every result.
 
 Reference: [official config](https://github.com/lyuwenyu/RT-DETR/blob/29320b6fd828f8e0987a71426cf2d961b09dfed7/rtdetr_pytorch/configs/rtdetr/rtdetr_r50vd_6x_coco.yml).

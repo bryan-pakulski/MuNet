@@ -1,6 +1,6 @@
 """RT-DETR v1: ResNet-vd, hybrid encoder, and iterative deformable decoder."""
 import numpy as np
-from ... import nn
+from munet import nn
 from .backbone import PResNet
 from .encoder import HybridEncoder
 from .decoder import RTDETRTransformer

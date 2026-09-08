@@ -1,6 +1,7 @@
-# RT-DETR training and inference
+# RT-DETR example: training and inference
 
-MuNet 0.3 implements RT-DETR v1 with a ResNet-vd backbone, the hybrid encoder,
+The source example under `examples/rtdetr/` builds RT-DETR v1 from MuNet's
+reusable layers and operations. It contains a ResNet-vd backbone, the hybrid encoder,
 and an iterative multiscale deformable decoder. `rtdetr_r50vd()` defaults to the
 R50-vd architecture: 80 classes, 256 hidden channels, eight heads, six decoder
 layers, 300 queries and 100 denoising queries. `rtdetr_r18vd()` is also available.
@@ -8,11 +9,24 @@ The source and numerical reference are pinned to
 [official RT-DETR commit 29320b6](https://github.com/lyuwenyu/RT-DETR/tree/29320b6fd828f8e0987a71426cf2d961b09dfed7).
 Adapted model files retain the upstream Apache-2.0 license and attribution.
 
+The installed `munet-nn` library does not contain model implementations. Run this
+example from the repository root. For local source development:
+
+```bash
+make setup-rtdetr                    # Add VULKAN=0 for CPU-only builds
+source .venv/bin/activate
+export PYTHONPATH="$PWD/python"
+```
+
+Alternatively, install a MuNet wheel into your environment and install
+`examples/rtdetr/requirements.txt`; then run from the checkout root without the
+`PYTHONPATH` override. Use `from examples.rtdetr import ...` for example APIs.
+
 ## Train a model
 
 ```python
 import numpy as np
-from munet.models.rtdetr import rtdetr_r50vd, DetectorTrainer
+from examples.rtdetr import rtdetr_r50vd, DetectorTrainer
 
 model = rtdetr_r50vd(num_classes=2, seed=7)
 trainer = DetectorTrainer(model, device="vulkan", target_slots=32, seed=17)
@@ -71,16 +85,17 @@ shapes can describe different denoising assignments and attention masks.
 
 ## COCO scripts and pretrained weights
 
-After installing the PR wheel (or, after release, `munet-nn[detection,interop]>=0.3.0`):
+After the example setup above (ONNX export additionally needs the `interop` extra
+when using an installed wheel):
 
 ```bash
-python examples/rtdetr_train.py --images coco/train2017 \
+python -m examples.rtdetr.train --images coco/train2017 \
   --annotations coco/annotations/instances_train2017.json \
   --device vulkan --output runs/rtdetr --export-onnx
-python examples/rtdetr_infer.py --checkpoint runs/rtdetr/last.mnet \
+python -m examples.rtdetr.infer --checkpoint runs/rtdetr/last.mnet \
   --images picture.jpg --device vulkan --output detections.json
-# Optional extra: pip install 'munet-nn[coco]'
-python examples/rtdetr_evaluate.py --checkpoint runs/rtdetr/last.mnet \
+python -m pip install -r examples/rtdetr/requirements-eval.txt
+python -m examples.rtdetr.evaluate --checkpoint runs/rtdetr/last.mnet \
   --images coco/val2017 --annotations coco/annotations/instances_val2017.json
 ```
 
@@ -96,7 +111,7 @@ multiscale sizes, subject to the specialization transfer cost above.
 Official pretrained weights are an explicit input, not an implicit download:
 
 ```python
-from munet.models.rtdetr import load_torch_checkpoint
+from examples.rtdetr import load_torch_checkpoint
 load_torch_checkpoint(model, "official_checkpoint.pth")
 # Or: model.load_state_dict(torch_model.state_dict())
 ```
@@ -135,13 +150,14 @@ semantics; construct the native model for training.
 
 ```bash
 python -m pip install '.[test,torch]'
-python tools/fetch_rtdetr_reference.py
-PYTHONPATH=python python tools/test.py --swarm
-MUNET_TEST_VULKAN=1 PYTHONPATH=python python tools/test.py --vulkan-validation --swarm
-PYTHONPATH=python python tools/validate_rtdetr_training.py --device cpu
+python -m pip install -r examples/rtdetr/requirements.txt
+python examples/rtdetr/fetch_reference.py
+PYTHONPATH=python python tools/test.py --swarm tests examples/rtdetr/tests
+MUNET_TEST_VULKAN=1 PYTHONPATH=python python tools/test.py --vulkan-validation --swarm tests examples/rtdetr/tests
+PYTHONPATH=python python -m examples.rtdetr.validate_training --device cpu
 ```
 
-Tests verify native primitive values/gradients, full R50-vd default-width/six-layer
+Library tests verify native primitive values/gradients; example tests verify full R50-vd default-width/six-layer
 inference, full R50-backbone training with a compact decoder, denoising/auxiliary
 losses, empty targets, checkpoints, postprocessing and ONNX/PyTorch interchange.
 The standalone training gate uses all default R50 channels/layers/300 queries,

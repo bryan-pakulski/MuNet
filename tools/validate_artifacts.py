@@ -6,6 +6,7 @@ from pathlib import Path
 import tarfile
 import zipfile
 from packaging.utils import parse_wheel_filename
+from packaging.requirements import Requirement
 from release_version import validate
 
 
@@ -28,9 +29,11 @@ def check(directory, *, require_sdist=True):
             files = set(z.namelist())
             for required in ("munet/__init__.py", "munet_nn/__init__.py", "munet/cli.py",
                              "munet/swarm/__main__.py", "munet/swarm/owner.py", "munet/bin/munet-node",
-                             "munet/models/rtdetr/__init__.py", "munet/models/rtdetr/LICENSE-RT-DETR", "munet/checkpoint.py"):
+                             "munet/nn.py", "munet/optim.py", "munet/checkpoint.py"):
                 if required not in files:
                     raise ValueError(f"{wheel.name} is missing {required}")
+            if any(n.startswith(("munet/models/", "munet_nn/models/", "examples/")) for n in files):
+                raise ValueError("model implementations and examples must not be packaged in the library wheel")
             if not any(n.startswith("munet/_native.") and n.endswith(".so") for n in files):
                 raise ValueError("missing native extension")
             if not (z.getinfo("munet/bin/munet-node").external_attr >> 16) & 0o111:
@@ -38,6 +41,9 @@ def check(directory, *, require_sdist=True):
             metadata = BytesParser().parsebytes(z.read(next(n for n in files if n.endswith(".dist-info/METADATA"))))
             if metadata["Name"] != "munet-nn" or metadata["Version"] != version:
                 raise ValueError("wheel metadata does not match the project")
+            requirements = [Requirement(r) for r in metadata.get_all("Requires-Dist", [])]
+            if {r.name for r in requirements if r.marker is None or r.marker.evaluate({"extra": ""})} != {"numpy"}:
+                raise ValueError("the core library must depend only on NumPy; tooling belongs in extras/examples")
             entries = ConfigParser()
             entries.read_string(z.read(next(n for n in files if n.endswith(".dist-info/entry_points.txt"))).decode())
             for command in ("munet-node", "munet-server"):
@@ -51,7 +57,9 @@ def check(directory, *, require_sdist=True):
             files = {str(Path(n).relative_to(Path(n).parts[0])) for n in archive.getnames()}
         for required in ("cpp/core.hpp", "cpp/swarm/node.cpp", "cpp/vulkan_loader.hpp", "CMakeLists.txt",
                          "cmake/MuNetConfig.cmake.in", "cpp/third_party/nlohmann/LICENSE.MIT", "tools/smoke_install.py",
-                         "cpp/ops.cpp", "cpp/kernels/grid.inc", "cmake/kernel_sources.hpp.in"):
+                         "cpp/ops.cpp", "cpp/kernels/grid.inc", "cmake/kernel_sources.hpp.in", "conftest.py",
+                         "examples/rtdetr/__init__.py", "examples/rtdetr/LICENSE-RT-DETR", "examples/rtdetr/NOTICE",
+                         "examples/rtdetr/requirements.txt", "examples/rtdetr/train.py"):
             if required not in files:
                 raise ValueError(f"source distribution missing {required}")
     print(f"Validated {len(wheels)} munet-nn {version} wheels and {len(sources)} source distributions")

@@ -1,7 +1,7 @@
 """Small-data convergence gate, separate from the reference numerical gate."""
 import numpy as np
 import munet as mu
-from munet.models.rtdetr import RTDETR,DetectorTrainer
+from examples.rtdetr import RTDETR,DetectorTrainer
 
 
 def test_tiny_detector_head_overfits_a_fixed_batch():

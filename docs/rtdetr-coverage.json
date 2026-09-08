@@ -5,7 +5,9 @@
     "commit": "29320b6fd828f8e0987a71426cf2d961b09dfed7",
     "config": "rtdetr_pytorch/configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
   },
-  "current_scope": "Native static float32 RT-DETR v1 R50-vd training/inference, checkpoint resume and ONNX interchange; MSE/SGD swarm retained",
+  "current_scope": "Model-independent native float32 NN building blocks, checkpointing, ONNX interchange and MSE/SGD swarm; RT-DETR v1 is a source example",
+  "example_path": "examples/rtdetr",
+  "packaged_models": [],
   "rtdetr_inference_supported": true,
   "rtdetr_training_supported": true,
   "multiple_gpu_training_supported": false,

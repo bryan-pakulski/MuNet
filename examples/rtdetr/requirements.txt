@@ -1,0 +1,2 @@
+# Image input/preprocessing for this example. MuNet supplies NumPy.
+Pillow>=10

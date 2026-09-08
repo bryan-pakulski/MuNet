@@ -2,7 +2,9 @@
 
 A greenfield, experimental C++17 graph compiler for Vulkan training and inference, with a small PyTorch-style Python interface.
 
-**Version 0.3.0 adds native RT-DETR v1 training and inference.** It includes the R50-vd model, detection losses, AdamW/EMA, resumable training and model interchange. This remains an experimental correctness baseline; full COCO convergence and physical-device performance are not yet established. The greenfield runtime retains the `munet-nn` PyPI project and `munet_nn` import name. The new API also uses `import munet`; this is a breaking rewrite of the 0.1 API.
+**MuNet is the building blocks for creating neural networks:** tensors, layers, automatic differentiation, optimizers, graph compilation, device execution and model interchange. The installed library has NumPy as its only Python runtime dependency. Model architectures, datasets and training recipes belong in examples or applications.
+
+Version 0.3.0 adds the operations needed to build and train the [RT-DETR example](examples/rtdetr/README.md). That model is an acceptance test and reference application under `examples/rtdetr/`; it is not packaged in the library. Full COCO convergence and physical-device performance are not yet established. The runtime retains the `munet-nn` PyPI project and `munet_nn` import name; `import munet` is also supported. This is a breaking rewrite of the 0.1 API.
 
 The C++ core owns graph validation, shape inference, symbolic reverse-mode differentiation, fusion, temporary-buffer planning, CPU reference execution, GLSL generation, and Vulkan execution. Python constructs models, captures a static graph once, invokes the shader compiler on cache misses, and exposes model conversion and serialization.
 
@@ -11,7 +13,7 @@ The C++ core owns graph validation, shape inference, symbolic reverse-mode diffe
 - Float32 tensors with positive static dimensions, rank up to eight.
 - Convolution and pooling with backward, batched matrix multiplication, normalization, attention, differentiable bilinear sampling, indexing, TopK and broadcast arithmetic.
 - PyTorch-style modules, persistent train/eval buffers, SGD, AdamW parameter groups, gradient clipping and EMA.
-- A compiled forward/loss/backward/optimizer/EMA step, including native Hungarian assignment and RT-DETR denoising and auxiliary losses. Parameters remain in Vulkan memory between calls; `.item()`, `.numpy()`, saving, and explicit interop perform readbacks.
+- A compiled forward/loss/backward/optimizer/EMA step and native assignment operation. Parameters remain in Vulkan memory between calls; `.item()`, `.numpy()`, saving, and explicit interop perform readbacks.
 - Single-consumer scalar-operation fusion, including view expressions feeding matrix multiplication; temporary buffers reused after their final consumers.
 - GLSL → SPIR-V compilation on demand, a persistent SPIR-V cache, Vulkan pipeline creation, and recorded command-buffer replay.
 - Data-only `.mnet` save/load, including training state; native graph → ONNX → native graph conversion for the supported subset.
@@ -19,7 +21,7 @@ The C++ core owns graph validation, shape inference, symbolic reverse-mode diffe
 - An explicit CPU reference backend. Selecting Vulkan never silently runs native operators on the CPU.
 - A disconnect-tolerant training swarm: one durable owner, C++ worker binaries, capability-based leases, cached offline computation, result retries, and sample-weighted MSE/SGD rounds.
 
-Read the [RT-DETR guide and runnable examples](docs/rtdetr.md), [installation and releases](docs/install.md), [the architecture and decisions](docs/architecture.md), [training swarm guide](docs/swarm.md), [RT-DETR acceptance plan](docs/rtdetr-acceptance.md), and [validation report](docs/validation.md).
+Read the [RT-DETR example](examples/rtdetr/README.md), [installation and releases](docs/install.md), [the architecture and decisions](docs/architecture.md), [training swarm guide](docs/swarm.md), [RT-DETR acceptance plan](docs/rtdetr-acceptance.md), and [validation report](docs/validation.md).
 
 ## Install
 
@@ -72,11 +74,10 @@ python -m pip install '.[interop,test]' -Ccmake.define.MUNET_VULKAN=OFF
 python examples/train_mlp.py --device cpu
 ```
 
-For editable development without rebuilding a wheel:
+For manual source development without rebuilding a wheel:
 
 ```bash
-python -m pip install cmake pybind11 numpy pytest onnx onnxruntime scipy Pillow torch onnxscript
-python tools/fetch_rtdetr_reference.py
+python -m pip install cmake pybind11 numpy pytest onnx onnxruntime scipy torch onnxscript
 python tools/build.py                  # add --cpu-only when needed
 PYTHONPATH=python python -m pytest -q
 MUNET_TEST_VULKAN=1 PYTHONPATH=python python -m pytest -q
@@ -85,6 +86,23 @@ PYTHONPATH=python python tools/test.py --vulkan-validation
 ```
 
 The opted-in Vulkan tests fail when the driver/compiler is unavailable. They do not skip or select the CPU instead. `tools/build.py --cmake-arg=-DVulkan_INCLUDE_DIR=...` accepts custom SDK paths.
+
+## RT-DETR example
+
+The model, matching/loss recipe, image and COCO handling, training loop, and
+acceptance tests live together under `examples/rtdetr/`. Set it up separately:
+
+```bash
+make setup-rtdetr
+make test-rtdetr
+PYTHONPATH=python .venv/bin/python -m examples.rtdetr.train --help
+```
+
+Use `from examples.rtdetr import RTDETR` from the repository root. There is no
+`munet.models` or `munet_nn.models` API. See the [example guide](docs/rtdetr.md)
+for training, checkpoint/resume, inference and evaluation commands. `make setup`
+builds the library without downloading PyTorch or the RT-DETR reference; `make
+test` installs the optional numerical-reference tools and runs library tests.
 
 ## Python training
 
@@ -143,7 +161,7 @@ ONNX support is **default-domain opsets 13–18**, static float32 computation, a
 
 Export produces a standard inference graph and preserves supported computation, not original Python classes or exact graph topology. Native training programs must be exported by compiling their trained model separately. A supported inference graph does not reconstruct the original training behavior of an arbitrary PyTorch model.
 
-`mu.save(train_step, "step.mnet")` and `mu.load(...)` preserve compiled computation and current device state. Use `DetectorTrainer.save/load` for model, optimizer, EMA, scheduler and host RNG resume. This is a new versioned archive format; no reader for the previous MuNet format is included.
+`mu.save(train_step, "step.mnet")` and `mu.load(...)` preserve compiled computation and current device state. `munet.checkpoint.save_state/load_state` supplies data-only state archives for application training loops; the RT-DETR example's `DetectorTrainer` uses it for model, optimizer, EMA, scheduler and RNG resume. This is a new versioned archive format; no reader for the previous MuNet format is included.
 
 ## Training swarm
 

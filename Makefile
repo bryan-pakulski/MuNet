@@ -20,15 +20,18 @@ ifeq ($(filter 0 1,$(VULKAN)),)
 $(error VULKAN must be 0 or 1)
 endif
 
-.PHONY: help setup deps build reference test test-vulkan smoke install clean
+.PHONY: help setup deps build test-deps rtdetr-deps setup-rtdetr reference test test-vulkan test-rtdetr test-rtdetr-vulkan smoke install clean
 
 help:
 	@printf '%s\n' \
-	  'make setup           Create .venv, install test dependencies, build library/node, fetch reference' \
+	  'make setup           Create .venv and build the library/node (no PyTorch or model downloads)' \
 	  'make setup VULKAN=0  Set up without Vulkan headers or a GPU driver' \
 	  'make build           Rebuild native code after edits (incremental)' \
-	  'make test            CPU numerical, detector and swarm tests' \
+	  'make test            Install reference-test tools and run library CPU/swarm tests' \
 	  'make test-vulkan     CPU + Vulkan tests with API/synchronization validation (VULKAN=1)' \
+	  'make setup-rtdetr    Set up the optional RT-DETR example and image dependencies' \
+	  'make test-rtdetr     Run RT-DETR example acceptance tests on CPU' \
+	  'make test-rtdetr-vulkan  Run example acceptance tests with Vulkan validation' \
 	  'make smoke           Run the small MLP training example (DEVICE=cpu or vulkan)' \
 	  'make install         Install library and node/server commands into the virtual environment' \
 	  'make clean           Clean native build outputs; keep dependencies, data and checkpoints' \
@@ -42,27 +45,46 @@ $(VENV_PYTHON):
 # Keep the development dependencies aligned with pyproject.toml and ci.yml.
 $(VENV)/.munet-deps: pyproject.toml Makefile | $(VENV_PYTHON)
 	"$(VENV_PYTHON)" -m pip install --upgrade pip
-	"$(VENV_PYTHON)" -m pip install 'cmake>=3.20' 'pybind11>=3.0' 'scikit-build-core>=0.10' 'numpy>=1.24' 'pytest>=8' 'onnx>=1.16' 'onnxruntime>=1.18' 'onnxscript>=0.3' 'scipy>=1.10' 'Pillow>=10'
+	"$(VENV_PYTHON)" -m pip install 'cmake>=3.20' 'pybind11>=3.0' 'scikit-build-core>=0.10' 'numpy>=1.24' 'pytest>=8' 'onnx>=1.16'
+	touch "$@"
+
+$(VENV)/.munet-test-deps: pyproject.toml Makefile | deps
+	"$(VENV_PYTHON)" -m pip install 'onnxruntime>=1.18' 'onnxscript>=0.3' 'scipy>=1.10'
 	"$(VENV_PYTHON)" -m pip install 'torch>=2.6' --index-url "$(TORCH_INDEX_URL)"
 	touch "$@"
 
-deps: $(VENV)/.munet-deps
+$(VENV)/.munet-rtdetr-deps: examples/rtdetr/requirements.txt | deps
+	"$(VENV_PYTHON)" -m pip install -r examples/rtdetr/requirements.txt
+	touch "$@"
 
-setup: build reference
+deps: $(VENV)/.munet-deps
+test-deps: $(VENV)/.munet-test-deps
+rtdetr-deps: $(VENV)/.munet-rtdetr-deps
+
+setup: build
+setup-rtdetr: build rtdetr-deps
 
 build: deps
 	"$(VENV_PYTHON)" tools/build.py $(BUILD_FLAGS) $(CMAKE_ARGS)
 
 reference: $(VENV_PYTHON)
-	"$(VENV_PYTHON)" tools/fetch_rtdetr_reference.py
+	"$(VENV_PYTHON)" examples/rtdetr/fetch_reference.py
 
-test: build reference
+test: build test-deps
 	MUNET_TEST_VULKAN=0 $(RUN) tools/test.py --swarm
 
 test-vulkan:
 	@test "$(VULKAN)" = 1 || { printf '%s\n' 'Use make test-vulkan VULKAN=1 to build and test the Vulkan runtime.'; exit 1; }
-	$(MAKE) build reference
+	$(MAKE) build test-deps
 	$(RUN) tools/test.py --vulkan-validation --swarm
+
+test-rtdetr: build test-deps rtdetr-deps reference
+	MUNET_TEST_VULKAN=0 $(RUN) tools/test.py examples/rtdetr/tests
+
+test-rtdetr-vulkan:
+	@test "$(VULKAN)" = 1 || { printf '%s\n' 'Use make test-rtdetr-vulkan VULKAN=1.'; exit 1; }
+	$(MAKE) build test-deps rtdetr-deps reference
+	$(RUN) tools/test.py --vulkan-validation examples/rtdetr/tests
 
 smoke: build
 	$(RUN) examples/train_mlp.py --device "$(DEVICE)" --steps 20

@@ -1,7 +1,7 @@
 """RT-DETR v1 matching, varifocal/focal/BCE and box losses on native graphs."""
 import numpy as np
-from ... import nn
-from ...core import as_tensor, cat, operation, where
+from munet import nn
+from munet.core import as_tensor, cat, operation, where
 
 
 def cxcywh_to_xyxy(boxes): return cat([boxes[...,:2]-boxes[...,2:]*0.5,boxes[...,:2]+boxes[...,2:]*0.5],-1)

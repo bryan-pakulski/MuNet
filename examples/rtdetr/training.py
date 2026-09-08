@@ -2,8 +2,8 @@
 from collections import OrderedDict
 import copy
 import numpy as np
-from ... import compile, optim, nn
-from ...checkpoint import save_state,load_state
+from munet import compile, optim, nn
+from munet.checkpoint import save_state,load_state
 from . import RTDETR, SetCriterion, pad_targets, prepare_denoising
 
 
@@ -104,11 +104,11 @@ class DetectorTrainer:
         return model
 
     def export(self,path,example_images,*,onnx_path=None,use_ema=True):
-        from ...serialization import save
+        from munet.serialization import save
         model=self.inference_model(use_ema);program=compile(model,device=self.device);program(example_images)
         save(program,path)
         if onnx_path is not None:
-            from ...interop import to_onnx
+            from munet.interop import to_onnx
             to_onnx(program,onnx_path)
         return program
 

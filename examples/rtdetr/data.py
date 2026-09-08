@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 import numpy as np
-from ... import nn,compile
+from munet import nn,compile
 from .loss import cxcywh_to_xyxy
 
 
