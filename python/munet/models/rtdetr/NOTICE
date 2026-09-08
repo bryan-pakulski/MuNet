@@ -1,0 +1,9 @@
+RT-DETR source adaptations
+Original repository: https://github.com/lyuwenyu/RT-DETR
+Pinned commit: 29320b6fd828f8e0987a71426cf2d961b09dfed7
+Authors: lyuwenyu and RT-DETR contributors
+License: Apache License 2.0 (included as LICENSE-RT-DETR)
+
+backbone.py, encoder.py and decoder.py adapt the reference architecture and names.
+MuNet changes replace PyTorch execution with native graph operations, persistent
+buffers, explicit denoising inputs, NumPy initialization, and static shape guards.

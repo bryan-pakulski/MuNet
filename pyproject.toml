@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "munet-nn"
-version = "0.2.0"
+version = "0.3.0"
 description = "Experimental C++ graph compiler for portable Vulkan training and inference"
 readme = "README.md"
 license = { text = "Proprietary" }
@@ -23,7 +23,9 @@ munet-server = "munet.swarm.__main__:main"
 [project.optional-dependencies]
 interop = ["onnx>=1.16"]
 vk = ["onnx>=1.16", "onnxruntime>=1.18"]
-test = ["pytest>=8", "onnx>=1.16", "onnxruntime>=1.18"]
+test = ["pytest>=8", "onnx>=1.16", "onnxruntime>=1.18", "scipy>=1.10", "Pillow>=10"]
+detection = ["Pillow>=10"]
+coco = ["Pillow>=10", "pycocotools>=2.0.7"]
 torch = ["torch>=2.6", "onnx>=1.16", "onnxscript>=0.3"]
 
 [tool.scikit-build]

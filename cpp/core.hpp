@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 #include <map>
+#include <functional>
 
 namespace munet {
 using Shape = std::vector<int64_t>;
@@ -28,7 +29,7 @@ class Graph {
   Id scalar(float v);
   Id sum_to(Id value, const Shape& shape);
 };
-struct Kernel { Id root; size_t count; std::string source; };
+struct Kernel { Id root; size_t count; std::string source; std::vector<std::pair<size_t,size_t>> bindings; };
 struct Counters {
   uint64_t runs=0, submissions=0, dispatches=0, upload_bytes=0, download_bytes=0, waits=0;
 };
@@ -74,9 +75,14 @@ class Plan {
   size_t unfused_nodes_=0, naive_floats_=0, arena_floats_=0;
   Counters counters_;
   std::unique_ptr<DeviceExecutor> device_;
+  void initialize_arena();
   float read_value(Id id,size_t index) const;
   float calculate(Id id,size_t index) const;
+  float extended_calculate(Id id,size_t index) const;
+  std::string extended_shader(Id id) const;
   std::string expr(Id id,const std::string& index,bool force=false) const;
   std::string shader(Id root) const;
+  std::vector<Id> binding_ids(Id root) const;
+  std::string shader_header(Id root) const;
 };
 }

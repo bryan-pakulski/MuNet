@@ -71,11 +71,11 @@ def test_from_torch_modern_export(device):
 def test_unsupported_onnx_is_explicit_and_never_executes_fallback(tmp_path):
     import onnx
     from onnx import helper as h, TensorProto as T
-    graph = h.make_graph([h.make_node("Softmax", ["x"], ["y"], name="attention_softmax")], "unsupported",
+    graph = h.make_graph([h.make_node("CumSum", ["x"], ["y"], name="unsupported_cumsum")], "unsupported",
                         [h.make_tensor_value_info("x", T.FLOAT, [2, 3])], [h.make_tensor_value_info("y", T.FLOAT, [2, 3])])
     path = tmp_path / "unsupported.onnx"
     onnx.save(h.make_model(graph, opset_imports=[h.make_opsetid("", 18)], ir_version=8), path)
-    with pytest.raises(UnsupportedOperatorError, match="attention_softmax"):
+    with pytest.raises(UnsupportedOperatorError, match="unsupported_cumsum"):
         from_onnx(path, device="cpu")
     graph.input[0].type.tensor_type.shape.dim[0].dim_param = "batch"
     graph.node[0].op_type = "Relu"

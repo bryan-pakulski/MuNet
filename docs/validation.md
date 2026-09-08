@@ -1,5 +1,56 @@
 # Validation report
 
+## RT-DETR 0.3 validation
+
+The additional implementation was checked on the same CPU/software-Vulkan host.
+The pinned official reference is fetched by SHA and each source file is checked
+against `tests/rtdetr-reference.json`. Reference adapters only remove registry/
+distributed scaffolding, an unused torchvision import, and replace its float32
+box-area helper with the same four-coordinate formula. Model/loss computations
+remain the pinned upstream PyTorch code.
+
+- 43 primitive/detector cases passed across CPU and software Vulkan, with API and
+  synchronization validation enabled and zero validation error markers.
+- The default-width, six-layer R50-vd inference test compares backbone features,
+  hybrid-encoder features, logits and boxes with upstream (1×3×32×64, four queries).
+- The R50 backbone training test includes a two-layer compact decoder, two images
+  at 64×64, one empty target, fresh shared denoising inputs, all auxiliary loss
+  terms and selected backbone/encoder/sampling/box-head/embedding gradients.
+  Primitive sampling also has finite-difference checks. Tests avoid exact loss
+  kinks, where a one-ULP coordinate change can legitimately change a derivative.
+- The tensor-descriptor runtime passed a subsequent 52-case CPU/Vulkan regression
+  run after adding deferred allocation and 64-bit arena offsets. A 6 GiB plan is
+  tested without allocating its tensor arena. Full 640×640 R50 training plans
+  successfully at 5,327,510,016 arena bytes; this is a planning-only check.
+- A complete **default R50-vd** CPU training step used 80 classes, 256 hidden
+  channels, eight heads, six layers, 300 queries and 100 DN queries, with a
+  2×3×160×160 batch. All 387 participating trainable parameters had AdamW state;
+  EMA advanced to step one. Loss was 38.91286 and the unclipped norm was 207.86143.
+  The planned arena was 2,317,059,584 bytes and 21,268 kernels after fusion.
+  First capture plus CPU execution took about 651 seconds under shared load.
+  These numbers describe a correctness smoke, not a throughput benchmark.
+- The compact-head fixed-batch learning test runs 100 AdamW updates and requires
+  the final detection loss below 65% of its initial value. It is not COCO training.
+- CPU training-state resume checks AdamW, BN, EMA, scheduler, host denoising RNG,
+  trained-model export and `.mnet` reload over multiple subsequent steps.
+- Complete compact-detector native → ONNX → native → `.mnet` round trips and the
+  modern exporter import of the pinned upstream detector pass. Local independent
+  ONNX execution uses its reference evaluator; ONNX Runtime is additionally
+  required in CI because the local environment previously blocked its telemetry.
+- 34 CPU runtime/packaging/swarm compatibility cases passed (the mixed-Vulkan
+  swarm case is selected in the Vulkan CI job); 15 additional format/interop/
+  packaging checks passed. Workflow YAML passed actionlint.
+- The 0.3.0 Linux CPython 3.12 wheel built and installed successfully, includes the
+  detector modules/license, and completed native node/server training, restart,
+  checkpoint and headless-import smoke checks.
+
+JUnit and generated validation reports are retained under `artifacts/validation`
+in CI. Physical GPUs, 640×640 full training, full COCO AP, ARM correctness and
+large-model swarm semantics are not established by these local checks. The
+release CI matrix rebuilds Linux x86-64/aarch64 wheels and standalone binaries.
+
+## Previous 0.2 foundation validation
+
 Validated locally on 7 September 2026. **57 tests passed, 0 failed, 0 skipped**, including 18 swarm tests and three release-packaging tests. After adding a nineteenth swarm case for native TLS trust and hostname verification, a targeted run passed that case plus offline recovery and compiler-mismatch checks (3 passed). Vulkan API and synchronization validation were enabled; the captured output contained zero validation error markers. Loader diagnostics confirmed that `VK_LAYER_KHRONOS_validation` was loaded. Interoperability tests request that ONNX Runtime telemetry be disabled. A subsequent full-suite repeat was blocked by the execution environment when that dependency attempted a telemetry connection; the final worker changes were verified separately without importing it.
 
 ## Environment

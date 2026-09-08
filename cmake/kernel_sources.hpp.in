@@ -1,0 +1,6 @@
+#pragma once
+#include <map>
+#include <string>
+static const std::map<std::string,std::string> kernel_sources = {
+@MUNET_KERNEL_SOURCE@
+};

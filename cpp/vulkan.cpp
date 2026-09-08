@@ -39,10 +39,10 @@ class Vulkan final:public DeviceExecutor {
   VkCommandPool pool_=VK_NULL_HANDLE;
   VkCommandBuffer replay_=VK_NULL_HANDLE,transfer_=VK_NULL_HANDLE;
   VkFence fence_=VK_NULL_HANDLE;
-  VkDescriptorSetLayout set_layout_=VK_NULL_HANDLE;
+  std::vector<VkDescriptorSetLayout> set_layouts_;
   VkDescriptorPool descriptor_pool_=VK_NULL_HANDLE;
-  VkDescriptorSet set_=VK_NULL_HANDLE;
-  VkPipelineLayout layout_=VK_NULL_HANDLE;
+  std::vector<VkDescriptorSet> sets_;
+  std::vector<VkPipelineLayout> layouts_;
   VkPipelineCache cache_=VK_NULL_HANDLE;
   std::vector<VkPipeline> pipelines_;
   Buffer arena_,staging_;
@@ -55,9 +55,9 @@ class Vulkan final:public DeviceExecutor {
       vkDeviceWaitIdle(device_);
       for(auto pipeline:pipelines_) vkDestroyPipeline(device_,pipeline,nullptr);
       if(cache_)vkDestroyPipelineCache(device_,cache_,nullptr);
-      if(layout_)vkDestroyPipelineLayout(device_,layout_,nullptr);
+      for(auto layout:layouts_)vkDestroyPipelineLayout(device_,layout,nullptr);
       if(descriptor_pool_)vkDestroyDescriptorPool(device_,descriptor_pool_,nullptr);
-      if(set_layout_)vkDestroyDescriptorSetLayout(device_,set_layout_,nullptr);
+      for(auto layout:set_layouts_)vkDestroyDescriptorSetLayout(device_,layout,nullptr);
       if(fence_)vkDestroyFence(device_,fence_,nullptr);
       if(pool_)vkDestroyCommandPool(device_,pool_,nullptr);
       for(auto* b:{&arena_,&staging_}) {
@@ -108,8 +108,15 @@ class Vulkan final:public DeviceExecutor {
       if(index>=devices.size())throw std::runtime_error("Vulkan device index unavailable; inspect munet.devices()");
       physical_=devices[index];vkGetPhysicalDeviceProperties(physical_,&props_);vkGetPhysicalDeviceMemoryProperties(physical_,&memory_);
       if(props_.apiVersion<VK_API_VERSION_1_1)throw std::runtime_error("MuNet v0 requires Vulkan 1.1");
-      if(initial.empty()||initial.size()*sizeof(float)>props_.limits.maxStorageBufferRange)
-        throw std::runtime_error("graph arena exceeds device maxStorageBufferRange; split-arena allocation is not implemented");
+      if(initial.empty())throw std::runtime_error("empty graph arena");
+      for(const auto& k:kernels) {
+        if(k.bindings.size()>props_.limits.maxPerStageDescriptorStorageBuffers||k.bindings.size()>props_.limits.maxDescriptorSetStorageBuffers)
+          throw std::runtime_error("kernel exceeds device storage descriptor count");
+        for(auto [off,count]:k.bindings) {
+          if(count*4>props_.limits.maxStorageBufferRange)throw std::runtime_error("individual tensor exceeds device maxStorageBufferRange; reduce batch/image size");
+          if(off*4%props_.limits.minStorageBufferOffsetAlignment)throw std::runtime_error("tensor offset does not satisfy device storage alignment");
+        }
+      }
       if(props_.limits.maxComputeWorkGroupInvocations<64||props_.limits.maxComputeWorkGroupSize[0]<64)
         throw std::runtime_error("device cannot execute the 64-thread baseline kernel");
       uint32_t count=0;vkGetPhysicalDeviceQueueFamilyProperties(physical_,&count,nullptr);
@@ -132,23 +139,35 @@ class Vulkan final:public DeviceExecutor {
       auto bytes=initial.size()*sizeof(float);
       buffer(arena_,bytes,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_SRC_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
       buffer(staging_,bytes,VK_BUFFER_USAGE_TRANSFER_SRC_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-      VkDescriptorSetLayoutBinding binding{};binding.binding=0;binding.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;binding.descriptorCount=1;binding.stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;
-      VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};sl.bindingCount=1;sl.pBindings=&binding;
-      check(vkCreateDescriptorSetLayout(device_,&sl,nullptr,&set_layout_),"create descriptor layout");
-      VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1};VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dp.maxSets=1;dp.poolSizeCount=1;dp.pPoolSizes=&ps;
+      // Each dispatch binds tensor-sized views of the arena. Total model/optimizer
+      // state may exceed maxStorageBufferRange without requiring descriptor indexing.
+      uint32_t descriptor_count=0;for(const auto& k:kernels)descriptor_count+=k.bindings.size();
+      VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,std::max(1u,descriptor_count)};
+      VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dp.maxSets=std::max(size_t(1),kernels.size());dp.poolSizeCount=1;dp.pPoolSizes=&ps;
       check(vkCreateDescriptorPool(device_,&dp,nullptr,&descriptor_pool_),"create descriptor pool");
-      VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};da.descriptorPool=descriptor_pool_;da.descriptorSetCount=1;da.pSetLayouts=&set_layout_;
-      check(vkAllocateDescriptorSets(device_,&da,&set_),"allocate descriptor set");
-      VkDescriptorBufferInfo db{arena_.buffer,0,bytes};VkWriteDescriptorSet wd{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wd.dstSet=set_;wd.dstBinding=0;wd.descriptorCount=1;wd.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;wd.pBufferInfo=&db;
-      vkUpdateDescriptorSets(device_,1,&wd,0,nullptr);
-      VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pl.setLayoutCount=1;pl.pSetLayouts=&set_layout_;
-      check(vkCreatePipelineLayout(device_,&pl,nullptr,&layout_),"create pipeline layout");
+      for(const auto& kernel:kernels) {
+        std::vector<VkDescriptorSetLayoutBinding> bindings(kernel.bindings.size());
+        for(size_t b=0;b<bindings.size();++b) {bindings[b].binding=b;bindings[b].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;bindings[b].descriptorCount=1;bindings[b].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
+        VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};sl.bindingCount=bindings.size();sl.pBindings=bindings.data();
+        VkDescriptorSetLayout set_layout=VK_NULL_HANDLE;check(vkCreateDescriptorSetLayout(device_,&sl,nullptr,&set_layout),"create descriptor layout");set_layouts_.push_back(set_layout);
+        VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};da.descriptorPool=descriptor_pool_;da.descriptorSetCount=1;da.pSetLayouts=&set_layout;
+        VkDescriptorSet set=VK_NULL_HANDLE;check(vkAllocateDescriptorSets(device_,&da,&set),"allocate descriptor set");sets_.push_back(set);
+        std::vector<VkDescriptorBufferInfo> infos(bindings.size());std::vector<VkWriteDescriptorSet> writes(bindings.size());
+        for(size_t b=0;b<bindings.size();++b) {
+          infos[b]={arena_.buffer,kernel.bindings[b].first*4,kernel.bindings[b].second*4};
+          writes[b]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};writes[b].dstSet=set;writes[b].dstBinding=b;writes[b].descriptorCount=1;writes[b].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;writes[b].pBufferInfo=&infos[b];
+        }
+        vkUpdateDescriptorSets(device_,writes.size(),writes.data(),0,nullptr);
+        VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pl.setLayoutCount=1;pl.pSetLayouts=&set_layout;
+        VkPipelineLayout layout=VK_NULL_HANDLE;check(vkCreatePipelineLayout(device_,&pl,nullptr,&layout),"create pipeline layout");layouts_.push_back(layout);
+      }
       VkPipelineCacheCreateInfo pc{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};check(vkCreatePipelineCache(device_,&pc,nullptr,&cache_),"create pipeline cache");
-      for(const auto& code:spirv) {
+      for(size_t k=0;k<spirv.size();++k) {
+        const auto& code=spirv[k];
         if(code.size()<5||code[0]!=0x07230203)throw std::invalid_argument("invalid SPIR-V module");
         VkShaderModuleCreateInfo sm{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};sm.codeSize=code.size()*4;sm.pCode=code.data();VkShaderModule module=VK_NULL_HANDLE;
         check(vkCreateShaderModule(device_,&sm,nullptr,&module),"create shader module");
-        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};ci.layout=layout_;ci.stage.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;ci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;ci.stage.module=module;ci.stage.pName="main";
+        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};ci.layout=layouts_[k];ci.stage.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;ci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;ci.stage.module=module;ci.stage.pName="main";
         VkPipeline pipeline=VK_NULL_HANDLE;auto result=vkCreateComputePipelines(device_,cache_,1,&ci,nullptr,&pipeline);
         vkDestroyShaderModule(device_,module,nullptr);if(pipeline)pipelines_.push_back(pipeline);check(result,"create compute pipeline");
       }
@@ -157,11 +176,12 @@ class Vulkan final:public DeviceExecutor {
       barrier(replay_,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_ACCESS_MEMORY_WRITE_BIT|VK_ACCESS_MEMORY_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
       for(auto [offset,size]:inputs) {VkBufferCopy c{offset*4,offset*4,size*4};vkCmdCopyBuffer(replay_,staging_.buffer,arena_.buffer,1,&c);}
       barrier(replay_,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT);
-      vkCmdBindDescriptorSets(replay_,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&set_,0,nullptr);
       for(size_t k=0;k<kernels.size();++k) {
+        vkCmdBindDescriptorSets(replay_,VK_PIPELINE_BIND_POINT_COMPUTE,layouts_[k],0,1,&sets_[k],0,nullptr);
         auto groups=(kernels[k].count+63)/64;
-        if(groups>props_.limits.maxComputeWorkGroupCount[0])throw std::runtime_error("dispatch exceeds device workgroup-count limit");
-        vkCmdBindPipeline(replay_,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[k]);vkCmdDispatch(replay_,groups,1,1);
+        auto gx=std::min(size_t(props_.limits.maxComputeWorkGroupCount[0]),groups),gy=(groups+gx-1)/gx;
+        if(gy>props_.limits.maxComputeWorkGroupCount[1])throw std::runtime_error("dispatch exceeds device workgroup-count limit");
+        vkCmdBindPipeline(replay_,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[k]);vkCmdDispatch(replay_,gx,gy,1);
         // Include read->write hazards introduced by reusing temporary storage.
         barrier(replay_,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,
           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT);

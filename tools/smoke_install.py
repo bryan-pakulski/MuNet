@@ -27,3 +27,10 @@ if mu._native.vulkan_built():
         raise AssertionError("explicit missing Vulkan loader was ignored")
 scripts = Path(sysconfig.get_path("scripts"))
 exercise(scripts / "munet-node", scripts / "munet-server")
+
+# The wheel must include detector modules and their adapted-source license.
+from munet.models.rtdetr import PostProcessor, rtdetr_r18vd
+assert (Path(mu.__file__).parent / 'models/rtdetr/LICENSE-RT-DETR').is_file()
+conv=mu.nn.Conv2d(1,2,3,padding=1)
+image=np.ones((1,1,4,4),np.float32)
+assert mu.compile(conv,device='cpu')(image).shape==(1,2,4,4)

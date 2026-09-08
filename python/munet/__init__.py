@@ -1,7 +1,7 @@
-from .core import Tensor, Parameter, Result, compile, grad, devices
+from .core import Tensor, Parameter, Buffer, Result, compile, grad, devices, as_tensor, cat, stack, where
 from . import nn, optim
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 def save(program, path):
     from .serialization import save

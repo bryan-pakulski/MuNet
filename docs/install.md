@@ -4,10 +4,10 @@ MuNet keeps the existing **`munet-nn` PyPI project**. `pip install munet_nn` and
 
 ## Install the library, node and server together
 
-After a 0.2.0 release has been published:
+After a 0.3.0 release has been published:
 
 ```bash
-python -m pip install --upgrade 'munet-nn>=0.2.0'
+python -m pip install --upgrade 'munet-nn>=0.3.0'
 munet-node --version
 munet-server --version
 ```
@@ -23,9 +23,9 @@ For compiling new Vulkan graphs or preparing Vulkan swarm jobs, install `glslang
 Optional Python tooling:
 
 ```bash
-python -m pip install 'munet-nn[interop]>=0.2.0' # ONNX conversion
-python -m pip install 'munet-nn[torch]>=0.2.0'   # PyTorch export/import tooling
-python -m pip install 'munet-nn[vk]>=0.2.0'      # Retained ONNX/ONNX Runtime extra
+python -m pip install 'munet-nn[interop]>=0.3.0' # ONNX conversion
+python -m pip install 'munet-nn[torch]>=0.3.0'   # PyTorch export/import tooling
+python -m pip install 'munet-nn[vk]>=0.3.0'      # Retained ONNX/ONNX Runtime extra
 ```
 
 The `vk` extra retains its previous tooling meaning; it does not install a GPU driver or select a different wheel. The old `cu12-vk` and `cu13-vk` extras are removed because this implementation has no CUDA backend.
@@ -108,3 +108,7 @@ cmake --install build-native --prefix /path/to/install
 ```
 
 To build standalone archives locally, use a clean Python 3.12 environment with a shared `libpython`, install the newly built/repaired wheel plus `pyinstaller==6.22.2`, `cmake` and `packaging`, then run `python tools/build_release.py --wheel /path/to/wheel.whl`. For distributable Linux binaries, use the workflow's matching manylinux container and its distribution-provided Python 3.12. The static `/opt/python` interpreters build wheels but cannot freeze the server. Building on a newer host raises the minimum glibc requirement. Each archive records its build host, version and architecture in `manifest.json`.
+
+## Detector extras
+
+Version 0.3 adds `munet-nn[detection]` (Pillow preprocessing), `munet-nn[coco]` (COCO evaluation), and the existing `interop`/`torch` extras for model conversion. The base library and node/server command installation stay under the same `munet-nn` PyPI project and trusted-publisher workflow. See [the detector guide](rtdetr.md).
