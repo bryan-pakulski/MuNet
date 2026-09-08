@@ -20,6 +20,7 @@ def main():
     parser.add_argument("action", choices=["prepare", "export"])
     parser.add_argument("directory", type=Path)
     parser.add_argument("--cpu-only", action="store_true", help="omit SPIR-V from a new job")
+    parser.add_argument("--device", default="vulkan", help="export inference device: vulkan, vulkan:N or cpu")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--output", type=Path, default=Path("swarm-trained.mnet"))
     parser.add_argument("--onnx", action="store_true", help="also export the trained inference graph as ONNX")
@@ -37,7 +38,7 @@ def main():
         print(f"Exporting checkpoint {status['version']} ({status['epochs_completed']} completed epochs)")
     finally:
         owner.close()
-    inference = mu.compile(model, device="cpu")
+    inference = mu.compile(model, device="cpu" if args.cpu_only else args.device)
     prediction = inference(x).numpy()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     mu.save(inference, args.output)

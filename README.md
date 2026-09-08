@@ -42,8 +42,7 @@ For local development and testing, use the Makefile (Linux, Python 3.10+):
 ```bash
 sudo apt-get install build-essential python3-dev python3-venv libvulkan-dev glslang-tools vulkan-validationlayers libcurl4-openssl-dev libssl-dev
 make setup
-make test
-make test-vulkan
+make test                  # Vulkan + CPU reference tests, including validation
 ```
 
 Use `make setup VULKAN=0` and `make test VULKAN=0` for a CPU-only build.
@@ -79,13 +78,28 @@ For manual source development without rebuilding a wheel:
 ```bash
 python -m pip install cmake pybind11 numpy pytest onnx onnxruntime scipy torch onnxscript
 python tools/build.py                  # add --cpu-only when needed
-PYTHONPATH=python python -m pytest -q
-MUNET_TEST_VULKAN=1 PYTHONPATH=python python -m pytest -q
+PYTHONPATH=python python -m pytest -q  # Vulkan + CPU reference tests
 # With vulkan-validationlayers installed:
 PYTHONPATH=python python tools/test.py --vulkan-validation
 ```
 
-The opted-in Vulkan tests fail when the driver/compiler is unavailable. They do not skip or select the CPU instead. `tools/build.py --cmake-arg=-DVulkan_INCLUDE_DIR=...` accepts custom SDK paths.
+Vulkan tests run by default and fail when the driver/compiler is unavailable. Use `MUNET_TEST_VULKAN=0` for explicit CPU-only testing. `tools/build.py --cmake-arg=-DVulkan_INCLUDE_DIR=...` accepts custom SDK paths.
+
+## Model examples
+
+Build and train a model using the [example collection](examples/README.md):
+
+```bash
+make demo-mnist          # CNN; automatically downloads MNIST
+make demo-segmentation   # Small U-Net; generates RGB images and masks
+make demo-language-model # Causal Transformer; downloads Tiny Shakespeare
+make test-examples      # Offline learning, resume and inference checks
+```
+
+Each saves a resumable checkpoint, a native inference graph and validation metrics.
+Use `VULKAN=1 DEVICE=vulkan` for a Vulkan build and GPU execution. The examples
+also provide explicit offline data modes. Model code and image dependencies stay
+under `examples/`; the installed core continues to require only NumPy.
 
 ## RT-DETR example
 

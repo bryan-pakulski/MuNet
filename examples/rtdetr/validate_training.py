@@ -13,7 +13,7 @@ from examples.rtdetr import rtdetr_r50vd,DetectorTrainer,pad_targets,prepare_den
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--device',default='cpu');p.add_argument('--size',type=int,default=160)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--device',default='vulkan');p.add_argument('--size',type=int,default=160)
     p.add_argument('--output',default='artifacts/validation/full-r50-training.json');p.add_argument('--plan-only',action='store_true');args=p.parse_args()
     model=rtdetr_r50vd(seed=7);trainer=DetectorTrainer(model,device=args.device,target_slots=2,seed=17)
     x=np.random.default_rng(5).uniform(size=(2,3,args.size,args.size)).astype(np.float32)
